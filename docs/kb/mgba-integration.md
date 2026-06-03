@@ -75,9 +75,7 @@ Cloned to `external/` (gitignored). Three non-obvious gotchas, all confirmed:
 ```bash
 export DEVKITPRO=/opt/devkitpro
 export DEVKITARM=/opt/devkitpro/devkitARM        # on its OWN line — one-line export mis-expands $DEVKITPRO
-cd external/mgba
-sed -i '' 's/ FIXED_ROM_BUFFER//' src/platform/3ds/CMakeLists.txt   # DUAL-CORE: per-core ROM (see warning below)
-mkdir build-3ds && cd build-3ds
+cd external/mgba && mkdir build-3ds && cd build-3ds   # keep FIXED_ROM_BUFFER (clone default) — required on 3DS
 cmake -G "Unix Makefiles" \
   -DCMAKE_TOOLCHAIN_FILE=../src/platform/3ds/CMakeToolchain.txt \
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
@@ -108,47 +106,42 @@ exact set. As built here it is:
   `<3ds.h>` — both mGBA and libctru define `u8`/`u16`, so keep them in separate files; expose
   a plain-C API (`uint16_t*`, `uint32_t keys`) to `main.c`.
 
-### ⚠️ FIXED_ROM_BUFFER breaks dual-core — rebuild without it (done)
+### FIXED_ROM_BUFFER must STAY — dual-core via per-core buffers (corrected v0.3)
 
-mGBA's 3DS frontend sets `FIXED_ROM_BUFFER` (`src/platform/3ds/CMakeLists.txt:14`
-`OS_DEFINES`), and it propagates into the core. Under it the GBA core does **not** allocate
-per-instance ROM memory — it points `gba->memory.rom` at a **single global
-`uint32_t* romBuffer`** (`src/gba/gba.c:62`; defined by the frontend in `ctru-heap.c` as one
-32 MB malloc). Fine for mGBA's single-core frontend, **fatal for our two cores**: both would
-share one ROM buffer, so the second load clobbers the first.
+**An earlier attempt removed `FIXED_ROM_BUFFER` to give each core its own ROM. That was
+wrong and crashed on real 3DS.** Without it, GBA `reset` runs `_pristineCow` (`memory.c`),
+which allocates a *second* "pristine" copy of the ROM and `memcpy`s into it — that alloc
+returns NULL on the 3DS → data abort in `memcpy(NULL,…)`. Confirmed by the Luma crash dump:
+`_pristineCow ← GBAReset ← reset ← gbacore_load_rom`. It only "worked" in Azahar because its
+looser heap let the copy succeed for small ROMs (hence the earlier false "it's just memory"
+conclusion — the real cause is `_pristineCow`, and it fails on hardware regardless).
 
-**Fix (applied):** strip `FIXED_ROM_BUFFER` from that `OS_DEFINES` line before configuring
-(the `sed` in the recipe above) so each core mallocs its own ROM. Then load each ROM via the
-**preload** path — `mCorePreloadVF` / `mCorePreloadVFCB` — which reads the whole ROM into a
-per-core malloc'd buffer. This matters because the 3DS VFile has **no `mmap`**, so the plain
-`loadROM` map path won't work; preload is the per-instance equivalent (it's *why* mGBA chose
-FIXED_ROM_BUFFER on 3DS in the first place). Sequence per core:
-`VFileOpen(path, O_RDONLY)` → `mCorePreloadVF(core, vf)` → `mCoreAutoloadSave` → `reset`.
-Verify two ROMs load independently at v0.3.
+**Correct approach (applied; verified stable with two 16 MB ROMs in Azahar):** keep
+`FIXED_ROM_BUFFER` — the 3DS-native path, **no pristine copy**. libmgba's `ctru-heap.c`
+(compiled *into* `libmgba.a`) already **defines** `romBuffer`/`romBufferSize` and allocates
+one boot buffer (~32 MB). For two cores, `source/gbacore.c`:
 
-(The `libmgba.a` in `build-3ds/` was rebuilt this way on 2026-06-03 — dual-core-ready.)
+1. **`extern`s** those globals — do **not** redefine them (`ctru-heap.c` provides them;
+   redefining → "multiple definition" link error).
+2. **Reuses the boot `romBuffer` for the first core**; `malloc`s a dedicated buffer for the
+   **second**, pointing `romBuffer`/`romBufferSize` at it **before** that core's load.
+3. Loads via `mCorePreloadVF` (copies the ROM into `romBuffer`) → `mCoreAutoloadSave` →
+   `reset` (captures `gba->memory.rom = romBuffer`, per-core). Loads are sequential on the
+   main thread → no race; normal `runFrame` uses the per-core `gba->memory.rom`, not the global.
 
-### Memory: two big ROMs need the `.cia` (124 MB), not the `.3dsx` (verified v0.3)
+So `-DFIXED_ROM_BUFFER` **belongs in MGBA_DEFS** (it's in the list above) and in the lib build
+(the clone default — don't `sed` it out).
 
-Each core **preloads its whole ROM into RAM** (`mCorePreloadVF`, since no FIXED_ROM_BUFFER) →
-~ROM-size per core. Two 16 MB Pokémon ROMs = **32 MB** + per-core working set + framebuffers.
+**Memory:** ~ROM-size per core (no pristine copy) → two 16 MB ROMs ≈ 32 MB boot (core A) +
+16 MB (core B). Fits the `.cia` (124 MB) easily, and even the Azahar `.3dsx` heap.
 
-- A **`.3dsx` under Azahar's homebrew loader gets a limited heap**: two 16 MB ROMs crash
-  ~12 s in (a *runtime* allocation OOMs and corrupts memory → wild code-shaped writes →
-  Dynarmic `brk` trap, not a clean failure). **Two ~7 MB ROMs run fine** — that's how the
-  cause was isolated (ruled out concurrency: serialized still crashed; ruled out stack:
-  512 KB still crashed; small ROMs = stable ⇒ memory).
-- The **`.cia` exheader sets `SystemModeExt: 124 MB`**, so two 16 MB ROMs fit with headroom →
-  **test big-ROM dual-GBA via the `.cia` on real hardware** (or use smaller ROMs in an
-  Azahar `.3dsx`). Azahar *installs* CIAs rather than booting them, so it's not a quick
-  big-ROM test bench.
-- **Worker stacks:** mGBA `runFrame` has deep call chains — use **≥512 KB per worker**
-  (32 KB overflows and smashes memory).
-- **Azahar caveat:** `svcGetProcessorID` (SVC `GetCurrentProcessorNumber`) is **unimplemented
-  in Azahar** → the on-screen core readout shows garbage there; it's correct on hardware.
-- **Robustness TODO:** mGBA's preload doesn't fail gracefully on OOM (it corrupts rather than
-  returning false). On memory-constrained targets, check free heap before loading the second
-  ROM and degrade to one core with a message instead of crashing.
+**Other gotchas:** worker stacks — mGBA `runFrame` has deep call chains, give each worker
+**≥512 KB** (32 KB overflows/corrupts). `svcGetProcessorID` is **unimplemented in Azahar**
+(garbage core readout there; correct on hardware).
+
+**Edge case / TODO:** a GBA *soft-reset* at runtime re-reads the global `romBuffer` (last set
+= core B's), so core A would reset to B's ROM. Rare (user combo); fix later by re-pointing the
+global per core around reset.
 
 ## Milestones (detail; see toolkit ../../../docs/ROADMAP.md for M0–M4)
 
