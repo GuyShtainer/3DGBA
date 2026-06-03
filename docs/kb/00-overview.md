@@ -25,5 +25,6 @@ numbers drift.
 
 ## Build/run
 
-See [../../README.md](../../README.md) and the toolkit `../../../../CLAUDE.md`. The
-milestone plan (M0–M4) is in the toolkit `../../../../docs/ROADMAP.md`.
+See [../../README.md](../../README.md) and the toolkit `../../../../CLAUDE.md`. The master
+version ladder (v0.1 → v1.0 → v1.x) is in [../ROADMAP.md](../ROADMAP.md); the toolkit-level
+verdict is in `../../../../docs/ROADMAP.md`.
