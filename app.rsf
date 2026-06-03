@@ -142,6 +142,7 @@ AccessControlInfo:
   # Maximum 34 services (32 if firmware is prior to 9.3.0)
   ServiceAccessControl:
    - cfg:u
+   - dsp::DSP
    - fs:USER
    - gsp::Gpu
    - hid:USER

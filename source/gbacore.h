@@ -5,6 +5,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>   // size_t
 
 #define GBA_W          240   // GBA visible width
 #define GBA_H          160   // GBA visible height
@@ -36,5 +37,13 @@ void     gbacore_run_frame(GbaCore* c);                    // one frame; drains 
 // (e.g. no state file to load). Separate from the in-game .sav (battery) save.
 bool     gbacore_save_state(GbaCore* c, int slot);
 bool     gbacore_load_state(GbaCore* c, int slot);
+
+// --- Audio (v0.7 solo): pull PCM from the focused core; drain the unfocused one. ---
+// Samples are interleaved stereo int16 (L,R). "frames" == stereo sample pairs.
+unsigned gbacore_sample_rate(GbaCore* c);   // Hz (32768 fallback if the core reports 0)
+unsigned gbacore_ndsp_rate(GbaCore* c);     // rate matched to the 3DS LCD refresh (no pitch drift)
+size_t   gbacore_audio_available(GbaCore* c);                          // frames ready to read
+size_t   gbacore_read_audio(GbaCore* c, int16_t* out, size_t frames);  // returns frames read
+void     gbacore_drain_audio(GbaCore* c);                              // discard pending audio
 
 void     gbacore_destroy(GbaCore* c);

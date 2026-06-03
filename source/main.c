@@ -13,6 +13,7 @@
 #include <malloc.h>
 #include <string.h>
 #include <stdio.h>
+#include <time.h>
 
 #include "gbacore.h"
 #include "rompicker.h"
@@ -180,12 +181,82 @@ static void render_game(EmuInstance* e, C3D_RenderTarget* screen, C3D_RenderTarg
 	}
 }
 
+// ---- Audio output (v0.7 solo): one ndsp stereo channel; only the FOCUSED game plays ----
+#define AUDIO_FRAMES   1280   // stereo frames per wave buffer (matches mGBA's 3DS port)
+#define AUDIO_DSP_BUFS 4
+static ndspWaveBuf s_wbuf[AUDIO_DSP_BUFS];
+static int16_t*    s_audioMem = NULL;
+static int         s_bufId = 0;
+static bool        s_hasSound = false;
+// --- temporary audio diagnostics (shown on the top screen) ---
+static unsigned s_dbgRate = 0, s_dbgAvail = 0, s_dbgAdds = 0;
+
+static bool s_hasPtm = false;   // ptm:u for battery level (HUD)
+
+static void audio_wbuf_reset(void) {   // (re)point the 4 wave buffers at their slices
+	memset(s_wbuf, 0, sizeof(s_wbuf));
+	for (int i = 0; i < AUDIO_DSP_BUFS; i++)
+		s_wbuf[i].data_pcm16 = &s_audioMem[AUDIO_FRAMES * 2 * i];
+	s_bufId = 0;
+}
+
+static void audio_init(void) {
+	if (R_FAILED(ndspInit())) return;   // no dspfirm.cdc (homebrew w/o it) -> stays silent
+	s_hasSound = true;
+	ndspSetOutputMode(NDSP_OUTPUT_STEREO);
+	ndspSetOutputCount(1);
+	ndspChnReset(0);
+	ndspChnSetFormat(0, NDSP_FORMAT_STEREO_PCM16);
+	ndspChnSetInterp(0, NDSP_INTERP_NONE);
+	ndspChnWaveBufClear(0);
+	s_audioMem = (int16_t*)linearAlloc(AUDIO_FRAMES * AUDIO_DSP_BUFS * 2 * sizeof(int16_t));
+	audio_wbuf_reset();
+}
+
+static void audio_exit(void) {
+	if (!s_hasSound) return;
+	ndspChnWaveBufClear(0);
+	ndspExit();
+	if (s_audioMem) linearFree(s_audioMem);
+	s_audioMem = NULL;
+	s_hasSound = false;
+}
+
+// Drop everything queued/playing and reset the ring — instant clean cut on a focus switch.
+static void audio_reset_stream(void) {
+	if (!s_hasSound) return;
+	ndspChnWaveBufClear(0);
+	audio_wbuf_reset();
+}
+
+// Feed the focused core's PCM into ndsp; drain the unfocused core so its buffer can't back up.
+static void audio_feed(EmuInstance* focusedGame, EmuInstance* otherGame) {
+	if (!s_hasSound) return;
+	if (otherGame->core) gbacore_drain_audio(otherGame->core);
+	if (!focusedGame->core) return;
+	s_dbgAvail = gbacore_audio_available(focusedGame->core);
+	while (s_wbuf[s_bufId].status != NDSP_WBUF_QUEUED &&
+	       s_wbuf[s_bufId].status != NDSP_WBUF_PLAYING) {
+		size_t avail = gbacore_audio_available(focusedGame->core);
+		if (!avail) break;
+		size_t want = avail < AUDIO_FRAMES ? avail : AUDIO_FRAMES;
+		size_t n = gbacore_read_audio(focusedGame->core, s_wbuf[s_bufId].data_pcm16, want);
+		if (!n) break;
+		s_wbuf[s_bufId].nsamples = n;
+		DSP_FlushDataCache(s_wbuf[s_bufId].data_pcm16, n * 2 * sizeof(int16_t));
+		ndspChnWaveBufAdd(0, &s_wbuf[s_bufId]);
+		s_bufId = (s_bufId + 1) & (AUDIO_DSP_BUFS - 1);
+		s_dbgAdds++;
+	}
+}
+
 // ---- Pause menu ----
 enum { SESSION_CHANGE, SESSION_QUIT };
 static const char* MENU_ITEMS[] = {
-	"Resume", "Swap screens", "Save A", "Load A", "Save B", "Load B", "Change games", "Quit"
+	"Resume", "Toggle HUD", "Swap screens",
+	"Save A", "Load A", "Save B", "Load B", "Change games", "Quit"
 };
-#define MENU_N 8
+#define MENU_N 9
 
 // Run one play session with the two chosen ROMs. Returns SESSION_CHANGE (re-pick) or
 // SESSION_QUIT. Creates/destroys the cores + worker threads itself.
@@ -212,6 +283,14 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 		preTgt = C3D_RenderTargetCreateFromTex(&preTex, GPU_TEXFACE_2D, 0, -1);
 	}
 
+	// Audio: both cores share one rate (pitch-matched to the 3DS refresh); start clean.
+	GbaCore* anyCore = emuA.core ? emuA.core : emuB.core;
+	if (s_hasSound && anyCore) {
+		s_dbgRate = gbacore_ndsp_rate(anyCore);
+		ndspChnSetRate(0, (float)s_dbgRate);
+		audio_reset_stream();
+	}
+
 	int focused = 0;
 	bool menuOpen = false;
 	int  menuSel = 0;
@@ -225,17 +304,33 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 	char toast[48] = "";
 	int  toastTimer = 0;
 
+	// HUD (menu-toggleable): per-screen game label + FPS + clock + battery.
+	bool hudOn = true;
+	char nameA[64], nameB[64];
+	rom_display_name(pathA, nameA, sizeof nameA);
+	rom_display_name(pathB, nameB, sizeof nameB);
+	u64 fpsT0 = osGetTime();
+	int fpsFrames = 0, fps = 0;
+	u8  batLvl = 0;
+	int batTimer = 0;
+
 	while (aptMainLoop()) {
 		hidScanInput();
 		u32 kDown = hidKeysDown();
 		u32 kHeld = hidKeysHeld();
+
+		// HUD stats: FPS (0.5s window) + battery (throttled).
+		fpsFrames++;
+		u64 nowMs = osGetTime();
+		if (nowMs - fpsT0 >= 500) { fps = (int)(fpsFrames * 1000 / (nowMs - fpsT0)); fpsFrames = 0; fpsT0 = nowMs; }
+		if (s_hasPtm && --batTimer <= 0) { PTMU_GetBatteryLevel(&batLvl); batTimer = 60; }
 
 		if (!menuOpen) {
 			bool combo = (kHeld & KEY_START) && (kHeld & KEY_SELECT);
 			if ((kDown & KEY_TOUCH) || combo) {
 				menuOpen = true; menuSel = 0; status[0] = '\0';
 			} else {
-				if (kDown & (KEY_X | KEY_Y)) focused ^= 1;
+				if (kDown & (KEY_X | KEY_Y)) { focused ^= 1; audio_reset_stream(); }
 				int fs = swapped ? (focused ^ 1) : focused;   // screen the focused game sits on
 				if (kDown & KEY_ZR) {
 					scaleMode[fs] = (scaleMode[fs] + 1) % 3;
@@ -258,6 +353,8 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 				LightEvent_Wait(&emuB.done);
 				if (emuA.core) upload_frame(&emuA);
 				if (emuB.core) upload_frame(&emuB);
+				// Solo audio: only the focused game is heard; the other is drained.
+				audio_feed(focused == 0 ? &emuA : &emuB, focused == 0 ? &emuB : &emuA);
 			}
 		} else {
 			if (kDown & (KEY_DDOWN | KEY_CPAD_DOWN)) menuSel = (menuSel + 1) % MENU_N;
@@ -265,23 +362,46 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 			if (kDown & KEY_B) menuOpen = false;                 // resume
 			if (kDown & KEY_A) {
 				if      (menuSel == 0) menuOpen = false;         // Resume
-				else if (menuSel == 1) {                         // Swap screens
+				else if (menuSel == 1) {                         // Toggle HUD
+					hudOn = !hudOn;
+					snprintf(status, sizeof status, "HUD %s", hudOn ? "on" : "off");
+				}
+				else if (menuSel == 2) {                         // Swap screens
 					swapped = !swapped; menuOpen = false;
 					snprintf(toast, sizeof toast, "Layout: %s", swapped ? "B top / A bottom" : "A top / B bottom");
 					toastTimer = 90;
 				}
-				else if (menuSel == 2) snprintf(status, sizeof status, "%s", gbacore_save_state(emuA.core, 1) ? "Saved A"  : "Save A failed");
-				else if (menuSel == 3) snprintf(status, sizeof status, "%s", gbacore_load_state(emuA.core, 1) ? "Loaded A" : "No state A");
-				else if (menuSel == 4) snprintf(status, sizeof status, "%s", gbacore_save_state(emuB.core, 1) ? "Saved B"  : "Save B failed");
-				else if (menuSel == 5) snprintf(status, sizeof status, "%s", gbacore_load_state(emuB.core, 1) ? "Loaded B" : "No state B");
-				else if (menuSel == 6) { result = SESSION_CHANGE; break; }
+				else if (menuSel == 3) snprintf(status, sizeof status, "%s", gbacore_save_state(emuA.core, 1) ? "Saved A"  : "Save A failed");
+				else if (menuSel == 4) snprintf(status, sizeof status, "%s", gbacore_load_state(emuA.core, 1) ? "Loaded A" : "No state A");
+				else if (menuSel == 5) snprintf(status, sizeof status, "%s", gbacore_save_state(emuB.core, 1) ? "Saved B"  : "Save B failed");
+				else if (menuSel == 6) snprintf(status, sizeof status, "%s", gbacore_load_state(emuB.core, 1) ? "Loaded B" : "No state B");
+				else if (menuSel == 7) { result = SESSION_CHANGE; break; }
 				else                   { result = SESSION_QUIT;   break; }
 			}
 		}
 
 		// ---- text for this frame (single buffer; cleared once) ----
 		C2D_TextBufClear(txtBuf);
-		C2D_Text items[MENU_N], tHint, tStatus, tToast;
+		C2D_Text items[MENU_N], tHint, tStatus, tToast, tDbg;
+		char dbg[72];
+		snprintf(dbg, sizeof dbg, "snd=%d rate=%u av=%u add=%u s0=%d",
+		         (int)s_hasSound, s_dbgRate, s_dbgAvail, s_dbgAdds, (int)s_wbuf[0].status);
+		C2D_TextParse(&tDbg, txtBuf, dbg); C2D_TextOptimize(&tDbg);
+
+		// HUD text: per-screen game label + a top-screen stat line (FPS / clock / battery).
+		C2D_Text tHudTop, tHudBot, tHudStat;
+		const char* topName = swapped ? nameB : nameA;
+		const char* botName = swapped ? nameA : nameB;
+		char hudStat[40];
+		if (hudOn) {
+			time_t tt = time(NULL);
+			struct tm* lt = localtime(&tt);
+			snprintf(hudStat, sizeof hudStat, "%dfps  %02d:%02d  bat %d/5",
+			         fps, lt ? lt->tm_hour : 0, lt ? lt->tm_min : 0, batLvl);
+			C2D_TextParse(&tHudTop,  txtBuf, topName);  C2D_TextOptimize(&tHudTop);
+			C2D_TextParse(&tHudBot,  txtBuf, botName);  C2D_TextOptimize(&tHudBot);
+			C2D_TextParse(&tHudStat, txtBuf, hudStat);  C2D_TextOptimize(&tHudStat);
+		}
 		if (menuOpen) {
 			for (int i = 0; i < MENU_N; i++) { C2D_TextParse(&items[i], txtBuf, MENU_ITEMS[i]); C2D_TextOptimize(&items[i]); }
 			if (status[0]) { C2D_TextParse(&tStatus, txtBuf, status); C2D_TextOptimize(&tStatus); }
@@ -306,12 +426,31 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 
 		// top screen (sharp-bilinear two-pass when applicable). render_game leaves `top` bound.
 		render_game(topG, top, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], topTint, clrBg);
-		if (!menuOpen && focScreen == 0) C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 400.0f, 4.0f, clrHi);
-		if (!menuOpen && toastTimer > 0) C2D_DrawText(&tToast, C2D_WithColor, 8.0f, 8.0f, 0.0f, 0.5f, 0.5f, clrHi);
+		if (!menuOpen) {
+			if (hudOn) {
+				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 400.0f, 14.0f, C2D_Color32(0, 0, 0, 0x90));
+				if (focScreen == 0) C2D_DrawRectSolid(0.0f, 14.0f, 0.0f, 400.0f, 2.0f, clrHi);
+				C2D_DrawText(&tHudTop, C2D_WithColor, 4.0f, 1.0f, 0.0f, 0.4f, 0.4f, clrTxt);
+				float sw, sh; C2D_TextGetDimensions(&tHudStat, 0.4f, 0.4f, &sw, &sh);
+				C2D_DrawText(&tHudStat, C2D_WithColor, 396.0f - sw, 1.0f, 0.0f, 0.4f, 0.4f, clrTxt);
+			} else if (focScreen == 0) {
+				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 400.0f, 4.0f, clrHi);
+			}
+			if (toastTimer > 0) C2D_DrawText(&tToast, C2D_WithColor, 8.0f, hudOn ? 20.0f : 8.0f, 0.0f, 0.5f, 0.5f, clrHi);
+		}
+		C2D_DrawText(&tDbg, C2D_WithColor, 6.0f, 222.0f, 0.0f, 0.42f, 0.42f, clrTxt);   // TEMP audio diag
 
 		// bottom screen (+ menu overlay when open). render_game leaves `bot` bound.
 		render_game(botG, bot, preTgt, &preTex, 320.0f, 240.0f, scaleMode[1], smooth[1], botTint, clrBg);
-		if (!menuOpen && focScreen == 1) C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 4.0f, clrHi);
+		if (!menuOpen) {
+			if (hudOn) {
+				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 14.0f, C2D_Color32(0, 0, 0, 0x90));
+				if (focScreen == 1) C2D_DrawRectSolid(0.0f, 14.0f, 0.0f, 320.0f, 2.0f, clrHi);
+				C2D_DrawText(&tHudBot, C2D_WithColor, 4.0f, 1.0f, 0.0f, 0.4f, 0.4f, clrTxt);
+			} else if (focScreen == 1) {
+				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 4.0f, clrHi);
+			}
+		}
 		if (menuOpen) {
 			C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 240.0f, clrDim);
 			C2D_DrawRectSolid(34.0f, 6.0f, 0.0f, 252.0f, 228.0f, clrPanel);
@@ -331,6 +470,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 	}
 
 	// teardown this session's workers + cores; reset g_quit for the next session
+	if (s_hasSound) ndspChnWaveBufClear(0);   // stop sound between sessions
 	g_quit = true;
 	LightEvent_Signal(&emuA.go);
 	LightEvent_Signal(&emuB.go);
@@ -422,6 +562,8 @@ int main(int argc, char** argv) {
 	C3D_Init(C3D_DEFAULT_CMDBUF_SIZE);
 	C2D_Init(C2D_DEFAULT_MAX_OBJECTS);
 	C2D_Prepare();
+	audio_init();   // ndsp; silently no-ops if dspfirm.cdc isn't present
+	s_hasPtm = R_SUCCEEDED(ptmuInit());   // battery level for the HUD
 	C3D_RenderTarget* top = C2D_CreateScreenTarget(GFX_TOP, GFX_LEFT);
 	C3D_RenderTarget* bot = C2D_CreateScreenTarget(GFX_BOTTOM, GFX_LEFT);
 	C2D_TextBuf txtBuf = C2D_TextBufNew(4096);
@@ -443,6 +585,8 @@ int main(int argc, char** argv) {
 		// SESSION_CHANGE -> loop back to the picker
 	}
 
+	audio_exit();
+	if (s_hasPtm) ptmuExit();
 	C2D_TextBufDelete(txtBuf);
 	C2D_Fini();
 	C3D_Fini();

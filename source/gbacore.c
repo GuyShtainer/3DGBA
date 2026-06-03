@@ -41,6 +41,9 @@ GbaCore* gbacore_create(void) {
 	// Match mGBA's own frontend: detect + skip GBA idle loops (big win for games like
 	// Pokemon that busy-wait a lot). Read by the core at reset, so set it before load.
 	mCoreConfigSetDefaultValue(&core->config, "idleOptimization", "detect");
+	// Headroom so the main thread can poll-read audio once per frame without the core's
+	// ring buffer overflowing between reads (~549 stereo frames produced per GBA frame).
+	core->setAudioBufferSize(core, 4096);
 	g->core = core;
 	return g;
 }
@@ -84,7 +87,31 @@ void gbacore_set_keys(GbaCore* g, uint16_t keys) {
 
 void gbacore_run_frame(GbaCore* g) {
 	g->core->runFrame(g->core);
-	// No audio path yet (v0.7) — drain the core's audio buffer so it can't back up.
+	// Audio stays in the core's buffer; the caller reads it (focused core) or drains it
+	// (unfocused core) each frame via the gbacore_*_audio helpers below.
+}
+
+unsigned gbacore_sample_rate(GbaCore* g) {
+	unsigned r = g->core->audioSampleRate(g->core);
+	return r ? r : 32768;
+}
+
+unsigned gbacore_ndsp_rate(GbaCore* g) {
+	// Match playback to the 3DS LCD's true refresh (16756991/280095 = 59.826 Hz) so audio
+	// neither drifts ahead nor lags the ~59.73 Hz GBA core. Same trick mGBA's 3DS port uses.
+	double ratio = mCoreCalculateFramerateRatio(g->core, 16756991.0 / 280095.0);
+	return (unsigned)(gbacore_sample_rate(g) * ratio);
+}
+
+size_t gbacore_audio_available(GbaCore* g) {
+	return mAudioBufferAvailable(g->core->getAudioBuffer(g->core));
+}
+
+size_t gbacore_read_audio(GbaCore* g, int16_t* out, size_t frames) {
+	return mAudioBufferRead(g->core->getAudioBuffer(g->core), out, frames);
+}
+
+void gbacore_drain_audio(GbaCore* g) {
 	mAudioBufferClear(g->core->getAudioBuffer(g->core));
 }
 
