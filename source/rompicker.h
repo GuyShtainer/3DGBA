@@ -14,3 +14,8 @@
 
 bool rompicker_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txtBuf,
                    char* pathA, char* pathB, size_t cap);
+
+// Derive a friendly name for a .gba file from its header (known Gen-3 codes, else the
+// internal 12-char title, else the filename). `path` is a full sdmc path. Used by the
+// picker and the in-game HUD label.
+void rom_display_name(const char* path, char* out, size_t cap);

@@ -16,7 +16,45 @@
 #define VIS_ROWS     13
 #define ROW_H        16.0f
 
-static int scan_roms(char names[][NAME_LEN]) {
+// Map the GBA header game code (offset 0xAC) to a friendly name for the games we care about.
+static const char* known_game(const char* code) {
+	if (!strncmp(code, "BPEE", 4)) return "Pokemon Emerald";
+	if (!strncmp(code, "BPRE", 4)) return "Pokemon FireRed";
+	if (!strncmp(code, "BPGE", 4)) return "Pokemon LeafGreen";
+	if (!strncmp(code, "AXVE", 4)) return "Pokemon Ruby";
+	if (!strncmp(code, "AXPE", 4)) return "Pokemon Sapphire";
+	return NULL;
+}
+
+void rom_display_name(const char* path, char* out, size_t cap) {
+	unsigned char h[0xB0];
+	FILE* f = fopen(path, "rb");
+	if (f) {
+		size_t got = fread(h, 1, sizeof h, f);
+		fclose(f);
+		if (got == sizeof h) {
+			char code[5] = {0};
+			memcpy(code, h + 0xAC, 4);
+			const char* k = known_game(code);
+			if (k) { snprintf(out, cap, "%s", k); return; }
+			char title[13] = {0};
+			memcpy(title, h + 0xA0, 12);
+			for (int i = 11; i >= 0; --i) {            // trim trailing spaces/junk
+				if (title[i] == ' ' || (unsigned char)title[i] < 0x20) title[i] = '\0';
+				else break;
+			}
+			if (title[0] >= 0x20) { snprintf(out, cap, "%s", title); return; }
+		}
+	}
+	// fall back to the filename without its .gba extension
+	const char* base = strrchr(path, '/');
+	base = base ? base + 1 : path;
+	snprintf(out, cap, "%s", base);
+	size_t L = strlen(out);
+	if (L > 4 && strcasecmp(out + L - 4, ".gba") == 0) out[L - 4] = '\0';
+}
+
+static int scan_roms(char names[][NAME_LEN], char disp[][NAME_LEN]) {
 	DIR* d = opendir(ROM_DIR);
 	if (!d) return 0;
 	int n = 0;
@@ -27,6 +65,9 @@ static int scan_roms(char names[][NAME_LEN]) {
 		if (L > 4 && strcasecmp(nm + L - 4, ".gba") == 0) {
 			strncpy(names[n], nm, NAME_LEN - 1);
 			names[n][NAME_LEN - 1] = '\0';
+			char full[256];
+			snprintf(full, sizeof full, "%s/%s", ROM_DIR, nm);
+			rom_display_name(full, disp[n], NAME_LEN);
 			n++;
 		}
 	}
@@ -36,8 +77,9 @@ static int scan_roms(char names[][NAME_LEN]) {
 
 bool rompicker_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txtBuf,
                    char* pathA, char* pathB, size_t cap) {
-	static char names[MAX_ROMS][NAME_LEN];
-	int n = scan_roms(names);
+	static char names[MAX_ROMS][NAME_LEN];   // filenames (for building paths)
+	static char disp[MAX_ROMS][NAME_LEN];    // friendly names (for display)
+	int n = scan_roms(names, disp);
 	if (n == 0) return false;   // nothing to pick -> caller falls back to defaults
 
 	const u32 clrBg     = C2D_Color32(0x20, 0x18, 0x30, 0xFF);  // GBA-nostalgic indigo
@@ -82,11 +124,11 @@ bool rompicker_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txt
 		C2D_TextParse(&tHelp, txtBuf, help);                   C2D_TextOptimize(&tHelp);
 		int shown = 0;
 		for (int i = 0; i < VIS_ROWS && topRow + i < n; i++) {
-			C2D_TextParse(&rows[i], txtBuf, names[topRow + i]); C2D_TextOptimize(&rows[i]); shown++;
+			C2D_TextParse(&rows[i], txtBuf, disp[topRow + i]); C2D_TextOptimize(&rows[i]); shown++;
 		}
 		char alabel[160];
 		if (phase == 1) {
-			snprintf(alabel, sizeof alabel, "Game A: %s", names[idxA]);
+			snprintf(alabel, sizeof alabel, "Game A: %s", disp[idxA]);
 			C2D_TextParse(&tA, txtBuf, alabel);               C2D_TextOptimize(&tA);
 		}
 
