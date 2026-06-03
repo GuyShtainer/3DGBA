@@ -19,3 +19,6 @@ bool rompicker_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txt
 // internal 12-char title, else the filename). `path` is a full sdmc path. Used by the
 // picker and the in-game HUD label.
 void rom_display_name(const char* path, char* out, size_t cap);
+
+// Remember the last A+B pairing so the picker can offer a one-button resume next boot.
+void rompicker_save_recent(const char* pathA, const char* pathB);

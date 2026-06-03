@@ -75,8 +75,85 @@ static int scan_roms(char names[][NAME_LEN], char disp[][NAME_LEN]) {
 	return n;
 }
 
+#define RECENT_PATH "sdmc:/dual-gba/recent.bin"
+typedef struct { char a[256]; char b[256]; } RecentPair;
+
+void rompicker_save_recent(const char* pathA, const char* pathB) {
+	RecentPair r;
+	snprintf(r.a, sizeof r.a, "%s", pathA);
+	snprintf(r.b, sizeof r.b, "%s", pathB);
+	FILE* f = fopen(RECENT_PATH, "wb");
+	if (!f) return;
+	fwrite(&r, 1, sizeof r, f);
+	fclose(f);
+}
+
+// Load the saved pairing into r; returns true only if both files still exist.
+static bool load_recent(RecentPair* r) {
+	FILE* f = fopen(RECENT_PATH, "rb");
+	if (!f) return false;
+	size_t n = fread(r, 1, sizeof *r, f);
+	fclose(f);
+	if (n != sizeof *r) return false;
+	r->a[sizeof r->a - 1] = '\0';
+	r->b[sizeof r->b - 1] = '\0';
+	FILE* fa = fopen(r->a, "rb"); if (!fa) return false; fclose(fa);
+	FILE* fb = fopen(r->b, "rb"); if (!fb) return false; fclose(fb);
+	return true;
+}
+
+// Boot prompt offering the last pairing. Returns 1 = use recent, 0 = pick new, -1 = defaults.
+static int recent_prompt(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txtBuf,
+                         const RecentPair* r) {
+	const u32 clrBg  = C2D_Color32(0x20, 0x18, 0x30, 0xFF);
+	const u32 clrSel = C2D_Color32(0xF5, 0xD0, 0x42, 0xFF);
+	const u32 clrTxt = C2D_Color32(0xFF, 0xFF, 0xFF, 0xFF);
+	const u32 clrDim = C2D_Color32(0xB0, 0xA8, 0xC8, 0xFF);
+	char na[NAME_LEN], nb[NAME_LEN], line[300];
+	rom_display_name(r->a, na, sizeof na);
+	rom_display_name(r->b, nb, sizeof nb);
+	snprintf(line, sizeof line, "%s   +   %s", na, nb);
+
+	while (aptMainLoop()) {
+		hidScanInput();
+		u32 k = hidKeysDown();
+		if (k & KEY_A)     return 1;
+		if (k & KEY_X)     return 0;
+		if (k & KEY_START) return -1;
+
+		C2D_TextBufClear(txtBuf);
+		C2D_Text tTitle, tPair, tHelp;
+		C2D_TextParse(&tTitle, txtBuf, "Resume last pairing?"); C2D_TextOptimize(&tTitle);
+		C2D_TextParse(&tPair,  txtBuf, line);                   C2D_TextOptimize(&tPair);
+		C2D_TextParse(&tHelp,  txtBuf, "A: resume    X: pick new    START: defaults"); C2D_TextOptimize(&tHelp);
+
+		C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
+		C2D_TargetClear(top, clrBg);
+		C2D_SceneBegin(top);
+		C2D_DrawText(&tTitle, C2D_WithColor, 8.0f, 90.0f, 0.0f, 0.7f, 0.7f, clrSel);
+		C2D_DrawText(&tPair,  C2D_WithColor, 8.0f, 124.0f, 0.0f, 0.5f, 0.5f, clrTxt);
+		C2D_TargetClear(bot, clrBg);
+		C2D_SceneBegin(bot);
+		C2D_DrawText(&tHelp,  C2D_WithColor, 8.0f, 214.0f, 0.0f, 0.45f, 0.45f, clrDim);
+		C3D_FrameEnd(0);
+	}
+	return -1;
+}
+
 bool rompicker_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txtBuf,
                    char* pathA, char* pathB, size_t cap) {
+	RecentPair recent;
+	if (load_recent(&recent)) {
+		int choice = recent_prompt(top, bot, txtBuf, &recent);
+		if (choice == 1) {                       // resume the saved pairing
+			snprintf(pathA, cap, "%s", recent.a);
+			snprintf(pathB, cap, "%s", recent.b);
+			return true;
+		}
+		if (choice == -1) return false;          // defaults
+		// choice == 0 -> fall through to the full list picker
+	}
+
 	static char names[MAX_ROMS][NAME_LEN];   // filenames (for building paths)
 	static char disp[MAX_ROMS][NAME_LEN];    // friendly names (for display)
 	int n = scan_roms(names, disp);

@@ -620,6 +620,8 @@ int main(int argc, char** argv) {
 		if (!rompicker_run(top, bot, txtBuf, pathA, pathB, sizeof pathA)) {
 			strcpy(pathA, "sdmc:/dual-gba/gameA.gba");
 			strcpy(pathB, "sdmc:/dual-gba/gameB.gba");
+		} else {
+			rompicker_save_recent(pathA, pathB);   // remember for next boot's resume prompt
 		}
 		int r = run_session(top, bot, txtBuf, isN3DS, mainPrio, pathA, pathB);
 		if (r == SESSION_QUIT) break;
