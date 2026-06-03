@@ -116,6 +116,20 @@ The skeleton's `emu_step()` is where a GBA core plugs in. The plan:
 > done. The risk is purely performance — fitting two software GBA cores in one 60 fps
 > budget on a New 3DS. Frameskip and gpSP are the escape hatches if mGBA×2 is too heavy.
 
+## Specialist agents
+
+This project carries its own Claude Code subagents in `.claude/agents/` (discovered when
+working inside the project):
+
+| Task | Agent |
+|---|---|
+| Embed `libmgba`; drive the two `mCore` instances (ROM/save/run-frame/video/audio/keys) | `mgba-core` |
+| Wire the emulated link cable (mGBA in-process lockstep SIO) between the two cores | `gba-link-lockstep` |
+| Combine the two cores' audio — solo/mixed/split + per-game volume | `gba-audio-mixer` |
+
+The toolkit's hardware agents — `n3ds-systems`, `pica-gpu`, `devkitarm-3ds-build`,
+`ctr-audio`, `n3ds-hardware-testing` — also apply (see `../../CLAUDE.md`).
+
 ## Layout
 
 ```
