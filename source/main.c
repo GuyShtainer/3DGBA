@@ -1,9 +1,10 @@
-// dual-gba (3DS) — v0.2: one real mGBA core on the top screen.
+// dual-gba (3DS) — v0.3: two real mGBA cores, one per screen.
 // -----------------------------------------------------------------------------
-// Worker A now hosts a real GBA core (mGBA, via gbacore.c) and renders to the
-// top screen; worker B is still the placeholder box (the real second core lands
-// in v0.3). Dual-core threading, the per-frame LightEvent handshake, dual-screen
-// citro2d rendering, and the X/Y focus toggle are unchanged from the skeleton.
+// Worker A hosts game A on the top screen, worker B hosts game B on the bottom
+// screen, each a self-contained mGBA core pinned to its own CPU core. Per-frame
+// LightEvent handshake, dual-screen citro2d rendering, X/Y focus toggle.
+// NOTE: the real two-core performance budget is only meaningful on New 3DS
+// hardware (the v0.4 gate) — Azahar's nested emulation is not a valid signal.
 // -----------------------------------------------------------------------------
 
 #include <3ds.h>
@@ -20,14 +21,14 @@
 typedef struct {
 	int        id;
 	Thread     thread;
-	LightEvent go;          // coordinator -> worker: "produce the next frame"
-	LightEvent done;        // worker -> coordinator: "frame ready"
-	volatile u32  frame;    // placeholder animation (used only when core == NULL)
-	volatile u32  keys;     // GBA keypad bits for a real core (neutral if unfocused)
-	volatile bool skip;     // per-instance frameskip request
+	LightEvent go;
+	LightEvent done;
+	volatile u32  frame;
+	volatile u32  keys;     // GBA keypad bits (neutral if unfocused)
+	volatile bool skip;
 	volatile s32  core_id;  // actual CPU core (svcGetProcessorID); -1 until set
 
-	GbaCore*   core;        // real mGBA core, or NULL for the placeholder box
+	GbaCore*   core;        // real mGBA core, or NULL if its ROM failed to load
 	u16*       fb;          // linear RGB565 framebuffer (stride GBA_FB_STRIDE)
 	C3D_Tex    tex;         // 256x256 RGB565 texture the framebuffer is uploaded into
 	bool       has_tex;
@@ -35,7 +36,6 @@ typedef struct {
 
 static volatile bool g_quit = false;
 
-// ---- Emulate one frame: real core -> mGBA; otherwise the placeholder box. ----
 static void emu_step(EmuInstance* e) {
 	if (e->core) {
 		gbacore_set_keys(e->core, (u16)e->keys);
@@ -64,12 +64,34 @@ static void emu_start(EmuInstance* e, int id, int core, int prio) {
 	LightEvent_Init(&e->done, RESET_ONESHOT);
 	e->thread = threadCreate(worker_main, e, WORKER_STACKSIZE, prio, core, false);
 	if (!e->thread) {
-		// Requested core unavailable (e.g. core 2 without a CIA / on Old 3DS): fall back.
 		e->thread = threadCreate(worker_main, e, WORKER_STACKSIZE, prio, -2, false);
 	}
 }
 
-// Map 3DS held keys (face buttons, D-pad, and the circle pad) to GBA keypad bits.
+// Allocate this instance's framebuffer + texture and load its ROM into a real core.
+// Call after emu_start (which zeroes the instance) and before the first frame signal.
+static bool setup_core(EmuInstance* e, const char* romPath) {
+	e->fb   = (u16*)linearAlloc(GBA_FB_STRIDE * 256 * sizeof(u16));
+	e->core = gbacore_create();
+	if (!e->core || !e->fb) { if (e->core) { gbacore_destroy(e->core); e->core = NULL; } return false; }
+	memset(e->fb, 0, GBA_FB_STRIDE * 256 * sizeof(u16));
+	gbacore_set_video_buffer(e->core, e->fb, GBA_FB_STRIDE);
+	if (!gbacore_load_rom(e->core, romPath)) {
+		gbacore_destroy(e->core); e->core = NULL;
+		return false;
+	}
+	C3D_TexInit(&e->tex, 256, 256, GPU_RGB565);
+	C3D_TexSetFilter(&e->tex, GPU_NEAREST, GPU_NEAREST);
+	e->has_tex = true;
+	return true;
+}
+
+static void teardown_core(EmuInstance* e) {
+	if (e->core)    gbacore_destroy(e->core);
+	if (e->has_tex) C3D_TexDelete(&e->tex);
+	if (e->fb)      linearFree(e->fb);
+}
+
 static u16 to_gba_keys(u32 held) {
 	u16 k = 0;
 	if (held & KEY_A)      k |= 1 << GBAKEY_A;
@@ -86,7 +108,6 @@ static u16 to_gba_keys(u32 held) {
 }
 
 // Upload an instance's linear RGB565 framebuffer into its tiled GPU texture.
-// (Flags taken from mGBA's own 3DS frontend: RGB565, OUT_TILED, FLIP_VERT.)
 static void upload_frame(EmuInstance* e) {
 	GSPGPU_FlushDataCache(e->fb, GBA_FB_STRIDE * GBA_H * sizeof(u16));
 	C3D_SyncDisplayTransfer(
@@ -127,7 +148,6 @@ int main(int argc, char** argv) {
 	C3D_RenderTarget* bot = C2D_CreateScreenTarget(GFX_BOTTOM, GFX_LEFT);
 
 	const u32 clrBg  = C2D_Color32(0x10, 0x10, 0x10, 0xFF);
-	const u32 clrB   = C2D_Color32(0xD5, 0x6A, 0x3A, 0xFF);
 	const u32 clrHi  = C2D_Color32(0xF5, 0xD0, 0x42, 0xFF);
 	const u32 clrTxt = C2D_Color32(0xFF, 0xFF, 0xFF, 0xFF);
 
@@ -139,24 +159,11 @@ int main(int argc, char** argv) {
 	emu_start(&emuA, 0, 0,                  mainPrio + 1);
 	emu_start(&emuB, 1, isN3DS ? 2 : 1,     mainPrio + 1);
 
-	// --- v0.2: wire a real mGBA core into worker A (top screen) ---
-	const char* romPath = "sdmc:/dual-gba/gameA.gba";
-	bool romOk = false;
-	emuA.fb   = (u16*)linearAlloc(GBA_FB_STRIDE * 256 * sizeof(u16));
-	emuA.core = gbacore_create();
-	if (emuA.core && emuA.fb) {
-		memset(emuA.fb, 0, GBA_FB_STRIDE * 256 * sizeof(u16));
-		gbacore_set_video_buffer(emuA.core, emuA.fb, GBA_FB_STRIDE);
-		romOk = gbacore_load_rom(emuA.core, romPath);
-		if (romOk) {
-			C3D_TexInit(&emuA.tex, 256, 256, GPU_RGB565);
-			C3D_TexSetFilter(&emuA.tex, GPU_NEAREST, GPU_NEAREST); // sharp pixels
-			emuA.has_tex = true;
-		}
-	}
-	if (!romOk && emuA.core) { gbacore_destroy(emuA.core); emuA.core = NULL; }
+	// v0.3: a real mGBA core per screen (each owns its ROM — no FIXED_ROM_BUFFER).
+	bool okA = setup_core(&emuA, "sdmc:/dual-gba/gameA.gba");
+	bool okB = setup_core(&emuB, "sdmc:/dual-gba/gameB.gba");
 
-	int focused = 0; // which game currently receives input
+	int focused = 0; // which game receives input
 
 	while (aptMainLoop()) {
 		hidScanInput();
@@ -174,55 +181,46 @@ int main(int argc, char** argv) {
 		LightEvent_Wait(&emuA.done);
 		LightEvent_Wait(&emuB.done);
 
-		// Build on-screen text once per frame (single buffer; no mid-frame clears).
+		// Build the small core-readout text once per frame (single buffer).
 		C2D_TextBufClear(txtBuf);
-		char line[96];
-		snprintf(line, sizeof line, "v0.2  N3DS:%d  A core:%ld  B core:%ld  rom:%s",
-		         (int)isN3DS, (long)emuA.core_id, (long)emuB.core_id, romOk ? "ok" : "FAIL");
-		C2D_Text txtReadout, txtErr;
+		char line[64];
+		snprintf(line, sizeof line, "A core:%ld %s   B core:%ld %s",
+		         (long)emuA.core_id, okA ? "" : "(no rom)",
+		         (long)emuB.core_id, okB ? "" : "(no rom)");
+		C2D_Text txtReadout;
 		C2D_TextParse(&txtReadout, txtBuf, line);
 		C2D_TextOptimize(&txtReadout);
-		bool gameA = (emuA.core && emuA.has_tex);
-		if (!gameA) {
-			C2D_TextParse(&txtErr, txtBuf, "Game A: ROM load failed (sdmc:/dual-gba/gameA.gba)");
-			C2D_TextOptimize(&txtErr);
-		}
 
-		// Texture upload happens outside the citro3d frame (GPU idle).
-		if (gameA) upload_frame(&emuA);
+		// Texture uploads happen outside the citro3d frame (GPU idle).
+		if (emuA.core) upload_frame(&emuA);
+		if (emuB.core) upload_frame(&emuB);
 
 		C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
 
-		// --- Top screen: Game A (real core) or a load-failure message ---
+		// --- Top screen: Game A ---
 		C2D_TargetClear(top, clrBg);
 		C2D_SceneBegin(top);
-		if (gameA) {
-			draw_game(&emuA, 400.0f, 240.0f);
-		} else {
-			C2D_DrawText(&txtErr, C2D_WithColor, 8.0f, 110.0f, 0.0f, 0.5f, 0.5f, clrTxt);
-		}
+		if (emuA.core) draw_game(&emuA, 400.0f, 240.0f);
 		if (focused == 0) C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 400.0f, 6.0f, clrHi);
 
-		// --- Bottom screen: placeholder box + the v0.1 core readout ---
+		// --- Bottom screen: Game B (+ small readout in the top letterbox) ---
 		C2D_TargetClear(bot, clrBg);
 		C2D_SceneBegin(bot);
-		C2D_DrawRectSolid(20.0f + (float)(emuB.frame % 240), 90.0f, 0.0f, 60.0f, 60.0f, clrB);
+		if (emuB.core) draw_game(&emuB, 320.0f, 240.0f);
 		if (focused == 1) C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 6.0f, clrHi);
-		C2D_DrawText(&txtReadout, C2D_WithColor, 6.0f, 10.0f, 0.0f, 0.5f, 0.5f, clrTxt);
+		C2D_DrawText(&txtReadout, C2D_WithColor, 4.0f, 0.0f, 0.0f, 0.4f, 0.4f, clrTxt);
 
 		C3D_FrameEnd(0);
 	}
 
-	// --- Shutdown ---
 	g_quit = true;
 	LightEvent_Signal(&emuA.go);
 	LightEvent_Signal(&emuB.go);
 	if (emuA.thread) { threadJoin(emuA.thread, U64_MAX); threadFree(emuA.thread); }
 	if (emuB.thread) { threadJoin(emuB.thread, U64_MAX); threadFree(emuB.thread); }
 
-	if (emuA.core)    gbacore_destroy(emuA.core);
-	if (emuA.has_tex) C3D_TexDelete(&emuA.tex);
-	if (emuA.fb)      linearFree(emuA.fb);
+	teardown_core(&emuA);
+	teardown_core(&emuB);
 
 	C2D_TextBufDelete(txtBuf);
 	C2D_Fini();
