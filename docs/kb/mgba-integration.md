@@ -75,7 +75,9 @@ Cloned to `external/` (gitignored). Three non-obvious gotchas, all confirmed:
 ```bash
 export DEVKITPRO=/opt/devkitpro
 export DEVKITARM=/opt/devkitpro/devkitARM        # on its OWN line — one-line export mis-expands $DEVKITPRO
-cd external/mgba && mkdir build-3ds && cd build-3ds
+cd external/mgba
+sed -i '' 's/ FIXED_ROM_BUFFER//' src/platform/3ds/CMakeLists.txt   # DUAL-CORE: per-core ROM (see warning below)
+mkdir build-3ds && cd build-3ds
 cmake -G "Unix Makefiles" \
   -DCMAKE_TOOLCHAIN_FILE=../src/platform/3ds/CMakeToolchain.txt \
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
@@ -105,6 +107,26 @@ exact set. As built here it is:
 - **Isolate mGBA in a wrapper TU** (e.g. `source/gbacore.c`) that does **not** include
   `<3ds.h>` — both mGBA and libctru define `u8`/`u16`, so keep them in separate files; expose
   a plain-C API (`uint16_t*`, `uint32_t keys`) to `main.c`.
+
+### ⚠️ FIXED_ROM_BUFFER breaks dual-core — rebuild without it (done)
+
+mGBA's 3DS frontend sets `FIXED_ROM_BUFFER` (`src/platform/3ds/CMakeLists.txt:14`
+`OS_DEFINES`), and it propagates into the core. Under it the GBA core does **not** allocate
+per-instance ROM memory — it points `gba->memory.rom` at a **single global
+`uint32_t* romBuffer`** (`src/gba/gba.c:62`; defined by the frontend in `ctru-heap.c` as one
+32 MB malloc). Fine for mGBA's single-core frontend, **fatal for our two cores**: both would
+share one ROM buffer, so the second load clobbers the first.
+
+**Fix (applied):** strip `FIXED_ROM_BUFFER` from that `OS_DEFINES` line before configuring
+(the `sed` in the recipe above) so each core mallocs its own ROM. Then load each ROM via the
+**preload** path — `mCorePreloadVF` / `mCorePreloadVFCB` — which reads the whole ROM into a
+per-core malloc'd buffer. This matters because the 3DS VFile has **no `mmap`**, so the plain
+`loadROM` map path won't work; preload is the per-instance equivalent (it's *why* mGBA chose
+FIXED_ROM_BUFFER on 3DS in the first place). Sequence per core:
+`VFileOpen(path, O_RDONLY)` → `mCorePreloadVF(core, vf)` → `mCoreAutoloadSave` → `reset`.
+Verify two ROMs load independently at v0.3.
+
+(The `libmgba.a` in `build-3ds/` was rebuilt this way on 2026-06-03 — dual-core-ready.)
 
 ## Milestones (detail; see toolkit ../../../docs/ROADMAP.md for M0–M4)
 
