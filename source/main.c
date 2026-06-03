@@ -117,19 +117,67 @@ static void upload_frame(EmuInstance* e) {
 		GX_TRANSFER_OUT_TILED(1) | GX_TRANSFER_FLIP_VERT(0));
 }
 
-static void draw_game(EmuInstance* e, float screenW, float screenH) {
-	Tex3DS_SubTexture sub = {
-		.width = GBA_W, .height = GBA_H,
-		.left = 0.0f, .top = 1.0f,
-		.right = (float)GBA_W / 256.0f,
-		.bottom = 1.0f - (float)GBA_H / 256.0f,
-	};
-	C2D_Image img = { .tex = &e->tex, .subtex = &sub };
-	float sx = screenW / GBA_W, sy = screenH / GBA_H;
-	float scale = sx < sy ? sx : sy;
-	float x = (screenW - GBA_W * scale) / 2.0f;
-	float y = (screenH - GBA_H * scale) / 2.0f;
-	C2D_DrawImageAt(img, x, y, 0.0f, NULL, scale, scale);
+// ---- Scaling modes (v0.6): live-cycled with ZR ----
+enum { SCALE_1X, SCALE_FIT, SCALE_STRETCH };
+static const char* SCALE_NAMES[] = { "1:1", "Aspect-fit", "Stretch" };
+
+// Sharp-bilinear (the "Sharp" filter at fractional scales): integer-NEAREST prescale the
+// 240x160 frame into an offscreen target, then LINEAR-downscale that to fit the screen.
+// Linear then only blends between already-huge clean pixels -> crisp edges, no shimmer, no
+// blur. This is exactly what mGBA's own 3DS port does. 2x is enough to kill the wobble at
+// the 1.5x/1.33x screen-fit factors; PRE_TEX is the POT texture that backs the 480x320 buffer.
+#define PRESCALE 2
+#define PRE_W    (GBA_W * PRESCALE)   // 480
+#define PRE_H    (GBA_H * PRESCALE)   // 320
+#define PRE_TEX  512
+
+// Draw one game to `screen` at the current scale + filter, leaving `screen` bound so the
+// caller can draw overlays (focus bar, toast, menu) on top. `preTgt`/`preTex` are the shared
+// offscreen prescale buffer, reused per screen (sequential on the render thread -> no race).
+static void render_game(EmuInstance* e, C3D_RenderTarget* screen, C3D_RenderTarget* preTgt,
+                        C3D_Tex* preTex, float screenW, float screenH,
+                        int mode, bool smooth, u32 clrBg) {
+	if (!e->core) { C2D_TargetClear(screen, clrBg); C2D_SceneBegin(screen); return; }
+
+	float sx, sy;
+	if (mode == SCALE_1X)           { sx = sy = 1.0f; }
+	else if (mode == SCALE_STRETCH) { sx = screenW / GBA_W; sy = screenH / GBA_H; }
+	else { float f = (screenW / GBA_W < screenH / GBA_H) ? screenW / GBA_W : screenH / GBA_H; sx = sy = f; }
+	float x = (screenW - GBA_W * sx) / 2.0f;
+	float y = (screenH - GBA_H * sy) / 2.0f;
+
+	// 1:1 is already pixel-perfect; sharp-bilinear only helps the fractional fits.
+	bool sharpBilinear = !smooth && mode != SCALE_1X && preTgt;
+
+	if (sharpBilinear) {
+		// Pass 0: NEAREST integer prescale 240x160 -> 480x320 into the offscreen target.
+		Tex3DS_SubTexture s0 = { GBA_W, GBA_H, 0.0f, 1.0f,
+		                         (float)GBA_W / 256.0f, 1.0f - (float)GBA_H / 256.0f };
+		C2D_Image i0 = { &e->tex, &s0 };   // source = this core's 256x256 GBA texture
+		C3D_TexSetFilter(&e->tex, GPU_NEAREST, GPU_NEAREST);
+		C2D_TargetClear(preTgt, C2D_Color32(0, 0, 0, 0));
+		C2D_SceneBegin(preTgt);
+		C2D_DrawImageAt(i0, 0.0f, 0.0f, 0.0f, NULL, (float)PRESCALE, (float)PRESCALE);
+
+		// Pass 1: LINEAR draw the prescaled image, fit to the final on-screen rect.
+		Tex3DS_SubTexture s1 = { PRE_W, PRE_H, 0.0f, 1.0f,
+		                         (float)PRE_W / PRE_TEX, 1.0f - (float)PRE_H / PRE_TEX };
+		C2D_Image i1 = { preTex, &s1 };
+		C3D_TexSetFilter(preTex, GPU_LINEAR, GPU_LINEAR);
+		C2D_TargetClear(screen, clrBg);
+		C2D_SceneBegin(screen);
+		C2D_DrawImageAt(i1, x, y, 0.0f, NULL, (GBA_W * sx) / PRE_W, (GBA_H * sy) / PRE_H);
+	} else {
+		// Direct draw: NEAREST for 1:1/Sharp, LINEAR for Smooth.
+		Tex3DS_SubTexture s = { GBA_W, GBA_H, 0.0f, 1.0f,
+		                        (float)GBA_W / 256.0f, 1.0f - (float)GBA_H / 256.0f };
+		C2D_Image img = { &e->tex, &s };
+		GPU_TEXTURE_FILTER_PARAM f = smooth ? GPU_LINEAR : GPU_NEAREST;
+		C3D_TexSetFilter(&e->tex, f, f);
+		C2D_TargetClear(screen, clrBg);
+		C2D_SceneBegin(screen);
+		C2D_DrawImageAt(img, x, y, 0.0f, NULL, sx, sy);
+	}
 }
 
 // ---- Pause menu ----
@@ -156,11 +204,25 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 	setup_core(&emuA, pathA);
 	setup_core(&emuB, pathB);
 
+	// Shared offscreen target for sharp-bilinear's NEAREST prescale pass (reused per screen).
+	C3D_Tex preTex;
+	C3D_RenderTarget* preTgt = NULL;
+	if (C3D_TexInitVRAM(&preTex, PRE_TEX, PRE_TEX, GPU_RGBA8)) {
+		C3D_TexSetWrap(&preTex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+		preTgt = C3D_RenderTargetCreateFromTex(&preTex, GPU_TEXFACE_2D, 0, -1);
+	}
+
 	int focused = 0;
 	bool menuOpen = false;
 	int  menuSel = 0;
 	int  result = SESSION_QUIT;
 	char status[24] = "";   // last save/load result, shown in the menu
+	// Scale + filter are PER SCREEN ([0]=top, [1]=bottom): the 400x240 top and 320x240 bottom
+	// have different best fits. ZR/ZL adjust the focused screen (X/Y switches focus).
+	int  scaleMode[2] = { SCALE_FIT, SCALE_FIT };
+	bool smooth[2]    = { false, false };
+	char toast[48] = "";
+	int  toastTimer = 0;
 
 	while (aptMainLoop()) {
 		hidScanInput();
@@ -173,6 +235,18 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 				menuOpen = true; menuSel = 0; status[0] = '\0';
 			} else {
 				if (kDown & (KEY_X | KEY_Y)) focused ^= 1;
+				if (kDown & KEY_ZR) {
+					scaleMode[focused] = (scaleMode[focused] + 1) % 3;
+					snprintf(toast, sizeof toast, "%s scale: %s",
+					         focused == 0 ? "Top" : "Bottom", SCALE_NAMES[scaleMode[focused]]);
+					toastTimer = 90;
+				}
+				if (kDown & KEY_ZL) {
+					smooth[focused] = !smooth[focused];   // render_game sets the per-pass filters
+					snprintf(toast, sizeof toast, "%s filter: %s", focused == 0 ? "Top" : "Bottom",
+					         smooth[focused] ? "Smooth" : "Sharp-bilinear");
+					toastTimer = 90;
+				}
 				u16 g = to_gba_keys(kHeld);
 				emuA.keys = (focused == 0) ? g : 0;
 				emuB.keys = (focused == 1) ? g : 0;
@@ -200,27 +274,25 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 
 		// ---- text for this frame (single buffer; cleared once) ----
 		C2D_TextBufClear(txtBuf);
-		C2D_Text items[MENU_N], tHint, tStatus;
+		C2D_Text items[MENU_N], tHint, tStatus, tToast;
 		if (menuOpen) {
 			for (int i = 0; i < MENU_N; i++) { C2D_TextParse(&items[i], txtBuf, MENU_ITEMS[i]); C2D_TextOptimize(&items[i]); }
 			if (status[0]) { C2D_TextParse(&tStatus, txtBuf, status); C2D_TextOptimize(&tStatus); }
 		} else {
 			C2D_TextParse(&tHint, txtBuf, "tap or START+SELECT for menu");
 			C2D_TextOptimize(&tHint);
+			if (toastTimer > 0) { C2D_TextParse(&tToast, txtBuf, toast); C2D_TextOptimize(&tToast); }
 		}
 
 		C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
 
-		// top: game A
-		C2D_TargetClear(top, clrBg);
-		C2D_SceneBegin(top);
-		if (emuA.core) draw_game(&emuA, 400.0f, 240.0f);
+		// top: game A (sharp-bilinear two-pass when applicable). render_game leaves `top` bound.
+		render_game(&emuA, top, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], clrBg);
 		if (!menuOpen && focused == 0) C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 400.0f, 6.0f, clrHi);
+		if (!menuOpen && toastTimer > 0) C2D_DrawText(&tToast, C2D_WithColor, 8.0f, 8.0f, 0.0f, 0.5f, 0.5f, clrHi);
 
-		// bottom: game B (+ menu overlay when open)
-		C2D_TargetClear(bot, clrBg);
-		C2D_SceneBegin(bot);
-		if (emuB.core) draw_game(&emuB, 320.0f, 240.0f);
+		// bottom: game B (+ menu overlay when open). render_game leaves `bot` bound.
+		render_game(&emuB, bot, preTgt, &preTex, 320.0f, 240.0f, scaleMode[1], smooth[1], clrBg);
 		if (!menuOpen && focused == 1) C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 6.0f, clrHi);
 		if (menuOpen) {
 			C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 240.0f, clrDim);
@@ -237,6 +309,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 		}
 
 		C3D_FrameEnd(0);
+		if (toastTimer > 0) toastTimer--;
 	}
 
 	// teardown this session's workers + cores; reset g_quit for the next session
@@ -247,6 +320,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 	if (emuB.thread) { threadJoin(emuB.thread, U64_MAX); threadFree(emuB.thread); }
 	teardown_core(&emuA);
 	teardown_core(&emuB);
+	if (preTgt) { C3D_RenderTargetDelete(preTgt); C3D_TexDelete(&preTex); }
 	g_quit = false;
 	return result;
 }
