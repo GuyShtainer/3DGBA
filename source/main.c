@@ -16,7 +16,9 @@
 
 #include "gbacore.h"
 
-#define WORKER_STACKSIZE (32 * 1024)
+// mGBA's runFrame has deep call chains — 32 KB overflows and smashes memory.
+// Give each worker a generous stack (two of these is still ~1 MB, negligible).
+#define WORKER_STACKSIZE (512 * 1024)
 
 typedef struct {
 	int        id;
