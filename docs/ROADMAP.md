@@ -14,6 +14,19 @@ set of GUI/visual decisions, sequenced around the two real unknowns — the **tw
 performance gate** and the **link-cable concurrency spike**. It supersedes the toolkit's
 high-level M0–M4 note (`../../docs/ROADMAP.md`), which stays as the toolkit-level verdict.
 
+## Status (2026-06-03)
+
+- **v0.1–v0.3 + v0.5: done.** Two real GBA games emulate at once, one per screen (mGBA via
+  `libmgba`), X/Y focus, per-core ROMs, and a boot-time ROM picker.
+- **v0.4 PERF GATE = ✅ GREEN** — two cores run at **full speed on a real New 3DS** (`.cia`).
+  Main line confirmed; the **link cable (v0.8) is viable** (no gpSP fork needed). Azahar's
+  slowness was purely nested-emulation, as predicted.
+- **Hard-won lesson:** keep `FIXED_ROM_BUFFER` on 3DS — removing it NULL-crashes via
+  `_pristineCow`; dual-core uses a per-core `romBuffer`. See `docs/kb/mgba-integration.md`.
+- **Current:** v0.6 presentation. Known issue: upscale "blur" — the GBA's 240×160 fills the
+  3DS screens only at fractional scale (1.5× top / 1.33× bottom), which softens pixels even
+  with nearest filtering. Fix = scaling modes (incl. pixel-perfect) + a sharp upscale.
+
 ## Locked GUI / visual decisions (the design contract)
 
 | Area | Decision |
