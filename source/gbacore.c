@@ -3,10 +3,13 @@
 // libmgba.a was built with (see Makefile MGBA_DEFS / docs/kb/mgba-integration.md).
 
 #include <stdlib.h>
-#include <fcntl.h>   // O_RDONLY
+#include <string.h>
+#include <stdio.h>
+#include <fcntl.h>   // O_RDONLY / O_WRONLY / O_CREAT
 
 #include <mgba/core/core.h>
 #include <mgba/core/config.h>
+#include <mgba/core/serialize.h>   // mCoreSaveStateNamed / SAVESTATE_ALL
 #include <mgba-util/vfs.h>
 #include <mgba-util/audio-buffer.h>
 
@@ -24,7 +27,8 @@ static bool s_bootRomBufTaken = false;
 
 struct GbaCore {
 	struct mCore* core;
-	void*         rom;    // dedicated buffer if we malloc'd one; NULL if using the boot buffer
+	void*         rom;            // dedicated buffer if we malloc'd one; NULL if using the boot buffer
+	char          rompath[256];   // for deriving save-state paths
 };
 
 GbaCore* gbacore_create(void) {
@@ -69,6 +73,8 @@ bool gbacore_load_rom(GbaCore* g, const char* path) {
 	}
 	mCoreAutoloadSave(g->core);
 	g->core->reset(g->core);              // captures gba->memory.rom = romBuffer (this core's)
+	strncpy(g->rompath, path, sizeof g->rompath - 1);
+	g->rompath[sizeof g->rompath - 1] = '\0';
 	return true;
 }
 
@@ -80,6 +86,28 @@ void gbacore_run_frame(GbaCore* g) {
 	g->core->runFrame(g->core);
 	// No audio path yet (v0.7) — drain the core's audio buffer so it can't back up.
 	mAudioBufferClear(g->core->getAudioBuffer(g->core));
+}
+
+bool gbacore_save_state(GbaCore* g, int slot) {
+	if (!g || !g->core || !g->rompath[0]) return false;
+	char p[300];
+	snprintf(p, sizeof p, "%s.ss%d", g->rompath, slot);
+	struct VFile* vf = VFileOpen(p, O_WRONLY | O_CREAT | O_TRUNC);
+	if (!vf) return false;
+	bool ok = mCoreSaveStateNamed(g->core, vf, SAVESTATE_ALL);
+	vf->close(vf);
+	return ok;
+}
+
+bool gbacore_load_state(GbaCore* g, int slot) {
+	if (!g || !g->core || !g->rompath[0]) return false;
+	char p[300];
+	snprintf(p, sizeof p, "%s.ss%d", g->rompath, slot);
+	struct VFile* vf = VFileOpen(p, O_RDONLY);
+	if (!vf) return false;   // no state saved yet
+	bool ok = mCoreLoadStateNamed(g->core, vf, SAVESTATE_ALL);
+	vf->close(vf);
+	return ok;
 }
 
 void gbacore_destroy(GbaCore* g) {

@@ -134,8 +134,10 @@ static void draw_game(EmuInstance* e, float screenW, float screenH) {
 
 // ---- Pause menu ----
 enum { SESSION_CHANGE, SESSION_QUIT };
-static const char* MENU_ITEMS[] = { "Resume", "Change games", "Quit" };
-#define MENU_N 3
+static const char* MENU_ITEMS[] = {
+	"Resume", "Save A", "Load A", "Save B", "Load B", "Change games", "Quit"
+};
+#define MENU_N 7
 
 // Run one play session with the two chosen ROMs. Returns SESSION_CHANGE (re-pick) or
 // SESSION_QUIT. Creates/destroys the cores + worker threads itself.
@@ -158,6 +160,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 	bool menuOpen = false;
 	int  menuSel = 0;
 	int  result = SESSION_QUIT;
+	char status[24] = "";   // last save/load result, shown in the menu
 
 	while (aptMainLoop()) {
 		hidScanInput();
@@ -167,7 +170,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 		if (!menuOpen) {
 			bool combo = (kHeld & KEY_START) && (kHeld & KEY_SELECT);
 			if ((kDown & KEY_TOUCH) || combo) {
-				menuOpen = true; menuSel = 0;
+				menuOpen = true; menuSel = 0; status[0] = '\0';
 			} else {
 				if (kDown & (KEY_X | KEY_Y)) focused ^= 1;
 				u16 g = to_gba_keys(kHeld);
@@ -185,17 +188,22 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 			if (kDown & (KEY_DUP   | KEY_CPAD_UP))   menuSel = (menuSel - 1 + MENU_N) % MENU_N;
 			if (kDown & KEY_B) menuOpen = false;                 // resume
 			if (kDown & KEY_A) {
-				if (menuSel == 0) menuOpen = false;              // Resume
-				else if (menuSel == 1) { result = SESSION_CHANGE; break; }
-				else { result = SESSION_QUIT; break; }
+				if      (menuSel == 0) menuOpen = false;         // Resume
+				else if (menuSel == 1) snprintf(status, sizeof status, "%s", gbacore_save_state(emuA.core, 1) ? "Saved A"  : "Save A failed");
+				else if (menuSel == 2) snprintf(status, sizeof status, "%s", gbacore_load_state(emuA.core, 1) ? "Loaded A" : "No state A");
+				else if (menuSel == 3) snprintf(status, sizeof status, "%s", gbacore_save_state(emuB.core, 1) ? "Saved B"  : "Save B failed");
+				else if (menuSel == 4) snprintf(status, sizeof status, "%s", gbacore_load_state(emuB.core, 1) ? "Loaded B" : "No state B");
+				else if (menuSel == 5) { result = SESSION_CHANGE; break; }
+				else                   { result = SESSION_QUIT;   break; }
 			}
 		}
 
 		// ---- text for this frame (single buffer; cleared once) ----
 		C2D_TextBufClear(txtBuf);
-		C2D_Text items[MENU_N], tHint;
+		C2D_Text items[MENU_N], tHint, tStatus;
 		if (menuOpen) {
 			for (int i = 0; i < MENU_N; i++) { C2D_TextParse(&items[i], txtBuf, MENU_ITEMS[i]); C2D_TextOptimize(&items[i]); }
+			if (status[0]) { C2D_TextParse(&tStatus, txtBuf, status); C2D_TextOptimize(&tStatus); }
 		} else {
 			C2D_TextParse(&tHint, txtBuf, "tap or START+SELECT for menu");
 			C2D_TextOptimize(&tHint);
@@ -216,13 +224,14 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 		if (!menuOpen && focused == 1) C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 6.0f, clrHi);
 		if (menuOpen) {
 			C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 240.0f, clrDim);
-			C2D_DrawRectSolid(60.0f, 60.0f, 0.0f, 200.0f, 120.0f, clrPanel);
+			C2D_DrawRectSolid(34.0f, 8.0f, 0.0f, 252.0f, 224.0f, clrPanel);
 			for (int i = 0; i < MENU_N; i++) {
-				float y = 78.0f + i * 30.0f;
+				float y = 16.0f + i * 26.0f;
 				bool s = (i == menuSel);
-				if (s) C2D_DrawRectSolid(72.0f, y - 3.0f, 0.0f, 176.0f, 26.0f, clrHi);
-				C2D_DrawText(&items[i], C2D_WithColor, 88.0f, y, 0.0f, 0.6f, 0.6f, s ? clrSelTxt : clrTxt);
+				if (s) C2D_DrawRectSolid(44.0f, y - 2.0f, 0.0f, 232.0f, 24.0f, clrHi);
+				C2D_DrawText(&items[i], C2D_WithColor, 56.0f, y, 0.0f, 0.6f, 0.6f, s ? clrSelTxt : clrTxt);
 			}
+			if (status[0]) C2D_DrawText(&tStatus, C2D_WithColor, 44.0f, 204.0f, 0.0f, 0.5f, 0.5f, clrTxt);
 		} else {
 			C2D_DrawText(&tHint, C2D_WithColor, 6.0f, 224.0f, 0.0f, 0.4f, 0.4f, clrTxt);
 		}

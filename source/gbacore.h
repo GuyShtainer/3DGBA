@@ -31,4 +31,10 @@ bool     gbacore_load_rom(GbaCore* c, const char* path);
 
 void     gbacore_set_keys(GbaCore* c, uint16_t gba_keys);  // mask of (1 << GBAKEY_x)
 void     gbacore_run_frame(GbaCore* c);                    // one frame; drains audio (no sound yet)
+
+// Save/load an emulator save-state to <rom-path>.ss<slot>. Returns false on failure
+// (e.g. no state file to load). Separate from the in-game .sav (battery) save.
+bool     gbacore_save_state(GbaCore* c, int slot);
+bool     gbacore_load_state(GbaCore* c, int slot);
+
 void     gbacore_destroy(GbaCore* c);
