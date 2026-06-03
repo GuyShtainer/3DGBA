@@ -183,9 +183,9 @@ static void render_game(EmuInstance* e, C3D_RenderTarget* screen, C3D_RenderTarg
 // ---- Pause menu ----
 enum { SESSION_CHANGE, SESSION_QUIT };
 static const char* MENU_ITEMS[] = {
-	"Resume", "Save A", "Load A", "Save B", "Load B", "Change games", "Quit"
+	"Resume", "Swap screens", "Save A", "Load A", "Save B", "Load B", "Change games", "Quit"
 };
-#define MENU_N 7
+#define MENU_N 8
 
 // Run one play session with the two chosen ROMs. Returns SESSION_CHANGE (re-pick) or
 // SESSION_QUIT. Creates/destroys the cores + worker threads itself.
@@ -221,6 +221,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 	// have different best fits. ZR/ZL adjust the focused screen (X/Y switches focus).
 	int  scaleMode[2] = { SCALE_FIT, SCALE_FIT };
 	bool smooth[2]    = { false, false };
+	bool swapped      = false;   // false: A=top / B=bottom. true: B=top / A=bottom.
 	char toast[48] = "";
 	int  toastTimer = 0;
 
@@ -235,16 +236,17 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 				menuOpen = true; menuSel = 0; status[0] = '\0';
 			} else {
 				if (kDown & (KEY_X | KEY_Y)) focused ^= 1;
+				int fs = swapped ? (focused ^ 1) : focused;   // screen the focused game sits on
 				if (kDown & KEY_ZR) {
-					scaleMode[focused] = (scaleMode[focused] + 1) % 3;
+					scaleMode[fs] = (scaleMode[fs] + 1) % 3;
 					snprintf(toast, sizeof toast, "%s scale: %s",
-					         focused == 0 ? "Top" : "Bottom", SCALE_NAMES[scaleMode[focused]]);
+					         fs == 0 ? "Top" : "Bottom", SCALE_NAMES[scaleMode[fs]]);
 					toastTimer = 90;
 				}
 				if (kDown & KEY_ZL) {
-					smooth[focused] = !smooth[focused];   // render_game sets the per-pass filters
-					snprintf(toast, sizeof toast, "%s filter: %s", focused == 0 ? "Top" : "Bottom",
-					         smooth[focused] ? "Smooth" : "Sharp-bilinear");
+					smooth[fs] = !smooth[fs];   // render_game sets the per-pass filters
+					snprintf(toast, sizeof toast, "%s filter: %s", fs == 0 ? "Top" : "Bottom",
+					         smooth[fs] ? "Smooth" : "Sharp-bilinear");
 					toastTimer = 90;
 				}
 				u16 g = to_gba_keys(kHeld);
@@ -263,11 +265,16 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 			if (kDown & KEY_B) menuOpen = false;                 // resume
 			if (kDown & KEY_A) {
 				if      (menuSel == 0) menuOpen = false;         // Resume
-				else if (menuSel == 1) snprintf(status, sizeof status, "%s", gbacore_save_state(emuA.core, 1) ? "Saved A"  : "Save A failed");
-				else if (menuSel == 2) snprintf(status, sizeof status, "%s", gbacore_load_state(emuA.core, 1) ? "Loaded A" : "No state A");
-				else if (menuSel == 3) snprintf(status, sizeof status, "%s", gbacore_save_state(emuB.core, 1) ? "Saved B"  : "Save B failed");
-				else if (menuSel == 4) snprintf(status, sizeof status, "%s", gbacore_load_state(emuB.core, 1) ? "Loaded B" : "No state B");
-				else if (menuSel == 5) { result = SESSION_CHANGE; break; }
+				else if (menuSel == 1) {                         // Swap screens
+					swapped = !swapped; menuOpen = false;
+					snprintf(toast, sizeof toast, "Layout: %s", swapped ? "B top / A bottom" : "A top / B bottom");
+					toastTimer = 90;
+				}
+				else if (menuSel == 2) snprintf(status, sizeof status, "%s", gbacore_save_state(emuA.core, 1) ? "Saved A"  : "Save A failed");
+				else if (menuSel == 3) snprintf(status, sizeof status, "%s", gbacore_load_state(emuA.core, 1) ? "Loaded A" : "No state A");
+				else if (menuSel == 4) snprintf(status, sizeof status, "%s", gbacore_save_state(emuB.core, 1) ? "Saved B"  : "Save B failed");
+				else if (menuSel == 5) snprintf(status, sizeof status, "%s", gbacore_load_state(emuB.core, 1) ? "Loaded B" : "No state B");
+				else if (menuSel == 6) { result = SESSION_CHANGE; break; }
 				else                   { result = SESSION_QUIT;   break; }
 			}
 		}
@@ -284,26 +291,31 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 			if (toastTimer > 0) { C2D_TextParse(&tToast, txtBuf, toast); C2D_TextOptimize(&tToast); }
 		}
 
+		// Map games to screens. Scale/filter stay tied to the SCREEN; focus/input to the GAME.
+		EmuInstance* topG = swapped ? &emuB : &emuA;
+		EmuInstance* botG = swapped ? &emuA : &emuB;
+		int focScreen = swapped ? (focused ^ 1) : focused;   // screen showing the focused game
+
 		C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
 
-		// top: game A (sharp-bilinear two-pass when applicable). render_game leaves `top` bound.
-		render_game(&emuA, top, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], clrBg);
-		if (!menuOpen && focused == 0) C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 400.0f, 6.0f, clrHi);
+		// top screen (sharp-bilinear two-pass when applicable). render_game leaves `top` bound.
+		render_game(topG, top, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], clrBg);
+		if (!menuOpen && focScreen == 0) C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 400.0f, 6.0f, clrHi);
 		if (!menuOpen && toastTimer > 0) C2D_DrawText(&tToast, C2D_WithColor, 8.0f, 8.0f, 0.0f, 0.5f, 0.5f, clrHi);
 
-		// bottom: game B (+ menu overlay when open). render_game leaves `bot` bound.
-		render_game(&emuB, bot, preTgt, &preTex, 320.0f, 240.0f, scaleMode[1], smooth[1], clrBg);
-		if (!menuOpen && focused == 1) C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 6.0f, clrHi);
+		// bottom screen (+ menu overlay when open). render_game leaves `bot` bound.
+		render_game(botG, bot, preTgt, &preTex, 320.0f, 240.0f, scaleMode[1], smooth[1], clrBg);
+		if (!menuOpen && focScreen == 1) C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 6.0f, clrHi);
 		if (menuOpen) {
 			C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 240.0f, clrDim);
-			C2D_DrawRectSolid(34.0f, 8.0f, 0.0f, 252.0f, 224.0f, clrPanel);
+			C2D_DrawRectSolid(34.0f, 6.0f, 0.0f, 252.0f, 228.0f, clrPanel);
 			for (int i = 0; i < MENU_N; i++) {
-				float y = 16.0f + i * 26.0f;
+				float y = 12.0f + i * 24.0f;
 				bool s = (i == menuSel);
-				if (s) C2D_DrawRectSolid(44.0f, y - 2.0f, 0.0f, 232.0f, 24.0f, clrHi);
-				C2D_DrawText(&items[i], C2D_WithColor, 56.0f, y, 0.0f, 0.6f, 0.6f, s ? clrSelTxt : clrTxt);
+				if (s) C2D_DrawRectSolid(44.0f, y - 2.0f, 0.0f, 232.0f, 22.0f, clrHi);
+				C2D_DrawText(&items[i], C2D_WithColor, 56.0f, y, 0.0f, 0.55f, 0.55f, s ? clrSelTxt : clrTxt);
 			}
-			if (status[0]) C2D_DrawText(&tStatus, C2D_WithColor, 44.0f, 204.0f, 0.0f, 0.5f, 0.5f, clrTxt);
+			if (status[0]) C2D_DrawText(&tStatus, C2D_WithColor, 44.0f, 206.0f, 0.0f, 0.5f, 0.5f, clrTxt);
 		} else {
 			C2D_DrawText(&tHint, C2D_WithColor, 6.0f, 224.0f, 0.0f, 0.4f, 0.4f, clrTxt);
 		}
