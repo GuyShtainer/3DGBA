@@ -1,0 +1,29 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "build",
+			"type": "shell",
+			"command": "make",
+			"args": ["-j4"],
+			"group": { "kind": "build", "isDefault": true },
+			"problemMatcher": ["$gcc"]
+		},
+		{
+			"label": "clean",
+			"type": "shell",
+			"command": "make",
+			"args": ["clean"],
+			"problemMatcher": []
+		},
+		{
+			"label": "run on 3DS (3dslink)",
+			"type": "shell",
+			"command": "3dslink",
+			"args": ["${workspaceFolder}/${workspaceFolderBasename}.3dsx"],
+			"dependsOn": "build",
+			"problemMatcher": [],
+			"detail": "Sends the built .3dsx to a 3DS running the Homebrew Launcher in netloader/receive mode (Y) on the same network."
+		}
+	]
+}
