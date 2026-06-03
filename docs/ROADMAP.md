@@ -33,8 +33,17 @@ high-level M0–M4 note (`../../docs/ROADMAP.md`), which stays as the toolkit-le
 - **Backlog / nice-to-have (later):** an **authentic GBA-BIOS-style boot animation** — the classic
   "Game Boy Advance" logo slide-down + chime — as an optional extra startup screen alongside the
   current custom splash. Purely cosmetic; deferred.
-- **Next:** hardware sign-off of the full v0.6 pass on a real New 3DS (sharp-bilinear adds GPU
-  passes — confirm 60fps holds with both cores), then v0.7 (solo audio + HUD + cover-art picker).
+- **v0.7 in progress.** Built (compile-clean, runtime-unverified): **solo audio** via ndsp (focused
+  core → one STEREO_PCM16 channel, unfocused drained, channel cleared on X/Y; rate pitch-matched to
+  the 3DS refresh) — *plus* the exheader fix (`app.rsf` was missing `dsp::DSP`, so `ndspInit` failed →
+  silence); **toggleable HUD** (per-screen game label + FPS/clock/battery); **auto-named ROM picker**
+  (GBA header → Gen-3 names/title); **recent pairings** (one-button resume of the last A+B at boot);
+  **settings persistence** (`sdmc:/dual-gba/settings.bin`). A temporary on-screen audio readout
+  (snd/rate/av/add/s0) is in to diagnose the reported silence; remove once audio is confirmed.
+- **Open: audio still silent in Azahar** as of last test — diag build pending the user's read of the
+  on-screen numbers to localize (ndspInit vs core-produces-samples vs ndsp-output).
+- **Next:** confirm audio (diag), then audio mixer modes (mixed/split + per-game volume), the
+  cover-art *grid* picker, and the v0.6/v0.7 hardware sign-off; then v0.8 link cable.
 
 ## Locked GUI / visual decisions (the design contract)
 
