@@ -128,6 +128,28 @@ Verify two ROMs load independently at v0.3.
 
 (The `libmgba.a` in `build-3ds/` was rebuilt this way on 2026-06-03 — dual-core-ready.)
 
+### Memory: two big ROMs need the `.cia` (124 MB), not the `.3dsx` (verified v0.3)
+
+Each core **preloads its whole ROM into RAM** (`mCorePreloadVF`, since no FIXED_ROM_BUFFER) →
+~ROM-size per core. Two 16 MB Pokémon ROMs = **32 MB** + per-core working set + framebuffers.
+
+- A **`.3dsx` under Azahar's homebrew loader gets a limited heap**: two 16 MB ROMs crash
+  ~12 s in (a *runtime* allocation OOMs and corrupts memory → wild code-shaped writes →
+  Dynarmic `brk` trap, not a clean failure). **Two ~7 MB ROMs run fine** — that's how the
+  cause was isolated (ruled out concurrency: serialized still crashed; ruled out stack:
+  512 KB still crashed; small ROMs = stable ⇒ memory).
+- The **`.cia` exheader sets `SystemModeExt: 124 MB`**, so two 16 MB ROMs fit with headroom →
+  **test big-ROM dual-GBA via the `.cia` on real hardware** (or use smaller ROMs in an
+  Azahar `.3dsx`). Azahar *installs* CIAs rather than booting them, so it's not a quick
+  big-ROM test bench.
+- **Worker stacks:** mGBA `runFrame` has deep call chains — use **≥512 KB per worker**
+  (32 KB overflows and smashes memory).
+- **Azahar caveat:** `svcGetProcessorID` (SVC `GetCurrentProcessorNumber`) is **unimplemented
+  in Azahar** → the on-screen core readout shows garbage there; it's correct on hardware.
+- **Robustness TODO:** mGBA's preload doesn't fail gracefully on OOM (it corrupts rather than
+  returning false). On memory-constrained targets, check free heap before loading the second
+  ROM and degrade to one core with a message instead of crashing.
+
 ## Milestones (detail; see toolkit ../../../docs/ROADMAP.md for M0–M4)
 
 - **M1a** build `libmgba.a` · **M1b** one core → top screen (proves the embed) ·
