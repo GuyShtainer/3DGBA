@@ -250,6 +250,41 @@ static void audio_feed(EmuInstance* focusedGame, EmuInstance* otherGame) {
 	}
 }
 
+// ---- Settings persistence (sdmc:/dual-gba/settings.bin) --------------------
+#define SETTINGS_PATH  "sdmc:/dual-gba/settings.bin"
+#define SETTINGS_MAGIC 0x31424744u   // 'DGB1'
+typedef struct {
+	u32 magic;
+	s32 scaleMode[2];
+	s32 smooth[2];
+	s32 swapped;
+	s32 hudOn;
+} Settings;
+
+static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, bool* hudOn) {
+	FILE* f = fopen(SETTINGS_PATH, "rb");
+	if (!f) return;
+	Settings s;
+	size_t n = fread(&s, 1, sizeof s, f);
+	fclose(f);
+	if (n != sizeof s || s.magic != SETTINGS_MAGIC) return;
+	scaleMode[0] = ((unsigned)s.scaleMode[0]) % 3;
+	scaleMode[1] = ((unsigned)s.scaleMode[1]) % 3;
+	smooth[0] = s.smooth[0] != 0;
+	smooth[1] = s.smooth[1] != 0;
+	*swapped  = s.swapped != 0;
+	*hudOn    = s.hudOn   != 0;
+}
+
+static void settings_save(const int scaleMode[2], const bool smooth[2], bool swapped, bool hudOn) {
+	Settings s = { SETTINGS_MAGIC, { scaleMode[0], scaleMode[1] },
+	               { smooth[0], smooth[1] }, swapped, hudOn };
+	FILE* f = fopen(SETTINGS_PATH, "wb");
+	if (!f) return;
+	fwrite(&s, 1, sizeof s, f);
+	fclose(f);
+}
+
 // ---- Pause menu ----
 enum { SESSION_CHANGE, SESSION_QUIT };
 static const char* MENU_ITEMS[] = {
@@ -314,6 +349,8 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 	u8  batLvl = 0;
 	int batTimer = 0;
 
+	settings_load(scaleMode, smooth, &swapped, &hudOn);   // restore saved prefs
+
 	while (aptMainLoop()) {
 		hidScanInput();
 		u32 kDown = hidKeysDown();
@@ -337,12 +374,14 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 					snprintf(toast, sizeof toast, "%s scale: %s",
 					         fs == 0 ? "Top" : "Bottom", SCALE_NAMES[scaleMode[fs]]);
 					toastTimer = 90;
+					settings_save(scaleMode, smooth, swapped, hudOn);
 				}
 				if (kDown & KEY_ZL) {
 					smooth[fs] = !smooth[fs];   // render_game sets the per-pass filters
 					snprintf(toast, sizeof toast, "%s filter: %s", fs == 0 ? "Top" : "Bottom",
 					         smooth[fs] ? "Smooth" : "Sharp-bilinear");
 					toastTimer = 90;
+					settings_save(scaleMode, smooth, swapped, hudOn);
 				}
 				u16 g = to_gba_keys(kHeld);
 				emuA.keys = (focused == 0) ? g : 0;
@@ -365,11 +404,13 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 				else if (menuSel == 1) {                         // Toggle HUD
 					hudOn = !hudOn;
 					snprintf(status, sizeof status, "HUD %s", hudOn ? "on" : "off");
+					settings_save(scaleMode, smooth, swapped, hudOn);
 				}
 				else if (menuSel == 2) {                         // Swap screens
 					swapped = !swapped; menuOpen = false;
 					snprintf(toast, sizeof toast, "Layout: %s", swapped ? "B top / A bottom" : "A top / B bottom");
 					toastTimer = 90;
+					settings_save(scaleMode, smooth, swapped, hudOn);
 				}
 				else if (menuSel == 3) snprintf(status, sizeof status, "%s", gbacore_save_state(emuA.core, 1) ? "Saved A"  : "Save A failed");
 				else if (menuSel == 4) snprintf(status, sizeof status, "%s", gbacore_load_state(emuA.core, 1) ? "Loaded A" : "No state A");
