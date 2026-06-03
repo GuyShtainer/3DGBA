@@ -12,8 +12,19 @@
 
 #include "gbacore.h"
 
+// FIXED_ROM_BUFFER: libmgba's 3DS build (ctru-heap.c, compiled into libmgba.a) DEFINES these
+// and allocates one boot romBuffer (~32 MB). The GBA core points gba->memory.rom at romBuffer,
+// captured at load/reset. For dual-core we reuse the boot buffer for the FIRST core and malloc
+// a dedicated buffer for the SECOND, pointing the global at each core's buffer before its load.
+// Loads run sequentially on the main thread at startup, so there's no race; normal runFrame
+// uses the per-core gba->memory.rom, not this global.
+extern uint32_t* romBuffer;
+extern size_t    romBufferSize;
+static bool s_bootRomBufTaken = false;
+
 struct GbaCore {
 	struct mCore* core;
+	void*         rom;    // dedicated buffer if we malloc'd one; NULL if using the boot buffer
 };
 
 GbaCore* gbacore_create(void) {
@@ -38,14 +49,26 @@ void gbacore_set_video_buffer(GbaCore* g, uint16_t* buf, unsigned stride) {
 bool gbacore_load_rom(GbaCore* g, const char* path) {
 	struct VFile* vf = VFileOpen(path, O_RDONLY);
 	if (!vf) return false;
-	// Preload reads the whole ROM into a per-core malloc'd buffer. Required on 3DS
-	// (no VFile mmap) and dual-core-safe (we built libmgba WITHOUT FIXED_ROM_BUFFER).
-	if (!mCorePreloadVF(g->core, vf)) {
-		vf->close(vf);            // close only on failure; on success the core owns it
+	// Allocate THIS core's ROM buffer and point the global at it before loading, so the
+	// core captures its own ROM. (FIXED_ROM_BUFFER avoids _pristineCow, which NULL-crashes
+	// on 3DS.) Loads are sequential at startup -> no race on the global.
+	size_t sz = vf->size(vf);
+	if (!s_bootRomBufTaken && romBuffer && romBufferSize >= sz) {
+		s_bootRomBufTaken = true;         // first core: reuse libmgba's boot romBuffer as-is
+		g->rom = NULL;                    // we don't own it -> don't free it
+	} else {
+		g->rom = malloc(sz);              // second core: its own buffer
+		if (!g->rom) { vf->close(vf); return false; }
+		romBuffer = (uint32_t*)g->rom;
+		romBufferSize = sz;
+	}
+	if (!mCorePreloadVF(g->core, vf)) {   // copies the ROM into romBuffer
+		vf->close(vf);                    // on success the core owns vf
+		free(g->rom); g->rom = NULL;
 		return false;
 	}
 	mCoreAutoloadSave(g->core);
-	g->core->reset(g->core);
+	g->core->reset(g->core);              // captures gba->memory.rom = romBuffer (this core's)
 	return true;
 }
 
@@ -65,5 +88,6 @@ void gbacore_destroy(GbaCore* g) {
 		mCoreConfigDeinit(&g->core->config);
 		g->core->deinit(g->core);
 	}
+	free(g->rom);
 	free(g);
 }

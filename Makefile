@@ -56,10 +56,11 @@ CFLAGS	+=	$(INCLUDE) -D__3DS__
 
 # --- embedded mGBA core (libmgba.a in external/mgba/build-3ds; see docs/kb/mgba-integration.md)
 # MGBA_DEFS MUST match how libmgba.a was built or struct layouts drift (ABI corruption).
-# (No FIXED_ROM_BUFFER: we rebuilt libmgba without it so each core owns its ROM.)
+# FIXED_ROM_BUFFER ON = 3DS-native ROM handling (no _pristineCow, which NULL-crashes on 3DS).
+# gbacore.c defines the romBuffer global and swaps it per core for dual-core support.
 MGBA_DEFS := -DBUILD_STATIC -DCOLOR_16_BIT -DCOLOR_5_6_5 -DENABLE_DIRECTORIES \
-             -DENABLE_SCRIPTING -DENABLE_VFS -DENABLE_VFS_FD -DM_CORE_GB -DM_CORE_GBA \
-             -DUSE_LZMA -DUSE_MINIZIP -DUSE_PNG -DUSE_ZLIB
+             -DENABLE_SCRIPTING -DENABLE_VFS -DENABLE_VFS_FD -DFIXED_ROM_BUFFER \
+             -DM_CORE_GB -DM_CORE_GBA -DUSE_LZMA -DUSE_MINIZIP -DUSE_PNG -DUSE_ZLIB
 MGBA_INC := -I$(TOPDIR)/external/mgba/include -I$(TOPDIR)/external/mgba/build-3ds/include
 MGBA_LIBDIR := $(TOPDIR)/external/mgba/build-3ds
 # libmgba.a needs mGBA's bundled zlib + libpng (separate archives that cross-reference,
