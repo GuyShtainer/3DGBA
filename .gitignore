@@ -4,3 +4,4 @@ build/
 *.elf
 *.cia
 *.map
+banner.bnr
