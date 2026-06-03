@@ -14,6 +14,7 @@
 #include <citro2d.h>
 #include <citro3d.h>
 #include <string.h>
+#include <stdio.h>
 
 #define WORKER_STACKSIZE (32 * 1024)
 
@@ -27,6 +28,7 @@ typedef struct {
 	volatile u32  frame;  // stand-in for emulated video output
 	volatile u32  keys;   // input handed in by the coordinator (neutral if unfocused)
 	volatile bool skip;   // per-instance frameskip request (set when a core overruns)
+	volatile s32  core_id;// v0.1: actual CPU core this worker landed on (svcGetProcessorID); -1 until set
 } EmuInstance;
 
 static volatile bool g_quit = false;
@@ -43,6 +45,7 @@ static void emu_step(EmuInstance* e) {
 // ---- Worker thread: one per emulated system, pinned to its own CPU core ----
 static void worker_main(void* arg) {
 	EmuInstance* e = (EmuInstance*)arg;
+	e->core_id = svcGetProcessorID();  // v0.1 gate: confirm worker B really landed on core 2
 	while (!g_quit) {
 		LightEvent_Wait(&e->go);
 		if (g_quit) break;
@@ -54,6 +57,7 @@ static void worker_main(void* arg) {
 static void emu_start(EmuInstance* e, int id, int core, int prio) {
 	memset(e, 0, sizeof(*e));
 	e->id = id;
+	e->core_id = -1;
 	LightEvent_Init(&e->go,   RESET_ONESHOT);
 	LightEvent_Init(&e->done, RESET_ONESHOT);
 	e->thread = threadCreate(worker_main, e, WORKER_STACKSIZE, prio, core, false);
@@ -83,6 +87,10 @@ int main(int argc, char** argv) {
 	const u32 clrA  = C2D_Color32(0x3A, 0x7B, 0xD5, 0xFF);
 	const u32 clrB  = C2D_Color32(0xD5, 0x6A, 0x3A, 0xFF);
 	const u32 clrHi = C2D_Color32(0xF5, 0xD0, 0x42, 0xFF);
+	const u32 clrTxt = C2D_Color32(0xFF, 0xFF, 0xFF, 0xFF);
+
+	// v0.1 readout: a small text buffer to print which CPU core each worker landed on.
+	C2D_TextBuf txtBuf = C2D_TextBufNew(256);
 
 	// --- Spawn the two emulator workers ---
 	// Core 0 hosts this (light) coordinator, so worker A shares it: the blocking
@@ -126,6 +134,17 @@ int main(int argc, char** argv) {
 		C2D_DrawRectSolid(20.0f + (float)(emuA.frame % 300), 90.0f, 0.0f, 60.0f, 60.0f, clrA);
 		if (focused == 0) C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 400.0f, 6.0f, clrHi);
 
+		// v0.1 readout: New-3DS flag + the actual core each worker runs on.
+		// On a CIA build on a New 3DS, worker B should report core 2.
+		char line[96];
+		snprintf(line, sizeof line, "v0.1  N3DS:%d   A core:%ld   B core:%ld   (want B=2)",
+		         (int)isN3DS, (long)emuA.core_id, (long)emuB.core_id);
+		C2D_TextBufClear(txtBuf);
+		C2D_Text txt;
+		C2D_TextParse(&txt, txtBuf, line);
+		C2D_TextOptimize(&txt);
+		C2D_DrawText(&txt, C2D_WithColor, 8.0f, 14.0f, 0.0f, 0.5f, 0.5f, clrTxt);
+
 		C2D_TargetClear(bot, clrBg);
 		C2D_SceneBegin(bot);
 		C2D_DrawRectSolid(20.0f + (float)(emuB.frame % 240), 90.0f, 0.0f, 60.0f, 60.0f, clrB);
@@ -141,6 +160,7 @@ int main(int argc, char** argv) {
 	if (emuA.thread) { threadJoin(emuA.thread, U64_MAX); threadFree(emuA.thread); }
 	if (emuB.thread) { threadJoin(emuB.thread, U64_MAX); threadFree(emuB.thread); }
 
+	C2D_TextBufDelete(txtBuf);
 	C2D_Fini();
 	C3D_Fini();
 	gfxExit();
