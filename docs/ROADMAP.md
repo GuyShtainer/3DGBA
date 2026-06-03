@@ -23,9 +23,18 @@ high-level M0–M4 note (`../../docs/ROADMAP.md`), which stays as the toolkit-le
   slowness was purely nested-emulation, as predicted.
 - **Hard-won lesson:** keep `FIXED_ROM_BUFFER` on 3DS — removing it NULL-crashes via
   `_pristineCow`; dual-core uses a per-core `romBuffer`. See `docs/kb/mgba-integration.md`.
-- **Current:** v0.6 presentation. Known issue: upscale "blur" — the GBA's 240×160 fills the
-  3DS screens only at fractional scale (1.5× top / 1.33× bottom), which softens pixels even
-  with nearest filtering. Fix = scaling modes (incl. pixel-perfect) + a sharp upscale.
+- **v0.6 presentation = done.** v0.6.1 per-screen scaling (1:1 / aspect-fit / stretch, ZR) +
+  **sharp-bilinear** filter (ZL) — the blur fix: NEAREST integer prescale → LINEAR fit, the same
+  two-pass mGBA's own 3DS port uses (a PICA200 has no programmable fragment shader, so the
+  single-pass sharp-bilinear shader is impossible; two-pass via an offscreen target is the way).
+  v0.6.2 runtime A↔B screen swap (pause menu; scale/filter bound to the *screen*, focus/input to
+  the *game*). v0.6.3 active-game dim cue (unfocused game dimmed 50%), custom GBA-nostalgic icon +
+  CIA banner, and an animated dual-screen boot splash.
+- **Backlog / nice-to-have (later):** an **authentic GBA-BIOS-style boot animation** — the classic
+  "Game Boy Advance" logo slide-down + chime — as an optional extra startup screen alongside the
+  current custom splash. Purely cosmetic; deferred.
+- **Next:** hardware sign-off of the full v0.6 pass on a real New 3DS (sharp-bilinear adds GPU
+  passes — confirm 60fps holds with both cores), then v0.7 (solo audio + HUD + cover-art picker).
 
 ## Locked GUI / visual decisions (the design contract)
 
