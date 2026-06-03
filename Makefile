@@ -54,12 +54,27 @@ CFLAGS	:=	-g -Wall -O2 -mword-relocations \
 
 CFLAGS	+=	$(INCLUDE) -D__3DS__
 
+# --- embedded mGBA core (libmgba.a in external/mgba/build-3ds; see docs/kb/mgba-integration.md)
+# MGBA_DEFS MUST match how libmgba.a was built or struct layouts drift (ABI corruption).
+# (No FIXED_ROM_BUFFER: we rebuilt libmgba without it so each core owns its ROM.)
+MGBA_DEFS := -DBUILD_STATIC -DCOLOR_16_BIT -DCOLOR_5_6_5 -DENABLE_DIRECTORIES \
+             -DENABLE_SCRIPTING -DENABLE_VFS -DENABLE_VFS_FD -DM_CORE_GB -DM_CORE_GBA \
+             -DUSE_LZMA -DUSE_MINIZIP -DUSE_PNG -DUSE_ZLIB
+MGBA_INC := -I$(TOPDIR)/external/mgba/include -I$(TOPDIR)/external/mgba/build-3ds/include
+MGBA_LIBDIR := $(TOPDIR)/external/mgba/build-3ds
+# libmgba.a needs mGBA's bundled zlib + libpng (separate archives that cross-reference,
+# so link them in one --start-group). lzma/minizip live inside libmgba.a.
+MGBA_LDPATHS := -L$(MGBA_LIBDIR) -L$(MGBA_LIBDIR)/zlib -L$(MGBA_LIBDIR)/libpng
+MGBA_LDLIBS  := -Wl,--start-group -lmgba -lzlibstatic -llibpng16_static -Wl,--end-group
+
+CFLAGS	+=	$(MGBA_DEFS) $(MGBA_INC)
+
 CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions -std=gnu++11
 
 ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=3dsx.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 
-LIBS	:= -lcitro2d -lcitro3d -lctru -lm
+LIBS	:= $(MGBA_LDLIBS) -lcitro2d -lcitro3d -lctru -lm
 
 #---------------------------------------------------------------------------------
 # library roots (each must contain include/ and lib/)
@@ -99,7 +114,7 @@ export INCLUDE	:=	$(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
 			$(foreach dir,$(LIBDIRS),-I$(dir)/include) \
 			-I$(CURDIR)/$(BUILD)
 
-export LIBPATHS	:=	$(foreach dir,$(LIBDIRS),-L$(dir)/lib)
+export LIBPATHS	:=	$(foreach dir,$(LIBDIRS),-L$(dir)/lib) $(MGBA_LDPATHS)
 
 export _3DSXDEPS	:=	$(if $(NO_SMDH),,$(OUTPUT).smdh)
 

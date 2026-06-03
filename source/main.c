@@ -1,51 +1,53 @@
-// 3DS Tool Template
+// dual-gba (3DS) — v0.2: one real mGBA core on the top screen.
 // -----------------------------------------------------------------------------
-// A runnable skeleton for a dual-"core" 3DS app: two worker threads (each meant
-// to host one emulator instance), one per screen, with an X/Y control toggle.
-//
-// What's real here: thread creation + core pinning, the LightEvent frame
-// handshake, the New 3DS speedup, dual-screen citro2d rendering, and input
-// focus toggling. What's a stub: emu_step(), which just animates a box. Replace
-// its body with mGBA's setKeys()/runFrame() and swap the box for the emulated
-// framebuffer uploaded as a GPU texture.
+// Worker A now hosts a real GBA core (mGBA, via gbacore.c) and renders to the
+// top screen; worker B is still the placeholder box (the real second core lands
+// in v0.3). Dual-core threading, the per-frame LightEvent handshake, dual-screen
+// citro2d rendering, and the X/Y focus toggle are unchanged from the skeleton.
 // -----------------------------------------------------------------------------
 
 #include <3ds.h>
 #include <citro2d.h>
 #include <citro3d.h>
+#include <malloc.h>
 #include <string.h>
 #include <stdio.h>
 
+#include "gbacore.h"
+
 #define WORKER_STACKSIZE (32 * 1024)
 
-// One emulated system. In the real project this wraps an mGBA core + its
-// framebuffer/audio ring. The coordinator reads `frame` after `done` fires.
 typedef struct {
 	int        id;
 	Thread     thread;
-	LightEvent go;      // coordinator -> worker: "produce the next frame"
-	LightEvent done;    // worker -> coordinator: "frame ready"
-	volatile u32  frame;  // stand-in for emulated video output
-	volatile u32  keys;   // input handed in by the coordinator (neutral if unfocused)
-	volatile bool skip;   // per-instance frameskip request (set when a core overruns)
-	volatile s32  core_id;// v0.1: actual CPU core this worker landed on (svcGetProcessorID); -1 until set
+	LightEvent go;          // coordinator -> worker: "produce the next frame"
+	LightEvent done;        // worker -> coordinator: "frame ready"
+	volatile u32  frame;    // placeholder animation (used only when core == NULL)
+	volatile u32  keys;     // GBA keypad bits for a real core (neutral if unfocused)
+	volatile bool skip;     // per-instance frameskip request
+	volatile s32  core_id;  // actual CPU core (svcGetProcessorID); -1 until set
+
+	GbaCore*   core;        // real mGBA core, or NULL for the placeholder box
+	u16*       fb;          // linear RGB565 framebuffer (stride GBA_FB_STRIDE)
+	C3D_Tex    tex;         // 256x256 RGB565 texture the framebuffer is uploaded into
+	bool       has_tex;
 } EmuInstance;
 
 static volatile bool g_quit = false;
 
-// ---- Emulate one frame. Replace this body. --------------------------------
-// Real version, roughly:
-//     core->setKeys(core, e->keys);
-//     mCoreRunFrame(core);                 // ~16.78M GBA cycles of work
-//     convert core framebuffer -> tiled GPU texture in this instance's back buffer
+// ---- Emulate one frame: real core -> mGBA; otherwise the placeholder box. ----
 static void emu_step(EmuInstance* e) {
-	e->frame++;
+	if (e->core) {
+		gbacore_set_keys(e->core, (u16)e->keys);
+		gbacore_run_frame(e->core);
+	} else {
+		e->frame++;
+	}
 }
 
-// ---- Worker thread: one per emulated system, pinned to its own CPU core ----
 static void worker_main(void* arg) {
 	EmuInstance* e = (EmuInstance*)arg;
-	e->core_id = svcGetProcessorID();  // v0.1 gate: confirm worker B really landed on core 2
+	e->core_id = svcGetProcessorID();
 	while (!g_quit) {
 		LightEvent_Wait(&e->go);
 		if (g_quit) break;
@@ -62,20 +64,61 @@ static void emu_start(EmuInstance* e, int id, int core, int prio) {
 	LightEvent_Init(&e->done, RESET_ONESHOT);
 	e->thread = threadCreate(worker_main, e, WORKER_STACKSIZE, prio, core, false);
 	if (!e->thread) {
-		// Requested core unavailable (e.g. core 2 without a CIA build / on Old 3DS):
-		// fall back to letting the scheduler place it.
+		// Requested core unavailable (e.g. core 2 without a CIA / on Old 3DS): fall back.
 		e->thread = threadCreate(worker_main, e, WORKER_STACKSIZE, prio, -2, false);
 	}
 }
 
+// Map 3DS held keys (face buttons, D-pad, and the circle pad) to GBA keypad bits.
+static u16 to_gba_keys(u32 held) {
+	u16 k = 0;
+	if (held & KEY_A)      k |= 1 << GBAKEY_A;
+	if (held & KEY_B)      k |= 1 << GBAKEY_B;
+	if (held & KEY_SELECT) k |= 1 << GBAKEY_SELECT;
+	if (held & KEY_START)  k |= 1 << GBAKEY_START;
+	if (held & (KEY_DRIGHT | KEY_CPAD_RIGHT)) k |= 1 << GBAKEY_RIGHT;
+	if (held & (KEY_DLEFT  | KEY_CPAD_LEFT))  k |= 1 << GBAKEY_LEFT;
+	if (held & (KEY_DUP    | KEY_CPAD_UP))    k |= 1 << GBAKEY_UP;
+	if (held & (KEY_DDOWN  | KEY_CPAD_DOWN))  k |= 1 << GBAKEY_DOWN;
+	if (held & KEY_R)      k |= 1 << GBAKEY_R;
+	if (held & KEY_L)      k |= 1 << GBAKEY_L;
+	return k;
+}
+
+// Upload an instance's linear RGB565 framebuffer into its tiled GPU texture.
+// (Flags taken from mGBA's own 3DS frontend: RGB565, OUT_TILED, FLIP_VERT.)
+static void upload_frame(EmuInstance* e) {
+	GSPGPU_FlushDataCache(e->fb, GBA_FB_STRIDE * GBA_H * sizeof(u16));
+	C3D_SyncDisplayTransfer(
+		(u32*)e->fb,       GX_BUFFER_DIM(GBA_FB_STRIDE, GBA_H),
+		(u32*)e->tex.data, GX_BUFFER_DIM(256, 256),
+		GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGB565) |
+		GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB565) |
+		GX_TRANSFER_OUT_TILED(1) | GX_TRANSFER_FLIP_VERT(0));
+}
+
+// Draw an instance's game texture aspect-fit + centered on a screen.
+static void draw_game(EmuInstance* e, float screenW, float screenH) {
+	Tex3DS_SubTexture sub = {
+		.width = GBA_W, .height = GBA_H,
+		.left = 0.0f, .top = 1.0f,
+		.right = (float)GBA_W / 256.0f,
+		.bottom = 1.0f - (float)GBA_H / 256.0f,
+	};
+	C2D_Image img = { .tex = &e->tex, .subtex = &sub };
+	float sx = screenW / GBA_W, sy = screenH / GBA_H;
+	float scale = sx < sy ? sx : sy;
+	float x = (screenW - GBA_W * scale) / 2.0f;
+	float y = (screenH - GBA_H * scale) / 2.0f;
+	C2D_DrawImageAt(img, x, y, 0.0f, NULL, scale, scale);
+}
+
 int main(int argc, char** argv) {
-	// --- New 3DS: unlock 804 MHz + L2 cache. Claim syscore (core 1) time too. ---
 	bool isN3DS = false;
 	APT_CheckNew3DS(&isN3DS);
 	if (isN3DS) osSetSpeedupEnable(true);
 	APT_SetAppCpuTimeLimit(80);
 
-	// --- Both screens via citro2d ---
 	gfxInitDefault();
 	C3D_Init(C3D_DEFAULT_CMDBUF_SIZE);
 	C2D_Init(C2D_DEFAULT_MAX_OBJECTS);
@@ -83,30 +126,38 @@ int main(int argc, char** argv) {
 	C3D_RenderTarget* top = C2D_CreateScreenTarget(GFX_TOP, GFX_LEFT);
 	C3D_RenderTarget* bot = C2D_CreateScreenTarget(GFX_BOTTOM, GFX_LEFT);
 
-	const u32 clrBg = C2D_Color32(0x10, 0x10, 0x10, 0xFF);
-	const u32 clrA  = C2D_Color32(0x3A, 0x7B, 0xD5, 0xFF);
-	const u32 clrB  = C2D_Color32(0xD5, 0x6A, 0x3A, 0xFF);
-	const u32 clrHi = C2D_Color32(0xF5, 0xD0, 0x42, 0xFF);
+	const u32 clrBg  = C2D_Color32(0x10, 0x10, 0x10, 0xFF);
+	const u32 clrB   = C2D_Color32(0xD5, 0x6A, 0x3A, 0xFF);
+	const u32 clrHi  = C2D_Color32(0xF5, 0xD0, 0x42, 0xFF);
 	const u32 clrTxt = C2D_Color32(0xFF, 0xFF, 0xFF, 0xFF);
 
-	// v0.1 readout: a small text buffer to print which CPU core each worker landed on.
 	C2D_TextBuf txtBuf = C2D_TextBufNew(256);
 
-	// --- Spawn the two emulator workers ---
-	// Core 0 hosts this (light) coordinator, so worker A shares it: the blocking
-	// handshake means A gets ~all of core 0 while the coordinator sleeps. Worker B
-	// gets full core 2 on a New 3DS (CIA build needed for guaranteed access),
-	// otherwise core 1. Workers run a notch below the coordinator so it can always
-	// preempt to present.
 	s32 mainPrio = 0x30;
 	svcGetThreadPriority(&mainPrio, CUR_THREAD_HANDLE);
 	EmuInstance emuA, emuB;
 	emu_start(&emuA, 0, 0,                  mainPrio + 1);
 	emu_start(&emuB, 1, isN3DS ? 2 : 1,     mainPrio + 1);
 
+	// --- v0.2: wire a real mGBA core into worker A (top screen) ---
+	const char* romPath = "sdmc:/dual-gba/gameA.gba";
+	bool romOk = false;
+	emuA.fb   = (u16*)linearAlloc(GBA_FB_STRIDE * 256 * sizeof(u16));
+	emuA.core = gbacore_create();
+	if (emuA.core && emuA.fb) {
+		memset(emuA.fb, 0, GBA_FB_STRIDE * 256 * sizeof(u16));
+		gbacore_set_video_buffer(emuA.core, emuA.fb, GBA_FB_STRIDE);
+		romOk = gbacore_load_rom(emuA.core, romPath);
+		if (romOk) {
+			C3D_TexInit(&emuA.tex, 256, 256, GPU_RGB565);
+			C3D_TexSetFilter(&emuA.tex, GPU_NEAREST, GPU_NEAREST); // sharp pixels
+			emuA.has_tex = true;
+		}
+	}
+	if (!romOk && emuA.core) { gbacore_destroy(emuA.core); emuA.core = NULL; }
+
 	int focused = 0; // which game currently receives input
 
-	// --- Coordinator loop (main thread, core 0) ---
 	while (aptMainLoop()) {
 		hidScanInput();
 		u32 kDown = hidKeysDown();
@@ -114,51 +165,64 @@ int main(int argc, char** argv) {
 		if (kDown & KEY_START) break;
 		if (kDown & (KEY_X | KEY_Y)) focused ^= 1;
 
-		// Focused game gets live input; the other keeps running with neutral input.
-		// (Real project: remap these 3DS bits to GBA keypad bits.)
-		emuA.keys = (focused == 0) ? kHeld : 0;
-		emuB.keys = (focused == 1) ? kHeld : 0;
+		u16 gbaKeys = to_gba_keys(kHeld);
+		emuA.keys = (focused == 0) ? gbaKeys : 0;
+		emuB.keys = (focused == 1) ? gbaKeys : 0;
 
-		// Kick both workers in parallel, then gather. The real loop adds a deadline:
-		// if a worker is late, set its .skip for next frame instead of stalling.
 		LightEvent_Signal(&emuA.go);
 		LightEvent_Signal(&emuB.go);
 		LightEvent_Wait(&emuA.done);
 		LightEvent_Wait(&emuB.done);
 
-		// All GPU work happens here on the one render thread.
+		// Build on-screen text once per frame (single buffer; no mid-frame clears).
+		C2D_TextBufClear(txtBuf);
+		char line[96];
+		snprintf(line, sizeof line, "v0.2  N3DS:%d  A core:%ld  B core:%ld  rom:%s",
+		         (int)isN3DS, (long)emuA.core_id, (long)emuB.core_id, romOk ? "ok" : "FAIL");
+		C2D_Text txtReadout, txtErr;
+		C2D_TextParse(&txtReadout, txtBuf, line);
+		C2D_TextOptimize(&txtReadout);
+		bool gameA = (emuA.core && emuA.has_tex);
+		if (!gameA) {
+			C2D_TextParse(&txtErr, txtBuf, "Game A: ROM load failed (sdmc:/dual-gba/gameA.gba)");
+			C2D_TextOptimize(&txtErr);
+		}
+
+		// Texture upload happens outside the citro3d frame (GPU idle).
+		if (gameA) upload_frame(&emuA);
+
 		C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
 
+		// --- Top screen: Game A (real core) or a load-failure message ---
 		C2D_TargetClear(top, clrBg);
 		C2D_SceneBegin(top);
-		C2D_DrawRectSolid(20.0f + (float)(emuA.frame % 300), 90.0f, 0.0f, 60.0f, 60.0f, clrA);
+		if (gameA) {
+			draw_game(&emuA, 400.0f, 240.0f);
+		} else {
+			C2D_DrawText(&txtErr, C2D_WithColor, 8.0f, 110.0f, 0.0f, 0.5f, 0.5f, clrTxt);
+		}
 		if (focused == 0) C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 400.0f, 6.0f, clrHi);
 
-		// v0.1 readout: New-3DS flag + the actual core each worker runs on.
-		// On a CIA build on a New 3DS, worker B should report core 2.
-		char line[96];
-		snprintf(line, sizeof line, "v0.1  N3DS:%d   A core:%ld   B core:%ld   (want B=2)",
-		         (int)isN3DS, (long)emuA.core_id, (long)emuB.core_id);
-		C2D_TextBufClear(txtBuf);
-		C2D_Text txt;
-		C2D_TextParse(&txt, txtBuf, line);
-		C2D_TextOptimize(&txt);
-		C2D_DrawText(&txt, C2D_WithColor, 8.0f, 14.0f, 0.0f, 0.5f, 0.5f, clrTxt);
-
+		// --- Bottom screen: placeholder box + the v0.1 core readout ---
 		C2D_TargetClear(bot, clrBg);
 		C2D_SceneBegin(bot);
 		C2D_DrawRectSolid(20.0f + (float)(emuB.frame % 240), 90.0f, 0.0f, 60.0f, 60.0f, clrB);
 		if (focused == 1) C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 6.0f, clrHi);
+		C2D_DrawText(&txtReadout, C2D_WithColor, 6.0f, 10.0f, 0.0f, 0.5f, 0.5f, clrTxt);
 
 		C3D_FrameEnd(0);
 	}
 
-	// --- Shutdown: wake workers so they observe g_quit and exit ---
+	// --- Shutdown ---
 	g_quit = true;
 	LightEvent_Signal(&emuA.go);
 	LightEvent_Signal(&emuB.go);
 	if (emuA.thread) { threadJoin(emuA.thread, U64_MAX); threadFree(emuA.thread); }
 	if (emuB.thread) { threadJoin(emuB.thread, U64_MAX); threadFree(emuB.thread); }
+
+	if (emuA.core)    gbacore_destroy(emuA.core);
+	if (emuA.has_tex) C3D_TexDelete(&emuA.tex);
+	if (emuA.fb)      linearFree(emuA.fb);
 
 	C2D_TextBufDelete(txtBuf);
 	C2D_Fini();
