@@ -58,6 +58,54 @@ flags — identical for the lib and everything that links it, or you get silent 
 Output: `libmgba.a` + the `include/mgba` and `include/mgba-util` header trees. Add to
 [../../Makefile](../../Makefile): `-lmgba` after a `-L` to its lib dir; its include path on `INCLUDE`.
 
+### ✅ Verified recipe (2026-06-03, mGBA master @ `92621ea`; macOS arm64, devkitARM gcc 15.2.0, CMake 4.3.3)
+
+Cloned to `external/` (gitignored). Three non-obvious gotchas, all confirmed:
+
+1. **Use mGBA's bundled 3DS toolchain**, `src/platform/3ds/CMakeToolchain.txt` — it sets
+   `3DS ON`, `-D__3DS__`, and arch flags (`-march=armv6k -mtune=mpcore -mfloat-abi=hard
+   -mtp=soft`) that match our app's ABI. **Not** devkitPro's generic `cmake/3DS.cmake` (that
+   sets `CMAKE_SYSTEM_NAME` but not the `3DS` var mGBA's CMake keys on).
+2. **Make generator, not Ninja.** The 3DS *frontend* subdir emits duplicate `mgba.3dsx`
+   rules → Ninja's generate step hard-fails ("multiple rules generate"); Make only warns.
+3. **`-DCMAKE_POLICY_VERSION_MINIMUM=3.5`** is required — bundled zlib's
+   `cmake_minimum_required` predates CMake 4. And **build only the `mgba` target** (the
+   static lib) to skip the frontend `.3dsx`.
+
+```bash
+export DEVKITPRO=/opt/devkitpro
+export DEVKITARM=/opt/devkitpro/devkitARM        # on its OWN line — one-line export mis-expands $DEVKITPRO
+cd external/mgba && mkdir build-3ds && cd build-3ds
+cmake -G "Unix Makefiles" \
+  -DCMAKE_TOOLCHAIN_FILE=../src/platform/3ds/CMakeToolchain.txt \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+  -DBUILD_QT=OFF -DBUILD_SDL=OFF -DCOLOR_16_BIT=ON -DCOLOR_5_6_5=ON ..
+make mgba -j$(sysctl -n hw.ncpu)        # -> build-3ds/libmgba.a (~7.7 MB)
+```
+
+### Using it without ABI drift (CRITICAL)
+
+The public headers' struct layouts depend on compile-time macros, and **`mgba/flags.h` is
+NOT the source of truth** (it disagreed with the real build — e.g. it marks
+`ENABLE_DIRECTORIES`/`FIXED_ROM_BUFFER` undef while the lib was built *with* them, and lists
+`MINIMAL_CORE` which the lib was built *without*). The authoritative set is the **C_DEFINES
+in `build-3ds/CMakeFiles/mgba.dir/flags.make`**. Compile our mgba-touching code with that
+exact set. As built here it is:
+
+```
+-DBUILD_STATIC -DCOLOR_16_BIT -DCOLOR_5_6_5 -DENABLE_DIRECTORIES -DENABLE_SCRIPTING
+-DENABLE_VFS -DENABLE_VFS_FD -DFIXED_ROM_BUFFER -DM_CORE_GB -DM_CORE_GBA -DUSE_LZMA
+-DUSE_MINIZIP -DUSE_PNG -DUSE_ZLIB -D__3DS__   (+ the HAVE_*/_GNU_SOURCE/IOAPI_NO_64 set)
+```
+
+- **Includes:** `external/mgba/include` **and** `external/mgba/build-3ds/include` (generated
+  `mgba/flags.h` lives in the latter). **Link:** `-L external/mgba/build-3ds -lmgba`.
+- **`mColor` is `uint16_t` RGB565** under these flags → pair with `GPU_RGB565` /
+  `GX_TRANSFER_FMT_RGB565` (watch channel order at upload).
+- **Isolate mGBA in a wrapper TU** (e.g. `source/gbacore.c`) that does **not** include
+  `<3ds.h>` — both mGBA and libctru define `u8`/`u16`, so keep them in separate files; expose
+  a plain-C API (`uint16_t*`, `uint32_t keys`) to `main.c`.
+
 ## Milestones (detail; see toolkit ../../../docs/ROADMAP.md for M0–M4)
 
 - **M1a** build `libmgba.a` · **M1b** one core → top screen (proves the embed) ·
