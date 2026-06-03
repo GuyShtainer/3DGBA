@@ -15,6 +15,7 @@
 #include <stdio.h>
 
 #include "gbacore.h"
+#include "rompicker.h"
 
 // mGBA's runFrame has deep call chains — 32 KB overflows and smashes memory.
 // Give each worker a generous stack (two of these is still ~1 MB, negligible).
@@ -153,7 +154,14 @@ int main(int argc, char** argv) {
 	const u32 clrHi  = C2D_Color32(0xF5, 0xD0, 0x42, 0xFF);
 	const u32 clrTxt = C2D_Color32(0xFF, 0xFF, 0xFF, 0xFF);
 
-	C2D_TextBuf txtBuf = C2D_TextBufNew(256);
+	C2D_TextBuf txtBuf = C2D_TextBufNew(4096);   // picker needs room for the ROM list
+
+	// v0.5: pick the two games from the SD (falls back to fixed paths if cancelled / none found).
+	char pathA[256], pathB[256];
+	if (!rompicker_run(top, bot, txtBuf, pathA, pathB, sizeof pathA)) {
+		strcpy(pathA, "sdmc:/dual-gba/gameA.gba");
+		strcpy(pathB, "sdmc:/dual-gba/gameB.gba");
+	}
 
 	s32 mainPrio = 0x30;
 	svcGetThreadPriority(&mainPrio, CUR_THREAD_HANDLE);
@@ -161,9 +169,10 @@ int main(int argc, char** argv) {
 	emu_start(&emuA, 0, 0,                  mainPrio + 1);
 	emu_start(&emuB, 1, isN3DS ? 2 : 1,     mainPrio + 1);
 
-	// v0.3: a real mGBA core per screen (each owns its ROM — no FIXED_ROM_BUFFER).
-	bool okA = setup_core(&emuA, "sdmc:/dual-gba/gameA.gba");
-	bool okB = setup_core(&emuB, "sdmc:/dual-gba/gameB.gba");
+	// A real mGBA core per screen, ROMs chosen above (each core owns its ROM via
+	// FIXED_ROM_BUFFER + a per-core buffer; see gbacore.c).
+	bool okA = setup_core(&emuA, pathA);
+	bool okB = setup_core(&emuB, pathB);
 
 	int focused = 0; // which game receives input
 
