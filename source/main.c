@@ -136,7 +136,7 @@ static const char* SCALE_NAMES[] = { "1:1", "Aspect-fit", "Stretch" };
 // offscreen prescale buffer, reused per screen (sequential on the render thread -> no race).
 static void render_game(EmuInstance* e, C3D_RenderTarget* screen, C3D_RenderTarget* preTgt,
                         C3D_Tex* preTex, float screenW, float screenH,
-                        int mode, bool smooth, u32 clrBg) {
+                        int mode, bool smooth, const C2D_ImageTint* tint, u32 clrBg) {
 	if (!e->core) { C2D_TargetClear(screen, clrBg); C2D_SceneBegin(screen); return; }
 
 	float sx, sy;
@@ -166,7 +166,7 @@ static void render_game(EmuInstance* e, C3D_RenderTarget* screen, C3D_RenderTarg
 		C3D_TexSetFilter(preTex, GPU_LINEAR, GPU_LINEAR);
 		C2D_TargetClear(screen, clrBg);
 		C2D_SceneBegin(screen);
-		C2D_DrawImageAt(i1, x, y, 0.0f, NULL, (GBA_W * sx) / PRE_W, (GBA_H * sy) / PRE_H);
+		C2D_DrawImageAt(i1, x, y, 0.0f, tint, (GBA_W * sx) / PRE_W, (GBA_H * sy) / PRE_H);
 	} else {
 		// Direct draw: NEAREST for 1:1/Sharp, LINEAR for Smooth.
 		Tex3DS_SubTexture s = { GBA_W, GBA_H, 0.0f, 1.0f,
@@ -176,7 +176,7 @@ static void render_game(EmuInstance* e, C3D_RenderTarget* screen, C3D_RenderTarg
 		C3D_TexSetFilter(&e->tex, f, f);
 		C2D_TargetClear(screen, clrBg);
 		C2D_SceneBegin(screen);
-		C2D_DrawImageAt(img, x, y, 0.0f, NULL, sx, sy);
+		C2D_DrawImageAt(img, x, y, 0.0f, tint, sx, sy);
 	}
 }
 
@@ -296,16 +296,22 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 		EmuInstance* botG = swapped ? &emuA : &emuB;
 		int focScreen = swapped ? (focused ^ 1) : focused;   // screen showing the focused game
 
+		// Active-game cue: dim the UNFOCUSED game toward black; focused stays full.
+		C2D_ImageTint dimTint;
+		C2D_PlainImageTint(&dimTint, C2D_Color32(0, 0, 0, 0xFF), 0.5f);
+		const C2D_ImageTint* topTint = (focScreen == 0) ? NULL : &dimTint;
+		const C2D_ImageTint* botTint = (focScreen == 1) ? NULL : &dimTint;
+
 		C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
 
 		// top screen (sharp-bilinear two-pass when applicable). render_game leaves `top` bound.
-		render_game(topG, top, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], clrBg);
-		if (!menuOpen && focScreen == 0) C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 400.0f, 6.0f, clrHi);
+		render_game(topG, top, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], topTint, clrBg);
+		if (!menuOpen && focScreen == 0) C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 400.0f, 4.0f, clrHi);
 		if (!menuOpen && toastTimer > 0) C2D_DrawText(&tToast, C2D_WithColor, 8.0f, 8.0f, 0.0f, 0.5f, 0.5f, clrHi);
 
 		// bottom screen (+ menu overlay when open). render_game leaves `bot` bound.
-		render_game(botG, bot, preTgt, &preTex, 320.0f, 240.0f, scaleMode[1], smooth[1], clrBg);
-		if (!menuOpen && focScreen == 1) C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 6.0f, clrHi);
+		render_game(botG, bot, preTgt, &preTex, 320.0f, 240.0f, scaleMode[1], smooth[1], botTint, clrBg);
+		if (!menuOpen && focScreen == 1) C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 4.0f, clrHi);
 		if (menuOpen) {
 			C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 240.0f, clrDim);
 			C2D_DrawRectSolid(34.0f, 6.0f, 0.0f, 252.0f, 228.0f, clrPanel);
@@ -337,6 +343,75 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 	return result;
 }
 
+// ---- Animated boot splash (GBA-nostalgic, dual-screen) ----------------------
+static u32 dim_color(u32 c, float f) {   // scale RGB toward black, keep alpha
+	u32 r = (c & 0xFF) * f, g = ((c >> 8) & 0xFF) * f, b = ((c >> 16) & 0xFF) * f;
+	return (c & 0xFF000000) | (b << 16) | (g << 8) | r;
+}
+
+// A mini GBA "screen" (bezel + screen + ground band + player dot) for the splash.
+static void splash_panel(float x, float y, float w, float h, u32 inner, u32 dot) {
+	C2D_DrawRectSolid(x - 3, y - 3, 0.0f, w + 6, h + 6, C2D_Color32(0x12, 0x0e, 0x1c, 0xFF));
+	C2D_DrawRectSolid(x, y, 0.0f, w, h, inner);
+	C2D_DrawRectSolid(x, y + h * 0.62f, 0.0f, w, h * 0.38f, dim_color(inner, 0.7f));
+	C2D_DrawRectSolid(x + w * 0.5f - 3, y + h * 0.5f - 3, 0.0f, 6.0f, 6.0f, dot);
+}
+
+static float ease_out(float p) { float q = 1.0f - p; return 1.0f - q * q * q; }
+
+static void run_splash(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txtBuf) {
+	const u32 bg   = C2D_Color32(0x18, 0x11, 0x28, 0xFF);
+	const u32 gold = C2D_Color32(0xF5, 0xD0, 0x42, 0xFF);
+	const u32 grn  = C2D_Color32(0x4a, 0x7a, 0x2a, 0xFF);
+	const u32 blu  = C2D_Color32(0x2a, 0x60, 0x96, 0xFF);
+	const int DUR  = 150;   // ~2.5s at 60fps; A/START/touch skips
+
+	for (int f = 0; f < DUR && aptMainLoop(); f++) {
+		hidScanInput();
+		if (hidKeysDown() & (KEY_A | KEY_B | KEY_START | KEY_TOUCH)) break;
+		float t = (float)f / DUR;
+
+		float slide = ease_out(t < 0.5f ? t / 0.5f : 1.0f);          // panels glide in
+		float titleA = t < 0.4f ? 0.0f : (t < 0.7f ? (t - 0.4f) / 0.3f : 1.0f);
+		float fade   = t > 0.92f ? (t - 0.92f) / 0.08f : 0.0f;       // fade out at the end
+		float pulse  = 0.6f + 0.4f * ((f / 8) % 2);                  // link "blink"
+
+		const float pw = 150.0f, ph = 100.0f;
+		C2D_Text tTitle, tSub;
+		C2D_TextBufClear(txtBuf);
+		C2D_TextParse(&tTitle, txtBuf, "DUAL GBA");                   C2D_TextOptimize(&tTitle);
+		C2D_TextParse(&tSub,   txtBuf, "two games  -  one link cable"); C2D_TextOptimize(&tSub);
+		float twT, thT, twS, thS;
+		C2D_TextGetDimensions(&tTitle, 1.0f, 1.0f, &twT, &thT);
+		C2D_TextGetDimensions(&tSub,   0.5f, 0.5f, &twS, &thS);
+
+		C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
+
+		// top screen: Game-A panel drops in from above + title
+		C2D_TargetClear(top, bg);
+		C2D_SceneBegin(top);
+		float ax = (400.0f - pw) / 2.0f, ay = -ph + (28.0f + ph) * slide;
+		splash_panel(ax, ay, pw, ph, grn, C2D_Color32(0xF0, 0xDC, 0x40, 0xFF));
+		C2D_DrawText(&tTitle, C2D_WithColor, (400.0f - twT) / 2.0f, 196.0f, 0.0f, 1.0f, 1.0f,
+		             C2D_Color32(0xF5, 0xD0, 0x42, (u8)(titleA * 255)));
+		// link plug reaching down toward the hinge
+		C2D_DrawRectSolid(196.0f, ay + ph, 0.0f, 8.0f, 12.0f * slide, dim_color(gold, pulse));
+		if (fade > 0.0f) C2D_DrawRectSolid(0, 0, 0, 400, 240, C2D_Color32(0x18, 0x11, 0x28, (u8)(fade * 255)));
+
+		// bottom screen: Game-B panel rises in from below + subtitle
+		C2D_TargetClear(bot, bg);
+		C2D_SceneBegin(bot);
+		float bx = (320.0f - pw) / 2.0f, by = 240.0f - (28.0f + ph) * slide;
+		C2D_DrawRectSolid(156.0f, by - 12.0f * slide, 0.0f, 8.0f, 12.0f * slide, dim_color(gold, pulse));
+		splash_panel(bx, by, pw, ph, blu, C2D_Color32(0xE6, 0x4B, 0x41, 0xFF));
+		C2D_DrawText(&tSub, C2D_WithColor, (320.0f - twS) / 2.0f, 220.0f, 0.0f, 0.5f, 0.5f,
+		             C2D_Color32(0xBE, 0xB4, 0xD7, (u8)(titleA * 255)));
+		if (fade > 0.0f) C2D_DrawRectSolid(0, 0, 0, 320, 240, C2D_Color32(0x18, 0x11, 0x28, (u8)(fade * 255)));
+
+		C3D_FrameEnd(0);
+	}
+}
+
 int main(int argc, char** argv) {
 	bool isN3DS = false;
 	APT_CheckNew3DS(&isN3DS);
@@ -353,6 +428,8 @@ int main(int argc, char** argv) {
 
 	s32 mainPrio = 0x30;
 	svcGetThreadPriority(&mainPrio, CUR_THREAD_HANDLE);
+
+	run_splash(top, bot, txtBuf);   // animated GBA-nostalgic boot splash (skippable)
 
 	// Session loop: pick two ROMs, play, and on "Change games" pick again.
 	while (aptMainLoop()) {
