@@ -189,6 +189,13 @@ static int16_t*    s_audioMem = NULL;
 static int         s_bufId = 0;
 static bool        s_hasSound = false;
 
+// Audio mix modes (volume is per-game, 0..256 where 256 = 100%).
+enum { AUD_SOLO, AUD_MIXED, AUD_SPLIT };
+static const char* AUDIO_NAMES[] = { "Solo", "Mixed", "Split" };
+static int16_t s_mixA[AUDIO_FRAMES * 2];   // scratch for reading each core when mixing
+static int16_t s_mixB[AUDIO_FRAMES * 2];
+static inline int16_t clamp16(int v) { return v < -32768 ? -32768 : (v > 32767 ? 32767 : v); }
+
 static bool s_hasPtm = false;   // ptm:u for battery level (HUD)
 
 static void audio_wbuf_reset(void) {   // (re)point the 4 wave buffers at their slices
@@ -228,37 +235,89 @@ static void audio_reset_stream(void) {
 	audio_wbuf_reset();
 }
 
-// Feed the focused core's PCM into ndsp; drain the unfocused core so its buffer can't back up.
-static void audio_feed(EmuInstance* focusedGame, EmuInstance* otherGame) {
+static bool audio_wbuf_free(void) {
+	return s_wbuf[s_bufId].status != NDSP_WBUF_QUEUED && s_wbuf[s_bufId].status != NDSP_WBUF_PLAYING;
+}
+
+static void audio_queue(size_t frames) {   // flush + submit the current wave buffer, advance ring
+	s_wbuf[s_bufId].nsamples = frames;
+	DSP_FlushDataCache(s_wbuf[s_bufId].data_pcm16, frames * 2 * sizeof(int16_t));
+	ndspChnWaveBufAdd(0, &s_wbuf[s_bufId]);
+	s_bufId = (s_bufId + 1) & (AUDIO_DSP_BUFS - 1);
+}
+
+// Mix the two cores into ndsp per the chosen mode. SOLO = focused core only (other drained);
+// MIXED = both summed (per-game volume); SPLIT = game A -> left speaker, game B -> right.
+// volA/volB are 0..256 (256 = 100%).
+static void audio_feed(EmuInstance* ea, EmuInstance* eb, int focused, int mode, int volA, int volB) {
 	if (!s_hasSound) return;
-	if (otherGame->core) gbacore_drain_audio(otherGame->core);
-	if (!focusedGame->core) return;
-	while (s_wbuf[s_bufId].status != NDSP_WBUF_QUEUED &&
-	       s_wbuf[s_bufId].status != NDSP_WBUF_PLAYING) {
-		size_t avail = gbacore_audio_available(focusedGame->core);
-		if (!avail) break;
-		size_t want = avail < AUDIO_FRAMES ? avail : AUDIO_FRAMES;
-		size_t n = gbacore_read_audio(focusedGame->core, s_wbuf[s_bufId].data_pcm16, want);
-		if (!n) break;
-		s_wbuf[s_bufId].nsamples = n;
-		DSP_FlushDataCache(s_wbuf[s_bufId].data_pcm16, n * 2 * sizeof(int16_t));
-		ndspChnWaveBufAdd(0, &s_wbuf[s_bufId]);
-		s_bufId = (s_bufId + 1) & (AUDIO_DSP_BUFS - 1);
+	GbaCore* ca = ea->core;
+	GbaCore* cb = eb->core;
+
+	// SOLO, or a fallback when only one core is present: play one, drain the other.
+	if (mode == AUD_SOLO || !ca || !cb) {
+		GbaCore* play = mode == AUD_SOLO ? (focused == 0 ? ca : cb) : (ca ? ca : cb);
+		GbaCore* mute = mode == AUD_SOLO ? (focused == 0 ? cb : ca) : NULL;
+		int vol = (play == ca) ? volA : volB;
+		if (mute) gbacore_drain_audio(mute);
+		if (!play) return;
+		while (audio_wbuf_free()) {
+			size_t avail = gbacore_audio_available(play);
+			if (!avail) break;
+			size_t m = avail < AUDIO_FRAMES ? avail : AUDIO_FRAMES;
+			m = gbacore_read_audio(play, s_wbuf[s_bufId].data_pcm16, m);
+			if (!m) break;
+			if (vol != 256)
+				for (size_t i = 0; i < m * 2; i++)
+					s_wbuf[s_bufId].data_pcm16[i] = clamp16(s_wbuf[s_bufId].data_pcm16[i] * vol >> 8);
+			audio_queue(m);
+		}
+		return;
 	}
+
+	// MIXED / SPLIT: read both cores in lockstep and combine.
+	while (audio_wbuf_free()) {
+		size_t availA = gbacore_audio_available(ca);
+		size_t availB = gbacore_audio_available(cb);
+		size_t m = availA < availB ? availA : availB;
+		if (!m) break;
+		if (m > AUDIO_FRAMES) m = AUDIO_FRAMES;
+		gbacore_read_audio(ca, s_mixA, m);
+		gbacore_read_audio(cb, s_mixB, m);
+		int16_t* out = s_wbuf[s_bufId].data_pcm16;
+		for (size_t i = 0; i < m; i++) {
+			int aL = s_mixA[2*i], aR = s_mixA[2*i+1];
+			int bL = s_mixB[2*i], bR = s_mixB[2*i+1];
+			if (mode == AUD_MIXED) {
+				out[2*i]   = clamp16((aL * volA + bL * volB) >> 8);
+				out[2*i+1] = clamp16((aR * volA + bR * volB) >> 8);
+			} else {   // AUD_SPLIT: game A -> left, game B -> right (each downmixed to mono)
+				out[2*i]   = clamp16(((aL + aR) >> 1) * volA >> 8);
+				out[2*i+1] = clamp16(((bL + bR) >> 1) * volB >> 8);
+			}
+		}
+		audio_queue(m);
+	}
+	// Don't let the two cores drift apart if one produced more than the other.
+	if (gbacore_audio_available(ca) > 2 * AUDIO_FRAMES) gbacore_drain_audio(ca);
+	if (gbacore_audio_available(cb) > 2 * AUDIO_FRAMES) gbacore_drain_audio(cb);
 }
 
 // ---- Settings persistence (sdmc:/dual-gba/settings.bin) --------------------
 #define SETTINGS_PATH  "sdmc:/dual-gba/settings.bin"
-#define SETTINGS_MAGIC 0x31424744u   // 'DGB1'
+#define SETTINGS_MAGIC 0x32424744u   // 'DGB2'
 typedef struct {
 	u32 magic;
 	s32 scaleMode[2];
 	s32 smooth[2];
 	s32 swapped;
 	s32 hudOn;
+	s32 audioMode;
+	s32 volA, volB;
 } Settings;
 
-static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, bool* hudOn) {
+static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, bool* hudOn,
+                          int* audioMode, int* volA, int* volB) {
 	FILE* f = fopen(SETTINGS_PATH, "rb");
 	if (!f) return;
 	Settings s;
@@ -271,11 +330,15 @@ static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, bool*
 	smooth[1] = s.smooth[1] != 0;
 	*swapped  = s.swapped != 0;
 	*hudOn    = s.hudOn   != 0;
+	*audioMode = ((unsigned)s.audioMode) % 3;
+	*volA = s.volA < 0 ? 0 : (s.volA > 256 ? 256 : s.volA);
+	*volB = s.volB < 0 ? 0 : (s.volB > 256 ? 256 : s.volB);
 }
 
-static void settings_save(const int scaleMode[2], const bool smooth[2], bool swapped, bool hudOn) {
+static void settings_save(const int scaleMode[2], const bool smooth[2], bool swapped, bool hudOn,
+                          int audioMode, int volA, int volB) {
 	Settings s = { SETTINGS_MAGIC, { scaleMode[0], scaleMode[1] },
-	               { smooth[0], smooth[1] }, swapped, hudOn };
+	               { smooth[0], smooth[1] }, swapped, hudOn, audioMode, volA, volB };
 	FILE* f = fopen(SETTINGS_PATH, "wb");
 	if (!f) return;
 	fwrite(&s, 1, sizeof s, f);
@@ -285,10 +348,11 @@ static void settings_save(const int scaleMode[2], const bool smooth[2], bool swa
 // ---- Pause menu ----
 enum { SESSION_CHANGE, SESSION_QUIT };
 static const char* MENU_ITEMS[] = {
-	"Resume", "Toggle HUD", "Swap screens",
+	"Resume", "Audio", "Toggle HUD", "Swap screens",
 	"Save A", "Load A", "Save B", "Load B", "Change games", "Quit"
 };
-#define MENU_N 9
+#define MENU_N 10
+#define MENU_AUDIO_IDX 1   // this row's label is built dynamically ("Audio: <mode>")
 
 // Run one play session with the two chosen ROMs. Returns SESSION_CHANGE (re-pick) or
 // SESSION_QUIT. Creates/destroys the cores + worker threads itself.
@@ -345,7 +409,11 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 	u8  batLvl = 0;
 	int batTimer = 0;
 
-	settings_load(scaleMode, smooth, &swapped, &hudOn);   // restore saved prefs
+	// Audio: mode (solo/mixed/split) + per-game volume (0..256).
+	int audioMode = AUD_SOLO;
+	int volA = 256, volB = 256;
+
+	settings_load(scaleMode, smooth, &swapped, &hudOn, &audioMode, &volA, &volB);   // restore prefs
 
 	while (aptMainLoop()) {
 		hidScanInput();
@@ -370,14 +438,14 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 					snprintf(toast, sizeof toast, "%s scale: %s",
 					         fs == 0 ? "Top" : "Bottom", SCALE_NAMES[scaleMode[fs]]);
 					toastTimer = 90;
-					settings_save(scaleMode, smooth, swapped, hudOn);
+					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB);
 				}
 				if (kDown & KEY_ZL) {
 					smooth[fs] = !smooth[fs];   // render_game sets the per-pass filters
 					snprintf(toast, sizeof toast, "%s filter: %s", fs == 0 ? "Top" : "Bottom",
 					         smooth[fs] ? "Smooth" : "Sharp-bilinear");
 					toastTimer = 90;
-					settings_save(scaleMode, smooth, swapped, hudOn);
+					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB);
 				}
 				u16 g = to_gba_keys(kHeld);
 				emuA.keys = (focused == 0) ? g : 0;
@@ -388,31 +456,43 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 				LightEvent_Wait(&emuB.done);
 				if (emuA.core) upload_frame(&emuA);
 				if (emuB.core) upload_frame(&emuB);
-				// Solo audio: only the focused game is heard; the other is drained.
-				audio_feed(focused == 0 ? &emuA : &emuB, focused == 0 ? &emuB : &emuA);
+				audio_feed(&emuA, &emuB, focused, audioMode, volA, volB);
 			}
 		} else {
 			if (kDown & (KEY_DDOWN | KEY_CPAD_DOWN)) menuSel = (menuSel + 1) % MENU_N;
 			if (kDown & (KEY_DUP   | KEY_CPAD_UP))   menuSel = (menuSel - 1 + MENU_N) % MENU_N;
-			if (kDown & KEY_B) menuOpen = false;                 // resume
+			if (menuSel == MENU_AUDIO_IDX && (kDown & (KEY_DLEFT | KEY_CPAD_LEFT | KEY_DRIGHT | KEY_CPAD_RIGHT))) {
+					int* v = (focused == 0) ? &volA : &volB;   // adjust the focused game's volume
+					*v += (kDown & (KEY_DRIGHT | KEY_CPAD_RIGHT)) ? 32 : -32;
+					if (*v < 0) *v = 0; else if (*v > 256) *v = 256;
+					snprintf(status, sizeof status, "Vol %c: %d%%", focused == 0 ? 'A' : 'B', *v * 100 / 256);
+					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB);
+				}
+				if (kDown & KEY_B) menuOpen = false;                 // resume
 			if (kDown & KEY_A) {
 				if      (menuSel == 0) menuOpen = false;         // Resume
-				else if (menuSel == 1) {                         // Toggle HUD
+				else if (menuSel == 1) {                         // Audio mode (Solo/Mixed/Split)
+					audioMode = (audioMode + 1) % 3;
+					snprintf(status, sizeof status, "Audio: %s", AUDIO_NAMES[audioMode]);
+					audio_reset_stream();                        // clean cut between modes
+					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB);
+				}
+				else if (menuSel == 2) {                         // Toggle HUD
 					hudOn = !hudOn;
 					snprintf(status, sizeof status, "HUD %s", hudOn ? "on" : "off");
-					settings_save(scaleMode, smooth, swapped, hudOn);
+					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB);
 				}
-				else if (menuSel == 2) {                         // Swap screens
+				else if (menuSel == 3) {                         // Swap screens
 					swapped = !swapped; menuOpen = false;
 					snprintf(toast, sizeof toast, "Layout: %s", swapped ? "B top / A bottom" : "A top / B bottom");
 					toastTimer = 90;
-					settings_save(scaleMode, smooth, swapped, hudOn);
+					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB);
 				}
-				else if (menuSel == 3) snprintf(status, sizeof status, "%s", gbacore_save_state(emuA.core, 1) ? "Saved A"  : "Save A failed");
-				else if (menuSel == 4) snprintf(status, sizeof status, "%s", gbacore_load_state(emuA.core, 1) ? "Loaded A" : "No state A");
-				else if (menuSel == 5) snprintf(status, sizeof status, "%s", gbacore_save_state(emuB.core, 1) ? "Saved B"  : "Save B failed");
-				else if (menuSel == 6) snprintf(status, sizeof status, "%s", gbacore_load_state(emuB.core, 1) ? "Loaded B" : "No state B");
-				else if (menuSel == 7) { result = SESSION_CHANGE; break; }
+				else if (menuSel == 4) snprintf(status, sizeof status, "%s", gbacore_save_state(emuA.core, 1) ? "Saved A"  : "Save A failed");
+				else if (menuSel == 5) snprintf(status, sizeof status, "%s", gbacore_load_state(emuA.core, 1) ? "Loaded A" : "No state A");
+				else if (menuSel == 6) snprintf(status, sizeof status, "%s", gbacore_save_state(emuB.core, 1) ? "Saved B"  : "Save B failed");
+				else if (menuSel == 7) snprintf(status, sizeof status, "%s", gbacore_load_state(emuB.core, 1) ? "Loaded B" : "No state B");
+				else if (menuSel == 8) { result = SESSION_CHANGE; break; }
 				else                   { result = SESSION_QUIT;   break; }
 			}
 		}
@@ -429,14 +509,23 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 		if (hudOn) {
 			time_t tt = time(NULL);
 			struct tm* lt = localtime(&tt);
-			snprintf(hudStat, sizeof hudStat, "%dfps  %02d:%02d  bat %d/5",
-			         fps, lt ? lt->tm_hour : 0, lt ? lt->tm_min : 0, batLvl);
+			snprintf(hudStat, sizeof hudStat, "%s  %dfps  %02d:%02d  %d/5",
+			         AUDIO_NAMES[audioMode], fps, lt ? lt->tm_hour : 0, lt ? lt->tm_min : 0, batLvl);
 			C2D_TextParse(&tHudTop,  txtBuf, topName);  C2D_TextOptimize(&tHudTop);
 			C2D_TextParse(&tHudBot,  txtBuf, botName);  C2D_TextOptimize(&tHudBot);
 			C2D_TextParse(&tHudStat, txtBuf, hudStat);  C2D_TextOptimize(&tHudStat);
 		}
 		if (menuOpen) {
-			for (int i = 0; i < MENU_N; i++) { C2D_TextParse(&items[i], txtBuf, MENU_ITEMS[i]); C2D_TextOptimize(&items[i]); }
+			char alabel[40];
+			for (int i = 0; i < MENU_N; i++) {
+				const char* label = MENU_ITEMS[i];
+				if (i == MENU_AUDIO_IDX) {   // dynamic: "Audio: Mixed  A100 B80"
+					snprintf(alabel, sizeof alabel, "Audio: %s  A%d B%d",
+					         AUDIO_NAMES[audioMode], volA * 100 / 256, volB * 100 / 256);
+					label = alabel;
+				}
+				C2D_TextParse(&items[i], txtBuf, label); C2D_TextOptimize(&items[i]);
+			}
 			if (status[0]) { C2D_TextParse(&tStatus, txtBuf, status); C2D_TextOptimize(&tStatus); }
 		} else {
 			C2D_TextParse(&tHint, txtBuf, "tap or START+SELECT for menu");
@@ -485,14 +574,14 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 		}
 		if (menuOpen) {
 			C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 240.0f, clrDim);
-			C2D_DrawRectSolid(34.0f, 6.0f, 0.0f, 252.0f, 228.0f, clrPanel);
+			C2D_DrawRectSolid(34.0f, 4.0f, 0.0f, 252.0f, 232.0f, clrPanel);
 			for (int i = 0; i < MENU_N; i++) {
-				float y = 12.0f + i * 24.0f;
+				float y = 8.0f + i * 22.0f;
 				bool s = (i == menuSel);
-				if (s) C2D_DrawRectSolid(44.0f, y - 2.0f, 0.0f, 232.0f, 22.0f, clrHi);
-				C2D_DrawText(&items[i], C2D_WithColor, 56.0f, y, 0.0f, 0.55f, 0.55f, s ? clrSelTxt : clrTxt);
+				if (s) C2D_DrawRectSolid(44.0f, y - 2.0f, 0.0f, 232.0f, 20.0f, clrHi);
+				C2D_DrawText(&items[i], C2D_WithColor, 56.0f, y, 0.0f, 0.5f, 0.5f, s ? clrSelTxt : clrTxt);
 			}
-			if (status[0]) C2D_DrawText(&tStatus, C2D_WithColor, 44.0f, 206.0f, 0.0f, 0.5f, 0.5f, clrTxt);
+			if (status[0]) C2D_DrawText(&tStatus, C2D_WithColor, 44.0f, 226.0f, 0.0f, 0.42f, 0.42f, clrTxt);
 		} else {
 			C2D_DrawText(&tHint, C2D_WithColor, 6.0f, 224.0f, 0.0f, 0.4f, 0.4f, clrTxt);
 		}
