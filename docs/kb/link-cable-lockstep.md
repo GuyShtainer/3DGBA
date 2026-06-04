@@ -1,6 +1,6 @@
 # Link cable — in-process lockstep between two mCore instances
 
-**Verified against mGBA master source (2026-06-03).** Two GBA cores can be linked
+**Verified against the pinned mGBA checkout, source-level (2026-06-04).** Two GBA cores can be linked
 entirely in-process using mGBA's lockstep SIO — the exact mechanism mGBA's Qt
 `MultiplayerController` uses for local multiplayer. This is what makes "two games at
 once" worth doing: trade/battle between the two screens.
@@ -27,26 +27,74 @@ valid `GBASIODriver*` `setPeripheral` expects.
   `nAttached < 2` ("no secondary players") or if a non-zero player tries to start one
   ("Secondary player attempted to start transfer"). → **attach both before running.**
 
-## The concurrency catch (the one thing to prototype first)
+## The concurrency mechanism (source-verified 2026-06-04 — this is the crux)
 
 mGBA ships **only a thread-based** `mLockstepUser` — `mLockstepThreadUser` whose
 `sleep = mCoreThreadWaitFromThread` / `wake = mCoreThreadStopWaiting`, assuming each core
 runs inside an `mCoreThread`. **Our skeleton uses raw `threadCreate` workers calling
-`runFrame` directly — not `mCoreThread`.** Two ways to reconcile:
+`runFrame` directly.** The naïve fear was a deadlock: `GBASIOLockstepPlayerSleep` calls
+`user->sleep()` **while the coordinator `Mutex` is held** (`sio/lockstep.c:907` lock →
+`:1009` sleep → `:1012` unlock). If `sleep()` *blocked there*, the peer worker could never
+take the mutex to reach `wake()`.
 
-- **B1 — adopt mGBA's model.** Run each core via `mCoreThread` + `mLockstepThreadUser` and
-  pace them from our coordinator. **Lowest risk** (it's the shipped, proven path) but it
-  changes our worker model.
-- **B2 — custom `mLockstepUser`.** Implement `sleep()`/`wake()` that bridge to our
-  `LightEvent` handshake so a worker hitting a transfer barrier blocks on its own event
-  until the coordinator advances the peer. **Fits our skeleton better but is unproven** —
-  the primary calls `GBASIOLockstepCoordinatorWaitOnPlayers` expecting secondaries to
-  advance and ack, so a single-pass-per-frame scheduler may need multiple coordinator
-  turns per transfer.
+**It doesn't block there — `sleep` is cooperative.** `GBASIOLockstepPlayerSleep`
+(`:1084`) does:
+```c
+player->driver->user->sleep(player->driver->user);
+player->driver->d.p->p->cpu->nextEvent = 0;   // force the CPU to break out…
+GBAInterrupt(player->driver->d.p->p);          // …of runFrame, right now
+```
+i.e. it asks the user to *arrange to wait* and then makes **`runFrame` return early**
+(mid-video-frame). The real blocking is meant to happen in the thread's **outer loop, after
+the mutex is released** — which is exactly what `mCoreThread` does. `wake()` only needs to
+*signal*; it never blocks. So a correct `mLockstepUser` must **not** block inside `sleep()`
+— it sets a flag; the worker blocks after `runFrame` returns.
 
-**Prototype B2 against `src/gba/sio/lockstep.c`** (read
+This reshapes the decision — both options are viable; **B2 now looks preferable** because it
+keeps our pinned, truly-parallel cores (the basis of the v0.4 GREEN result):
+
+- **B1 — adopt `mCoreThread` + `mLockstepThreadUser`.** Proven/shipped. But `mCoreThread`
+  owns thread creation (CPU-affinity/core-2 pinning is ours to lose), runs the core free
+  with its own sync + frame callback, and supplants our per-frame `LightEvent` handshake and
+  frameskip control. Big rewrite of the worker/render model. **Fallback.**
+- **B2 — custom `mLockstepUser` + a run-until-frame loop in our workers (recommended).**
+  Keep the two pinned workers. `sleep()` just sets a per-core `wantWait` flag (the
+  coordinator already forces the early `runFrame` return); `wake()` `LightEvent_Signal`s that
+  core's wait event. Deadlock-safe because `sleep()` never blocks under the mutex and
+  `wake()` only signals. The one real change: a worker must call `runFrame` **repeatedly**
+  until its video frame completes, blocking on the wait event whenever `wantWait` is set —
+  because a single `runFrame` no longer equals one frame once transfers interrupt it.
+
+## B2 implementation outline (the spike)
+
+Per-core state (in `gbacore`, or a small `linkcore` beside it): `LightEvent waitEv;`
+`volatile bool wantWait;` plus the `GBASIOLockstepDriver` and an `mLockstepUser` whose
+`sleep`/`wake` are:
+```c
+static void link_sleep(struct mLockstepUser* u){ Node* n=(Node*)u; n->wantWait = true; }      // no block!
+static void link_wake (struct mLockstepUser* u){ Node* n=(Node*)u; LightEvent_Signal(&n->waitEv); }
+```
+Worker loop changes from "one `runFrame` per `go`" to **run-until-frame-complete**:
+```c
+LightEvent_Wait(&e->go);
+uint32_t f0 = core->frameCounter(core);          // core.h:116
+do {
+    core->runFrame(core);                        // may return early when a transfer interrupts
+    if (e->node.wantWait) { e->node.wantWait=false; LightEvent_Wait(&e->node.waitEv); }
+} while (core->frameCounter(core) == f0 && !g_quit);
+LightEvent_Signal(&e->done);
+```
+Use a **latching** event (`RESET_ONESHOT`) so a `wake` that arrives before the `Wait` isn't
+lost. Both workers run concurrently on cores 0 and 2, so while A is parked on `waitEv`, B is
+genuinely advancing and will drive the coordinator to `wake` A. Setup (coordinator init, two
+`GBASIOLockstepDriverCreate` + `…CoordinatorAttach` + `setPeripheral`) happens **once on the
+main thread after both ROMs load**, before the workers start stepping.
+
+**Spike acceptance:** a Pokémon Gen-3 trade *or* a 2-player battle completes across the two
+screens, on real New 3DS hardware, with no desync/hang. Read
 `GBASIOLockstepCoordinatorWaitOnPlayers`, `_advanceCycle`, `_untilNextSync`, `_hardSync`,
-`GBASIOLockstepPlayerSleep/Wake`) before committing. If it resists, fall back to B1.
+`GBASIOLockstepPlayer{Sleep,Wake}` in `sio/lockstep.c` while building it. If B2's
+frame-completion/wait edges resist a timebox, fall back to B1.
 
 ## Cadence vs. frameskip — they fight each other
 

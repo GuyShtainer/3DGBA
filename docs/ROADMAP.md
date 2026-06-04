@@ -71,12 +71,14 @@ high-level M0–M4 note (`../../docs/ROADMAP.md`), which stays as the toolkit-le
   - **RED** (can't hold even with frameskip/804 MHz/L2) → **gpSP fork**: re-do license (GPL),
     rewire core/audio path, and **the link cable (v0.8) is forfeited** (gpSP has no in-process
     lockstep). Product pivots to "two independent games + presentation/touch" — still shippable.
-- **🔬 Link concurrency spike (v0.8, GREEN-only):** mGBA ships only a thread-based
-  `mLockstepThreadUser` (assumes `mCoreThread`); our workers call `runFrame` directly.
-  Branch **B1** = adopt `mCoreThread`+`mLockstepThreadUser` (proven, changes worker model);
-  **B2** = custom `mLockstepUser` bridged to our `LightEvent` handshake (fits skeleton,
-  unproven). Prototype B2 against `src/gba/sio/lockstep.c`; fall back to B1. Also reconcile
-  link cadence (`LOCKSTEP_INTERVAL=4096`) vs frameskip — suspend unfocused-frameskip during a transfer.
+- **🔬 Link concurrency spike (v0.8, GREEN-only):** **groundwork done (2026-06-04, source-level)** —
+  see [docs/kb/link-cable-lockstep.md](docs/kb/link-cable-lockstep.md). Key finding: lockstep `sleep()`
+  is **cooperative** — it sets a wait request and forces `runFrame` to return early (not an in-place
+  block under the coordinator mutex), so a custom `mLockstepUser` is **deadlock-safe**. **B2 is now the
+  recommended path** (custom `mLockstepUser` + a run-until-frame loop in our pinned workers; keeps the
+  truly-parallel cores behind v0.4 GREEN); **B1** (`mCoreThread`+`mLockstepThreadUser`) is the proven
+  fallback. Still to reconcile: link cadence (`LOCKSTEP_INTERVAL=4096`) vs unfocused-frameskip —
+  suspend frameskip during a transfer.
 
 ## Version ladder (GREEN path; RED variances noted)
 
