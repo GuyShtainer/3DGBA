@@ -31,6 +31,14 @@ struct GbaCore {
 	char          rompath[256];   // for deriving save-state paths
 };
 
+// Replace the ROM's final extension with ".sav" (e.g. ".../gameA.gba" -> ".../gameA.sav").
+static void derive_sav_path(const char* rom, char* out, size_t cap) {
+	snprintf(out, cap, "%s", rom);
+	char* dot = strrchr(out, '.');
+	if (dot) snprintf(dot, cap - (dot - out), ".sav");
+	else     snprintf(out + strlen(out), cap - strlen(out), ".sav");
+}
+
 GbaCore* gbacore_create(void) {
 	GbaCore* g = (GbaCore*)calloc(1, sizeof(*g));
 	if (!g) return NULL;
@@ -81,10 +89,23 @@ bool gbacore_load_rom(GbaCore* g, const char* path) {
 		free(g->rom); g->rom = NULL;
 		return false;
 	}
-	mCoreAutoloadSave(g->core);
-	g->core->reset(g->core);              // captures gba->memory.rom = romBuffer (this core's)
+	// Battery save: load <rom>.sav (writable, created if missing) so SRAM persists. mGBA's
+	// mCoreAutoloadSave needs core->dirs configured (we don't), so load by explicit path.
 	strncpy(g->rompath, path, sizeof g->rompath - 1);
 	g->rompath[sizeof g->rompath - 1] = '\0';
+	char savpath[300];
+	derive_sav_path(g->rompath, savpath, sizeof savpath);
+	mCoreLoadSaveFile(g->core, savpath, false);
+	g->core->reset(g->core);              // captures gba->memory.rom = romBuffer (this core's)
+	return true;
+}
+
+// Load an explicit .sav into this core and reset so the game boots with it. Used by the
+// in-game ".sav" loader (separate from the auto <rom>.sav above and from save STATES).
+bool gbacore_load_save(GbaCore* g, const char* path) {
+	if (!g || !g->core) return false;
+	if (!mCoreLoadSaveFile(g->core, path, false)) return false;
+	g->core->reset(g->core);
 	return true;
 }
 

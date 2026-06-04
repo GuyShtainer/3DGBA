@@ -27,8 +27,11 @@ GbaCore* gbacore_create(void);
 // Call before gbacore_load_rom().
 void     gbacore_set_video_buffer(GbaCore* c, uint16_t* buf, unsigned stride);
 
-// Preload the ROM into a per-core buffer, autoload its .sav, and reset. false on failure.
+// Preload the ROM into a per-core buffer, load <rom>.sav (writable), and reset. false on fail.
 bool     gbacore_load_rom(GbaCore* c, const char* path);
+
+// Load an explicit battery .sav into a running core and reset so it boots with it. false on fail.
+bool     gbacore_load_save(GbaCore* c, const char* path);
 
 void     gbacore_set_keys(GbaCore* c, uint16_t gba_keys);  // mask of (1 << GBAKEY_x)
 void     gbacore_run_frame(GbaCore* c);                    // one frame; drains audio (no sound yet)

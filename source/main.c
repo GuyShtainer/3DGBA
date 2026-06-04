@@ -349,9 +349,9 @@ static void settings_save(const int scaleMode[2], const bool smooth[2], bool swa
 enum { SESSION_CHANGE, SESSION_QUIT };
 static const char* MENU_ITEMS[] = {
 	"Resume", "Audio", "Toggle HUD", "Swap screens",
-	"Save A", "Load A", "Save B", "Load B", "Change games", "Quit"
+	"Save A", "Load A", "Save B", "Load B", "Load .sav (focused)", "Change games", "Quit"
 };
-#define MENU_N 10
+#define MENU_N 11
 #define MENU_AUDIO_IDX 1   // this row's label is built dynamically ("Audio: <mode>")
 
 // Run one play session with the two chosen ROMs. Returns SESSION_CHANGE (re-pick) or
@@ -492,7 +492,15 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 				else if (menuSel == 5) snprintf(status, sizeof status, "%s", gbacore_load_state(emuA.core, 1) ? "Loaded A" : "No state A");
 				else if (menuSel == 6) snprintf(status, sizeof status, "%s", gbacore_save_state(emuB.core, 1) ? "Saved B"  : "Save B failed");
 				else if (menuSel == 7) snprintf(status, sizeof status, "%s", gbacore_load_state(emuB.core, 1) ? "Loaded B" : "No state B");
-				else if (menuSel == 8) { result = SESSION_CHANGE; break; }
+				else if (menuSel == 8) {                         // Load a .sav into the focused game
+					EmuInstance* fg = (focused == 0) ? &emuA : &emuB;
+					char savp[256];
+					if (fg->core && savpicker_run(top, bot, txtBuf, savp, sizeof savp))
+						snprintf(status, sizeof status, "%s %c", gbacore_load_save(fg->core, savp) ? "Loaded sav" : "sav failed", focused == 0 ? 'A' : 'B');
+					else
+						snprintf(status, sizeof status, "no .sav files");
+				}
+				else if (menuSel == 9) { result = SESSION_CHANGE; break; }
 				else                   { result = SESSION_QUIT;   break; }
 			}
 		}
@@ -574,12 +582,12 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 		}
 		if (menuOpen) {
 			C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 240.0f, clrDim);
-			C2D_DrawRectSolid(34.0f, 4.0f, 0.0f, 252.0f, 232.0f, clrPanel);
+			C2D_DrawRectSolid(34.0f, 2.0f, 0.0f, 252.0f, 236.0f, clrPanel);
 			for (int i = 0; i < MENU_N; i++) {
-				float y = 8.0f + i * 22.0f;
+				float y = 5.0f + i * 20.0f;
 				bool s = (i == menuSel);
-				if (s) C2D_DrawRectSolid(44.0f, y - 2.0f, 0.0f, 232.0f, 20.0f, clrHi);
-				C2D_DrawText(&items[i], C2D_WithColor, 56.0f, y, 0.0f, 0.5f, 0.5f, s ? clrSelTxt : clrTxt);
+				if (s) C2D_DrawRectSolid(44.0f, y - 1.0f, 0.0f, 232.0f, 18.0f, clrHi);
+				C2D_DrawText(&items[i], C2D_WithColor, 54.0f, y, 0.0f, 0.46f, 0.46f, s ? clrSelTxt : clrTxt);
 			}
 			if (status[0]) C2D_DrawText(&tStatus, C2D_WithColor, 44.0f, 226.0f, 0.0f, 0.42f, 0.42f, clrTxt);
 		} else {

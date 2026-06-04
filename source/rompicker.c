@@ -232,3 +232,74 @@ bool rompicker_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txt
 	}
 	return false;
 }
+
+// ---- .sav loader: a single-list picker over *.sav in ROM_DIR ----------------
+static int scan_ext(char names[][NAME_LEN], const char* ext) {
+	DIR* d = opendir(ROM_DIR);
+	if (!d) return 0;
+	int n = 0;
+	size_t el = strlen(ext);
+	struct dirent* e;
+	while ((e = readdir(d)) != NULL && n < MAX_ROMS) {
+		const char* nm = e->d_name;
+		size_t L = strlen(nm);
+		if (L > el && strcasecmp(nm + L - el, ext) == 0) {
+			strncpy(names[n], nm, NAME_LEN - 1);
+			names[n][NAME_LEN - 1] = '\0';
+			n++;
+		}
+	}
+	closedir(d);
+	return n;
+}
+
+bool savpicker_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txtBuf,
+                   char* out, size_t cap) {
+	static char names[MAX_ROMS][NAME_LEN];
+	int n = scan_ext(names, ".sav");
+	if (n == 0) return false;   // no .sav files present
+
+	const u32 clrBg     = C2D_Color32(0x20, 0x18, 0x30, 0xFF);
+	const u32 clrSel    = C2D_Color32(0xF5, 0xD0, 0x42, 0xFF);
+	const u32 clrTxt    = C2D_Color32(0xFF, 0xFF, 0xFF, 0xFF);
+	const u32 clrSelTxt = C2D_Color32(0x20, 0x18, 0x30, 0xFF);
+	const u32 clrDim    = C2D_Color32(0xB0, 0xA8, 0xC8, 0xFF);
+
+	int sel = 0, topRow = 0;
+	while (aptMainLoop()) {
+		hidScanInput();
+		u32 k = hidKeysDown();
+		if (k & (KEY_B | KEY_START)) return false;
+		if (k & (KEY_DDOWN | KEY_CPAD_DOWN)) sel = (sel + 1) % n;
+		if (k & (KEY_DUP   | KEY_CPAD_UP))   sel = (sel - 1 + n) % n;
+		if (k & KEY_A) { snprintf(out, cap, "%s/%s", ROM_DIR, names[sel]); return true; }
+
+		if (sel < topRow) topRow = sel;
+		if (sel >= topRow + VIS_ROWS) topRow = sel - VIS_ROWS + 1;
+
+		C2D_TextBufClear(txtBuf);
+		C2D_Text tTitle, tHelp, rows[VIS_ROWS];
+		C2D_TextParse(&tTitle, txtBuf, "Pick a .sav to load");            C2D_TextOptimize(&tTitle);
+		C2D_TextParse(&tHelp,  txtBuf, "Up/Down: move   A: load   B: cancel"); C2D_TextOptimize(&tHelp);
+		int shown = 0;
+		for (int i = 0; i < VIS_ROWS && topRow + i < n; i++) {
+			C2D_TextParse(&rows[i], txtBuf, names[topRow + i]); C2D_TextOptimize(&rows[i]); shown++;
+		}
+
+		C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
+		C2D_TargetClear(top, clrBg);
+		C2D_SceneBegin(top);
+		C2D_DrawText(&tTitle, C2D_WithColor, 8.0f, 6.0f, 0.0f, 0.6f, 0.6f, clrSel);
+		for (int i = 0; i < shown; i++) {
+			float y = 30.0f + i * ROW_H;
+			bool s = (topRow + i == sel);
+			if (s) C2D_DrawRectSolid(6.0f, y - 1.0f, 0.0f, 388.0f, ROW_H - 1.0f, clrSel);
+			C2D_DrawText(&rows[i], C2D_WithColor, 12.0f, y, 0.0f, 0.5f, 0.5f, s ? clrSelTxt : clrTxt);
+		}
+		C2D_TargetClear(bot, clrBg);
+		C2D_SceneBegin(bot);
+		C2D_DrawText(&tHelp, C2D_WithColor, 8.0f, 214.0f, 0.0f, 0.45f, 0.45f, clrDim);
+		C3D_FrameEnd(0);
+	}
+	return false;
+}
