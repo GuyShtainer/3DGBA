@@ -188,8 +188,6 @@ static ndspWaveBuf s_wbuf[AUDIO_DSP_BUFS];
 static int16_t*    s_audioMem = NULL;
 static int         s_bufId = 0;
 static bool        s_hasSound = false;
-// --- temporary audio diagnostics (shown on the top screen) ---
-static unsigned s_dbgRate = 0, s_dbgAvail = 0, s_dbgAdds = 0;
 
 static bool s_hasPtm = false;   // ptm:u for battery level (HUD)
 
@@ -208,6 +206,7 @@ static void audio_init(void) {
 	ndspChnReset(0);
 	ndspChnSetFormat(0, NDSP_FORMAT_STEREO_PCM16);
 	ndspChnSetInterp(0, NDSP_INTERP_NONE);
+	ndspChnSetPaused(0, false);
 	ndspChnWaveBufClear(0);
 	s_audioMem = (int16_t*)linearAlloc(AUDIO_FRAMES * AUDIO_DSP_BUFS * 2 * sizeof(int16_t));
 	audio_wbuf_reset();
@@ -234,7 +233,6 @@ static void audio_feed(EmuInstance* focusedGame, EmuInstance* otherGame) {
 	if (!s_hasSound) return;
 	if (otherGame->core) gbacore_drain_audio(otherGame->core);
 	if (!focusedGame->core) return;
-	s_dbgAvail = gbacore_audio_available(focusedGame->core);
 	while (s_wbuf[s_bufId].status != NDSP_WBUF_QUEUED &&
 	       s_wbuf[s_bufId].status != NDSP_WBUF_PLAYING) {
 		size_t avail = gbacore_audio_available(focusedGame->core);
@@ -246,7 +244,6 @@ static void audio_feed(EmuInstance* focusedGame, EmuInstance* otherGame) {
 		DSP_FlushDataCache(s_wbuf[s_bufId].data_pcm16, n * 2 * sizeof(int16_t));
 		ndspChnWaveBufAdd(0, &s_wbuf[s_bufId]);
 		s_bufId = (s_bufId + 1) & (AUDIO_DSP_BUFS - 1);
-		s_dbgAdds++;
 	}
 }
 
@@ -321,8 +318,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 	// Audio: both cores share one rate (pitch-matched to the 3DS refresh); start clean.
 	GbaCore* anyCore = emuA.core ? emuA.core : emuB.core;
 	if (s_hasSound && anyCore) {
-		s_dbgRate = gbacore_ndsp_rate(anyCore);
-		ndspChnSetRate(0, (float)s_dbgRate);
+		ndspChnSetRate(0, (float)gbacore_ndsp_rate(anyCore));
 		audio_reset_stream();
 	}
 
@@ -423,11 +419,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 
 		// ---- text for this frame (single buffer; cleared once) ----
 		C2D_TextBufClear(txtBuf);
-		C2D_Text items[MENU_N], tHint, tStatus, tToast, tDbg;
-		char dbg[72];
-		snprintf(dbg, sizeof dbg, "snd=%d rate=%u av=%u add=%u s0=%d",
-		         (int)s_hasSound, s_dbgRate, s_dbgAvail, s_dbgAdds, (int)s_wbuf[0].status);
-		C2D_TextParse(&tDbg, txtBuf, dbg); C2D_TextOptimize(&tDbg);
+		C2D_Text items[MENU_N], tHint, tStatus, tToast;
 
 		// HUD text: per-screen game label + a top-screen stat line (FPS / clock / battery).
 		C2D_Text tHudTop, tHudBot, tHudStat;
@@ -479,7 +471,6 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 			}
 			if (toastTimer > 0) C2D_DrawText(&tToast, C2D_WithColor, 8.0f, hudOn ? 20.0f : 8.0f, 0.0f, 0.5f, 0.5f, clrHi);
 		}
-		C2D_DrawText(&tDbg, C2D_WithColor, 6.0f, 222.0f, 0.0f, 0.42f, 0.42f, clrTxt);   // TEMP audio diag
 
 		// bottom screen (+ menu overlay when open). render_game leaves `bot` bound.
 		render_game(botG, bot, preTgt, &preTex, 320.0f, 240.0f, scaleMode[1], smooth[1], botTint, clrBg);

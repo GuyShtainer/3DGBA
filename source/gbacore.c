@@ -41,6 +41,13 @@ GbaCore* gbacore_create(void) {
 	// Match mGBA's own frontend: detect + skip GBA idle loops (big win for games like
 	// Pokemon that busy-wait a lot). Read by the core at reset, so set it before load.
 	mCoreConfigSetDefaultValue(&core->config, "idleOptimization", "detect");
+	// Audio isn't muted by accident: the GBA core takes masterVolume from core->opts.volume,
+	// and a zero-initialised opts == SILENCE. Force full volume + unmuted, then apply.
+	core->opts.volume = 0x100;   // GBA_AUDIO_VOLUME_MAX
+	core->opts.mute   = false;
+	mCoreConfigSetDefaultValue(&core->config, "volume", "256");
+	mCoreConfigSetDefaultValue(&core->config, "mute",   "0");
+	core->loadConfig(core, &core->config);
 	// Headroom so the main thread can poll-read audio once per frame without the core's
 	// ring buffer overflowing between reads (~549 stereo frames produced per GBA frame).
 	core->setAudioBufferSize(core, 4096);
