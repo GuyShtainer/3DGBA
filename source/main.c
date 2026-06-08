@@ -214,6 +214,45 @@ static void render_game(EmuInstance* e, C3D_RenderTarget* screen, C3D_RenderTarg
 	}
 }
 
+// ---- Touch controls (v1.1): a virtual gamepad over the bottom game ----------
+// Single-touch, so one button at a time. Each zone = a GBA key HELD while the finger is in
+// it (walk by holding a D-pad zone; tap A/B/Start). Touch drives the BOTTOM-screen game.
+static u16 touch_keys(int px, int py) {
+	// D-pad cross, bottom-left cluster (center ~55,180).
+	if (px < 112 && py > 118) {
+		int dx = px - 55, dy = py - 180;
+		if (dx > -24 && dx < 24 && dy < -16) return 1 << GBAKEY_UP;
+		if (dx > -24 && dx < 24 && dy >  16) return 1 << GBAKEY_DOWN;
+		if (dy > -24 && dy < 24 && dx < -16) return 1 << GBAKEY_LEFT;
+		if (dy > -24 && dy < 24 && dx >  16) return 1 << GBAKEY_RIGHT;
+		return 0;
+	}
+	if (px > 252 && py > 150) return 1 << GBAKEY_A;                 // A (big, bottom-right)
+	if (px > 198 && px <= 252 && py > 176) return 1 << GBAKEY_B;    // B (left of A)
+	if (px > 128 && px < 192 && py > 214) return 1 << GBAKEY_START; // START (bottom-center)
+	if (py < 28 && px < 56)  return 1 << GBAKEY_L;                  // L (top-left)
+	if (py < 28 && px > 264) return 1 << GBAKEY_R;                  // R (top-right)
+	return 0;
+}
+
+// Draw the translucent gamepad overlay (on the already-bound bottom target). `held` highlights
+// the pressed zone. Uses citro2d rects; labels are drawn by the caller via the text buffer.
+static void touch_overlay(u16 held) {
+	const u32 pad = C2D_Color32(0xF5, 0xD0, 0x42, 0x40);   // faint gold
+	const u32 lit = C2D_Color32(0xF5, 0xD0, 0x42, 0xB0);   // bright when pressed
+	#define ZONE(x,y,w,h,k) C2D_DrawRectSolid((x),(y),0.0f,(w),(h),(held & (1<<(k))) ? lit : pad)
+	ZONE(33, 138, 44, 30, GBAKEY_UP);
+	ZONE(33, 192, 44, 30, GBAKEY_DOWN);
+	ZONE(7, 162, 32, 36, GBAKEY_LEFT);
+	ZONE(71, 162, 32, 36, GBAKEY_RIGHT);
+	ZONE(252, 150, 60, 60, GBAKEY_A);
+	ZONE(198, 176, 50, 44, GBAKEY_B);
+	ZONE(128, 214, 64, 22, GBAKEY_START);
+	ZONE(4, 4, 52, 22, GBAKEY_L);
+	ZONE(264, 4, 52, 22, GBAKEY_R);
+	#undef ZONE
+}
+
 // ---- Audio output (v0.7 solo): one ndsp stereo channel; only the FOCUSED game plays ----
 #define AUDIO_FRAMES   1280   // stereo frames per wave buffer (matches mGBA's 3DS port)
 #define AUDIO_DSP_BUFS 4
@@ -381,12 +420,13 @@ static void settings_save(const int scaleMode[2], const bool smooth[2], bool swa
 // ---- Pause menu ----
 enum { SESSION_CHANGE, SESSION_QUIT };
 static const char* MENU_ITEMS[] = {
-	"Resume", "Link", "Audio", "Toggle HUD", "Swap screens",
+	"Resume", "Link", "Audio", "Touch", "Toggle HUD", "Swap screens",
 	"Save A", "Load A", "Save B", "Load B", "Load .sav (focused)", "Change games", "Quit"
 };
-#define MENU_N 12
+#define MENU_N 13
 #define MENU_LINK_IDX  1   // dynamic label ("Link: off/on")
 #define MENU_AUDIO_IDX 2   // dynamic label ("Audio: <mode>")
+#define MENU_TOUCH_IDX 3   // dynamic label ("Touch: on/off")
 
 // Run one play session with the two chosen ROMs. Returns SESSION_CHANGE (re-pick) or
 // SESSION_QUIT. Creates/destroys the cores + worker threads itself.
@@ -422,6 +462,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 
 	GbaLink* link = gbalink_create();   // shared lockstep coordinator; cores attach on demand
 	bool linkOn = false;
+	bool touchOn = false;   // virtual gamepad over the bottom game (touch drives that game)
 
 	int focused = 0;
 	bool menuOpen = false;
@@ -465,7 +506,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 
 		if (!menuOpen) {
 			bool combo = (kHeld & KEY_START) && (kHeld & KEY_SELECT);
-			if ((kDown & KEY_TOUCH) || combo) {
+			// With the virtual gamepad on, the touchscreen drives the game, so the menu opens
+			// only via the combo; otherwise a tap opens the menu (the original behaviour).
+			if ((!touchOn && (kDown & KEY_TOUCH)) || combo) {
 				menuOpen = true; menuSel = 0; status[0] = '\0';
 			} else {
 				if (kDown & KEY_Y) { focused ^= 1; audio_reset_stream(); }   // switch focus
@@ -492,8 +535,11 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB);
 				}
 				u16 g = to_gba_keys(kHeld);
-				emuA.keys = (focused == 0) ? g : 0;
-				emuB.keys = (focused == 1) ? g : 0;
+				// Virtual gamepad: the touchscreen drives the BOTTOM game (A is on bottom iff swapped).
+				u16 tk = 0;
+				if (touchOn && (kHeld & KEY_TOUCH)) { touchPosition tp; hidTouchRead(&tp); tk = touch_keys(tp.px, tp.py); }
+				emuA.keys = ((focused == 0) ? g : 0) | (swapped ? tk : 0);
+				emuB.keys = ((focused == 1) ? g : 0) | (swapped ? 0 : tk);
 				if (linkOn) {
 					// Workers free-run on their own; main just samples the latest frames and stays
 					// responsive. Audio is paused while linked (cores run concurrently -> buffer race).
@@ -551,22 +597,26 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 					audio_reset_stream();                        // clean cut between modes
 					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB);
 				}
-				else if (menuSel == 3) {                         // Toggle HUD
+				else if (menuSel == 3) {                         // Touch (virtual gamepad)
+					touchOn = !touchOn;
+					snprintf(status, sizeof status, "Touch %s", touchOn ? "on" : "off");
+				}
+				else if (menuSel == 4) {                         // Toggle HUD
 					hudOn = !hudOn;
 					snprintf(status, sizeof status, "HUD %s", hudOn ? "on" : "off");
 					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB);
 				}
-				else if (menuSel == 4) {                         // Swap screens
+				else if (menuSel == 5) {                         // Swap screens
 					swapped = !swapped; menuOpen = false;
 					snprintf(toast, sizeof toast, "Layout: %s", swapped ? "B top / A bottom" : "A top / B bottom");
 					toastTimer = 90;
 					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB);
 				}
-				else if (menuSel == 5) snprintf(status, sizeof status, "%s", gbacore_save_state(emuA.core, 1) ? "Saved A"  : "Save A failed");
-				else if (menuSel == 6) snprintf(status, sizeof status, "%s", gbacore_load_state(emuA.core, 1) ? "Loaded A" : "No state A");
-				else if (menuSel == 7) snprintf(status, sizeof status, "%s", gbacore_save_state(emuB.core, 1) ? "Saved B"  : "Save B failed");
-				else if (menuSel == 8) snprintf(status, sizeof status, "%s", gbacore_load_state(emuB.core, 1) ? "Loaded B" : "No state B");
-				else if (menuSel == 9) {                         // Load a .sav into the focused game
+				else if (menuSel == 6) snprintf(status, sizeof status, "%s", gbacore_save_state(emuA.core, 1) ? "Saved A"  : "Save A failed");
+				else if (menuSel == 7) snprintf(status, sizeof status, "%s", gbacore_load_state(emuA.core, 1) ? "Loaded A" : "No state A");
+				else if (menuSel == 8) snprintf(status, sizeof status, "%s", gbacore_save_state(emuB.core, 1) ? "Saved B"  : "Save B failed");
+				else if (menuSel == 9) snprintf(status, sizeof status, "%s", gbacore_load_state(emuB.core, 1) ? "Loaded B" : "No state B");
+				else if (menuSel == 10) {                         // Load a .sav into the focused game
 					EmuInstance* fg = (focused == 0) ? &emuA : &emuB;
 					char savp[256];
 					if (fg->core && savpicker_run(top, bot, txtBuf, savp, sizeof savp))
@@ -574,7 +624,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 					else
 						snprintf(status, sizeof status, "no .sav files");
 				}
-				else if (menuSel == 10) { result = SESSION_CHANGE; break; }
+				else if (menuSel == 11) { result = SESSION_CHANGE; break; }
 				else                   { result = SESSION_QUIT;   break; }
 			}
 		}
@@ -607,6 +657,10 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 					label = alabel;
 				} else if (i == MENU_LINK_IDX) {   // dynamic: "Link: off/ON (beta)"
 					snprintf(llabel, sizeof llabel, "Link: %s", linkOn ? "ON (beta)" : "off");
+					label = llabel;
+				
+				} else if (i == MENU_TOUCH_IDX) {
+					snprintf(llabel, sizeof llabel, "Touch: %s", touchOn ? "on" : "off");
 					label = llabel;
 				}
 				C2D_TextParse(&items[i], txtBuf, label); C2D_TextOptimize(&items[i]);
@@ -656,17 +710,22 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 			} else if (focScreen == 1) {
 				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 4.0f, clrHi);
 			}
+			if (touchOn) {   // translucent virtual gamepad over the bottom game
+				u16 th = 0;
+				if (kHeld & KEY_TOUCH) { touchPosition tp; hidTouchRead(&tp); th = touch_keys(tp.px, tp.py); }
+				touch_overlay(th);
+			}
 		}
 		if (menuOpen) {
 			C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 240.0f, clrDim);
-			C2D_DrawRectSolid(34.0f, 1.0f, 0.0f, 252.0f, 238.0f, clrPanel);
+			C2D_DrawRectSolid(30.0f, 1.0f, 0.0f, 260.0f, 238.0f, clrPanel);
 			for (int i = 0; i < MENU_N; i++) {
-				float y = 3.0f + i * 18.0f;
+				float y = 2.0f + i * 17.0f;
 				bool s = (i == menuSel);
-				if (s) C2D_DrawRectSolid(44.0f, y - 1.0f, 0.0f, 232.0f, 16.0f, clrHi);
-				C2D_DrawText(&items[i], C2D_WithColor, 52.0f, y, 0.0f, 0.42f, 0.42f, s ? clrSelTxt : clrTxt);
+				if (s) C2D_DrawRectSolid(40.0f, y - 1.0f, 0.0f, 240.0f, 15.0f, clrHi);
+				C2D_DrawText(&items[i], C2D_WithColor, 48.0f, y, 0.0f, 0.4f, 0.4f, s ? clrSelTxt : clrTxt);
 			}
-			if (status[0]) C2D_DrawText(&tStatus, C2D_WithColor, 40.0f, 222.0f, 0.0f, 0.4f, 0.4f, clrTxt);
+			if (status[0]) C2D_DrawText(&tStatus, C2D_WithColor, 36.0f, 224.0f, 0.0f, 0.38f, 0.38f, clrTxt);
 		} else {
 			C2D_DrawText(&tHint, C2D_WithColor, 6.0f, 224.0f, 0.0f, 0.4f, 0.4f, clrTxt);
 		}

@@ -69,4 +69,12 @@ uint32_t gbacore_frame_counter(GbaCore* c);   // bumps once per produced video f
 size_t   gbalink_attached(GbaLink* link);
 int      gbacore_link_player(GbaCore* c);
 
+// --- Live RAM access + game id (v1.1 game-aware touch) ---
+// Read the running game's bus (EWRAM 0x02000000, IWRAM 0x03000000, ROM 0x08000000, ...).
+uint8_t  gbacore_read8(GbaCore* c, uint32_t addr);
+uint16_t gbacore_read16(GbaCore* c, uint32_t addr);
+uint32_t gbacore_read32(GbaCore* c, uint32_t addr);
+// 4-char ROM game code from the header (e.g. "BPEE"); out must hold >=5 bytes (NUL-terminated).
+void     gbacore_game_code(GbaCore* c, char out[5]);
+
 void     gbacore_destroy(GbaCore* c);
