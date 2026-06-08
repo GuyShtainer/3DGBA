@@ -46,7 +46,14 @@ static volatile bool g_quit = false;
 // Link callbacks (invoked by mGBA's lockstep). onSleep runs on this core's worker thread
 // during runFrame and must NOT block — it only requests a park; the worker parks (blocks on
 // waitEv) after runFrame returns. onWake runs on the peer's worker thread and just signals.
-static void link_cb_sleep(void* ctx) { ((EmuInstance*)ctx)->wantWait = true; }
+static void link_cb_sleep(void* ctx) {
+	EmuInstance* e = (EmuInstance*)ctx;
+	// Clear first so a STALE wake (one the coordinator fired while we weren't parked) can't make
+	// the upcoming park return instantly. Clear (here) and signal (onWake) both run under the
+	// coordinator mutex, so they stay ordered; a fresh wake after this clear still releases us.
+	LightEvent_Clear(&e->waitEv);
+	e->wantWait = true;
+}
 static void link_cb_wake (void* ctx) { LightEvent_Signal(&((EmuInstance*)ctx)->waitEv); }
 
 static void emu_step(EmuInstance* e) {   // one video frame (unlinked path)
