@@ -72,13 +72,14 @@ static void worker_main(void* arg) {
 		LightEvent_Wait(&e->go);
 		if (g_quit) break;
 		if (e->linked && e->core) {
-			// FREE-RUN: produce frames continuously until unlinked. The lockstep keeps the two
-			// cores in step; we park on waitEv whenever it asks. This is DECOUPLED from the main
-			// render loop, so main stays responsive no matter what the cores do (no per-frame
-			// barrier -> no frame-end deadlock, which is what tanked the barrier version).
+			// LINKED: run in fine-grained CPU slices (runLoop) so the lockstep's earlyExit
+			// returns us at the EXACT transfer/park point — the core can't cross a transfer
+			// START->FINISH while the peer is behind (the cause of the stale/0xFFFF link error).
+			// Cooperative like mGBA's mCoreThread, but on our core-2-pinned worker. Decoupled
+			// from the render loop, so main stays responsive regardless.
 			while (e->linked && !g_quit) {
 				gbacore_set_keys(e->core, (u16)e->keys);
-				gbacore_run_frame(e->core);
+				gbacore_run_loop(e->core);
 				e->frame++;
 				if (e->wantWait) { e->wantWait = false; LightEvent_Wait(&e->waitEv); }
 			}
