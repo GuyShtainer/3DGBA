@@ -14,8 +14,21 @@ set of GUI/visual decisions, sequenced around the two real unknowns — the **tw
 performance gate** and the **link-cable concurrency spike**. It supersedes the toolkit's
 high-level M0–M4 note (`../../docs/ROADMAP.md`), which stays as the toolkit-level verdict.
 
-## Status (2026-06-03)
+## Status (2026-06-08)
 
+- **🏆 v0.8 LINK CABLE = ✅ DONE on real New 3DS (2026-06-08).** Two Gen-3 Pokémon games completed a
+  **full trade across the two screens, saved, and persisted across a restart** — the project's
+  flagship goal, achieved. The fix that made it work: run the *linked* cores via `core->runLoop`
+  (mGBA's fine-grained CPU slice that returns on `earlyExit`) instead of `runFrame`, so each worker
+  parks at the **exact** lockstep transfer point — mGBA's cooperative correctness, but on our
+  **core-2-pinned** workers (no `mCoreThread` rewrite, parallel perf kept). See
+  [docs/kb/link-cable-lockstep.md](docs/kb/link-cable-lockstep.md). Free-running B2 (frame-granular
+  park) was the dead end; `runLoop` is the answer.
+- **⚠️ POLISH ITEM (perf):** on New 3DS, normal play (audio on) drops to **~30fps in heavy scenes**;
+  with audio off (during a link) it's a **solid 60fps**. So the **audio path is the dominant cost in
+  hard scenes** — optimize it in the polish pass (candidates: lighten the per-frame mix/feed,
+  reconsider sample rate, or add unfocused-frameskip to claw back the heavy-scene budget). Target:
+  60fps with audio on, even in hard scenes.
 - **v0.1–v0.3 + v0.5: done.** Two real GBA games emulate at once, one per screen (mGBA via
   `libmgba`), X/Y focus, per-core ROMs, and a boot-time ROM picker.
 - **v0.4 PERF GATE = ✅ GREEN** — two cores run at **full speed on a real New 3DS** (`.cia`).
