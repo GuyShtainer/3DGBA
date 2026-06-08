@@ -72,13 +72,14 @@ static void worker_main(void* arg) {
 		LightEvent_Wait(&e->go);
 		if (g_quit) break;
 		if (e->linked && e->core) {
-			// FREE-RUN: produce frames continuously until unlinked. The lockstep keeps the two
-			// cores in step; we park on waitEv whenever it asks. This is DECOUPLED from the main
-			// render loop, so main stays responsive no matter what the cores do (no per-frame
-			// barrier -> no frame-end deadlock, which is what tanked the barrier version).
+			// LINKED: run in fine-grained CPU slices (runLoop) so the lockstep's earlyExit
+			// returns us at the EXACT transfer/park point — the core can't cross a transfer
+			// START->FINISH while the peer is behind (the cause of the stale/0xFFFF link error).
+			// Cooperative like mGBA's mCoreThread, but on our core-2-pinned worker. Decoupled
+			// from the render loop, so main stays responsive regardless.
 			while (e->linked && !g_quit) {
 				gbacore_set_keys(e->core, (u16)e->keys);
-				gbacore_run_frame(e->core);
+				gbacore_run_loop(e->core);
 				e->frame++;
 				if (e->wantWait) { e->wantWait = false; LightEvent_Wait(&e->waitEv); }
 			}
@@ -580,14 +581,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 
 		// ---- text for this frame (single buffer; cleared once) ----
 		C2D_TextBufClear(txtBuf);
-		C2D_Text items[MENU_N], tHint, tStatus, tToast, tLinkDbg;
-		bool showLinkDbg = linkOn;
-		if (showLinkDbg) {   // TEMP link diagnostic: registered players + each core's player id
-			char ld[40];
-			snprintf(ld, sizeof ld, "LINK n=%d A=%d B=%d", (int)gbalink_attached(link),
-			         gbacore_link_player(emuA.core), gbacore_link_player(emuB.core));
-			C2D_TextParse(&tLinkDbg, txtBuf, ld); C2D_TextOptimize(&tLinkDbg);
-		}
+		C2D_Text items[MENU_N], tHint, tStatus, tToast;
 
 		// HUD text: per-screen game label + a top-screen stat line (FPS / clock / battery).
 		C2D_Text tHudTop, tHudBot, tHudStat;
@@ -650,10 +644,6 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 400.0f, 4.0f, clrHi);
 			}
 			if (toastTimer > 0) C2D_DrawText(&tToast, C2D_WithColor, 8.0f, hudOn ? 20.0f : 8.0f, 0.0f, 0.5f, 0.5f, clrHi);
-			if (showLinkDbg) {   // TEMP link diagnostic, bottom-left of top screen
-				C2D_DrawRectSolid(0.0f, 206.0f, 0.0f, 400.0f, 34.0f, C2D_Color32(0, 0, 0, 0xC0));
-				C2D_DrawText(&tLinkDbg, C2D_WithColor, 6.0f, 212.0f, 0.0f, 0.6f, 0.6f, C2D_Color32(0x42, 0xF5, 0xD0, 0xFF));
-			}
 		}
 
 		// bottom screen (+ menu overlay when open). render_game leaves `bot` bound.

@@ -35,7 +35,10 @@ bool     gbacore_load_rom(GbaCore* c, const char* path);
 bool     gbacore_load_save(GbaCore* c, const char* path);
 
 void     gbacore_set_keys(GbaCore* c, uint16_t gba_keys);  // mask of (1 << GBAKEY_x)
-void     gbacore_run_frame(GbaCore* c);                    // one frame; drains audio (no sound yet)
+void     gbacore_run_frame(GbaCore* c);                    // run one whole video frame
+// One CPU run-slice (core->runLoop): returns promptly when the lockstep sets earlyExit, so a
+// linked worker can park at the exact transfer point. Same primitive mGBA's mCoreThread uses.
+void     gbacore_run_loop(GbaCore* c);
 
 // Save/load an emulator save-state to <rom-path>.ss<slot>. Returns false on failure
 // (e.g. no state file to load). Separate from the in-game .sav (battery) save.

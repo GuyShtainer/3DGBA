@@ -140,6 +140,12 @@ void gbacore_run_frame(GbaCore* g) {
 	// (unfocused core) each frame via the gbacore_*_audio helpers below.
 }
 
+void gbacore_run_loop(GbaCore* g) {
+	// One ARM run-slice. Unlike runFrame (which loops to a full frame, ignoring earlyExit),
+	// this returns the instant the lockstep parks the core -> we can block exactly there.
+	g->core->runLoop(g->core);
+}
+
 unsigned gbacore_sample_rate(GbaCore* g) {
 	unsigned r = g->core->audioSampleRate(g->core);
 	return r ? r : 32768;
