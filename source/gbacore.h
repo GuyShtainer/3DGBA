@@ -19,6 +19,7 @@ enum {
 };
 
 typedef struct GbaCore GbaCore;
+typedef struct GbaLink GbaLink;   // shared lockstep coordinator for two linked cores
 
 // Create + init a GBA core. NULL on failure.
 GbaCore* gbacore_create(void);
@@ -48,5 +49,16 @@ unsigned gbacore_ndsp_rate(GbaCore* c);     // rate matched to the 3DS LCD refre
 size_t   gbacore_audio_available(GbaCore* c);                          // frames ready to read
 size_t   gbacore_read_audio(GbaCore* c, int16_t* out, size_t frames);  // returns frames read
 void     gbacore_drain_audio(GbaCore* c);                              // discard pending audio
+
+// --- Link cable (v0.8, experimental): in-process mGBA SIO lockstep between two cores. ---
+// onSleep/onWake are plain-C callbacks the mGBA lockstep invokes to park/resume a core's
+// worker thread (onSleep on the core's own thread, onWake from the peer's thread). They must
+// NOT block inside onSleep (it only requests a wait; the worker blocks after runFrame returns).
+GbaLink* gbalink_create(void);
+void     gbalink_destroy(GbaLink* link);
+void     gbacore_link_attach(GbaCore* c, GbaLink* link, int requestedId,
+                             void (*onSleep)(void*), void (*onWake)(void*), void* ctx);
+void     gbacore_link_detach(GbaCore* c);
+uint32_t gbacore_frame_counter(GbaCore* c);   // bumps once per produced video frame
 
 void     gbacore_destroy(GbaCore* c);

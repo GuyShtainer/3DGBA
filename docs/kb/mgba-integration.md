@@ -83,6 +83,14 @@ cmake -G "Unix Makefiles" \
 make mgba -j$(sysctl -n hw.ncpu)        # -> build-3ds/libmgba.a (~7.7 MB)
 ```
 
+> **Link cable (v0.8) needs one CMake edit before this step.** mGBA's bare `mgba` library
+> target compiles `sio.c` + `sio/gbp.c` but **not** `sio/lockstep.c` (it lives in a separate
+> `SIO_FILES` group only the SDL/Qt frontends pull in). So `GBASIOLockstepCoordinator*` etc.
+> are undefined when you link the dual-GBA link code. Fix: in **`src/gba/CMakeLists.txt`**
+> move `sio/lockstep.c` from `SIO_FILES` into `SOURCE_FILES` (the `GBA_SRC` list), then
+> rebuild (`make mgba`). `external/` is git-ignored, so this edit isn't committed — it must
+> be re-applied on a fresh clone. (Leave `sio/dolphin.c` out — it's Dolphin netplay, unneeded.)
+
 ### Using it without ABI drift (CRITICAL)
 
 The public headers' struct layouts depend on compile-time macros, and **`mgba/flags.h` is

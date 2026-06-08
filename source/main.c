@@ -20,6 +20,12 @@
 
 #define WORKER_STACKSIZE (512 * 1024)   // mGBA runFrame has deep call chains; 32KB overflows
 
+// Link spike watchdogs: a parked worker spins on `woke` (20us/spin) up to LINK_WAIT_SPINS
+// (~10ms) then gives up (degrade to a glitch, never a hard freeze); the per-frame sub-loop
+// is bounded by LINK_MAX_SUBFRAMES in case a video frame never completes.
+#define LINK_WAIT_SPINS     500
+#define LINK_MAX_SUBFRAMES  4000
+
 typedef struct {
 	int        id;
 	Thread     thread;
@@ -34,17 +40,37 @@ typedef struct {
 	u16*       fb;          // linear RGB565 framebuffer (stride GBA_FB_STRIDE)
 	C3D_Tex    tex;         // 256x256 RGB565 texture the framebuffer is uploaded into
 	bool       has_tex;
+
+	bool          linked;     // run the lockstep sub-frame loop when true
+	volatile bool wantWait;   // lockstep asked this core to park (set in onSleep)
+	volatile bool woke;       // peer signalled us (set in onWake)
 } EmuInstance;
 
 static volatile bool g_quit = false;
 
+// Link callbacks (invoked by mGBA's lockstep). onSleep runs on this core's worker thread
+// during runFrame and must NOT block — it just requests a park; the worker parks after
+// runFrame returns. onWake runs on the peer's worker thread.
+static void link_cb_sleep(void* ctx) { EmuInstance* e = (EmuInstance*)ctx; e->woke = false; e->wantWait = true; }
+static void link_cb_wake (void* ctx) { ((EmuInstance*)ctx)->woke = true; }
+
 static void emu_step(EmuInstance* e) {
-	if (e->core) {
-		gbacore_set_keys(e->core, (u16)e->keys);
+	if (!e->core) { e->frame++; return; }
+	gbacore_set_keys(e->core, (u16)e->keys);
+	if (!e->linked) { gbacore_run_frame(e->core); return; }
+
+	// Linked: a transfer can interrupt runFrame mid-frame (lockstep forces an early return),
+	// so loop until this core produces a full video frame, parking whenever asked.
+	uint32_t f0 = gbacore_frame_counter(e->core);
+	int guard = 0;
+	do {
 		gbacore_run_frame(e->core);
-	} else {
-		e->frame++;
-	}
+		if (e->wantWait) {
+			e->wantWait = false;
+			int spins = 0;
+			while (!e->woke && !g_quit && spins < LINK_WAIT_SPINS) { svcSleepThread(20000); spins++; }
+		}
+	} while (gbacore_frame_counter(e->core) == f0 && !g_quit && ++guard < LINK_MAX_SUBFRAMES);
 }
 
 static void worker_main(void* arg) {
@@ -348,11 +374,12 @@ static void settings_save(const int scaleMode[2], const bool smooth[2], bool swa
 // ---- Pause menu ----
 enum { SESSION_CHANGE, SESSION_QUIT };
 static const char* MENU_ITEMS[] = {
-	"Resume", "Audio", "Toggle HUD", "Swap screens",
+	"Resume", "Link", "Audio", "Toggle HUD", "Swap screens",
 	"Save A", "Load A", "Save B", "Load B", "Load .sav (focused)", "Change games", "Quit"
 };
-#define MENU_N 11
-#define MENU_AUDIO_IDX 1   // this row's label is built dynamically ("Audio: <mode>")
+#define MENU_N 12
+#define MENU_LINK_IDX  1   // dynamic label ("Link: off/on")
+#define MENU_AUDIO_IDX 2   // dynamic label ("Audio: <mode>")
 
 // Run one play session with the two chosen ROMs. Returns SESSION_CHANGE (re-pick) or
 // SESSION_QUIT. Creates/destroys the cores + worker threads itself.
@@ -385,6 +412,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 		ndspChnSetRate(0, (float)gbacore_ndsp_rate(anyCore));
 		audio_reset_stream();
 	}
+
+	GbaLink* link = gbalink_create();   // shared lockstep coordinator; cores attach on demand
+	bool linkOn = false;
 
 	int focused = 0;
 	bool menuOpen = false;
@@ -471,28 +501,46 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 				if (kDown & KEY_B) menuOpen = false;                 // resume
 			if (kDown & KEY_A) {
 				if      (menuSel == 0) menuOpen = false;         // Resume
-				else if (menuSel == 1) {                         // Audio mode (Solo/Mixed/Split)
+				else if (menuSel == 1) {                         // Link cable (experimental)
+					if (!emuA.core || !emuB.core || !link) {
+						snprintf(status, sizeof status, "Link needs 2 games");
+					} else if (!linkOn) {
+						gbacore_link_attach(emuA.core, link, 0, link_cb_sleep, link_cb_wake, &emuA);
+						gbacore_link_attach(emuB.core, link, 1, link_cb_sleep, link_cb_wake, &emuB);
+						emuA.linked = emuB.linked = true;
+						linkOn = true;
+						snprintf(status, sizeof status, "Link: ON (beta)");
+					} else {
+						emuA.linked = emuB.linked = false;
+						emuA.woke = emuB.woke = true;   // release any parked worker
+						gbacore_link_detach(emuA.core);
+						gbacore_link_detach(emuB.core);
+						linkOn = false;
+						snprintf(status, sizeof status, "Link: off");
+					}
+				}
+				else if (menuSel == 2) {                         // Audio mode (Solo/Mixed/Split)
 					audioMode = (audioMode + 1) % 3;
 					snprintf(status, sizeof status, "Audio: %s", AUDIO_NAMES[audioMode]);
 					audio_reset_stream();                        // clean cut between modes
 					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB);
 				}
-				else if (menuSel == 2) {                         // Toggle HUD
+				else if (menuSel == 3) {                         // Toggle HUD
 					hudOn = !hudOn;
 					snprintf(status, sizeof status, "HUD %s", hudOn ? "on" : "off");
 					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB);
 				}
-				else if (menuSel == 3) {                         // Swap screens
+				else if (menuSel == 4) {                         // Swap screens
 					swapped = !swapped; menuOpen = false;
 					snprintf(toast, sizeof toast, "Layout: %s", swapped ? "B top / A bottom" : "A top / B bottom");
 					toastTimer = 90;
 					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB);
 				}
-				else if (menuSel == 4) snprintf(status, sizeof status, "%s", gbacore_save_state(emuA.core, 1) ? "Saved A"  : "Save A failed");
-				else if (menuSel == 5) snprintf(status, sizeof status, "%s", gbacore_load_state(emuA.core, 1) ? "Loaded A" : "No state A");
-				else if (menuSel == 6) snprintf(status, sizeof status, "%s", gbacore_save_state(emuB.core, 1) ? "Saved B"  : "Save B failed");
-				else if (menuSel == 7) snprintf(status, sizeof status, "%s", gbacore_load_state(emuB.core, 1) ? "Loaded B" : "No state B");
-				else if (menuSel == 8) {                         // Load a .sav into the focused game
+				else if (menuSel == 5) snprintf(status, sizeof status, "%s", gbacore_save_state(emuA.core, 1) ? "Saved A"  : "Save A failed");
+				else if (menuSel == 6) snprintf(status, sizeof status, "%s", gbacore_load_state(emuA.core, 1) ? "Loaded A" : "No state A");
+				else if (menuSel == 7) snprintf(status, sizeof status, "%s", gbacore_save_state(emuB.core, 1) ? "Saved B"  : "Save B failed");
+				else if (menuSel == 8) snprintf(status, sizeof status, "%s", gbacore_load_state(emuB.core, 1) ? "Loaded B" : "No state B");
+				else if (menuSel == 9) {                         // Load a .sav into the focused game
 					EmuInstance* fg = (focused == 0) ? &emuA : &emuB;
 					char savp[256];
 					if (fg->core && savpicker_run(top, bot, txtBuf, savp, sizeof savp))
@@ -500,7 +548,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 					else
 						snprintf(status, sizeof status, "no .sav files");
 				}
-				else if (menuSel == 9) { result = SESSION_CHANGE; break; }
+				else if (menuSel == 10) { result = SESSION_CHANGE; break; }
 				else                   { result = SESSION_QUIT;   break; }
 			}
 		}
@@ -524,13 +572,16 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 			C2D_TextParse(&tHudStat, txtBuf, hudStat);  C2D_TextOptimize(&tHudStat);
 		}
 		if (menuOpen) {
-			char alabel[40];
+			char alabel[40], llabel[24];
 			for (int i = 0; i < MENU_N; i++) {
 				const char* label = MENU_ITEMS[i];
 				if (i == MENU_AUDIO_IDX) {   // dynamic: "Audio: Mixed  A100 B80"
 					snprintf(alabel, sizeof alabel, "Audio: %s  A%d B%d",
 					         AUDIO_NAMES[audioMode], volA * 100 / 256, volB * 100 / 256);
 					label = alabel;
+				} else if (i == MENU_LINK_IDX) {   // dynamic: "Link: off/ON (beta)"
+					snprintf(llabel, sizeof llabel, "Link: %s", linkOn ? "ON (beta)" : "off");
+					label = llabel;
 				}
 				C2D_TextParse(&items[i], txtBuf, label); C2D_TextOptimize(&items[i]);
 			}
@@ -582,14 +633,14 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 		}
 		if (menuOpen) {
 			C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 240.0f, clrDim);
-			C2D_DrawRectSolid(34.0f, 2.0f, 0.0f, 252.0f, 236.0f, clrPanel);
+			C2D_DrawRectSolid(34.0f, 1.0f, 0.0f, 252.0f, 238.0f, clrPanel);
 			for (int i = 0; i < MENU_N; i++) {
-				float y = 5.0f + i * 20.0f;
+				float y = 3.0f + i * 18.0f;
 				bool s = (i == menuSel);
-				if (s) C2D_DrawRectSolid(44.0f, y - 1.0f, 0.0f, 232.0f, 18.0f, clrHi);
-				C2D_DrawText(&items[i], C2D_WithColor, 54.0f, y, 0.0f, 0.46f, 0.46f, s ? clrSelTxt : clrTxt);
+				if (s) C2D_DrawRectSolid(44.0f, y - 1.0f, 0.0f, 232.0f, 16.0f, clrHi);
+				C2D_DrawText(&items[i], C2D_WithColor, 52.0f, y, 0.0f, 0.42f, 0.42f, s ? clrSelTxt : clrTxt);
 			}
-			if (status[0]) C2D_DrawText(&tStatus, C2D_WithColor, 44.0f, 226.0f, 0.0f, 0.42f, 0.42f, clrTxt);
+			if (status[0]) C2D_DrawText(&tStatus, C2D_WithColor, 40.0f, 222.0f, 0.0f, 0.4f, 0.4f, clrTxt);
 		} else {
 			C2D_DrawText(&tHint, C2D_WithColor, 6.0f, 224.0f, 0.0f, 0.4f, 0.4f, clrTxt);
 		}
@@ -600,13 +651,17 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 
 	// teardown this session's workers + cores; reset g_quit for the next session
 	if (s_hasSound) ndspChnWaveBufClear(0);   // stop sound between sessions
+	emuA.linked = emuB.linked = false;        // stop the lockstep sub-frame loop
+	emuA.woke   = emuB.woke   = true;          // release any worker parked on a link wait
 	g_quit = true;
 	LightEvent_Signal(&emuA.go);
 	LightEvent_Signal(&emuB.go);
 	if (emuA.thread) { threadJoin(emuA.thread, U64_MAX); threadFree(emuA.thread); }
 	if (emuB.thread) { threadJoin(emuB.thread, U64_MAX); threadFree(emuB.thread); }
+	if (linkOn) { gbacore_link_detach(emuA.core); gbacore_link_detach(emuB.core); }
 	teardown_core(&emuA);
 	teardown_core(&emuB);
+	gbalink_destroy(link);
 	if (preTgt) { C3D_RenderTargetDelete(preTgt); C3D_TexDelete(&preTex); }
 	g_quit = false;
 	return result;

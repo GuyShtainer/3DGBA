@@ -10,6 +10,9 @@
 #include <mgba/core/core.h>
 #include <mgba/core/config.h>
 #include <mgba/core/serialize.h>   // mCoreSaveStateNamed / SAVESTATE_ALL
+#include <mgba/core/lockstep.h>            // mLockstepUser
+#include <mgba/internal/gba/sio/lockstep.h> // GBASIOLockstepCoordinator / Driver
+#include <mgba/gba/interface.h>            // mPERIPH_GBA_LINK_PORT
 #include <mgba-util/vfs.h>
 #include <mgba-util/audio-buffer.h>
 
@@ -25,10 +28,28 @@ extern uint32_t* romBuffer;
 extern size_t    romBufferSize;
 static bool s_bootRomBufTaken = false;
 
+// mLockstepUser + the C-callback bridge to the frontend's worker park/resume.
+struct LinkUser {
+	struct mLockstepUser u;        // MUST be first (we cast mLockstepUser* <-> LinkUser*)
+	void (*onSleep)(void*);
+	void (*onWake)(void*);
+	void* ctx;
+	int   requestedId;
+	int   playerId;
+};
+
+struct GbaLink {
+	struct GBASIOLockstepCoordinator coord;
+};
+
 struct GbaCore {
 	struct mCore* core;
 	void*         rom;            // dedicated buffer if we malloc'd one; NULL if using the boot buffer
 	char          rompath[256];   // for deriving save-state paths
+
+	struct GbaLink*             link;        // non-NULL while attached to a coordinator
+	struct GBASIOLockstepDriver linkDriver;
+	struct LinkUser             linkUser;
 };
 
 // Replace the ROM's final extension with ".sav" (e.g. ".../gameA.gba" -> ".../gameA.sav").
@@ -163,6 +184,64 @@ bool gbacore_load_state(GbaCore* g, int slot) {
 	bool ok = mCoreLoadStateNamed(g->core, vf, SAVESTATE_ALL);
 	vf->close(vf);
 	return ok;
+}
+
+// ---- Link cable (mGBA SIO lockstep) ----------------------------------------
+static void link_user_sleep(struct mLockstepUser* u) {
+	struct LinkUser* l = (struct LinkUser*)u;
+	if (l->onSleep) l->onSleep(l->ctx);   // request a wait; must not block here
+}
+static void link_user_wake(struct mLockstepUser* u) {
+	struct LinkUser* l = (struct LinkUser*)u;
+	if (l->onWake) l->onWake(l->ctx);     // signal the parked worker
+}
+static int link_user_requestedId(struct mLockstepUser* u) {
+	return ((struct LinkUser*)u)->requestedId;
+}
+static void link_user_playerIdChanged(struct mLockstepUser* u, int id) {
+	((struct LinkUser*)u)->playerId = id;
+}
+
+GbaLink* gbalink_create(void) {
+	GbaLink* l = (GbaLink*)calloc(1, sizeof(*l));
+	if (!l) return NULL;
+	GBASIOLockstepCoordinatorInit(&l->coord);
+	return l;
+}
+
+void gbalink_destroy(GbaLink* link) {
+	if (!link) return;
+	GBASIOLockstepCoordinatorDeinit(&link->coord);
+	free(link);
+}
+
+void gbacore_link_attach(GbaCore* g, GbaLink* link, int requestedId,
+                         void (*onSleep)(void*), void (*onWake)(void*), void* ctx) {
+	if (!g || !g->core || !link || g->link) return;
+	g->linkUser.u.sleep          = link_user_sleep;
+	g->linkUser.u.wake           = link_user_wake;
+	g->linkUser.u.requestedId    = link_user_requestedId;
+	g->linkUser.u.playerIdChanged = link_user_playerIdChanged;
+	g->linkUser.onSleep     = onSleep;
+	g->linkUser.onWake      = onWake;
+	g->linkUser.ctx         = ctx;
+	g->linkUser.requestedId = requestedId;
+	g->linkUser.playerId    = -1;
+	GBASIOLockstepDriverCreate(&g->linkDriver, &g->linkUser.u);
+	GBASIOLockstepCoordinatorAttach(&link->coord, &g->linkDriver);
+	g->core->setPeripheral(g->core, mPERIPH_GBA_LINK_PORT, &g->linkDriver.d);
+	g->link = link;
+}
+
+void gbacore_link_detach(GbaCore* g) {
+	if (!g || !g->link) return;
+	g->core->setPeripheral(g->core, mPERIPH_GBA_LINK_PORT, NULL);
+	GBASIOLockstepCoordinatorDetach(&g->link->coord, &g->linkDriver);
+	g->link = NULL;
+}
+
+uint32_t gbacore_frame_counter(GbaCore* g) {
+	return g->core->frameCounter(g->core);
 }
 
 void gbacore_destroy(GbaCore* g) {
