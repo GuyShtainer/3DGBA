@@ -244,6 +244,14 @@ uint32_t gbacore_frame_counter(GbaCore* g) {
 	return g->core->frameCounter(g->core);
 }
 
+size_t gbalink_attached(GbaLink* link) {
+	return link ? GBASIOLockstepCoordinatorAttached(&link->coord) : 0;
+}
+
+int gbacore_link_player(GbaCore* g) {
+	return (g && g->link) ? g->linkUser.playerId : -1;
+}
+
 void gbacore_destroy(GbaCore* g) {
 	if (!g) return;
 	if (g->core) {

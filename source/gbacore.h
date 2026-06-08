@@ -61,4 +61,9 @@ void     gbacore_link_attach(GbaCore* c, GbaLink* link, int requestedId,
 void     gbacore_link_detach(GbaCore* c);
 uint32_t gbacore_frame_counter(GbaCore* c);   // bumps once per produced video frame
 
+// Diagnostics: how many cores the coordinator has registered, and this core's assigned
+// player id (-1 until the driver's first event registers it). For the on-screen link readout.
+size_t   gbalink_attached(GbaLink* link);
+int      gbacore_link_player(GbaCore* c);
+
 void     gbacore_destroy(GbaCore* c);
