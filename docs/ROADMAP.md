@@ -71,14 +71,17 @@ high-level M0–M4 note (`../../docs/ROADMAP.md`), which stays as the toolkit-le
   - **RED** (can't hold even with frameskip/804 MHz/L2) → **gpSP fork**: re-do license (GPL),
     rewire core/audio path, and **the link cable (v0.8) is forfeited** (gpSP has no in-process
     lockstep). Product pivots to "two independent games + presentation/touch" — still shippable.
-- **🔬 Link concurrency spike (v0.8, GREEN-only):** **groundwork done (2026-06-04, source-level)** —
-  see [docs/kb/link-cable-lockstep.md](docs/kb/link-cable-lockstep.md). Key finding: lockstep `sleep()`
-  is **cooperative** — it sets a wait request and forces `runFrame` to return early (not an in-place
-  block under the coordinator mutex), so a custom `mLockstepUser` is **deadlock-safe**. **B2 is now the
-  recommended path** (custom `mLockstepUser` + a run-until-frame loop in our pinned workers; keeps the
-  truly-parallel cores behind v0.4 GREEN); **B1** (`mCoreThread`+`mLockstepThreadUser`) is the proven
-  fallback. Still to reconcile: link cadence (`LOCKSTEP_INTERVAL=4096`) vs unfocused-frameskip —
-  suspend frameskip during a transfer.
+- **🔬 Link concurrency spike (v0.8):** **B2 spike built + tested (2026-06-08)** — handshake works
+  (two Gen-3 games detect each other + start exchanging across the screens), full speed + responsive,
+  but a real trade **errors mid-exchange**. A 3-agent source audit proved the cause is **structural**:
+  the free-running model races mGBA's *cooperative* sleep/wake (frame-granular park vs many transfers
+  per frame; `Wake` dropped by the `player->asleep` guard) → stale/`0xFFFF` partner words → link error.
+  **Azahar serializes the two cores so it can't fairly test the link anyway.** Verdict: free-running B2
+  can't reliably complete a transfer. Path to a working link = **B1** (`mCoreThread` +
+  `mLockstepThreadUser`, mGBA's proven cooperative model — a real worker/render/audio rewrite) and/or
+  **real New-3DS** validation (cores genuinely parallel). Full analysis + options in
+  [docs/kb/link-cable-lockstep.md](docs/kb/link-cable-lockstep.md). The committed spike stays as the
+  responsive baseline (main is decoupled → never hangs; toggle Link off any time).
 
 ## Version ladder (GREEN path; RED variances noted)
 

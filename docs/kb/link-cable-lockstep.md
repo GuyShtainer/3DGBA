@@ -27,6 +27,48 @@ valid `GBASIODriver*` `setPeripheral` expects.
   `nAttached < 2` ("no secondary players") or if a non-zero player tries to start one
   ("Secondary player attempted to start transfer"). → **attach both before running.**
 
+## Spike results (2026-06-08): handshake works, free-running B2 races on the data exchange
+
+The B2 spike got **far**: wiring confirmed (`n=2`, player ids `0`/`1`), full speed + responsive
+(free-running, 59fps), and a Gen-3 trade handshake **starts and exchanges** ("flashes") — then
+the game errors ("Sorry, we have a link error"). A 3-agent source-level audit (see
+`docs/` history / commit) pinned the cause, and it is **structural, not a small bug**:
+
+- mGBA's coordinator is built for a **cooperative scheduler**: a MULTI/NORMAL_32 transfer is only
+  correct if, between player 0's transfer START and FINISH, player 1's `_lockstepEvent` has run,
+  written `multiData[1]`, and `AckPlayer` has set `dataReceived=true` on both. mGBA guarantees
+  this by truly suspending player 0 at `WaitOnPlayers`.
+- **Free-running breaks two invariants.** (1) Our park is **frame-granular** (worker only checks
+  the park flag after `runFrame` returns), but a trade does *many* transfers per frame, so a
+  `completeEvent`/`_sioFinish` can fire before `dataReceived` is set → `FinishMultiplayer`/
+  `FinishNormal32` return `0xFFFF`/`0xFFFFFFFF` (`lockstep.c:585-587,636-637`) → the partner reads
+  garbage → link error. (2) `GBASIOLockstepPlayerWake` is a **no-op unless `player->asleep`**
+  (`lockstep.c:1051`); the primary's `WaitOnPlayers` wakes the secondary while it's still
+  mid-frame (not yet parked), so that wake is **dropped at the coordinator** before reaching our
+  `mLockstepUser` → a transfer slips → bad word. The "flash" is the first few transfers that
+  happen to line up; the first slipped one is the error.
+- **Azahar can't fairly test this anyway** — it runs the two cores *serially* (time-sliced),
+  while B2's whole premise is the two cores running *in parallel* on New-3DS cores 0+2. So Azahar
+  is the worst bed for the link, and a green/red verdict here doesn't transfer to hardware.
+
+**Verdict: free-running B2 cannot reliably complete a transfer** because it races mGBA's
+cooperative sleep/wake. Two ways forward:
+
+1. **B1 — `mCoreThread` + `mLockstepThreadUser` (recommended for a working link).** This is mGBA's
+   *shipped, proven* model: each core runs in an `mCoreThread` whose run loop cooperatively honors
+   sleep/wake exactly as the coordinator expects — scheduler-agnostic, so it should work under
+   Azahar's time-slicing *and* on hardware. Cost: a real rewrite of our worker/render/audio model
+   (mCoreThread owns the thread + frame callback; we lose the manual go/done handshake and likely
+   explicit core-2 affinity), touching code that currently works for v0.6/v0.7. Big, but correct.
+2. **Transfer-level barrier on top of B2.** Keep pinned workers but, while `coordinator->transferActive`,
+   stop free-running and let the coordinator fully sequence the ack round (both park, resume between
+   transfers). Smaller than B1 but still intricate and unproven; partially re-introduces the barrier.
+
+The committed spike (free-running) stays as the responsive baseline (main is decoupled, so a
+dropped wake never hangs the app — you can always toggle Link off). Completing a real trade is a
+**hardware-final** milestone: validate B1 (or the barrier) on a real New 3DS, where the cores are
+genuinely parallel, before calling the link done.
+
 ## The concurrency mechanism (source-verified 2026-06-04 — this is the crux)
 
 mGBA ships **only a thread-based** `mLockstepUser` — `mLockstepThreadUser` whose
