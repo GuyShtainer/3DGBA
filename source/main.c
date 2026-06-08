@@ -253,6 +253,33 @@ static void touch_overlay(u16 held) {
 	#undef ZONE
 }
 
+// ---- Game-aware touch profiles (v1.1 Stage 2): read live Gen-3 state from RAM ----------
+// Per-game RAM addresses (candidates - confirm on-device via the readout, then build actions on
+// them). sb1ptr = gSaveBlock1Ptr (its *value* points to the live SaveBlock1; player x/y are the
+// first two s16 in it). battleFlags = gBattleTypeFlags (nonzero while in a battle).
+typedef struct { char code[5]; uint32_t sb1ptr; uint32_t battleFlags; } GameProfile;
+static const GameProfile PROFILES[] = {
+	{ "BPEE", 0x03005D8Cu, 0x02022FECu },   // Pokemon Emerald
+	{ "BPRE", 0x03005008u, 0x02022B4Cu },   // Pokemon FireRed
+	{ "BPGE", 0x03005008u, 0x02022B4Cu },   // Pokemon LeafGreen (approx FR)
+};
+static const GameProfile* profile_for(GbaCore* c) {
+	if (!c) return NULL;
+	char code[5]; gbacore_game_code(c, code);
+	for (unsigned i = 0; i < sizeof PROFILES / sizeof PROFILES[0]; i++)
+		if (!strncmp(code, PROFILES[i].code, 4)) return &PROFILES[i];
+	return NULL;
+}
+// Fills px/py (player tile) + inBattle for a profiled game. Returns false if no profile.
+static bool game_state(GbaCore* c, const GameProfile* p, int* px, int* py, bool* inBattle) {
+	if (!c || !p) return false;
+	uint32_t sb1 = gbacore_read32(c, p->sb1ptr);
+	if ((sb1 >> 24) != 0x02) { *px = *py = -1; }   // not a sane EWRAM pointer yet
+	else { *px = (int16_t)gbacore_read16(c, sb1); *py = (int16_t)gbacore_read16(c, sb1 + 2); }
+	*inBattle = gbacore_read32(c, p->battleFlags) != 0;
+	return true;
+}
+
 // ---- Audio output (v0.7 solo): one ndsp stereo channel; only the FOCUSED game plays ----
 #define AUDIO_FRAMES   1280   // stereo frames per wave buffer (matches mGBA's 3DS port)
 #define AUDIO_DSP_BUFS 4
@@ -714,6 +741,13 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 				u16 th = 0;
 				if (kHeld & KEY_TOUCH) { touchPosition tp; hidTouchRead(&tp); th = touch_keys(tp.px, tp.py); }
 				touch_overlay(th);
+				const GameProfile* gp = profile_for(botG->core);   // TEMP: confirm RAM addresses
+				if (gp) {
+					int gx = -1, gy = -1; bool gb = false; game_state(botG->core, gp, &gx, &gy, &gb);
+					char gs[48]; snprintf(gs, sizeof gs, "%s xy=%d,%d battle=%d", gp->code, gx, gy, (int)gb);
+					C2D_Text tg; C2D_TextParse(&tg, txtBuf, gs); C2D_TextOptimize(&tg);
+					C2D_DrawText(&tg, C2D_WithColor, 4.0f, 224.0f, 0.0f, 0.42f, 0.42f, C2D_Color32(0x42, 0xF5, 0xD0, 0xFF));
+				}
 			}
 		}
 		if (menuOpen) {
