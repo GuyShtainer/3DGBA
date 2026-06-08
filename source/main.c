@@ -20,14 +20,6 @@
 
 #define WORKER_STACKSIZE (512 * 1024)   // mGBA runFrame has deep call chains; 32KB overflows
 
-// Link spike watchdogs: a parked worker spins on `woke` (20us/spin) up to LINK_WAIT_SPINS
-// then gives up (degrade to a glitch, never a hard freeze). The lockstep keeps the EMULATED
-// timing correct regardless of how long the wall-clock park is, so this budget must be far
-// longer than any legitimate wait (Azahar runs ~16fps -> a single park can be tens of ms) or
-// it false-fires mid-handshake and desyncs the link ("Sorry, we have a link error"). ~2s.
-#define LINK_WAIT_SPINS     100000
-#define LINK_MAX_SUBFRAMES  8000
-
 typedef struct {
 	int        id;
 	Thread     thread;
@@ -43,36 +35,27 @@ typedef struct {
 	C3D_Tex    tex;         // 256x256 RGB565 texture the framebuffer is uploaded into
 	bool       has_tex;
 
-	bool          linked;     // run the lockstep sub-frame loop when true
+	bool          linked;     // free-run under lockstep when true
 	volatile bool wantWait;   // lockstep asked this core to park (set in onSleep)
-	volatile bool woke;       // peer signalled us (set in onWake)
+	LightEvent    waitEv;     // peer signals this to un-park us (onWake)
+	volatile bool paused;     // X freezes the focused game (unlinked play only)
 } EmuInstance;
 
 static volatile bool g_quit = false;
 
 // Link callbacks (invoked by mGBA's lockstep). onSleep runs on this core's worker thread
-// during runFrame and must NOT block — it just requests a park; the worker parks after
-// runFrame returns. onWake runs on the peer's worker thread.
-static void link_cb_sleep(void* ctx) { EmuInstance* e = (EmuInstance*)ctx; e->woke = false; e->wantWait = true; }
-static void link_cb_wake (void* ctx) { ((EmuInstance*)ctx)->woke = true; }
+// during runFrame and must NOT block — it only requests a park; the worker parks (blocks on
+// waitEv) after runFrame returns. onWake runs on the peer's worker thread and just signals.
+static void link_cb_sleep(void* ctx) { ((EmuInstance*)ctx)->wantWait = true; }
+static void link_cb_wake (void* ctx) { LightEvent_Signal(&((EmuInstance*)ctx)->waitEv); }
 
-static void emu_step(EmuInstance* e) {
-	if (!e->core) { e->frame++; return; }
-	gbacore_set_keys(e->core, (u16)e->keys);
-	if (!e->linked) { gbacore_run_frame(e->core); return; }
-
-	// Linked: a transfer can interrupt runFrame mid-frame (lockstep forces an early return),
-	// so loop until this core produces a full video frame, parking whenever asked.
-	uint32_t f0 = gbacore_frame_counter(e->core);
-	int guard = 0;
-	do {
+static void emu_step(EmuInstance* e) {   // one video frame (unlinked path)
+	if (e->core) {
+		gbacore_set_keys(e->core, (u16)e->keys);
 		gbacore_run_frame(e->core);
-		if (e->wantWait) {
-			e->wantWait = false;
-			int spins = 0;
-			while (!e->woke && !g_quit && spins < LINK_WAIT_SPINS) { svcSleepThread(20000); spins++; }
-		}
-	} while (gbacore_frame_counter(e->core) == f0 && !g_quit && ++guard < LINK_MAX_SUBFRAMES);
+	} else {
+		e->frame++;
+	}
 }
 
 static void worker_main(void* arg) {
@@ -81,7 +64,20 @@ static void worker_main(void* arg) {
 	while (!g_quit) {
 		LightEvent_Wait(&e->go);
 		if (g_quit) break;
-		if (!e->skip) emu_step(e);
+		if (e->linked && e->core) {
+			// FREE-RUN: produce frames continuously until unlinked. The lockstep keeps the two
+			// cores in step; we park on waitEv whenever it asks. This is DECOUPLED from the main
+			// render loop, so main stays responsive no matter what the cores do (no per-frame
+			// barrier -> no frame-end deadlock, which is what tanked the barrier version).
+			while (e->linked && !g_quit) {
+				gbacore_set_keys(e->core, (u16)e->keys);
+				gbacore_run_frame(e->core);
+				e->frame++;
+				if (e->wantWait) { e->wantWait = false; LightEvent_Wait(&e->waitEv); }
+			}
+		} else if (!e->skip && !e->paused) {
+			emu_step(e);
+		}
 		LightEvent_Signal(&e->done);
 	}
 }
@@ -92,6 +88,7 @@ static void emu_start(EmuInstance* e, int id, int core, int prio) {
 	e->core_id = -1;
 	LightEvent_Init(&e->go,   RESET_ONESHOT);
 	LightEvent_Init(&e->done, RESET_ONESHOT);
+	LightEvent_Init(&e->waitEv, RESET_ONESHOT);   // link park/resume (latching)
 	e->thread = threadCreate(worker_main, e, WORKER_STACKSIZE, prio, core, false);
 	if (!e->thread) {
 		e->thread = threadCreate(worker_main, e, WORKER_STACKSIZE, prio, -2, false);
@@ -463,7 +460,14 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 			if ((kDown & KEY_TOUCH) || combo) {
 				menuOpen = true; menuSel = 0; status[0] = '\0';
 			} else {
-				if (kDown & (KEY_X | KEY_Y)) { focused ^= 1; audio_reset_stream(); }
+				if (kDown & KEY_Y) { focused ^= 1; audio_reset_stream(); }   // switch focus
+				if (kDown & KEY_X) {                                         // pause/resume focused game
+					EmuInstance* fg = (focused == 0) ? &emuA : &emuB;
+					fg->paused = !fg->paused;
+					snprintf(toast, sizeof toast, "Game %c %s", focused == 0 ? 'A' : 'B',
+					         fg->paused ? "paused" : "resumed");
+					toastTimer = 90;
+				}
 				int fs = swapped ? (focused ^ 1) : focused;   // screen the focused game sits on
 				if (kDown & KEY_ZR) {
 					scaleMode[fs] = (scaleMode[fs] + 1) % 3;
@@ -482,13 +486,20 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 				u16 g = to_gba_keys(kHeld);
 				emuA.keys = (focused == 0) ? g : 0;
 				emuB.keys = (focused == 1) ? g : 0;
-				LightEvent_Signal(&emuA.go);
-				LightEvent_Signal(&emuB.go);
-				LightEvent_Wait(&emuA.done);
-				LightEvent_Wait(&emuB.done);
-				if (emuA.core) upload_frame(&emuA);
-				if (emuB.core) upload_frame(&emuB);
-				audio_feed(&emuA, &emuB, focused, audioMode, volA, volB);
+				if (linkOn) {
+					// Workers free-run on their own; main just samples the latest frames and stays
+					// responsive. Audio is paused while linked (cores run concurrently -> buffer race).
+					if (emuA.core) upload_frame(&emuA);
+					if (emuB.core) upload_frame(&emuB);
+				} else {
+					LightEvent_Signal(&emuA.go);
+					LightEvent_Signal(&emuB.go);
+					LightEvent_Wait(&emuA.done);
+					LightEvent_Wait(&emuB.done);
+					if (emuA.core) upload_frame(&emuA);
+					if (emuB.core) upload_frame(&emuB);
+					audio_feed(&emuA, &emuB, focused, audioMode, volA, volB);
+				}
 			}
 		} else {
 			if (kDown & (KEY_DDOWN | KEY_CPAD_DOWN)) menuSel = (menuSel + 1) % MENU_N;
@@ -511,10 +522,15 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 						gbacore_link_attach(emuB.core, link, 1, link_cb_sleep, link_cb_wake, &emuB);
 						emuA.linked = emuB.linked = true;
 						linkOn = true;
+						LightEvent_Signal(&emuA.go);   // kick both workers into free-run
+						LightEvent_Signal(&emuB.go);
 						snprintf(status, sizeof status, "Link: ON (beta)");
 					} else {
-						emuA.linked = emuB.linked = false;
-						emuA.woke = emuB.woke = true;   // release any parked worker
+						emuA.linked = emuB.linked = false;        // free-run loops will exit
+						LightEvent_Signal(&emuA.waitEv);          // release any parked worker
+						LightEvent_Signal(&emuB.waitEv);
+						LightEvent_Wait(&emuA.done);              // wait for free-run to finish
+						LightEvent_Wait(&emuB.done);
 						gbacore_link_detach(emuA.core);
 						gbacore_link_detach(emuB.core);
 						linkOn = false;
@@ -653,9 +669,10 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 
 	// teardown this session's workers + cores; reset g_quit for the next session
 	if (s_hasSound) ndspChnWaveBufClear(0);   // stop sound between sessions
-	emuA.linked = emuB.linked = false;        // stop the lockstep sub-frame loop
-	emuA.woke   = emuB.woke   = true;          // release any worker parked on a link wait
+	emuA.linked = emuB.linked = false;        // stop the free-run loop
 	g_quit = true;
+	LightEvent_Signal(&emuA.waitEv);          // release any worker parked on a link wait
+	LightEvent_Signal(&emuB.waitEv);
 	LightEvent_Signal(&emuA.go);
 	LightEvent_Signal(&emuB.go);
 	if (emuA.thread) { threadJoin(emuA.thread, U64_MAX); threadFree(emuA.thread); }
