@@ -21,10 +21,12 @@
 #define WORKER_STACKSIZE (512 * 1024)   // mGBA runFrame has deep call chains; 32KB overflows
 
 // Link spike watchdogs: a parked worker spins on `woke` (20us/spin) up to LINK_WAIT_SPINS
-// (~10ms) then gives up (degrade to a glitch, never a hard freeze); the per-frame sub-loop
-// is bounded by LINK_MAX_SUBFRAMES in case a video frame never completes.
-#define LINK_WAIT_SPINS     500
-#define LINK_MAX_SUBFRAMES  4000
+// then gives up (degrade to a glitch, never a hard freeze). The lockstep keeps the EMULATED
+// timing correct regardless of how long the wall-clock park is, so this budget must be far
+// longer than any legitimate wait (Azahar runs ~16fps -> a single park can be tens of ms) or
+// it false-fires mid-handshake and desyncs the link ("Sorry, we have a link error"). ~2s.
+#define LINK_WAIT_SPINS     100000
+#define LINK_MAX_SUBFRAMES  8000
 
 typedef struct {
 	int        id;
