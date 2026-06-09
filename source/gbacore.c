@@ -256,14 +256,6 @@ uint32_t gbacore_frame_counter(GbaCore* g) {
 	return g->core->frameCounter(g->core);
 }
 
-size_t gbalink_attached(GbaLink* link) {
-	return link ? GBASIOLockstepCoordinatorAttached(&link->coord) : 0;
-}
-
-int gbacore_link_player(GbaCore* g) {
-	return (g && g->link) ? g->linkUser.playerId : -1;
-}
-
 // ---- Live RAM access + game id (game-aware touch) --------------------------
 uint8_t  gbacore_read8 (GbaCore* g, uint32_t a) { return (uint8_t)  g->core->busRead8 (g->core, a); }
 uint16_t gbacore_read16(GbaCore* g, uint32_t a) { return (uint16_t) g->core->busRead16(g->core, a); }

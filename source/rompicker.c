@@ -10,6 +10,7 @@
 #include <stdio.h>
 
 #include "rompicker.h"
+#include "theme.h"
 
 #define MAX_ROMS     128
 #define NAME_LEN     128
@@ -105,10 +106,10 @@ static bool load_recent(RecentPair* r) {
 // Boot prompt offering the last pairing. Returns 1 = use recent, 0 = pick new, -1 = defaults.
 static int recent_prompt(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txtBuf,
                          const RecentPair* r) {
-	const u32 clrBg  = C2D_Color32(0x20, 0x18, 0x30, 0xFF);
-	const u32 clrSel = C2D_Color32(0xF5, 0xD0, 0x42, 0xFF);
-	const u32 clrTxt = C2D_Color32(0xFF, 0xFF, 0xFF, 0xFF);
-	const u32 clrDim = C2D_Color32(0xB0, 0xA8, 0xC8, 0xFF);
+	const u32 clrBg  = THEME_BG;
+	const u32 clrSel = THEME_GOLD;
+	const u32 clrTxt = THEME_TEXT;
+	const u32 clrDim = THEME_DIM;
 	char na[NAME_LEN], nb[NAME_LEN], line[300];
 	rom_display_name(r->a, na, sizeof na);
 	rom_display_name(r->b, nb, sizeof nb);
@@ -159,11 +160,11 @@ bool rompicker_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txt
 	int n = scan_roms(names, disp);
 	if (n == 0) return false;   // nothing to pick -> caller falls back to defaults
 
-	const u32 clrBg     = C2D_Color32(0x20, 0x18, 0x30, 0xFF);  // GBA-nostalgic indigo
-	const u32 clrSel    = C2D_Color32(0xF5, 0xD0, 0x42, 0xFF);  // gold highlight
-	const u32 clrTxt    = C2D_Color32(0xFF, 0xFF, 0xFF, 0xFF);
-	const u32 clrSelTxt = C2D_Color32(0x20, 0x18, 0x30, 0xFF);
-	const u32 clrDim    = C2D_Color32(0xB0, 0xA8, 0xC8, 0xFF);
+	const u32 clrBg     = THEME_BG;  // GBA-nostalgic indigo
+	const u32 clrSel    = THEME_GOLD;  // gold highlight
+	const u32 clrTxt    = THEME_TEXT;
+	const u32 clrSelTxt = THEME_BG;
+	const u32 clrDim    = THEME_DIM;
 
 	int phase = 0;        // 0 = pick A, 1 = pick B
 	int idxA  = 0;
@@ -259,11 +260,11 @@ bool savpicker_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txt
 	int n = scan_ext(names, ".sav");
 	if (n == 0) return false;   // no .sav files present
 
-	const u32 clrBg     = C2D_Color32(0x20, 0x18, 0x30, 0xFF);
-	const u32 clrSel    = C2D_Color32(0xF5, 0xD0, 0x42, 0xFF);
-	const u32 clrTxt    = C2D_Color32(0xFF, 0xFF, 0xFF, 0xFF);
-	const u32 clrSelTxt = C2D_Color32(0x20, 0x18, 0x30, 0xFF);
-	const u32 clrDim    = C2D_Color32(0xB0, 0xA8, 0xC8, 0xFF);
+	const u32 clrBg     = THEME_BG;
+	const u32 clrSel    = THEME_GOLD;
+	const u32 clrTxt    = THEME_TEXT;
+	const u32 clrSelTxt = THEME_BG;
+	const u32 clrDim    = THEME_DIM;
 
 	int sel = 0, topRow = 0;
 	while (aptMainLoop()) {
