@@ -17,6 +17,7 @@
 
 #include "gbacore.h"
 #include "rompicker.h"
+#include "theme.h"
 
 #define WORKER_STACKSIZE (512 * 1024)   // mGBA runFrame has deep call chains; 32KB overflows
 
@@ -464,12 +465,12 @@ static const char* MENU_ITEMS[] = {
 // SESSION_QUIT. Creates/destroys the cores + worker threads itself.
 static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txtBuf,
                        bool isN3DS, s32 mainPrio, const char* pathA, const char* pathB) {
-	const u32 clrBg     = C2D_Color32(0x10, 0x10, 0x10, 0xFF);
-	const u32 clrHi     = C2D_Color32(0xF5, 0xD0, 0x42, 0xFF);
-	const u32 clrTxt    = C2D_Color32(0xFF, 0xFF, 0xFF, 0xFF);
-	const u32 clrDim    = C2D_Color32(0x00, 0x00, 0x00, 0xC0);  // menu dim overlay
-	const u32 clrPanel  = C2D_Color32(0x2a, 0x20, 0x42, 0xFF);  // GBA-nostalgic indigo
-	const u32 clrSelTxt = C2D_Color32(0x20, 0x18, 0x30, 0xFF);
+	const u32 clrBg     = THEME_LETTERBOX;
+	const u32 clrHi     = THEME_GOLD;
+	const u32 clrTxt    = THEME_TEXT;
+	const u32 clrDim    = THEME_MENU_DIM;
+	const u32 clrPanel  = THEME_PANEL;
+	const u32 clrSelTxt = THEME_SELTXT;
 
 	EmuInstance emuA, emuB;
 	emu_start(&emuA, 0, 0,              mainPrio + 1);
@@ -746,7 +747,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 		render_game(topG, top, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], topTint, clrBg);
 		if (!menuOpen) {
 			if (hudOn) {
-				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 400.0f, 14.0f, C2D_Color32(0, 0, 0, 0x90));
+				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 400.0f, 14.0f, THEME_HUD_BAR);
 				if (focScreen == 0) C2D_DrawRectSolid(0.0f, 14.0f, 0.0f, 400.0f, 2.0f, clrHi);
 				C2D_DrawText(&tHudTop, C2D_WithColor, 4.0f, 1.0f, 0.0f, 0.4f, 0.4f, clrTxt);
 				float sw, sh; C2D_TextGetDimensions(&tHudStat, 0.4f, 0.4f, &sw, &sh);
@@ -761,7 +762,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 		render_game(botG, bot, preTgt, &preTex, 320.0f, 240.0f, scaleMode[1], smooth[1], botTint, clrBg);
 		if (!menuOpen) {
 			if (hudOn) {
-				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 14.0f, C2D_Color32(0, 0, 0, 0x90));
+				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 14.0f, THEME_HUD_BAR);
 				if (focScreen == 1) C2D_DrawRectSolid(0.0f, 14.0f, 0.0f, 320.0f, 2.0f, clrHi);
 				C2D_DrawText(&tHudBot, C2D_WithColor, 4.0f, 1.0f, 0.0f, 0.4f, 0.4f, clrTxt);
 			} else if (focScreen == 1) {
@@ -825,7 +826,7 @@ static u32 dim_color(u32 c, float f) {   // scale RGB toward black, keep alpha
 
 // A mini GBA "screen" (bezel + screen + ground band + player dot) for the splash.
 static void splash_panel(float x, float y, float w, float h, u32 inner, u32 dot) {
-	C2D_DrawRectSolid(x - 3, y - 3, 0.0f, w + 6, h + 6, C2D_Color32(0x12, 0x0e, 0x1c, 0xFF));
+	C2D_DrawRectSolid(x - 3, y - 3, 0.0f, w + 6, h + 6, THEME_BEZEL);
 	C2D_DrawRectSolid(x, y, 0.0f, w, h, inner);
 	C2D_DrawRectSolid(x, y + h * 0.62f, 0.0f, w, h * 0.38f, dim_color(inner, 0.7f));
 	C2D_DrawRectSolid(x + w * 0.5f - 3, y + h * 0.5f - 3, 0.0f, 6.0f, 6.0f, dot);
@@ -834,10 +835,10 @@ static void splash_panel(float x, float y, float w, float h, u32 inner, u32 dot)
 static float ease_out(float p) { float q = 1.0f - p; return 1.0f - q * q * q; }
 
 static void run_splash(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txtBuf) {
-	const u32 bg   = C2D_Color32(0x18, 0x11, 0x28, 0xFF);
-	const u32 gold = C2D_Color32(0xF5, 0xD0, 0x42, 0xFF);
-	const u32 grn  = C2D_Color32(0x4a, 0x7a, 0x2a, 0xFF);
-	const u32 blu  = C2D_Color32(0x2a, 0x60, 0x96, 0xFF);
+	const u32 bg   = THEME_BG;
+	const u32 gold = THEME_GOLD;
+	const u32 grn  = THEME_GAME_A;
+	const u32 blu  = THEME_GAME_B;
 	const int DUR  = 150;   // ~2.5s at 60fps; A/START/touch skips
 
 	for (int f = 0; f < DUR && aptMainLoop(); f++) {
