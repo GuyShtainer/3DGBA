@@ -18,6 +18,9 @@
 #include "gbacore.h"
 #include "rompicker.h"
 #include "theme.h"
+#include "gamestate.h"
+#include "touch.h"
+#include "audio.h"
 
 #define WORKER_STACKSIZE (512 * 1024)   // mGBA runFrame has deep call chains; 32KB overflows
 
@@ -43,6 +46,7 @@ typedef struct {
 } EmuInstance;
 
 static volatile bool g_quit = false;
+static bool s_hasPtm = false;   // ptm:u for battery level (HUD)
 
 // Link callbacks (invoked by mGBA's lockstep). onSleep runs on this core's worker thread
 // during runFrame and must NOT block — it only requests a park; the worker parks (blocks on
@@ -215,194 +219,6 @@ static void render_game(EmuInstance* e, C3D_RenderTarget* screen, C3D_RenderTarg
 	}
 }
 
-// ---- Touch controls (v1.1): a virtual gamepad over the bottom game ----------
-// Single-touch, so one button at a time. Each zone = a GBA key HELD while the finger is in
-// it (walk by holding a D-pad zone; tap A/B/Start). Touch drives the BOTTOM-screen game.
-static u16 touch_keys(int px, int py) {
-	// D-pad cross, bottom-left cluster (center ~55,180).
-	if (px < 112 && py > 118) {
-		int dx = px - 55, dy = py - 180;
-		if (dx > -24 && dx < 24 && dy < -16) return 1 << GBAKEY_UP;
-		if (dx > -24 && dx < 24 && dy >  16) return 1 << GBAKEY_DOWN;
-		if (dy > -24 && dy < 24 && dx < -16) return 1 << GBAKEY_LEFT;
-		if (dy > -24 && dy < 24 && dx >  16) return 1 << GBAKEY_RIGHT;
-		return 0;
-	}
-	if (px > 252 && py > 150) return 1 << GBAKEY_A;                 // A (big, bottom-right)
-	if (px > 198 && px <= 252 && py > 176) return 1 << GBAKEY_B;    // B (left of A)
-	if (px > 128 && px < 192 && py > 214) return 1 << GBAKEY_START; // START (bottom-center)
-	if (py < 28 && px < 56)  return 1 << GBAKEY_L;                  // L (top-left)
-	if (py < 28 && px > 264) return 1 << GBAKEY_R;                  // R (top-right)
-	return 0;
-}
-
-// Draw the translucent gamepad overlay (on the already-bound bottom target). `held` highlights
-// the pressed zone. Uses citro2d rects; labels are drawn by the caller via the text buffer.
-static void touch_overlay(u16 held) {
-	const u32 pad = C2D_Color32(0xF5, 0xD0, 0x42, 0x40);   // faint gold
-	const u32 lit = C2D_Color32(0xF5, 0xD0, 0x42, 0xB0);   // bright when pressed
-	#define ZONE(x,y,w,h,k) C2D_DrawRectSolid((x),(y),0.0f,(w),(h),(held & (1<<(k))) ? lit : pad)
-	ZONE(33, 138, 44, 30, GBAKEY_UP);
-	ZONE(33, 192, 44, 30, GBAKEY_DOWN);
-	ZONE(7, 162, 32, 36, GBAKEY_LEFT);
-	ZONE(71, 162, 32, 36, GBAKEY_RIGHT);
-	ZONE(252, 150, 60, 60, GBAKEY_A);
-	ZONE(198, 176, 50, 44, GBAKEY_B);
-	ZONE(128, 214, 64, 22, GBAKEY_START);
-	ZONE(4, 4, 52, 22, GBAKEY_L);
-	ZONE(264, 4, 52, 22, GBAKEY_R);
-	#undef ZONE
-}
-
-// ---- Game-aware touch profiles (v1.1 Stage 2): read live Gen-3 state from RAM ----------
-// Per-game RAM addresses (candidates - confirm on-device via the readout, then build actions on
-// them). sb1ptr = gSaveBlock1Ptr (its *value* points to the live SaveBlock1; player x/y are the
-// first two s16 in it). battleFlags = gBattleTypeFlags (nonzero while in a battle).
-typedef struct { char code[5]; uint32_t sb1ptr; uint32_t battleFlags; } GameProfile;
-static const GameProfile PROFILES[] = {
-	{ "BPEE", 0x03005D8Cu, 0x02022FECu },   // Pokemon Emerald
-	{ "BPRE", 0x03005008u, 0x02022B4Cu },   // Pokemon FireRed
-	{ "BPGE", 0x03005008u, 0x02022B4Cu },   // Pokemon LeafGreen (approx FR)
-};
-static const GameProfile* profile_for(GbaCore* c) {
-	if (!c) return NULL;
-	char code[5]; gbacore_game_code(c, code);
-	for (unsigned i = 0; i < sizeof PROFILES / sizeof PROFILES[0]; i++)
-		if (!strncmp(code, PROFILES[i].code, 4)) return &PROFILES[i];
-	return NULL;
-}
-// Fills px/py (player tile) + inBattle for a profiled game. Returns false if no profile.
-static bool game_state(GbaCore* c, const GameProfile* p, int* px, int* py, bool* inBattle) {
-	if (!c || !p) return false;
-	uint32_t sb1 = gbacore_read32(c, p->sb1ptr);
-	if ((sb1 >> 24) != 0x02) { *px = *py = -1; }   // not a sane EWRAM pointer yet
-	else { *px = (int16_t)gbacore_read16(c, sb1); *py = (int16_t)gbacore_read16(c, sb1 + 2); }
-	*inBattle = gbacore_read32(c, p->battleFlags) != 0;
-	return true;
-}
-
-// ---- Audio output (v0.7 solo): one ndsp stereo channel; only the FOCUSED game plays ----
-#define AUDIO_FRAMES   1280   // stereo frames per wave buffer (matches mGBA's 3DS port)
-#define AUDIO_DSP_BUFS 4
-static ndspWaveBuf s_wbuf[AUDIO_DSP_BUFS];
-static int16_t*    s_audioMem = NULL;
-static int         s_bufId = 0;
-static bool        s_hasSound = false;
-
-// Audio mix modes (volume is per-game, 0..256 where 256 = 100%).
-enum { AUD_SOLO, AUD_MIXED, AUD_SPLIT };
-static const char* AUDIO_NAMES[] = { "Solo", "Mixed", "Split" };
-static int16_t s_mixA[AUDIO_FRAMES * 2];   // scratch for reading each core when mixing
-static int16_t s_mixB[AUDIO_FRAMES * 2];
-static inline int16_t clamp16(int v) { return v < -32768 ? -32768 : (v > 32767 ? 32767 : v); }
-
-static bool s_hasPtm = false;   // ptm:u for battery level (HUD)
-
-static void audio_wbuf_reset(void) {   // (re)point the 4 wave buffers at their slices
-	memset(s_wbuf, 0, sizeof(s_wbuf));
-	for (int i = 0; i < AUDIO_DSP_BUFS; i++)
-		s_wbuf[i].data_pcm16 = &s_audioMem[AUDIO_FRAMES * 2 * i];
-	s_bufId = 0;
-}
-
-static void audio_init(void) {
-	if (R_FAILED(ndspInit())) return;   // no dspfirm.cdc (homebrew w/o it) -> stays silent
-	s_hasSound = true;
-	ndspSetOutputMode(NDSP_OUTPUT_STEREO);
-	ndspSetOutputCount(1);
-	ndspChnReset(0);
-	ndspChnSetFormat(0, NDSP_FORMAT_STEREO_PCM16);
-	ndspChnSetInterp(0, NDSP_INTERP_NONE);
-	ndspChnSetPaused(0, false);
-	ndspChnWaveBufClear(0);
-	s_audioMem = (int16_t*)linearAlloc(AUDIO_FRAMES * AUDIO_DSP_BUFS * 2 * sizeof(int16_t));
-	audio_wbuf_reset();
-}
-
-static void audio_exit(void) {
-	if (!s_hasSound) return;
-	ndspChnWaveBufClear(0);
-	ndspExit();
-	if (s_audioMem) linearFree(s_audioMem);
-	s_audioMem = NULL;
-	s_hasSound = false;
-}
-
-// Drop everything queued/playing and reset the ring — instant clean cut on a focus switch.
-static void audio_reset_stream(void) {
-	if (!s_hasSound) return;
-	ndspChnWaveBufClear(0);
-	audio_wbuf_reset();
-}
-
-static bool audio_wbuf_free(void) {
-	return s_wbuf[s_bufId].status != NDSP_WBUF_QUEUED && s_wbuf[s_bufId].status != NDSP_WBUF_PLAYING;
-}
-
-static void audio_queue(size_t frames) {   // flush + submit the current wave buffer, advance ring
-	s_wbuf[s_bufId].nsamples = frames;
-	DSP_FlushDataCache(s_wbuf[s_bufId].data_pcm16, frames * 2 * sizeof(int16_t));
-	ndspChnWaveBufAdd(0, &s_wbuf[s_bufId]);
-	s_bufId = (s_bufId + 1) & (AUDIO_DSP_BUFS - 1);
-}
-
-// Mix the two cores into ndsp per the chosen mode. SOLO = focused core only (other drained);
-// MIXED = both summed (per-game volume); SPLIT = game A -> left speaker, game B -> right.
-// volA/volB are 0..256 (256 = 100%).
-static void audio_feed(EmuInstance* ea, EmuInstance* eb, int focused, int mode, int volA, int volB) {
-	if (!s_hasSound) return;
-	GbaCore* ca = ea->core;
-	GbaCore* cb = eb->core;
-
-	// SOLO, or a fallback when only one core is present: play one, drain the other.
-	if (mode == AUD_SOLO || !ca || !cb) {
-		GbaCore* play = mode == AUD_SOLO ? (focused == 0 ? ca : cb) : (ca ? ca : cb);
-		GbaCore* mute = mode == AUD_SOLO ? (focused == 0 ? cb : ca) : NULL;
-		int vol = (play == ca) ? volA : volB;
-		if (mute) gbacore_drain_audio(mute);
-		if (!play) return;
-		while (audio_wbuf_free()) {
-			size_t avail = gbacore_audio_available(play);
-			if (!avail) break;
-			size_t m = avail < AUDIO_FRAMES ? avail : AUDIO_FRAMES;
-			m = gbacore_read_audio(play, s_wbuf[s_bufId].data_pcm16, m);
-			if (!m) break;
-			if (vol != 256)
-				for (size_t i = 0; i < m * 2; i++)
-					s_wbuf[s_bufId].data_pcm16[i] = clamp16(s_wbuf[s_bufId].data_pcm16[i] * vol >> 8);
-			audio_queue(m);
-		}
-		return;
-	}
-
-	// MIXED / SPLIT: read both cores in lockstep and combine.
-	while (audio_wbuf_free()) {
-		size_t availA = gbacore_audio_available(ca);
-		size_t availB = gbacore_audio_available(cb);
-		size_t m = availA < availB ? availA : availB;
-		if (!m) break;
-		if (m > AUDIO_FRAMES) m = AUDIO_FRAMES;
-		gbacore_read_audio(ca, s_mixA, m);
-		gbacore_read_audio(cb, s_mixB, m);
-		int16_t* out = s_wbuf[s_bufId].data_pcm16;
-		for (size_t i = 0; i < m; i++) {
-			int aL = s_mixA[2*i], aR = s_mixA[2*i+1];
-			int bL = s_mixB[2*i], bR = s_mixB[2*i+1];
-			if (mode == AUD_MIXED) {
-				out[2*i]   = clamp16((aL * volA + bL * volB) >> 8);
-				out[2*i+1] = clamp16((aR * volA + bR * volB) >> 8);
-			} else {   // AUD_SPLIT: game A -> left, game B -> right (each downmixed to mono)
-				out[2*i]   = clamp16(((aL + aR) >> 1) * volA >> 8);
-				out[2*i+1] = clamp16(((bL + bR) >> 1) * volB >> 8);
-			}
-		}
-		audio_queue(m);
-	}
-	// Don't let the two cores drift apart if one produced more than the other.
-	if (gbacore_audio_available(ca) > 2 * AUDIO_FRAMES) gbacore_drain_audio(ca);
-	if (gbacore_audio_available(cb) > 2 * AUDIO_FRAMES) gbacore_drain_audio(cb);
-}
-
 // ---- Settings persistence (sdmc:/dual-gba/settings.bin) --------------------
 #define SETTINGS_PATH  "sdmc:/dual-gba/settings.bin"
 #define SETTINGS_MAGIC 0x33424744u   // 'DGB3'
@@ -488,10 +304,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 
 	// Audio: both cores share one rate (pitch-matched to the 3DS refresh); start clean.
 	GbaCore* anyCore = emuA.core ? emuA.core : emuB.core;
-	if (s_hasSound && anyCore) {
-		ndspChnSetRate(0, (float)gbacore_ndsp_rate(anyCore));
-		audio_reset_stream();
-	}
+	if (anyCore) audio_set_rate(anyCore);   // shared rate, clean start
 
 	GbaLink* link = gbalink_create();   // shared lockstep coordinator; cores attach on demand
 	bool linkOn = false;
@@ -592,7 +405,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 					LightEvent_Wait(&emuB.done);
 					if (emuA.core) upload_frame(&emuA);
 					if (emuB.core) upload_frame(&emuB);
-					audio_feed(&emuA, &emuB, focused, audioMode, volA, volB);
+					audio_feed(emuA.core, emuB.core, focused, audioMode, volA, volB);
 				}
 			}
 		} else {
@@ -800,7 +613,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 	}
 
 	// teardown this session's workers + cores; reset g_quit for the next session
-	if (s_hasSound) ndspChnWaveBufClear(0);   // stop sound between sessions
+	audio_reset_stream();   // stop sound between sessions
 	emuA.linked = emuB.linked = false;        // stop the free-run loop
 	g_quit = true;
 	LightEvent_Signal(&emuA.waitEv);          // release any worker parked on a link wait

@@ -67,11 +67,6 @@ void     gbacore_link_attach(GbaCore* c, GbaLink* link, int requestedId,
 void     gbacore_link_detach(GbaCore* c);
 uint32_t gbacore_frame_counter(GbaCore* c);   // bumps once per produced video frame
 
-// Diagnostics: how many cores the coordinator has registered, and this core's assigned
-// player id (-1 until the driver's first event registers it). For the on-screen link readout.
-size_t   gbalink_attached(GbaLink* link);
-int      gbacore_link_player(GbaCore* c);
-
 // --- Live RAM access + game id (v1.1 game-aware touch) ---
 // Read the running game's bus (EWRAM 0x02000000, IWRAM 0x03000000, ROM 0x08000000, ...).
 uint8_t  gbacore_read8(GbaCore* c, uint32_t addr);
