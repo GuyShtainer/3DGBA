@@ -13,7 +13,9 @@ typedef enum {
 	GCTX_BATTLE_ACTION,   // FIGHT / BAG / POKEMON / RUN
 	GCTX_BATTLE_MOVE,     // move-selection menu
 	GCTX_BATTLE_TARGET,   // double-battle "choose a target" (HandleInputChooseTarget live)
-	GCTX_PARTY,           // party menu open (in-battle send-out, or field)
+	GCTX_PARTY,           // party menu open (in-battle send-out)
+	GCTX_FIELDMENU,       // overworld sMenu up (START / YES-NO / script multichoice)
+	GCTX_BAG,             // bag menu open (field or battle "ITEM")
 	GCTX_BATTLE_OTHER     // some other battle screen (dialog/animation) — tap = advance (A)
 } GameCtx;
 
@@ -43,6 +45,16 @@ typedef struct {
 	uint32_t activeBattler; // gActiveBattler (u8)
 	// overworld pathfinding
 	uint32_t mapLayout;     // gBackupMapLayout / VMap (s32 width, s32 height, u16* map)
+	// general field menu (sMenu) + bag
+	uint32_t startCb;       // gMenuCallback / sStartMenuCallback (fn ptr; START active when == startCbInput)
+	uint32_t startCbInput;  // HandleStartMenuInput / StartCB_HandleInput (ROM; compare Thumb-masked)
+	uint32_t sMenuBase;     // struct Menu sMenu (+1 top, +2 cursorPos, +4 maxCursorPos, +5 windowId, +8 optHeight)
+	uint32_t gWindowsBase;  // gWindows[] (12-byte stride: +0 bg, +1 left, +2 top, +3 width, +4 height)
+	uint32_t startCursor;   // sStartMenuCursorPos (write too for the START menu)
+	uint32_t gTasksBase;    // gTasks[] (40-byte stride: +0 func, +4 isActive, +8 data[])
+	uint32_t cb2BagRun;     // CB2_BagMenuRun (ROM; gMain.callback2 == this when the bag is up)
+	uint32_t bagHandler;    // Task_BagMenu_HandleInput (ROM; the live list-task owner)
+	uint32_t bagOpen;       // FR gBagMenuState.bagOpen (bool8); 0 = unused (Emerald)
 } GameProfile;
 
 // One-pass snapshot of the live game.
@@ -60,6 +72,8 @@ typedef struct {
 	int     battlersCount;   // -1 if N/A
 	uint8_t absentMask;      // gAbsentBattlerFlags
 	uint8_t battlerPos[4];   // gBattlerPositions[0..3]
+	// bag (live list-task base, computed in game_read; 0 if N/A)
+	uint32_t bagListTaskBase; // gTasks + 40*listTaskId + 8 (+24 scroll, +26 row)
 } GameState;
 
 // Profile for a core's ROM (by header game code), or NULL if unknown.

@@ -32,6 +32,7 @@ typedef struct {
 	int      battlersCount;  // -1 if N/A
 	uint8_t  absentMask;     // gAbsentBattlerFlags
 	uint8_t  battlerPos[4];  // gBattlerPositions[0..3]
+	uint32_t bagListTaskBase; // live bag ListMenu task (+24 scroll, +26 row), 0 if N/A
 } TouchSmart;
 
 // Advance touch one frame; returns the GBA key mask to OR into the bottom game.

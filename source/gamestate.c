@@ -11,15 +11,19 @@ static const GameProfile PROFILES[] = {
   // code   sb1ptr      battleFlags  actionCur   moveCur     battleMons  bg0y
   //        partyMenu   partyCount  mainCb2     cb2Upd      cb2Init     newKeys
   //        ctrlFuncs   chooseTgt   multiCursor battlerPos  battlersCnt absentFlg   activeBat   mapLayout
+  //        startCb     startCbInput sMenuBase  gWindows    startCursor gTasks      cb2BagRun   bagHandler  bagOpen
   { "BPEE", 0x03005D8Cu, 0x02022FECu, 0x020244ACu, 0x020244B0u, 0x02024084u, 0x02022E16u,
             0x0203CEC8u, 0x020244E9u, 0x030022C4u, 0x081B01B0u, 0x081B01E0u, 0x030022EEu,
-            0x03005D60u, 0x08057824u, 0x03005D74u, 0x02024076u, 0x0202406Cu, 0x02024210u, 0x02024064u, 0x03005DC0u },
+            0x03005D60u, 0x08057824u, 0x03005D74u, 0x02024076u, 0x0202406Cu, 0x02024210u, 0x02024064u, 0x03005DC0u,
+            0x03005DF4u, 0x0809FAC4u, 0x0203CD90u, 0x02020004u, 0x0203760Eu, 0x03005E00u, 0x081AAD5Cu, 0x081ABD28u, 0x00000000u },
   { "BPRE", 0x03005008u, 0x02022B4Cu, 0x02023FF8u, 0x02023FFCu, 0x02023BE4u, 0x02022976u,
             0x0203B0A0u, 0x02024029u, 0x030030F4u, 0x0811EBA0u, 0x0811EBD0u, 0x0303011Eu,
-            0x03004FE0u, 0x0802E674u, 0x03004FF4u, 0x02023BD6u, 0x02023BCCu, 0x02023D70u, 0x02023BC4u, 0x03005040u },
+            0x03004FE0u, 0x0802E674u, 0x03004FF4u, 0x02023BD6u, 0x02023BCCu, 0x02023D70u, 0x02023BC4u, 0x03005040u,
+            0x020370F0u, 0x0806F280u, 0x0203ADE4u, 0x020204B4u, 0x020370F4u, 0x03005090u, 0x08107EE0u, 0x08108F0Cu, 0x0203AD01u },
   { "BPGE", 0x03005008u, 0x02022B4Cu, 0x02023FF8u, 0x02023FFCu, 0x02023BE4u, 0x02022976u,
             0x0203B0A0u, 0x02024029u, 0x030030F4u, 0x0811EBA0u, 0x0811EBD0u, 0x0303011Eu,
-            0x03004FE0u, 0x0802E674u, 0x03004FF4u, 0x02023BD6u, 0x02023BCCu, 0x02023D70u, 0x02023BC4u, 0x03005040u },
+            0x03004FE0u, 0x0802E674u, 0x03004FF4u, 0x02023BD6u, 0x02023BCCu, 0x02023D70u, 0x02023BC4u, 0x03005040u,
+            0x020370F0u, 0x0806F280u, 0x0203ADE4u, 0x020204B4u, 0x020370F4u, 0x03005090u, 0x08107EE0u, 0x08108F0Cu, 0x0203AD01u },
 };
 
 const GameProfile* profile_for(GbaCore* c) {
@@ -28,6 +32,20 @@ const GameProfile* profile_for(GbaCore* c) {
 	for (unsigned i = 0; i < sizeof PROFILES / sizeof PROFILES[0]; i++)
 		if (!strncmp(code, PROFILES[i].code, 4)) return &PROFILES[i];
 	return NULL;
+}
+
+// Find the live bag ListMenu task: scan gTasks (16 entries, 40-byte stride) for the active bag input
+// handler, then return its list-task base (gTasks + 40*listTaskId + 8); 0 if none.
+static uint32_t find_bag_list_task(GbaCore* c, const GameProfile* p) {
+	for (int t = 0; t < 16; t++) {
+		uint32_t task = p->gTasksBase + 40u * (uint32_t)t;
+		if (gbacore_read8(c, task + 4) == 0) continue;                 // isActive
+		if ((gbacore_read32(c, task + 0) & ~1u) != p->bagHandler) continue;
+		int16_t listId = (int16_t)gbacore_read16(c, task + 8);          // data[0] = listTaskId
+		if (listId < 0 || listId >= 16) return 0;
+		return p->gTasksBase + 40u * (uint32_t)listId + 8u;
+	}
+	return 0;
 }
 
 bool game_read(GbaCore* c, const GameProfile* p, GameState* out) {
@@ -44,10 +62,29 @@ bool game_read(GbaCore* c, const GameProfile* p, GameState* out) {
 	}
 	bool inBattle = gbacore_read32(c, p->battleFlags) != 0;
 
-	// The OVERWORLD always walks. (We used to also detect a *field* party menu here, but the
-	// callback2==CB2_UpdatePartyMenu compare could false-positive in the field -> ctx=GCTX_PARTY ->
-	// walk never ran, only A. Party touch is now battle-only, where it's the high-value case.)
-	if (!inBattle) { out->ctx = GCTX_OVERWORLD; return true; }
+	// Bag (field OR battle "ITEM"): callback2 == CB2_BagMenuRun, FR also gates on the bagOpen flag,
+	// and a live bag list-task must exist (so a row is actually tappable). Checked first (not battle-gated).
+	if ((gbacore_read32(c, p->mainCb2) & ~1u) == p->cb2BagRun) {
+		bool fr = (p->code[2] == 'R' || p->code[2] == 'G');
+		if (!fr || (p->bagOpen && gbacore_read8(c, p->bagOpen))) {
+			uint32_t lb = find_bag_list_task(c, p);
+			if (lb) { out->ctx = GCTX_BAG; out->bagListTaskBase = lb; return true; }
+		}
+	}
+
+	if (!inBattle) {
+		// Overworld sMenu overlay (START / YES-NO / multichoice)? A live window at sMenu.windowId with a
+		// sane choice count (freed windows read bg=0xFF, so a stale windowId is rejected). Else: walk.
+		// (party-menu field detection was removed — it could false-positive and block walking.)
+		uint8_t wid = gbacore_read8(c, p->sMenuBase + 5);
+		if (wid != 0xFF) {
+			uint32_t win = p->gWindowsBase + 12u * (uint32_t)wid;
+			int8_t maxc = (int8_t)gbacore_read8(c, p->sMenuBase + 4);
+			if (gbacore_read8(c, win) != 0xFF && maxc >= 0 && maxc <= 9) { out->ctx = GCTX_FIELDMENU; return true; }
+		}
+		out->ctx = GCTX_OVERWORLD;
+		return true;
+	}
 
 	// In-battle party "send out which Pokémon?": callback2 == the party-menu updater (Thumb bit masked),
 	// AND the party struct reads sane (guards against a stray callback match).

@@ -263,7 +263,8 @@ uint32_t gbacore_read32(GbaCore* g, uint32_t a) { return           g->core->busR
 // Write a byte to the running game's bus (used to set a menu cursor before injecting A). Safe only
 // from the same thread that runs the core, or while that core's worker is parked (the main loop's
 // per-frame handshake) — never during a link free-run.
-void     gbacore_write8(GbaCore* g, uint32_t a, uint8_t v) { g->core->busWrite8(g->core, a, v); }
+void     gbacore_write8 (GbaCore* g, uint32_t a, uint8_t v)  { g->core->busWrite8 (g->core, a, v); }
+void     gbacore_write16(GbaCore* g, uint32_t a, uint16_t v) { g->core->busWrite16(g->core, a, v); }
 
 void gbacore_game_code(GbaCore* g, char out[5]) {
 	for (int i = 0; i < 4; i++) out[i] = (char)g->core->busRead8(g->core, 0x080000ACu + i);

@@ -215,8 +215,58 @@ static u16 walk_update(bool touching, bool newPress, bool gvalid, int gx, int gy
 	return KEY_DIR(d);
 }
 
+// =================== SMART: general field menu (sMenu) =======================
+// START / YES-NO / multichoice share one cursor. Tap a row -> write sMenu.cursorPos (+ the START
+// mirror) + pulse A. Reads the live window template + pitch, so it follows whatever menu is up.
+static int s_fmenu = -1, s_fmenuTick = 0;
+static void fmenu_reset(void) { s_fmenu = -1; s_fmenuTick = 0; }
+
+static int hit_fieldmenu(GbaCore* core, const GameProfile* p, int gx, int gy) {
+	uint8_t wid = gbacore_read8(core, p->sMenuBase + 5);
+	if (wid == 0xFF) return -1;
+	uint32_t win = p->gWindowsBase + 12u * (uint32_t)wid;
+	int wl = gbacore_read8(core, win + 1), wt = gbacore_read8(core, win + 2), ww = gbacore_read8(core, win + 3);
+	int top = gbacore_read8(core, p->sMenuBase + 1), pitch = gbacore_read8(core, p->sMenuBase + 8);
+	int maxc = (int8_t)gbacore_read8(core, p->sMenuBase + 4);
+	if (pitch <= 0) return -1;
+	int x0 = wl * 8, y0 = wt * 8 + top;
+	if (gx < x0 || gx >= x0 + ww * 8) return -1;
+	int i = (gy - y0) / pitch;
+	return (i >= 0 && i <= maxc) ? i : -1;
+}
+static u16 fmenu_select(GbaCore* core, const GameProfile* p) {
+	if (s_fmenu < 0 || !core) return 0;
+	gbacore_write8(core, p->sMenuBase + 2, (uint8_t)s_fmenu);          // sMenu.cursorPos
+	if ((gbacore_read32(core, p->startCb) & ~1u) == p->startCbInput)   // START menu dispatches on its mirror
+		gbacore_write8(core, p->startCursor, (uint8_t)s_fmenu);
+	u16 k = (s_fmenuTick == 1) ? (1 << GBAKEY_A) : 0;
+	if (++s_fmenuTick >= 2) fmenu_reset();
+	return k;
+}
+
+// ============================ SMART: bag menu ===============================
+// Tap a visible item row -> write the live ListMenu row (+26) + A. Visible rows only (no scroll v1);
+// the bottom row is CLOSE BAG. EM: 8 rows from y16; FR/LG: 6 rows from y8 (pitch 16, both).
+static int s_bag = -1, s_bagTick = 0;
+static void bag_reset(void) { s_bag = -1; s_bagTick = 0; }
+
+static int hit_bag(const TouchSmart* sm, int gx, int gy) {
+	bool fr = sm->prof && (sm->prof->code[2] == 'R' || sm->prof->code[2] == 'G');
+	int x0 = fr ? 88 : 112, y0 = fr ? 8 : 16, rows = fr ? 6 : 8;
+	if (gx < x0 || gx >= 232 || gy < y0 || gy >= y0 + rows * 16) return -1;
+	int r = (gy - y0) / 16;
+	return (r >= 0 && r < rows) ? r : -1;
+}
+static u16 bag_select(GbaCore* core, uint32_t listBase) {
+	if (s_bag < 0 || !core || !listBase) return 0;
+	gbacore_write16(core, listBase + 26, (uint16_t)s_bag);            // live in-window row
+	u16 k = (s_bagTick == 1) ? (1 << GBAKEY_A) : 0;
+	if (++s_bagTick >= 2) bag_reset();
+	return k;
+}
+
 // ================================ dispatch ==================================
-static void all_reset(void) { battle_reset(); walk_reset(); party_reset(); target_reset(); }
+static void all_reset(void) { battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); bag_reset(); }
 
 u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, bool gvalid,
                  const TouchSmart* sm) {
@@ -231,7 +281,7 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 	switch (sm->ctx) {
 	case GCTX_BATTLE_ACTION:
 	case GCTX_BATTLE_MOVE: {
-		walk_reset(); party_reset(); target_reset();
+		walk_reset(); party_reset(); target_reset(); fmenu_reset(); bag_reset();
 		uint32_t base = (sm->ctx == GCTX_BATTLE_ACTION) ? sm->actionAddr : sm->moveAddr;
 		if (newPress && gvalid) {
 			int cell = (sm->ctx == GCTX_BATTLE_ACTION) ? hit_action(gx, gy) : hit_move(gx, gy);
@@ -240,22 +290,30 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 		return menu_select(sm->core, base);
 	}
 	case GCTX_BATTLE_TARGET:
-		battle_reset(); walk_reset(); party_reset();
+		battle_reset(); walk_reset(); party_reset(); fmenu_reset(); bag_reset();
 		if (newPress && gvalid) {
 			int pos = hit_battler(gx, gy);
 			if (pos >= 0) { int idx = battler_index_for_pos(sm, pos); if (idx >= 0) { s_tgt = idx; s_tgtTick = 0; } }
 		}
 		return select_pulse(sm->core, sm->prof ? sm->prof->multiCursor : 0, &s_tgt, &s_tgtTick);
 	case GCTX_PARTY:
-		battle_reset(); walk_reset(); target_reset();
+		battle_reset(); walk_reset(); target_reset(); fmenu_reset(); bag_reset();
 		if (newPress && gvalid) {
 			int slot = hit_party(gx, gy, sm->partyLayout);
 			if (slot == 7 || (slot >= 0 && slot < sm->partyCount)) { s_party = slot; s_partyTick = 0; }
 		}
 		return select_pulse(sm->core, sm->prof ? sm->prof->partyMenu + 0x09 : 0, &s_party, &s_partyTick);
 	case GCTX_OVERWORLD:
-		battle_reset(); party_reset(); target_reset();
+		battle_reset(); party_reset(); target_reset(); fmenu_reset(); bag_reset();
 		return walk_update(touching, newPress, gvalid, gx, gy, sm->px, sm->py, sm->core, sm->prof);
+	case GCTX_FIELDMENU:
+		battle_reset(); walk_reset(); party_reset(); target_reset(); bag_reset();
+		if (newPress && gvalid && sm->prof) { int i = hit_fieldmenu(sm->core, sm->prof, gx, gy); if (i >= 0) { s_fmenu = i; s_fmenuTick = 0; } }
+		return sm->prof ? fmenu_select(sm->core, sm->prof) : 0;
+	case GCTX_BAG:
+		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset();
+		if (newPress && gvalid) { int r = hit_bag(sm, gx, gy); if (r >= 0) { s_bag = r; s_bagTick = 0; } }
+		return bag_select(sm->core, sm->bagListTaskBase);
 	case GCTX_BATTLE_OTHER:
 		all_reset();
 		return touching ? (1 << GBAKEY_A) : 0;                     // battle dialog/animation: tap = advance
