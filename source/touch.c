@@ -113,8 +113,8 @@ static int battler_index_for_pos(const TouchSmart* sm, int pos) {
 // Tap (or slide) a tile -> BFS over the live collision grid -> follow the route, holding the D-pad
 // toward each node. Continuously RE-TARGETS while the screen is touched (drag to steer; on a bike the
 // held screen tile maps to a moving world tile, so you keep riding that way). Tap your own tile = A.
-#define WBOX  33          // BFS window edge (tiles); goal is always within ~+-7 of the player
-#define WHALF 16
+#define WBOX  65          // BFS window edge (tiles); ~+-32 around the player (doubled)
+#define WHALF 32
 #define KEY_DIR(d) (s_keyDir[d])
 static const u16 s_keyDir[4] = { 1 << GBAKEY_RIGHT, 1 << GBAKEY_LEFT, 1 << GBAKEY_DOWN, 1 << GBAKEY_UP };
 
@@ -144,7 +144,8 @@ static bool plan_bfs(GbaCore* core, const GameProfile* p, int sx, int sy, int gx
 	int w, h; uint32_t ptr;
 	if (!map_read(core, p, &w, &h, &ptr)) return false;
 	if (abs(gxw - sx) > WHALF || abs(gyw - sy) > WHALF) return false;
-	if (!walkable(core, ptr, w, h, gxw, gyw)) return false;
+	// (a blocked goal is allowed as a TERMINAL below — so tapping a door/ladder/NPC/sign routes to it
+	//  and steps in, triggering the warp/interact; the map-change check then ends the walk.)
 	s_mapW = w; s_mapH = h; s_mapPtr = ptr;
 
 	static int16_t parent[WBOX * WBOX];
@@ -166,7 +167,7 @@ static bool plan_bfs(GbaCore* core, const GameProfile* p, int sx, int sy, int gx
 			if (nlx < 0 || nlx >= WBOX || nly < 0 || nly >= WBOX) continue;
 			int nidx = nlx + WBOX * nly;
 			if (parent[nidx] != -1) continue;
-			if (!walkable(core, ptr, w, h, sx + nlx - WHALF, sy + nly - WHALF)) continue;
+			if (nidx != goal && !walkable(core, ptr, w, h, sx + nlx - WHALF, sy + nly - WHALF)) continue;
 			parent[nidx] = cur; dirOf[nidx] = (int8_t)d; q[tail++] = nidx;
 		}
 	}
@@ -247,8 +248,10 @@ static u16 fmenu_select(GbaCore* core, const GameProfile* p) {
 // ============================ SMART: bag menu ===============================
 // Tap a visible item row -> write the live ListMenu row (+26) + A. Visible rows only (no scroll v1);
 // the bottom row is CLOSE BAG. EM: 8 rows from y16; FR/LG: 6 rows from y8 (pitch 16, both).
-static int s_bag = -1, s_bagTick = 0;
-static void bag_reset(void) { s_bag = -1; s_bagTick = 0; }
+static int s_bag = -1, s_bagTick = 0;            // pending tap-select (visible row) + A pulse
+static bool s_bagDown = false, s_bagDrag = false;
+static int s_bagDownX, s_bagDownY, s_bagLastX, s_bagLastY, s_bagRow;
+static void bag_reset(void) { s_bag = -1; s_bagTick = 0; s_bagDown = false; s_bagDrag = false; }
 
 static int hit_bag(const TouchSmart* sm, int gx, int gy) {
 	bool fr = sm->prof && (sm->prof->code[2] == 'R' || sm->prof->code[2] == 'G');
@@ -257,12 +260,32 @@ static int hit_bag(const TouchSmart* sm, int gx, int gy) {
 	int r = (gy - y0) / 16;
 	return (r >= 0 && r < rows) ? r : -1;
 }
-static u16 bag_select(GbaCore* core, uint32_t listBase) {
-	if (s_bag < 0 || !core || !listBase) return 0;
-	gbacore_write16(core, listBase + 26, (uint16_t)s_bag);            // live in-window row
-	u16 k = (s_bagTick == 1) ? (1 << GBAKEY_A) : 0;
-	if (++s_bagTick >= 2) bag_reset();
-	return k;
+// Phone-style: TAP a row -> select on release (write live row +26, then A). DRAG vertically ->
+// scroll (inject UP/DOWN, using the game's own cursor+scroll). DRAG horizontally -> switch pocket
+// (inject LEFT/RIGHT). Never writes the scroll field directly (that path is racy).
+static u16 bag_update(const TouchSmart* sm, bool touching, bool newPress, bool gvalid, int gx, int gy) {
+	if (s_bag >= 0) {                                  // finish a pending tap-select pulse
+		if (sm->core && sm->bagListTaskBase) gbacore_write16(sm->core, sm->bagListTaskBase + 26, (uint16_t)s_bag);
+		u16 k = (s_bagTick == 1) ? (1 << GBAKEY_A) : 0;
+		if (++s_bagTick >= 2) { s_bag = -1; s_bagTick = 0; }
+		return k;
+	}
+	if (newPress && gvalid) { s_bagDown = true; s_bagDrag = false; s_bagDownX = s_bagLastX = gx; s_bagDownY = s_bagLastY = gy; s_bagRow = hit_bag(sm, gx, gy); }
+	if (touching && s_bagDown && gvalid) {
+		if (!s_bagDrag && (abs(gx - s_bagDownX) > 6 || abs(gy - s_bagDownY) > 6)) s_bagDrag = true;
+		if (s_bagDrag) {
+			if (gy - s_bagLastY >= 14) { s_bagLastX = gx; s_bagLastY = gy; return 1 << GBAKEY_UP; }    // drag down -> items above
+			if (s_bagLastY - gy >= 14) { s_bagLastX = gx; s_bagLastY = gy; return 1 << GBAKEY_DOWN; }  // drag up -> items below
+			if (gx - s_bagLastX >= 30) { s_bagLastX = gx; s_bagLastY = gy; return 1 << GBAKEY_LEFT; }  // swipe right -> prev pocket
+			if (s_bagLastX - gx >= 30) { s_bagLastX = gx; s_bagLastY = gy; return 1 << GBAKEY_RIGHT; } // swipe left  -> next pocket
+		}
+		return 0;
+	}
+	if (!touching && s_bagDown) {                      // released
+		s_bagDown = false;
+		if (!s_bagDrag && s_bagRow >= 0) { s_bag = s_bagRow; s_bagTick = 0; }   // a clean tap -> select
+	}
+	return 0;
 }
 
 // ================================ dispatch ==================================
@@ -312,8 +335,7 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 		return sm->prof ? fmenu_select(sm->core, sm->prof) : 0;
 	case GCTX_BAG:
 		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset();
-		if (newPress && gvalid) { int r = hit_bag(sm, gx, gy); if (r >= 0) { s_bag = r; s_bagTick = 0; } }
-		return bag_select(sm->core, sm->bagListTaskBase);
+		return bag_update(sm, touching, newPress, gvalid, gx, gy);
 	case GCTX_BATTLE_OTHER:
 		all_reset();
 		return touching ? (1 << GBAKEY_A) : 0;                     // battle dialog/animation: tap = advance
