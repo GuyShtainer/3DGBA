@@ -130,6 +130,10 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 		battle_reset();
 		return walk_update(newPress, gvalid, gx, gy, sm->px, sm->py);
 	}
+	if (sm && sm->valid && sm->ctx == GCTX_BATTLE_OTHER) {   // battle text / animation (also party/bag for now)
+		battle_reset(); walk_reset();
+		return touching ? (1 << GBAKEY_A) : 0;   // tap (or hold) anywhere = advance the dialog (A)
+	}
 	// Unhandled context (battle sub-screen, party, bag, ...) — no smart input yet (switch to Gamepad
 	// mode or use the physical buttons). Intentionally injects nothing rather than mis-driving.
 	battle_reset(); walk_reset();

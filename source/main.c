@@ -251,14 +251,14 @@ typedef struct {
 	s32 scaleMode[2];
 	s32 smooth[2];
 	s32 swapped;
-	s32 hudOn;
+	s32 hudMode;
 	s32 audioMode;
 	s32 volA, volB;
 	s32 touchMode;
 	s32 frameskip;
 } Settings;
 
-static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, bool* hudOn,
+static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, int* hudMode,
                           int* audioMode, int* volA, int* volB, int* touchMode, bool* fsOn) {
 	FILE* f = fopen(SETTINGS_PATH, "rb");
 	if (!f) return;
@@ -271,7 +271,7 @@ static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, bool*
 	smooth[0] = s.smooth[0] != 0;
 	smooth[1] = s.smooth[1] != 0;
 	*swapped  = s.swapped != 0;
-	*hudOn    = s.hudOn   != 0;
+	*hudMode    = ((unsigned)s.hudMode) & 3;
 	*audioMode = ((unsigned)s.audioMode) % 3;
 	*volA = s.volA < 0 ? 0 : (s.volA > 256 ? 256 : s.volA);
 	*volB = s.volB < 0 ? 0 : (s.volB > 256 ? 256 : s.volB);
@@ -279,10 +279,10 @@ static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, bool*
 	*fsOn = s.frameskip != 0;
 }
 
-static void settings_save(const int scaleMode[2], const bool smooth[2], bool swapped, bool hudOn,
+static void settings_save(const int scaleMode[2], const bool smooth[2], bool swapped, int hudMode,
                           int audioMode, int volA, int volB, int touchMode, bool fsOn) {
 	Settings s = { SETTINGS_MAGIC, { scaleMode[0], scaleMode[1] },
-	               { smooth[0], smooth[1] }, swapped, hudOn, audioMode, volA, volB, touchMode, fsOn };
+	               { smooth[0], smooth[1] }, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn };
 	FILE* f = fopen(SETTINGS_PATH, "wb");
 	if (!f) return;
 	fwrite(&s, 1, sizeof s, f);
@@ -302,6 +302,8 @@ static const char* MENU_ITEMS[] = {
 #define MENU_FS_IDX    4   // dynamic label ("Frameskip: on/off")
 #define MENU_MUTE_IDX  10  // dynamic label ("Mute: on/off")
 #define MENU_PAUSE_IDX 11  // dynamic label ("Pause A/B: on/off")
+#define MENU_HUD_IDX   5   // dynamic label ("HUD: off/top/bottom/both")
+static const char* const HUD_NAMES[4] = { "off", "top", "bottom", "both" };
 
 // Run one play session with the two chosen ROMs. Returns SESSION_CHANGE (re-pick) or
 // SESSION_QUIT. Creates/destroys the cores + worker threads itself.
@@ -354,7 +356,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 	int  toastTimer = 0;
 
 	// HUD (menu-toggleable): per-screen game label + FPS + clock + battery.
-	bool hudOn = true;
+	int  hudMode = 3;   // per-screen HUD/fps bitmask: 1=top 2=bottom
 	char nameA[64], nameB[64];
 	rom_display_name(pathA, nameA, sizeof nameA);
 	rom_display_name(pathB, nameB, sizeof nameB);
@@ -368,7 +370,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 	int audioMode = AUD_SOLO;
 	int volA = 256, volB = 256;
 
-	settings_load(scaleMode, smooth, &swapped, &hudOn, &audioMode, &volA, &volB, &touchMode, &fsOn);   // restore prefs
+	settings_load(scaleMode, smooth, &swapped, &hudMode, &audioMode, &volA, &volB, &touchMode, &fsOn);   // restore prefs
 	gbacore_set_frameskip(emuA.core, (fsOn && focused != 0) ? 2 : 0);   // unfocused-frameskip
 	gbacore_set_frameskip(emuB.core, (fsOn && focused != 1) ? 2 : 0);
 
@@ -426,14 +428,14 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 					snprintf(toast, sizeof toast, "%s scale: %s",
 					         fs == 0 ? "Top" : "Bottom", SCALE_NAMES[scaleMode[fs]]);
 					toastTimer = 90;
-					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB, touchMode, fsOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn);
 				}
 				if (kDown & KEY_ZL) {
 					smooth[fs] = !smooth[fs];   // render_game sets the per-pass filters
 					snprintf(toast, sizeof toast, "%s filter: %s", fs == 0 ? "Top" : "Bottom",
 					         smooth[fs] ? "Smooth" : "Sharp-bilinear");
 					toastTimer = 90;
-					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB, touchMode, fsOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn);
 				}
 				u16 g = to_gba_keys(kHeld);
 				// Touchscreen drives the BOTTOM game (A is on bottom iff swapped) as a POINTER on the
@@ -444,7 +446,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 					touchPosition tp = { 0, 0 };
 					if (touching) hidTouchRead(&tp);
 					int gx = -1, gy = -1; bool gvalid = false;
-					if (touchMode == TOUCH_SMART && !linkOn) {   // skip cross-thread RAM read during a link
+					if (touchMode == TOUCH_SMART) {   // game-aware touch works even during a link (benign EWRAM race)
 						gvalid = touch_to_gba(tp.px, tp.py, scaleMode[1], &gx, &gy);
 						GbaCore* botCore = swapped ? emuA.core : emuB.core;
 						const GameProfile* gp = profile_for(botCore);
@@ -485,7 +487,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 					*v += (kDown & (KEY_DRIGHT | KEY_CPAD_RIGHT)) ? 32 : -32;
 					if (*v < 0) *v = 0; else if (*v > 256) *v = 256;
 					snprintf(status, sizeof status, "Vol %c: %d%%", focused == 0 ? 'A' : 'B', *v * 100 / 256);
-					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB, touchMode, fsOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn);
 				}
 				if (kDown & KEY_B) menuOpen = false;                 // resume
 			bool activate = (kDown & KEY_A) != 0;
@@ -525,30 +527,30 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 					audioMode = (audioMode + 1) % 3;
 					snprintf(status, sizeof status, "Audio: %s", AUDIO_NAMES[audioMode]);
 					audio_reset_stream();                        // clean cut between modes
-					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB, touchMode, fsOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn);
 				}
 				else if (menuSel == 3) {                         // Touch mode (off / gamepad / smart)
 					touchMode = (touchMode + 1) % 3;
 					snprintf(status, sizeof status, "Touch: %s", TOUCH_NAMES[touchMode]);
-					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB, touchMode, fsOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn);
 				}
 				else if (menuSel == 4) {                         // Frameskip (unfocused game)
 					fsOn = !fsOn;
 					gbacore_set_frameskip(emuA.core, (fsOn && focused != 0) ? 2 : 0);
 					gbacore_set_frameskip(emuB.core, (fsOn && focused != 1) ? 2 : 0);
 					snprintf(status, sizeof status, "Frameskip %s", fsOn ? "on" : "off");
-					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB, touchMode, fsOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn);
 				}
 				else if (menuSel == 5) {                         // Toggle HUD
-					hudOn = !hudOn;
-					snprintf(status, sizeof status, "HUD %s", hudOn ? "on" : "off");
-					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB, touchMode, fsOn);
+					hudMode = (hudMode + 1) & 3;
+					snprintf(status, sizeof status, "HUD: %s", HUD_NAMES[hudMode]);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn);
 				}
 				else if (menuSel == 6) {                         // Swap screens
 					swapped = !swapped; menuOpen = false;
 					snprintf(toast, sizeof toast, "Layout: %s", swapped ? "B top / A bottom" : "A top / B bottom");
 					toastTimer = 90;
-					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB, touchMode, fsOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn);
 				}
 				else if (menuSel == 7) {                         // Save state (focused game)
 					EmuInstance* fg = (focused == 0) ? &emuA : &emuB;
@@ -589,7 +591,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 		const char* topName = swapped ? nameB : nameA;
 		const char* botName = swapped ? nameA : nameB;
 		char hudStat[40];
-		if (hudOn) {
+		if (hudMode) {
 			time_t tt = time(NULL);
 			struct tm* lt = localtime(&tt);
 			snprintf(hudStat, sizeof hudStat, "%s  %dfps %dms  %02d:%02d  %d/5",
@@ -623,6 +625,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 					bool fp = (focused == 0) ? emuA.paused : emuB.paused;
 					snprintf(llabel, sizeof llabel, "Pause %c: %s", focused == 0 ? 'A' : 'B', fp ? "on" : "off");
 					label = llabel;
+				} else if (i == MENU_HUD_IDX) {
+					snprintf(llabel, sizeof llabel, "HUD: %s", HUD_NAMES[hudMode]);
+					label = llabel;
 				}
 				C2D_TextParse(&items[i], txtBuf, label); C2D_TextOptimize(&items[i]);
 			}
@@ -653,7 +658,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 		// top screen (sharp-bilinear two-pass when applicable). render_game leaves `top` bound.
 		render_game(topG, top, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], topTint, clrBg);
 		if (!menuOpen) {
-			if (hudOn) {
+			if (hudMode & 1) {
 				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 400.0f, 14.0f, THEME_HUD_BAR);
 				if (focScreen == 0) C2D_DrawRectSolid(0.0f, 14.0f, 0.0f, 400.0f, 2.0f, clrHi);
 				C2D_DrawText(&tHudTop, C2D_WithColor, 4.0f, 1.0f, 0.0f, 0.4f, 0.4f, clrTxt);
@@ -662,13 +667,13 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 			} else if (focScreen == 0) {
 				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 400.0f, 4.0f, clrHi);
 			}
-			if (toastTimer > 0) C2D_DrawText(&tToast, C2D_WithColor, 8.0f, hudOn ? 20.0f : 8.0f, 0.0f, 0.5f, 0.5f, clrHi);
+			if (toastTimer > 0) C2D_DrawText(&tToast, C2D_WithColor, 8.0f, (hudMode & 1) ? 20.0f : 8.0f, 0.0f, 0.5f, 0.5f, clrHi);
 		}
 
 		// bottom screen (+ menu overlay when open). render_game leaves `bot` bound.
 		render_game(botG, bot, preTgt, &preTex, 320.0f, 240.0f, scaleMode[1], smooth[1], botTint, clrBg);
 		if (!menuOpen) {
-			if (hudOn) {
+			if (hudMode & 2) {
 				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 14.0f, THEME_HUD_BAR);
 				if (focScreen == 1) C2D_DrawRectSolid(0.0f, 14.0f, 0.0f, 320.0f, 2.0f, clrHi);
 				C2D_DrawText(&tHudBot, C2D_WithColor, 4.0f, 1.0f, 0.0f, 0.4f, 0.4f, clrTxt);
@@ -680,7 +685,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 			if (touchMode == TOUCH_PAD) {   // virtual gamepad overlay (SMART draws nothing -> real UI)
 				touch_draw(touchMode, tk, &sm);
 			}
-			if (touchMode == TOUCH_SMART && !linkOn && sm.valid) {   // TEMP debug: confirm RAM reads on device
+			if (touchMode == TOUCH_SMART && sm.valid) {   // TEMP debug: confirm RAM reads on device
 				static const char* const CTXN[] = { "none", "field", "b.act", "b.move", "b.other" };
 				char gs[64]; snprintf(gs, sizeof gs, "%s xy=%d,%d a=%d m=%d",
 				         CTXN[sm.ctx], sm.px, sm.py, sm.actionCursor, sm.moveCursor);
