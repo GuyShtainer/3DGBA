@@ -134,6 +134,12 @@ void gbacore_set_keys(GbaCore* g, uint16_t keys) {
 	g->core->setKeys(g->core, keys);
 }
 
+void gbacore_set_frameskip(GbaCore* g, int n) {
+	if (!g || !g->core) return;
+	g->core->opts.frameskip = n;
+	g->core->loadConfig(g->core, &g->core->config);   // applies to gba->video.frameskip (keeps volume)
+}
+
 void gbacore_run_frame(GbaCore* g) {
 	g->core->runFrame(g->core);
 	// Audio stays in the core's buffer; the caller reads it (focused core) or drains it

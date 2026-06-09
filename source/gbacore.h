@@ -35,6 +35,9 @@ bool     gbacore_load_rom(GbaCore* c, const char* path);
 bool     gbacore_load_save(GbaCore* c, const char* path);
 
 void     gbacore_set_keys(GbaCore* c, uint16_t gba_keys);  // mask of (1 << GBAKEY_x)
+// Video frameskip: render 1 of every (n+1) GBA frames (CPU still runs full speed, so SIO/link
+// and audio timing are unaffected). Used to give the focused game more budget in heavy scenes.
+void     gbacore_set_frameskip(GbaCore* c, int n);
 void     gbacore_run_frame(GbaCore* c);                    // run one whole video frame
 // One CPU run-slice (core->runLoop): returns promptly when the lockstep sets earlyExit, so a
 // linked worker can park at the exact transfer point. Same primitive mGBA's mCoreThread uses.
