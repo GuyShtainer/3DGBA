@@ -16,6 +16,32 @@ high-level M0–M4 note (`../../docs/ROADMAP.md`), which stays as the toolkit-le
 
 ## Status (2026-06-08)
 
+- **🧰 v1.1 polish batch (2026-06-09), pending hw test:** move-menu select fixed (all 4 moves; removed an over-rejecting RAM gate); **hard Mute** menu item (stops audio pump/mix/feed — real CPU save, not volume 0); **2D button pause-menu** (D-pad *or tap* to select) + a **Pause** entry; and a **render/emulation pipeline decouple** for non-link play — main now renders frame N-1 while the workers compute N, so the picture is no longer chained to the slower core (the reason link felt smoother). `worker_main` + the link path are untouched; drains keep the menu/link transitions clean.
+- **🎮 v1.1 TOUCH — direct-touch on the REAL game UI, built (2026-06-09), pending hardware test.**
+  Touch is a 3-way mode (Off / Gamepad / **Smart**). In Smart the touchscreen is a *pointer on the
+  game's own UI* (no overlay buttons): the touch is mapped back through the render scaling to a GBA
+  pixel and routed by live RAM (`gBattle_BG0_Y` = 160 action / 320 move; `gBattleTypeFlags`):
+  * **Battle action menu** — tap the real FIGHT/BAG/POKéMON/RUN → a closed-loop controller drives
+    `gActionSelectionCursor` there and presses A.
+  * **Battle move menu** — tap the real move → drives `gMoveSelectionCursor` + A; empty slots (read
+    from `gBattleMons[].moves`) are ignored.
+  * **Overworld tap-to-walk** — tap a tile → walk there (axis path + stall-detect off the player
+    coords; player sits at screen tile 7,5); tap yourself = A (interact / advance text).
+  The earlier overlay-button version was rejected ("a cool workaround, not what I had in mind"). All
+  addresses verified vs pret sym maps — see [docs/kb/gen3-ram-touch.md](docs/kb/gen3-ram-touch.md). A
+  temp `ctx/xy/cursor` readout stays on to confirm reads on device. Party/bag/field-menu direct-touch
+  + true collision pathfinding are deferred (addresses already sourced). *Not done until verified on hw.*
+- **⚙️ Multi-core audio offload + full-clock use, built (2026-06-09), pending hardware test.** Audio
+  moved off the render frame onto a **dedicated audio thread pinned to the core-1 syscore slice** (the
+  previously-unused lane): each worker drains its OWN core's audio into a lock-free SPSC ring, and the
+  audio thread mixes both rings + feeds ndsp. This (a) frees core 0 so heavy scenes can hold 60fps with
+  audio on, and (b) **un-mutes audio during a link** (rings are worker-private → no buffer race).
+  `osSetSpeedupEnable(true)` is now unconditional, and a **self-calibrating 804MHz/L2 detector** warns
+  on the splash if a New 3DS isn't accelerated (run the `.cia`, not the HBL `.3dsx`). **Core budget:
+  all 3 usable lanes now used** — core 0 (main + worker A), core 2 (worker B), core 1 (audio); core 3
+  is OS-reserved (never available to titles). Full plan + rollout in
+  [docs/kb/n3ds-audio-offload-plan.md](docs/kb/n3ds-audio-offload-plan.md). *Hardware-final: watch for
+  core-1 underrun crackle under the 80% syscore slice (mitigation: deepen the wave ring 4→6).*
 - **🏆 v0.8 LINK CABLE = ✅ DONE on real New 3DS (2026-06-08).** Two Gen-3 Pokémon games completed a
   **full trade across the two screens, saved, and persisted across a restart** — the project's
   flagship goal, achieved. The fix that made it work: run the *linked* cores via `core->runLoop`
@@ -24,11 +50,17 @@ high-level M0–M4 note (`../../docs/ROADMAP.md`), which stays as the toolkit-le
   **core-2-pinned** workers (no `mCoreThread` rewrite, parallel perf kept). See
   [docs/kb/link-cable-lockstep.md](docs/kb/link-cable-lockstep.md). Free-running B2 (frame-granular
   park) was the dead end; `runLoop` is the answer.
-- **⚠️ POLISH ITEM (perf):** on New 3DS, normal play (audio on) drops to **~30fps in heavy scenes**;
-  with audio off (during a link) it's a **solid 60fps**. So the **audio path is the dominant cost in
-  hard scenes** — optimize it in the polish pass (candidates: lighten the per-frame mix/feed,
-  reconsider sample rate, or add unfocused-frameskip to claw back the heavy-scene budget). Target:
-  60fps with audio on, even in hard scenes.
+- **✅ POLISH PASS #1 done + merged to `main` (2026-06-09).** Unfocused-frameskip (perf lever),
+  menu declutter + focused-game save/load state, settings persistence (`DGB3`), HUD link-status +
+  **worst-frame-ms** readout, controls cheat-sheet, `theme.h` palette unification, and a module split
+  (`audio.{c,h}` / `touch.{c,h}` / `gamestate.{c,h}` out of `main.c`). Confirmed working on hardware.
+- **🟢 POLISH PASS #2 (the three deferred perf/audio items) — ADDRESSED in code (2026-06-09), pending
+  hardware sign-off** via the multi-core audio offload above:
+  1. **fps locking higher** — audio work left core 0, returning the heavy-scene budget it was eating;
+     expect 60fps with audio on (confirm on hw; unfocused-frameskip remains as a fallback).
+  2. **audio "smoosh"/crackle** — decoupled from the frame via SPSC rings consumed by the core-1 audio
+     thread; if crackle persists under the syscore slice, deepen the wave ring (4→6) / tune the limit.
+  3. **audio during link** — now plays (worker-private rings); the old main-thread buffer race is gone.
 - **v0.1–v0.3 + v0.5: done.** Two real GBA games emulate at once, one per screen (mGBA via
   `libmgba`), X/Y focus, per-core ROMs, and a boot-time ROM picker.
 - **v0.4 PERF GATE = ✅ GREEN** — two cores run at **full speed on a real New 3DS** (`.cia`).
@@ -153,6 +185,19 @@ Agents: toolkit `n3ds-systems`, `pica-gpu`, `devkitarm-3ds-build`, `ctr-audio`,
   (A→`GFX_LEFT`, B→`GFX_RIGHT` of the top screen — adds the right-eye target the scaffold lacks). Risk:
   brightness halving, crosstalk between two different images, doubles top-screen GPU cost — labeled curiosity,
   must not regress the v1.0 budget.
+- **v1.4 — 📡 WIRELESS multi-3DS link (4-player GBA over 3DS local wireless).** *(user-requested, build
+  later)* Extend the in-process SIO lockstep (v0.8) **across consoles** so up to **4 emulated GBA
+  "devices" link over 3DS local wireless** — bridging mGBA's GBA-SIO bytes over the 3DS `uds` service
+  (NWMUDS ad-hoc). **Flexible topology:** 4 separate 3DS each running 1 game; or a console running 2
+  games (both screens) contributing 2 of the 4 link seats; any mix that sums to ≤4 GBAs (e.g. 3 consoles
+  with 1+1+2, or 2 consoles with 2+2). Players **negotiate P1–P4 seat assignment** at join (random/agreed)
+  so any console can host any seat(s). Targets Gen-3 4-player (Union Room / trades / multi battles) and
+  other GBA 4-player titles. **Architecture:** a `uds` transport layer feeding the existing
+  `GBASIOLockstepCoordinator` — local in-process cores + remote cores both appear as lockstep drivers;
+  the lockstep cadence already proven on one console must now tolerate wireless latency/jitter (buffer +
+  rollback or strict lockstep-with-wait). **High risk:** wireless latency vs the GBA link's tight timing,
+  `uds` throughput/MTU, and clean seat negotiation. Independent of v1.1–v1.3; the single-console link
+  (v0.8) is the foundation it builds on. Detail will land in `docs/kb/wireless-link-uds.md` when started.
 
 ## citro2d UI-layer module structure (v0.5) — `source/ui/`
 
