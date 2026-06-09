@@ -415,12 +415,11 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 					gbacore_set_frameskip(emuA.core, (fsOn && focused != 0) ? 2 : 0);
 					gbacore_set_frameskip(emuB.core, (fsOn && focused != 1) ? 2 : 0);
 				}
-				if (kDown & KEY_X) {                                         // pause/resume focused game
-					EmuInstance* fg = (focused == 0) ? &emuA : &emuB;
-					fg->paused = !fg->paused;
-					snprintf(toast, sizeof toast, "Game %c %s", focused == 0 ? 'A' : 'B',
-					         fg->paused ? "paused" : "resumed");
+				if (kDown & KEY_X) {                                         // swap which game is on which screen
+					swapped = !swapped;
+					snprintf(toast, sizeof toast, "Layout: %s", swapped ? "B top / A bottom" : "A top / B bottom");
 					toastTimer = 90;
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn);
 				}
 				int fs = swapped ? (focused ^ 1) : focused;   // screen the focused game sits on
 				if (kDown & KEY_ZR) {
@@ -495,7 +494,19 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 				touchPosition mtp; hidTouchRead(&mtp);
 				for (int i = 0; i < MENU_N; i++) {
 					float bx = 4.0f + (i & 1) * 160.0f, by = 4.0f + (i >> 1) * 32.0f;
-					if (mtp.px >= bx && mtp.px < bx + 152 && mtp.py >= by && mtp.py < by + 29) { menuSel = i; activate = true; break; }
+					if (mtp.px >= bx && mtp.px < bx + 152 && mtp.py >= by && mtp.py < by + 29) {
+						menuSel = i;
+						if (i == MENU_AUDIO_IDX) {   // 3 sub-buttons: A vol | B vol | mode (no full-cell activate)
+							int j = (int)((mtp.px - bx) / 50.5f); if (j < 0) j = 0; if (j > 2) j = 2;
+							if      (j == 0) { volA += 64; if (volA > 256) volA = 0; }
+							else if (j == 1) { volB += 64; if (volB > 256) volB = 0; }
+							else            { audioMode = (audioMode + 1) % 3; audio_reset_stream(); }
+							settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn);
+						} else {
+							activate = true;
+						}
+						break;
+					}
 				}
 			}
 			if (activate) {
@@ -633,7 +644,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 			}
 			// Footer: last action result, or a controls cheat-sheet when idle.
 			C2D_TextParse(&tStatus, txtBuf,
-			              status[0] ? status : "Y focus  X pause  ZL/ZR filter/scale  L/R = GBA");
+			              status[0] ? status : "Y focus  X swap  ZL/ZR filter/scale  L/R = GBA");
 			C2D_TextOptimize(&tStatus);
 		} else {
 			C2D_TextParse(&tHint, txtBuf, touchMode != TOUCH_OFF ? "START+SELECT: menu  (touch drives bottom game)"
@@ -698,6 +709,19 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 			for (int i = 0; i < MENU_N; i++) {   // 2x7 grid of buttons (D-pad or tap to select)
 				float bx = 4.0f + (i & 1) * 160.0f, by = 4.0f + (i >> 1) * 32.0f;
 				bool s = (i == menuSel);
+				if (i == MENU_AUDIO_IDX) {   // split cell: A vol | B vol | mode
+					char vlab[3][12];
+					snprintf(vlab[0], 12, "A%d%%", volA * 100 / 256);
+					snprintf(vlab[1], 12, "B%d%%", volB * 100 / 256);
+					snprintf(vlab[2], 12, "%s", AUDIO_NAMES[audioMode]);
+					for (int j = 0; j < 3; j++) {
+						float sx = bx + j * 50.5f;
+						C2D_DrawRectSolid(sx, by, 0.0f, 49.0f, 29.0f, s ? clrHi : clrPanel);
+						C2D_Text st; C2D_TextParse(&st, txtBuf, vlab[j]); C2D_TextOptimize(&st);
+						C2D_DrawText(&st, C2D_WithColor, sx + 4.0f, by + 8.0f, 0.0f, 0.36f, 0.36f, s ? clrSelTxt : clrTxt);
+					}
+					continue;
+				}
 				C2D_DrawRectSolid(bx, by, 0.0f, 152.0f, 29.0f, s ? clrHi : clrPanel);
 				C2D_DrawText(&items[i], C2D_WithColor, bx + 6.0f, by + 7.0f, 0.0f, 0.4f, 0.4f, s ? clrSelTxt : clrTxt);
 			}
