@@ -16,6 +16,7 @@ high-level M0–M4 note (`../../docs/ROADMAP.md`), which stays as the toolkit-le
 
 ## Status (2026-06-08)
 
+- **🧰 v1.1 touch/HUD follow-ups (2026-06-09), pending hw test:** per-screen **HUD/fps** toggle (menu cycles Off/Top/Bottom/Both — the fps lives in the HUD); **touch now works during a link** (removed the !linkOn guard — game_read/write is a benign EWRAM race on the cache-coherent MPCore); **battle dialog/animation: tap (or hold) anywhere = A** to advance text. **Queued:** in-battle **party menu** touch (switch-Pokémon screen, single vs double layout) — needs party-menu detection within the battle state + gPartyMenu.slotId write; currently a tap there just presses A.
 - **🧰 v1.1 polish batch (2026-06-09), pending hw test:** move-menu select fixed (all 4 moves; removed an over-rejecting RAM gate); **hard Mute** menu item (stops audio pump/mix/feed — real CPU save, not volume 0); **2D button pause-menu** (D-pad *or tap* to select) + a **Pause** entry; and a **render/emulation pipeline decouple** for non-link play — main now renders frame N-1 while the workers compute N, so the picture is no longer chained to the slower core (the reason link felt smoother). `worker_main` + the link path are untouched; drains keep the menu/link transitions clean.
 - **🎮 v1.1 TOUCH — direct-touch on the REAL game UI, built (2026-06-09), pending hardware test.**
   Touch is a 3-way mode (Off / Gamepad / **Smart**). In Smart the touchscreen is a *pointer on the
