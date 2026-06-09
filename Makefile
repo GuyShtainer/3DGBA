@@ -27,11 +27,13 @@ APP_DESCRIPTION := Two GBA games at once, one per screen
 APP_AUTHOR      := Guy Shtainer
 
 #---------------------------------------------------------------------------------
-# CIA packaging (requires makerom + bannertool on PATH; see README).
-# The New 3DS flags (804MHz / L2 / core 2 access) live in $(RSF).
+# CIA packaging. makerom + bannertool live in the toolkit's tools/bin/ (see tools/bin/README.md);
+# auto-discovered here whether this project sits under projects/ or at the toolkit root, with a
+# fall back to PATH if absent. The New 3DS flags (804MHz / L2 / core 2 access) live in $(RSF).
 #---------------------------------------------------------------------------------
-MAKEROM          ?= makerom
-BANNERTOOL       ?= bannertool
+TOOLKIT_BIN      := $(firstword $(wildcard $(CURDIR)/../../tools/bin $(CURDIR)/../tools/bin))
+MAKEROM          ?= $(firstword $(wildcard $(TOOLKIT_BIN)/makerom) makerom)
+BANNERTOOL       ?= $(firstword $(wildcard $(TOOLKIT_BIN)/bannertool) bannertool)
 
 RSF              := app.rsf
 BANNER_IMAGE     := banner.png
