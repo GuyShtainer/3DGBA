@@ -404,7 +404,7 @@ static void audio_feed(EmuInstance* ea, EmuInstance* eb, int focused, int mode, 
 
 // ---- Settings persistence (sdmc:/dual-gba/settings.bin) --------------------
 #define SETTINGS_PATH  "sdmc:/dual-gba/settings.bin"
-#define SETTINGS_MAGIC 0x32424744u   // 'DGB2'
+#define SETTINGS_MAGIC 0x33424744u   // 'DGB3'
 typedef struct {
 	u32 magic;
 	s32 scaleMode[2];
@@ -413,10 +413,12 @@ typedef struct {
 	s32 hudOn;
 	s32 audioMode;
 	s32 volA, volB;
+	s32 touchOn;
+	s32 frameskip;
 } Settings;
 
 static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, bool* hudOn,
-                          int* audioMode, int* volA, int* volB) {
+                          int* audioMode, int* volA, int* volB, bool* touchOn, bool* fsOn) {
 	FILE* f = fopen(SETTINGS_PATH, "rb");
 	if (!f) return;
 	Settings s;
@@ -432,12 +434,14 @@ static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, bool*
 	*audioMode = ((unsigned)s.audioMode) % 3;
 	*volA = s.volA < 0 ? 0 : (s.volA > 256 ? 256 : s.volA);
 	*volB = s.volB < 0 ? 0 : (s.volB > 256 ? 256 : s.volB);
+	*touchOn = s.touchOn != 0;
+	*fsOn = s.frameskip != 0;
 }
 
 static void settings_save(const int scaleMode[2], const bool smooth[2], bool swapped, bool hudOn,
-                          int audioMode, int volA, int volB) {
+                          int audioMode, int volA, int volB, bool touchOn, bool fsOn) {
 	Settings s = { SETTINGS_MAGIC, { scaleMode[0], scaleMode[1] },
-	               { smooth[0], smooth[1] }, swapped, hudOn, audioMode, volA, volB };
+	               { smooth[0], smooth[1] }, swapped, hudOn, audioMode, volA, volB, touchOn, fsOn };
 	FILE* f = fopen(SETTINGS_PATH, "wb");
 	if (!f) return;
 	fwrite(&s, 1, sizeof s, f);
@@ -447,13 +451,14 @@ static void settings_save(const int scaleMode[2], const bool smooth[2], bool swa
 // ---- Pause menu ----
 enum { SESSION_CHANGE, SESSION_QUIT };
 static const char* MENU_ITEMS[] = {
-	"Resume", "Link", "Audio", "Touch", "Toggle HUD", "Swap screens",
-	"Save A", "Load A", "Save B", "Load B", "Load .sav (focused)", "Change games", "Quit"
+	"Resume", "Link", "Audio", "Touch", "Frameskip", "Toggle HUD", "Swap screens",
+	"Save state", "Load state", "Load .sav (focused)", "Change games", "Quit"
 };
-#define MENU_N 13
+#define MENU_N 12
 #define MENU_LINK_IDX  1   // dynamic label ("Link: off/on")
 #define MENU_AUDIO_IDX 2   // dynamic label ("Audio: <mode>")
 #define MENU_TOUCH_IDX 3   // dynamic label ("Touch: on/off")
+#define MENU_FS_IDX    4   // dynamic label ("Frameskip: on/off")
 
 // Run one play session with the two chosen ROMs. Returns SESSION_CHANGE (re-pick) or
 // SESSION_QUIT. Creates/destroys the cores + worker threads itself.
@@ -490,6 +495,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 	GbaLink* link = gbalink_create();   // shared lockstep coordinator; cores attach on demand
 	bool linkOn = false;
 	bool touchOn = false;   // virtual gamepad over the bottom game (touch drives that game)
+	bool fsOn = false;      // frameskip the unfocused game to free heavy-scene budget
 
 	int focused = 0;
 	bool menuOpen = false;
@@ -518,7 +524,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 	int audioMode = AUD_SOLO;
 	int volA = 256, volB = 256;
 
-	settings_load(scaleMode, smooth, &swapped, &hudOn, &audioMode, &volA, &volB);   // restore prefs
+	settings_load(scaleMode, smooth, &swapped, &hudOn, &audioMode, &volA, &volB, &touchOn, &fsOn);   // restore prefs
+	gbacore_set_frameskip(emuA.core, (fsOn && focused != 0) ? 2 : 0);   // unfocused-frameskip
+	gbacore_set_frameskip(emuB.core, (fsOn && focused != 1) ? 2 : 0);
 
 	while (aptMainLoop()) {
 		hidScanInput();
@@ -538,7 +546,11 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 			if ((!touchOn && (kDown & KEY_TOUCH)) || combo) {
 				menuOpen = true; menuSel = 0; status[0] = '\0';
 			} else {
-				if (kDown & KEY_Y) { focused ^= 1; audio_reset_stream(); }   // switch focus
+				if (kDown & KEY_Y) {                                         // switch focus
+					focused ^= 1; audio_reset_stream();
+					gbacore_set_frameskip(emuA.core, (fsOn && focused != 0) ? 2 : 0);
+					gbacore_set_frameskip(emuB.core, (fsOn && focused != 1) ? 2 : 0);
+				}
 				if (kDown & KEY_X) {                                         // pause/resume focused game
 					EmuInstance* fg = (focused == 0) ? &emuA : &emuB;
 					fg->paused = !fg->paused;
@@ -552,14 +564,14 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 					snprintf(toast, sizeof toast, "%s scale: %s",
 					         fs == 0 ? "Top" : "Bottom", SCALE_NAMES[scaleMode[fs]]);
 					toastTimer = 90;
-					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB);
+					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB, touchOn, fsOn);
 				}
 				if (kDown & KEY_ZL) {
 					smooth[fs] = !smooth[fs];   // render_game sets the per-pass filters
 					snprintf(toast, sizeof toast, "%s filter: %s", fs == 0 ? "Top" : "Bottom",
 					         smooth[fs] ? "Smooth" : "Sharp-bilinear");
 					toastTimer = 90;
-					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB);
+					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB, touchOn, fsOn);
 				}
 				u16 g = to_gba_keys(kHeld);
 				// Virtual gamepad: the touchscreen drives the BOTTOM game (A is on bottom iff swapped).
@@ -590,7 +602,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 					*v += (kDown & (KEY_DRIGHT | KEY_CPAD_RIGHT)) ? 32 : -32;
 					if (*v < 0) *v = 0; else if (*v > 256) *v = 256;
 					snprintf(status, sizeof status, "Vol %c: %d%%", focused == 0 ? 'A' : 'B', *v * 100 / 256);
-					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB);
+					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB, touchOn, fsOn);
 				}
 				if (kDown & KEY_B) menuOpen = false;                 // resume
 			if (kDown & KEY_A) {
@@ -622,37 +634,48 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 					audioMode = (audioMode + 1) % 3;
 					snprintf(status, sizeof status, "Audio: %s", AUDIO_NAMES[audioMode]);
 					audio_reset_stream();                        // clean cut between modes
-					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB);
+					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB, touchOn, fsOn);
 				}
 				else if (menuSel == 3) {                         // Touch (virtual gamepad)
 					touchOn = !touchOn;
 					snprintf(status, sizeof status, "Touch %s", touchOn ? "on" : "off");
 				}
-				else if (menuSel == 4) {                         // Toggle HUD
+				else if (menuSel == 4) {                         // Frameskip (unfocused game)
+					fsOn = !fsOn;
+					gbacore_set_frameskip(emuA.core, (fsOn && focused != 0) ? 2 : 0);
+					gbacore_set_frameskip(emuB.core, (fsOn && focused != 1) ? 2 : 0);
+					snprintf(status, sizeof status, "Frameskip %s", fsOn ? "on" : "off");
+					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB, touchOn, fsOn);
+				}
+				else if (menuSel == 5) {                         // Toggle HUD
 					hudOn = !hudOn;
 					snprintf(status, sizeof status, "HUD %s", hudOn ? "on" : "off");
-					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB);
+					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB, touchOn, fsOn);
 				}
-				else if (menuSel == 5) {                         // Swap screens
+				else if (menuSel == 6) {                         // Swap screens
 					swapped = !swapped; menuOpen = false;
 					snprintf(toast, sizeof toast, "Layout: %s", swapped ? "B top / A bottom" : "A top / B bottom");
 					toastTimer = 90;
-					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB);
+					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB, touchOn, fsOn);
 				}
-				else if (menuSel == 6) snprintf(status, sizeof status, "%s", gbacore_save_state(emuA.core, 1) ? "Saved A"  : "Save A failed");
-				else if (menuSel == 7) snprintf(status, sizeof status, "%s", gbacore_load_state(emuA.core, 1) ? "Loaded A" : "No state A");
-				else if (menuSel == 8) snprintf(status, sizeof status, "%s", gbacore_save_state(emuB.core, 1) ? "Saved B"  : "Save B failed");
-				else if (menuSel == 9) snprintf(status, sizeof status, "%s", gbacore_load_state(emuB.core, 1) ? "Loaded B" : "No state B");
-				else if (menuSel == 10) {                         // Load a .sav into the focused game
+				else if (menuSel == 7) {                         // Save state (focused game)
+					EmuInstance* fg = (focused == 0) ? &emuA : &emuB;
+					snprintf(status, sizeof status, "%s", gbacore_save_state(fg->core, 1) ? "State saved" : "Save failed");
+				}
+				else if (menuSel == 8) {                         // Load state (focused game)
+					EmuInstance* fg = (focused == 0) ? &emuA : &emuB;
+					snprintf(status, sizeof status, "%s", gbacore_load_state(fg->core, 1) ? "State loaded" : "No state");
+				}
+				else if (menuSel == 9) {                         // Load a .sav into the focused game
 					EmuInstance* fg = (focused == 0) ? &emuA : &emuB;
 					char savp[256];
 					if (fg->core && savpicker_run(top, bot, txtBuf, savp, sizeof savp))
-						snprintf(status, sizeof status, "%s %c", gbacore_load_save(fg->core, savp) ? "Loaded sav" : "sav failed", focused == 0 ? 'A' : 'B');
+						snprintf(status, sizeof status, "%s", gbacore_load_save(fg->core, savp) ? "Loaded .sav" : ".sav failed");
 					else
 						snprintf(status, sizeof status, "no .sav files");
 				}
-				else if (menuSel == 11) { result = SESSION_CHANGE; break; }
-				else                   { result = SESSION_QUIT;   break; }
+				else if (menuSel == 10) { result = SESSION_CHANGE; break; }
+				else                    { result = SESSION_QUIT;   break; }
 			}
 		}
 
@@ -669,7 +692,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 			time_t tt = time(NULL);
 			struct tm* lt = localtime(&tt);
 			snprintf(hudStat, sizeof hudStat, "%s  %dfps  %02d:%02d  %d/5",
-			         AUDIO_NAMES[audioMode], fps, lt ? lt->tm_hour : 0, lt ? lt->tm_min : 0, batLvl);
+			         linkOn ? "LINK" : AUDIO_NAMES[audioMode], fps, lt ? lt->tm_hour : 0, lt ? lt->tm_min : 0, batLvl);
 			C2D_TextParse(&tHudTop,  txtBuf, topName);  C2D_TextOptimize(&tHudTop);
 			C2D_TextParse(&tHudBot,  txtBuf, botName);  C2D_TextOptimize(&tHudBot);
 			C2D_TextParse(&tHudStat, txtBuf, hudStat);  C2D_TextOptimize(&tHudStat);
@@ -688,6 +711,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 				
 				} else if (i == MENU_TOUCH_IDX) {
 					snprintf(llabel, sizeof llabel, "Touch: %s", touchOn ? "on" : "off");
+					label = llabel;
+				} else if (i == MENU_FS_IDX) {
+					snprintf(llabel, sizeof llabel, "Frameskip: %s", fsOn ? "on" : "off");
 					label = llabel;
 				}
 				C2D_TextParse(&items[i], txtBuf, label); C2D_TextOptimize(&items[i]);
@@ -752,14 +778,14 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 		}
 		if (menuOpen) {
 			C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 240.0f, clrDim);
-			C2D_DrawRectSolid(30.0f, 1.0f, 0.0f, 260.0f, 238.0f, clrPanel);
+			C2D_DrawRectSolid(32.0f, 2.0f, 0.0f, 256.0f, 236.0f, clrPanel);
 			for (int i = 0; i < MENU_N; i++) {
-				float y = 2.0f + i * 17.0f;
+				float y = 6.0f + i * 18.0f;
 				bool s = (i == menuSel);
-				if (s) C2D_DrawRectSolid(40.0f, y - 1.0f, 0.0f, 240.0f, 15.0f, clrHi);
-				C2D_DrawText(&items[i], C2D_WithColor, 48.0f, y, 0.0f, 0.4f, 0.4f, s ? clrSelTxt : clrTxt);
+				if (s) C2D_DrawRectSolid(42.0f, y - 1.0f, 0.0f, 236.0f, 16.0f, clrHi);
+				C2D_DrawText(&items[i], C2D_WithColor, 50.0f, y, 0.0f, 0.45f, 0.45f, s ? clrSelTxt : clrTxt);
 			}
-			if (status[0]) C2D_DrawText(&tStatus, C2D_WithColor, 36.0f, 224.0f, 0.0f, 0.38f, 0.38f, clrTxt);
+			if (status[0]) C2D_DrawText(&tStatus, C2D_WithColor, 38.0f, 222.0f, 0.0f, 0.42f, 0.42f, clrTxt);
 		} else {
 			C2D_DrawText(&tHint, C2D_WithColor, 6.0f, 224.0f, 0.0f, 0.4f, 0.4f, clrTxt);
 		}
