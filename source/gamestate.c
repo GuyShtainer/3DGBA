@@ -15,15 +15,18 @@ static const GameProfile PROFILES[] = {
   { "BPEE", 0x03005D8Cu, 0x02022FECu, 0x020244ACu, 0x020244B0u, 0x02024084u, 0x02022E16u,
             0x0203CEC8u, 0x020244E9u, 0x030022C4u, 0x081B01B0u, 0x081B01E0u, 0x030022EEu,
             0x03005D60u, 0x08057824u, 0x03005D74u, 0x02024076u, 0x0202406Cu, 0x02024210u, 0x02024064u, 0x03005DC0u,
-            0x03005DF4u, 0x0809FAC4u, 0x0203CD90u, 0x02020004u, 0x0203760Eu, 0x03005E00u, 0x081AAD5Cu, 0x081ABD28u, 0x00000000u },
+            0x03005DF4u, 0x0809FAC4u, 0x0203CD90u, 0x02020004u, 0x0203760Eu, 0x03005E00u, 0x081AAD5Cu, 0x081ABD28u, 0x00000000u,
+            0x081B1370u, 0x080E215Cu, 0x080E2058u },
   { "BPRE", 0x03005008u, 0x02022B4Cu, 0x02023FF8u, 0x02023FFCu, 0x02023BE4u, 0x02022976u,
             0x0203B0A0u, 0x02024029u, 0x030030F4u, 0x0811EBA0u, 0x0811EBD0u, 0x0303011Eu,
             0x03004FE0u, 0x0802E674u, 0x03004FF4u, 0x02023BD6u, 0x02023BCCu, 0x02023D70u, 0x02023BC4u, 0x03005040u,
-            0x020370F0u, 0x0806F280u, 0x0203ADE4u, 0x020204B4u, 0x020370F4u, 0x03005090u, 0x08107EE0u, 0x08108F0Cu, 0x0203AD01u },
+            0x020370F0u, 0x0806F280u, 0x0203ADE4u, 0x020204B4u, 0x020370F4u, 0x03005090u, 0x08107EE0u, 0x08108F0Cu, 0x0203AD01u,
+            0x0811FB28u, 0x0809CE54u, 0x0809CC98u },
   { "BPGE", 0x03005008u, 0x02022B4Cu, 0x02023FF8u, 0x02023FFCu, 0x02023BE4u, 0x02022976u,
             0x0203B0A0u, 0x02024029u, 0x030030F4u, 0x0811EBA0u, 0x0811EBD0u, 0x0303011Eu,
             0x03004FE0u, 0x0802E674u, 0x03004FF4u, 0x02023BD6u, 0x02023BCCu, 0x02023D70u, 0x02023BC4u, 0x03005040u,
-            0x020370F0u, 0x0806F280u, 0x0203ADE4u, 0x020204B4u, 0x020370F4u, 0x03005090u, 0x08107EE0u, 0x08108F0Cu, 0x0203AD01u },
+            0x020370F0u, 0x0806F280u, 0x0203ADE4u, 0x020204B4u, 0x020370F4u, 0x03005090u, 0x08107EE0u, 0x08108F0Cu, 0x0203AD01u,
+            0x0811FB28u, 0x0809CE54u, 0x0809CC98u },
 };
 
 const GameProfile* profile_for(GbaCore* c) {
@@ -32,6 +35,16 @@ const GameProfile* profile_for(GbaCore* c) {
 	for (unsigned i = 0; i < sizeof PROFILES / sizeof PROFILES[0]; i++)
 		if (!strncmp(code, PROFILES[i].code, 4)) return &PROFILES[i];
 	return NULL;
+}
+
+// True if any active gTasks entry's func == `handler` (Thumb-masked). Robust menu detection.
+static bool task_active(GbaCore* c, const GameProfile* p, uint32_t handler) {
+	if (!handler) return false;
+	for (int t = 0; t < 16; t++) {
+		uint32_t task = p->gTasksBase + 40u * (uint32_t)t;
+		if (gbacore_read8(c, task + 4) != 0 && (gbacore_read32(c, task + 0) & ~1u) == handler) return true;
+	}
+	return false;
 }
 
 // Find the live bag ListMenu task: scan gTasks (16 entries, 40-byte stride) for the active bag input
@@ -62,40 +75,26 @@ bool game_read(GbaCore* c, const GameProfile* p, GameState* out) {
 	}
 	bool inBattle = gbacore_read32(c, p->battleFlags) != 0;
 
-	// Bag (field OR battle "ITEM"): callback2 == CB2_BagMenuRun, FR also gates on the bagOpen flag,
-	// and a live bag list-task must exist (so a row is actually tappable). Checked first (not battle-gated).
-	if ((gbacore_read32(c, p->mainCb2) & ~1u) == p->cb2BagRun) {
-		bool fr = (p->code[2] == 'R' || p->code[2] == 'G');
-		if (!fr || (p->bagOpen && gbacore_read8(c, p->bagOpen))) {
-			uint32_t lb = find_bag_list_task(c, p);
-			if (lb) { out->ctx = GCTX_BAG; out->bagListTaskBase = lb; return true; }
-		}
-	}
-
-	if (!inBattle) {
-		// Overworld sMenu overlay (START / YES-NO / multichoice)? A live window at sMenu.windowId with a
-		// sane choice count (freed windows read bg=0xFF, so a stale windowId is rejected). Else: walk.
-		// (party-menu field detection was removed — it could false-positive and block walking.)
-		uint8_t wid = gbacore_read8(c, p->sMenuBase + 5);
-		if (wid != 0xFF) {
-			uint32_t win = p->gWindowsBase + 12u * (uint32_t)wid;
-			int8_t maxc = (int8_t)gbacore_read8(c, p->sMenuBase + 4);
-			if (gbacore_read8(c, win) != 0xFF && maxc >= 0 && maxc <= 9) { out->ctx = GCTX_FIELDMENU; return true; }
-		}
-		out->ctx = GCTX_OVERWORLD;
+	// Menu detection is TASK-BASED (scan gTasks for the menu's active input handler): robust and
+	// FAIL-SAFE — a wrong/absent address just means "not detected" (the overworld still WALKS), never a
+	// false-positive that blocks walking. Bag + party run in field AND battle, so they're top-level.
+	{ uint32_t lb = find_bag_list_task(c, p);                    // bag (field or battle "ITEM")
+	  if (lb) { out->ctx = GCTX_BAG; out->bagListTaskBase = lb; return true; } }
+	if (task_active(c, p, p->partyTask)) {                       // party (field, or battle send-out/use)
+		out->ctx = GCTX_PARTY;
+		uint8_t mt8 = gbacore_read8(c, p->partyMenu + PM_TYPE_OFF);
+		int lay = (mt8 >> 4) & 0x03, cnt = gbacore_read8(c, p->partyCount);
+		out->partyLayout = (lay <= 2) ? lay : 0;
+		out->partyCount  = (cnt >= 1 && cnt <= 6) ? cnt : 6;
 		return true;
 	}
 
-	// In-battle party "send out which Pokémon?": callback2 == the party-menu updater (Thumb bit masked),
-	// AND the party struct reads sane (guards against a stray callback match).
-	bool cbParty = (gbacore_read32(c, p->mainCb2) & ~1u) == p->cb2UpdParty;
-	uint8_t menuType = 0;
-	if (cbParty) {
-		uint8_t mt8 = gbacore_read8(c, p->partyMenu + PM_TYPE_OFF);
-		menuType = mt8 & 0x0F;                       // 0 field, 1 in-battle
-		int lay = (mt8 >> 4) & 0x03, cnt = gbacore_read8(c, p->partyCount);
-		if (lay <= 2 && menuType <= 1 && cnt >= 1 && cnt <= 6) { out->partyLayout = lay; out->partyCount = cnt; }
-		else cbParty = false;                        // garbage -> not really the party menu
+	if (!inBattle) {                                            // overworld
+		// sMenu overlay: the START menu (callback) or an active YES-NO / multichoice task. Otherwise WALK.
+		if (((gbacore_read32(c, p->startCb) & ~1u) == p->startCbInput) ||
+		    task_active(c, p, p->yesNoTask) || task_active(c, p, p->multiTask)) { out->ctx = GCTX_FIELDMENU; return true; }
+		out->ctx = GCTX_OVERWORLD;
+		return true;
 	}
 
 	// In battle. Target-select is its own controller state — test it first (not by bg0y).
@@ -119,8 +118,6 @@ bool game_read(GbaCore* c, const GameProfile* p, GameState* out) {
 		out->ctx = GCTX_BATTLE_MOVE;
 		uint8_t m = gbacore_read8(c, p->moveCursor); out->moveCursor = (m < 4) ? m : -1;
 		for (int i = 0; i < 4; i++) out->moveValid[i] = gbacore_read16(c, p->battleMons + BMON_MOVES_OFF + i * 2) != 0;
-	} else if (cbParty && menuType == 1) {
-		out->ctx = GCTX_PARTY;                        // in-battle "send out which Pokémon?"
 	} else {
 		out->ctx = GCTX_BATTLE_OTHER;
 	}

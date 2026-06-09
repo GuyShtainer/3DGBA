@@ -55,6 +55,9 @@ typedef struct {
 	uint32_t cb2BagRun;     // CB2_BagMenuRun (ROM; gMain.callback2 == this when the bag is up)
 	uint32_t bagHandler;    // Task_BagMenu_HandleInput (ROM; the live list-task owner)
 	uint32_t bagOpen;       // FR gBagMenuState.bagOpen (bool8); 0 = unused (Emerald)
+	uint32_t partyTask;     // Task_HandleChooseMonInput (party input handler — field OR battle)
+	uint32_t yesNoTask;     // Task_HandleYesNoInput
+	uint32_t multiTask;     // Task_HandleMultichoiceInput
 } GameProfile;
 
 // One-pass snapshot of the live game.
