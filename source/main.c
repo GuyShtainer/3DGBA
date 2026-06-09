@@ -331,6 +331,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 	rom_display_name(pathB, nameB, sizeof nameB);
 	u64 fpsT0 = osGetTime();
 	int fpsFrames = 0, fps = 0;
+	float worstMs = 0.0f; int showMs = 0;   // worst frame work-time over the fps window
 	u8  batLvl = 0;
 	int batTimer = 0;
 
@@ -343,6 +344,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 	gbacore_set_frameskip(emuB.core, (fsOn && focused != 1) ? 2 : 0);
 
 	while (aptMainLoop()) {
+		u64 wfStart = svcGetSystemTick();
 		hidScanInput();
 		u32 kDown = hidKeysDown();
 		u32 kHeld = hidKeysHeld();
@@ -350,7 +352,8 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 		// HUD stats: FPS (0.5s window) + battery (throttled).
 		fpsFrames++;
 		u64 nowMs = osGetTime();
-		if (nowMs - fpsT0 >= 500) { fps = (int)(fpsFrames * 1000 / (nowMs - fpsT0)); fpsFrames = 0; fpsT0 = nowMs; }
+		if (nowMs - fpsT0 >= 500) { fps = (int)(fpsFrames * 1000 / (nowMs - fpsT0)); fpsFrames = 0; fpsT0 = nowMs;
+		                            showMs = (int)(worstMs + 0.5f); worstMs = 0.0f; }
 		if (s_hasPtm && --batTimer <= 0) { PTMU_GetBatteryLevel(&batLvl); batTimer = 60; }
 
 		if (!menuOpen) {
@@ -505,8 +508,8 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 		if (hudOn) {
 			time_t tt = time(NULL);
 			struct tm* lt = localtime(&tt);
-			snprintf(hudStat, sizeof hudStat, "%s  %dfps  %02d:%02d  %d/5",
-			         linkOn ? "LINK" : AUDIO_NAMES[audioMode], fps, lt ? lt->tm_hour : 0, lt ? lt->tm_min : 0, batLvl);
+			snprintf(hudStat, sizeof hudStat, "%s  %dfps %dms  %02d:%02d  %d/5",
+			         linkOn ? "LINK" : AUDIO_NAMES[audioMode], fps, showMs, lt ? lt->tm_hour : 0, lt ? lt->tm_min : 0, batLvl);
 			C2D_TextParse(&tHudTop,  txtBuf, topName);  C2D_TextOptimize(&tHudTop);
 			C2D_TextParse(&tHudBot,  txtBuf, botName);  C2D_TextOptimize(&tHudBot);
 			C2D_TextParse(&tHudStat, txtBuf, hudStat);  C2D_TextOptimize(&tHudStat);
@@ -608,6 +611,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 			C2D_DrawText(&tHint, C2D_WithColor, 6.0f, 224.0f, 0.0f, 0.4f, 0.4f, clrTxt);
 		}
 
+		{ float wms = (svcGetSystemTick() - wfStart) * 1000.0f / SYSCLOCK_ARM11; if (wms > worstMs) worstMs = wms; }
 		C3D_FrameEnd(0);
 		if (toastTimer > 0) toastTimer--;
 	}
