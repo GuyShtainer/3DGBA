@@ -90,12 +90,26 @@ static void worker_main(void* arg) {
 			// START->FINISH while the peer is behind (the cause of the stale/0xFFFF link error).
 			// Cooperative like mGBA's mCoreThread, but on our core-2-pinned worker. Decoupled
 			// from the render loop, so main stays responsive regardless.
+			u64 paceDl = svcGetSystemTick();
+			u32 lastVf = gbacore_frame_counter(e->core);
 			while (e->linked && !g_quit) {
 				gbacore_set_keys(e->core, (u16)e->keys);
 				gbacore_run_loop(e->core);
 				e->frame++;
 				audio_pump_core(e->id, e->core);   // drain this core's audio into its ring (link audio)
 				if (e->wantWait) { e->wantWait = false; LightEvent_Wait(&e->waitEv); }
+				// Real-time pace: cap each PRODUCED video frame to the 3DS refresh so the lockstepped
+				// pair runs at ~60fps (it free-runs -> too fast otherwise). Only the wall-clock rate is
+				// touched; the lockstep transfer ordering (trade correctness) is unchanged. Paces between
+				// transactions; the short sleep rechecks linked/quit so a link-off exits promptly.
+				u32 vf = gbacore_frame_counter(e->core);
+				if (vf != lastVf) {
+					lastVf = vf;
+					paceDl += FRAME_TICKS;
+					u64 now = svcGetSystemTick();
+					if (now > paceDl) paceDl = now;   // behind schedule: don't accumulate debt
+					else while (e->linked && !g_quit && svcGetSystemTick() < paceDl) svcSleepThread(400000);
+				}
 			}
 		} else if (!e->skip && !e->paused) {
 			emu_step(e);
