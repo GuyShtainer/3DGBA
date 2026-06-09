@@ -44,19 +44,21 @@ bool game_read(GbaCore* c, const GameProfile* p, GameState* out) {
 	}
 	bool inBattle = gbacore_read32(c, p->battleFlags) != 0;
 
-	// Party menu (field OR in-battle send-out): callback2 == the party-menu updater, with Thumb bit masked.
+	// The OVERWORLD always walks. (We used to also detect a *field* party menu here, but the
+	// callback2==CB2_UpdatePartyMenu compare could false-positive in the field -> ctx=GCTX_PARTY ->
+	// walk never ran, only A. Party touch is now battle-only, where it's the high-value case.)
+	if (!inBattle) { out->ctx = GCTX_OVERWORLD; return true; }
+
+	// In-battle party "send out which Pokémon?": callback2 == the party-menu updater (Thumb bit masked),
+	// AND the party struct reads sane (guards against a stray callback match).
 	bool cbParty = (gbacore_read32(c, p->mainCb2) & ~1u) == p->cb2UpdParty;
 	uint8_t menuType = 0;
 	if (cbParty) {
 		uint8_t mt8 = gbacore_read8(c, p->partyMenu + PM_TYPE_OFF);
 		menuType = mt8 & 0x0F;                       // 0 field, 1 in-battle
-		out->partyLayout = (mt8 >> 4) & 0x03;        // 0 single, 1 double, 2 multi
-		out->partyCount  = gbacore_read8(c, p->partyCount);
-	}
-
-	if (!inBattle) {
-		out->ctx = (cbParty && menuType == 0) ? GCTX_PARTY : GCTX_OVERWORLD;
-		return true;
+		int lay = (mt8 >> 4) & 0x03, cnt = gbacore_read8(c, p->partyCount);
+		if (lay <= 2 && menuType <= 1 && cnt >= 1 && cnt <= 6) { out->partyLayout = lay; out->partyCount = cnt; }
+		else cbParty = false;                        // garbage -> not really the party menu
 	}
 
 	// In battle. Target-select is its own controller state — test it first (not by bg0y).
