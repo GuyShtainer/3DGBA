@@ -718,9 +718,13 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 				}
 				C2D_TextParse(&items[i], txtBuf, label); C2D_TextOptimize(&items[i]);
 			}
-			if (status[0]) { C2D_TextParse(&tStatus, txtBuf, status); C2D_TextOptimize(&tStatus); }
+			// Footer: last action result, or a controls cheat-sheet when idle.
+			C2D_TextParse(&tStatus, txtBuf,
+			              status[0] ? status : "Y focus  X pause  ZL/ZR filter/scale  L/R = GBA");
+			C2D_TextOptimize(&tStatus);
 		} else {
-			C2D_TextParse(&tHint, txtBuf, "tap or START+SELECT for menu");
+			C2D_TextParse(&tHint, txtBuf, touchOn ? "START+SELECT: menu  (touch drives bottom game)"
+			                                      : "tap / START+SELECT: menu");
 			C2D_TextOptimize(&tHint);
 			if (toastTimer > 0) { C2D_TextParse(&tToast, txtBuf, toast); C2D_TextOptimize(&tToast); }
 		}
@@ -785,7 +789,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 				if (s) C2D_DrawRectSolid(42.0f, y - 1.0f, 0.0f, 236.0f, 16.0f, clrHi);
 				C2D_DrawText(&items[i], C2D_WithColor, 50.0f, y, 0.0f, 0.45f, 0.45f, s ? clrSelTxt : clrTxt);
 			}
-			if (status[0]) C2D_DrawText(&tStatus, C2D_WithColor, 38.0f, 222.0f, 0.0f, 0.42f, 0.42f, clrTxt);
+			C2D_DrawText(&tStatus, C2D_WithColor, 38.0f, 222.0f, 0.0f, 0.38f, 0.38f, clrTxt);
 		} else {
 			C2D_DrawText(&tHint, C2D_WithColor, 6.0f, 224.0f, 0.0f, 0.4f, 0.4f, clrTxt);
 		}
