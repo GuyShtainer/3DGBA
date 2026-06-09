@@ -23,9 +23,15 @@ typedef struct {
 	int      moveCursor;     // 0..3 or -1 (debug only)
 	bool     moveValid[4];
 	int      px, py;         // player tile (for tap-to-walk), -1 if unknown
-	GbaCore* core;           // bottom game's core, for deterministic menu-cursor writes
+	GbaCore* core;           // bottom game's core, for deterministic menu-cursor writes + RAM reads
 	uint32_t actionAddr;     // gActionSelectionCursor[0]
 	uint32_t moveAddr;       // gMoveSelectionCursor[0]
+	const GameProfile* prof; // all other addresses (party / target / map)
+	int      partyCount;     // gPlayerPartyCount, -1 if N/A
+	int      partyLayout;    // 0 single / 1 double / 2 multi, -1 if N/A
+	int      battlersCount;  // -1 if N/A
+	uint8_t  absentMask;     // gAbsentBattlerFlags
+	uint8_t  battlerPos[4];  // gBattlerPositions[0..3]
 } TouchSmart;
 
 // Advance touch one frame; returns the GBA key mask to OR into the bottom game.

@@ -1,15 +1,25 @@
-// gamestate.c — see gamestate.h.
+// gamestate.c — see gamestate.h. Addresses verified vs pret's byte-matched sym maps (symbols branch),
+// US v1.0/rev0. FRLG share one RAM map; LeafGreen's NEW symbols are FireRed-derived (see spec Risks).
 #include <string.h>
 #include "gamestate.h"
 
-#define BMON_MOVES_OFF 0x0C   // BattlePokemon.moves[] offset (4x u16); struct stride 0x58
+#define BMON_MOVES_OFF 0x0C   // BattlePokemon.moves[] offset (4x u16)
+#define PM_TYPE_OFF    0x08   // gPartyMenu: low nibble menuType (0 field/1 battle), bits4-5 layout
+#define PM_SLOT_OFF    0x09   // gPartyMenu.slotId (s8)
 
-// All addresses verified vs pret's byte-matched sym maps (symbols branch). FRLG share one RAM map.
-// US v1.0 (rev0) builds. cols:  sb1ptr        battleFlags   actionCur     moveCur       battleMons    bg0y
 static const GameProfile PROFILES[] = {
-	{ "BPEE", 0x03005D8Cu, 0x02022FECu, 0x020244ACu, 0x020244B0u, 0x02024084u, 0x02022E16u },  // Emerald
-	{ "BPRE", 0x03005008u, 0x02022B4Cu, 0x02023FF8u, 0x02023FFCu, 0x02023BE4u, 0x02022976u },  // FireRed
-	{ "BPGE", 0x03005008u, 0x02022B4Cu, 0x02023FF8u, 0x02023FFCu, 0x02023BE4u, 0x02022976u },  // LeafGreen
+  // code   sb1ptr      battleFlags  actionCur   moveCur     battleMons  bg0y
+  //        partyMenu   partyCount  mainCb2     cb2Upd      cb2Init     newKeys
+  //        ctrlFuncs   chooseTgt   multiCursor battlerPos  battlersCnt absentFlg   activeBat   mapLayout
+  { "BPEE", 0x03005D8Cu, 0x02022FECu, 0x020244ACu, 0x020244B0u, 0x02024084u, 0x02022E16u,
+            0x0203CEC8u, 0x020244E9u, 0x030022C4u, 0x081B01B0u, 0x081B01E0u, 0x030022EEu,
+            0x03005D60u, 0x08057824u, 0x03005D74u, 0x02024076u, 0x0202406Cu, 0x02024210u, 0x02024064u, 0x03005DC0u },
+  { "BPRE", 0x03005008u, 0x02022B4Cu, 0x02023FF8u, 0x02023FFCu, 0x02023BE4u, 0x02022976u,
+            0x0203B0A0u, 0x02024029u, 0x030030F4u, 0x0811EBA0u, 0x0811EBD0u, 0x0303011Eu,
+            0x03004FE0u, 0x0802E674u, 0x03004FF4u, 0x02023BD6u, 0x02023BCCu, 0x02023D70u, 0x02023BC4u, 0x03005040u },
+  { "BPGE", 0x03005008u, 0x02022B4Cu, 0x02023FF8u, 0x02023FFCu, 0x02023BE4u, 0x02022976u,
+            0x0203B0A0u, 0x02024029u, 0x030030F4u, 0x0811EBA0u, 0x0811EBD0u, 0x0303011Eu,
+            0x03004FE0u, 0x0802E674u, 0x03004FF4u, 0x02023BD6u, 0x02023BCCu, 0x02023D70u, 0x02023BC4u, 0x03005040u },
 };
 
 const GameProfile* profile_for(GbaCore* c) {
@@ -23,27 +33,55 @@ const GameProfile* profile_for(GbaCore* c) {
 bool game_read(GbaCore* c, const GameProfile* p, GameState* out) {
 	memset(out, 0, sizeof *out);
 	out->px = out->py = -1; out->actionCursor = out->moveCursor = -1; out->ctx = GCTX_NONE;
+	out->partyCount = out->partyLayout = out->battlersCount = -1;
 	if (!c || !p) return false;
 	out->valid = true;
 
 	uint32_t sb1 = gbacore_read32(c, p->sb1ptr);
-	if ((sb1 >> 24) == 0x02) {                       // sane EWRAM pointer
+	if ((sb1 >> 24) == 0x02) {
 		out->px = (int16_t)gbacore_read16(c, sb1);
 		out->py = (int16_t)gbacore_read16(c, sb1 + 2);
 	}
+	bool inBattle = gbacore_read32(c, p->battleFlags) != 0;
 
-	if (gbacore_read32(c, p->battleFlags) == 0) { out->ctx = GCTX_OVERWORLD; return true; }
+	// Party menu (field OR in-battle send-out): callback2 == the party-menu updater, with Thumb bit masked.
+	bool cbParty = (gbacore_read32(c, p->mainCb2) & ~1u) == p->cb2UpdParty;
+	uint8_t menuType = 0;
+	if (cbParty) {
+		uint8_t mt8 = gbacore_read8(c, p->partyMenu + PM_TYPE_OFF);
+		menuType = mt8 & 0x0F;                       // 0 field, 1 in-battle
+		out->partyLayout = (mt8 >> 4) & 0x03;        // 0 single, 1 double, 2 multi
+		out->partyCount  = gbacore_read8(c, p->partyCount);
+	}
 
-	// In battle: gBattle_BG0_Y is 160 while the action menu shows, 320 while the move menu shows.
-	uint16_t bg0y = gbacore_read16(c, p->bg0y);
-	if (bg0y == 160) {
+	if (!inBattle) {
+		out->ctx = (cbParty && menuType == 0) ? GCTX_PARTY : GCTX_OVERWORLD;
+		return true;
+	}
+
+	// In battle. Target-select is its own controller state — test it first (not by bg0y).
+	int bc = gbacore_read8(c, p->battlersCount);
+	bool targetSel = false;
+	for (int b = 0; b < bc && b < 4; b++)
+		if ((gbacore_read32(c, p->ctrlFuncs + 4u * b) & ~1u) == p->chooseTarget) { targetSel = true; break; }
+	if (targetSel) {
+		out->ctx = GCTX_BATTLE_TARGET;
+		out->battlersCount = bc;
+		out->absentMask = gbacore_read8(c, p->absentFlags);
+		for (int i = 0; i < 4; i++) out->battlerPos[i] = (i < bc) ? gbacore_read8(c, p->battlerPos + i) : 0xFF;
+		return true;
+	}
+
+	uint16_t bgy = gbacore_read16(c, p->bg0y);
+	if (bgy == 160) {
 		out->ctx = GCTX_BATTLE_ACTION;
 		uint8_t a = gbacore_read8(c, p->actionCursor); out->actionCursor = (a < 4) ? a : -1;
-	} else if (bg0y == 320) {
+	} else if (bgy == 320) {
 		out->ctx = GCTX_BATTLE_MOVE;
 		uint8_t m = gbacore_read8(c, p->moveCursor); out->moveCursor = (m < 4) ? m : -1;
-		for (int i = 0; i < 4; i++)                  // a slot exists iff its move id is non-zero
-			out->moveValid[i] = gbacore_read16(c, p->battleMons + BMON_MOVES_OFF + i * 2) != 0;
+		for (int i = 0; i < 4; i++) out->moveValid[i] = gbacore_read16(c, p->battleMons + BMON_MOVES_OFF + i * 2) != 0;
+	} else if (cbParty && menuType == 1) {
+		out->ctx = GCTX_PARTY;                        // in-battle "send out which Pokémon?"
 	} else {
 		out->ctx = GCTX_BATTLE_OTHER;
 	}

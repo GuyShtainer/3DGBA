@@ -456,6 +456,10 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 							sm.px = gsr.px; sm.py = gsr.py;
 							for (int i = 0; i < 4; i++) sm.moveValid[i] = gsr.moveValid[i];
 							sm.core = botCore; sm.actionAddr = gp->actionCursor; sm.moveAddr = gp->moveCursor;
+							sm.prof = gp;
+							sm.partyCount = gsr.partyCount; sm.partyLayout = gsr.partyLayout;
+							sm.battlersCount = gsr.battlersCount; sm.absentMask = gsr.absentMask;
+							for (int i = 0; i < 4; i++) sm.battlerPos[i] = gsr.battlerPos[i];
 						}
 					}
 					tk = touch_update(touchMode, touching, tp.px, tp.py, gx, gy, gvalid, &sm);
@@ -697,7 +701,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 				touch_draw(touchMode, tk, &sm);
 			}
 			if (touchMode == TOUCH_SMART && sm.valid) {   // TEMP debug: confirm RAM reads on device
-				static const char* const CTXN[] = { "none", "field", "b.act", "b.move", "b.other" };
+				static const char* const CTXN[] = { "none", "field", "b.act", "b.move", "b.tgt", "party", "b.oth" };
 				char gs[64]; snprintf(gs, sizeof gs, "%s xy=%d,%d a=%d m=%d",
 				         CTXN[sm.ctx], sm.px, sm.py, sm.actionCursor, sm.moveCursor);
 				C2D_Text tg; C2D_TextParse(&tg, txtBuf, gs); C2D_TextOptimize(&tg);
