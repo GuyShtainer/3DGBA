@@ -23,6 +23,7 @@
 #include "audio.h"
 
 #define WORKER_STACKSIZE (512 * 1024)   // mGBA runFrame has deep call chains; 32KB overflows
+#define FRAME_TICKS      4481520ULL    // SYSCLOCK_ARM11 / (16756991/280095) -> 59.826 fps real-time cap
 
 typedef struct {
 	int        id;
@@ -47,6 +48,13 @@ typedef struct {
 
 static volatile bool g_quit = false;
 static bool s_hasPtm = false;   // ptm:u for battery level (HUD)
+static volatile bool g_appActive = true;   // false while suspended (HOME/sleep) -> idle, free the cores
+static aptHookCookie s_aptCookie;
+static void apt_hook(APT_HookType t, void* p) {
+	(void)p;
+	if (t == APTHOOK_ONSUSPEND || t == APTHOOK_ONSLEEP) g_appActive = false;
+	else if (t == APTHOOK_ONRESTORE || t == APTHOOK_ONWAKEUP) g_appActive = true;
+}
 
 // Link callbacks (invoked by mGBA's lockstep). onSleep runs on this core's worker thread
 // during runFrame and must NOT block — it only requests a park; the worker parks (blocks on
@@ -86,10 +94,12 @@ static void worker_main(void* arg) {
 				gbacore_set_keys(e->core, (u16)e->keys);
 				gbacore_run_loop(e->core);
 				e->frame++;
+				audio_pump_core(e->id, e->core);   // drain this core's audio into its ring (link audio)
 				if (e->wantWait) { e->wantWait = false; LightEvent_Wait(&e->waitEv); }
 			}
 		} else if (!e->skip && !e->paused) {
 			emu_step(e);
+			audio_pump_core(e->id, e->core);   // drain this core's audio into its ring
 		}
 		LightEvent_Signal(&e->done);
 	}
@@ -159,6 +169,20 @@ static void upload_frame(EmuInstance* e) {
 // ---- Scaling modes (v0.6): live-cycled with ZR ----
 enum { SCALE_1X, SCALE_FIT, SCALE_STRETCH };
 static const char* SCALE_NAMES[] = { "1:1", "Aspect-fit", "Stretch" };
+
+// Invert the bottom-screen scale/letterbox: map a 320x240 touch to a GBA pixel (0..239,0..159).
+// Mirrors render_game's transform for the bottom screen (mode = scaleMode[1]). false if off-frame.
+static bool touch_to_gba(int px, int py, int mode, int* gx, int* gy) {
+	const float sw = 320.0f, sh = 240.0f;
+	float scx, scy;
+	if (mode == SCALE_1X)           { scx = scy = 1.0f; }
+	else if (mode == SCALE_STRETCH) { scx = sw / GBA_W; scy = sh / GBA_H; }
+	else { float f = (sw / GBA_W < sh / GBA_H) ? sw / GBA_W : sh / GBA_H; scx = scy = f; }
+	float ox = (sw - GBA_W * scx) / 2.0f, oy = (sh - GBA_H * scy) / 2.0f;
+	int X = (int)((px - ox) / scx), Y = (int)((py - oy) / scy);
+	*gx = X; *gy = Y;
+	return X >= 0 && X < GBA_W && Y >= 0 && Y < GBA_H;
+}
 
 // Sharp-bilinear (the "Sharp" filter at fractional scales): integer-NEAREST prescale the
 // 240x160 frame into an offscreen target, then LINEAR-downscale that to fit the screen.
@@ -230,12 +254,12 @@ typedef struct {
 	s32 hudOn;
 	s32 audioMode;
 	s32 volA, volB;
-	s32 touchOn;
+	s32 touchMode;
 	s32 frameskip;
 } Settings;
 
 static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, bool* hudOn,
-                          int* audioMode, int* volA, int* volB, bool* touchOn, bool* fsOn) {
+                          int* audioMode, int* volA, int* volB, int* touchMode, bool* fsOn) {
 	FILE* f = fopen(SETTINGS_PATH, "rb");
 	if (!f) return;
 	Settings s;
@@ -251,14 +275,14 @@ static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, bool*
 	*audioMode = ((unsigned)s.audioMode) % 3;
 	*volA = s.volA < 0 ? 0 : (s.volA > 256 ? 256 : s.volA);
 	*volB = s.volB < 0 ? 0 : (s.volB > 256 ? 256 : s.volB);
-	*touchOn = s.touchOn != 0;
+	*touchMode = ((unsigned)s.touchMode) % 3;
 	*fsOn = s.frameskip != 0;
 }
 
 static void settings_save(const int scaleMode[2], const bool smooth[2], bool swapped, bool hudOn,
-                          int audioMode, int volA, int volB, bool touchOn, bool fsOn) {
+                          int audioMode, int volA, int volB, int touchMode, bool fsOn) {
 	Settings s = { SETTINGS_MAGIC, { scaleMode[0], scaleMode[1] },
-	               { smooth[0], smooth[1] }, swapped, hudOn, audioMode, volA, volB, touchOn, fsOn };
+	               { smooth[0], smooth[1] }, swapped, hudOn, audioMode, volA, volB, touchMode, fsOn };
 	FILE* f = fopen(SETTINGS_PATH, "wb");
 	if (!f) return;
 	fwrite(&s, 1, sizeof s, f);
@@ -269,13 +293,15 @@ static void settings_save(const int scaleMode[2], const bool smooth[2], bool swa
 enum { SESSION_CHANGE, SESSION_QUIT };
 static const char* MENU_ITEMS[] = {
 	"Resume", "Link", "Audio", "Touch", "Frameskip", "Toggle HUD", "Swap screens",
-	"Save state", "Load state", "Load .sav (focused)", "Change games", "Quit"
+	"Save state", "Load state", "Load .sav (focused)", "Mute", "Pause", "Change games", "Quit"
 };
-#define MENU_N 12
+#define MENU_N 14
 #define MENU_LINK_IDX  1   // dynamic label ("Link: off/on")
 #define MENU_AUDIO_IDX 2   // dynamic label ("Audio: <mode>")
 #define MENU_TOUCH_IDX 3   // dynamic label ("Touch: on/off")
 #define MENU_FS_IDX    4   // dynamic label ("Frameskip: on/off")
+#define MENU_MUTE_IDX  10  // dynamic label ("Mute: on/off")
+#define MENU_PAUSE_IDX 11  // dynamic label ("Pause A/B: on/off")
 
 // Run one play session with the two chosen ROMs. Returns SESSION_CHANGE (re-pick) or
 // SESSION_QUIT. Creates/destroys the cores + worker threads itself.
@@ -304,15 +330,18 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 
 	// Audio: both cores share one rate (pitch-matched to the 3DS refresh); start clean.
 	GbaCore* anyCore = emuA.core ? emuA.core : emuB.core;
+	audio_thread_start(mainPrio, isN3DS);   // dedicated audio thread on the core-1 slice
 	if (anyCore) audio_set_rate(anyCore);   // shared rate, clean start
 
 	GbaLink* link = gbalink_create();   // shared lockstep coordinator; cores attach on demand
 	bool linkOn = false;
-	bool touchOn = false;   // virtual gamepad over the bottom game (touch drives that game)
+	int  touchMode = TOUCH_OFF;   // 0 off / 1 gamepad / 2 smart (touch drives the bottom game)
 	bool fsOn = false;      // frameskip the unfocused game to free heavy-scene budget
+	bool muted = false;     // HARD mute (stops audio rendering, saves CPU)
 
 	int focused = 0;
 	bool menuOpen = false;
+	bool workersRunning = false;   // pipeline: a non-link frame is computing while we render the last
 	int  menuSel = 0;
 	int  result = SESSION_QUIT;
 	char status[24] = "";   // last save/load result, shown in the menu
@@ -339,15 +368,18 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 	int audioMode = AUD_SOLO;
 	int volA = 256, volB = 256;
 
-	settings_load(scaleMode, smooth, &swapped, &hudOn, &audioMode, &volA, &volB, &touchOn, &fsOn);   // restore prefs
+	settings_load(scaleMode, smooth, &swapped, &hudOn, &audioMode, &volA, &volB, &touchMode, &fsOn);   // restore prefs
 	gbacore_set_frameskip(emuA.core, (fsOn && focused != 0) ? 2 : 0);   // unfocused-frameskip
 	gbacore_set_frameskip(emuB.core, (fsOn && focused != 1) ? 2 : 0);
 
 	while (aptMainLoop()) {
+		if (!g_appActive) { svcSleepThread(16 * 1000 * 1000); continue; }   // backgrounded: don't hog the cores
 		u64 wfStart = svcGetSystemTick();
 		hidScanInput();
 		u32 kDown = hidKeysDown();
 		u32 kHeld = hidKeysHeld();
+		u16 tk = 0;             // touch-injected keys for the bottom game this frame
+		TouchSmart sm = { 0 };   // bottom game live state for SMART touch
 
 		// HUD stats: FPS (0.5s window) + battery (throttled).
 		fpsFrames++;
@@ -360,9 +392,22 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 			bool combo = (kHeld & KEY_START) && (kHeld & KEY_SELECT);
 			// With the virtual gamepad on, the touchscreen drives the game, so the menu opens
 			// only via the combo; otherwise a tap opens the menu (the original behaviour).
-			if ((!touchOn && (kDown & KEY_TOUCH)) || combo) {
+			if ((touchMode == TOUCH_OFF && (kDown & KEY_TOUCH)) || combo) {
 				menuOpen = true; menuSel = 0; status[0] = '\0';
+				if (!linkOn && workersRunning) {   // finish the in-flight frame before pausing into the menu
+					LightEvent_Wait(&emuA.done); LightEvent_Wait(&emuB.done);
+					if (emuA.core) upload_frame(&emuA); if (emuB.core) upload_frame(&emuB);
+					workersRunning = false;
+				}
 			} else {
+				// PIPELINE: finish the PREVIOUS frame (started last iteration, ran during the render) and
+				// snapshot it. We render N-1 while N computes -> render isn't chained to the slower core,
+				// so non-link is as smooth as the link path. Workers are parked here -> touch RAM access safe.
+				if (!linkOn && workersRunning) {
+					LightEvent_Wait(&emuA.done); LightEvent_Wait(&emuB.done);
+					if (emuA.core) upload_frame(&emuA); if (emuB.core) upload_frame(&emuB);
+					workersRunning = false;
+				}
 				if (kDown & KEY_Y) {                                         // switch focus
 					focused ^= 1; audio_reset_stream();
 					gbacore_set_frameskip(emuA.core, (fsOn && focused != 0) ? 2 : 0);
@@ -381,48 +426,77 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 					snprintf(toast, sizeof toast, "%s scale: %s",
 					         fs == 0 ? "Top" : "Bottom", SCALE_NAMES[scaleMode[fs]]);
 					toastTimer = 90;
-					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB, touchOn, fsOn);
+					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB, touchMode, fsOn);
 				}
 				if (kDown & KEY_ZL) {
 					smooth[fs] = !smooth[fs];   // render_game sets the per-pass filters
 					snprintf(toast, sizeof toast, "%s filter: %s", fs == 0 ? "Top" : "Bottom",
 					         smooth[fs] ? "Smooth" : "Sharp-bilinear");
 					toastTimer = 90;
-					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB, touchOn, fsOn);
+					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB, touchMode, fsOn);
 				}
 				u16 g = to_gba_keys(kHeld);
-				// Virtual gamepad: the touchscreen drives the BOTTOM game (A is on bottom iff swapped).
-				u16 tk = 0;
-				if (touchOn && (kHeld & KEY_TOUCH)) { touchPosition tp; hidTouchRead(&tp); tk = touch_keys(tp.px, tp.py); }
+				// Touchscreen drives the BOTTOM game (A is on bottom iff swapped) as a POINTER on the
+				// real game UI. touch_update is stateful (menu-cursor driver + tap-to-walk) -> run it
+				// every gameplay frame when enabled.
+				if (touchMode != TOUCH_OFF) {
+					bool touching = (kHeld & KEY_TOUCH) != 0;
+					touchPosition tp = { 0, 0 };
+					if (touching) hidTouchRead(&tp);
+					int gx = -1, gy = -1; bool gvalid = false;
+					if (touchMode == TOUCH_SMART && !linkOn) {   // skip cross-thread RAM read during a link
+						gvalid = touch_to_gba(tp.px, tp.py, scaleMode[1], &gx, &gy);
+						GbaCore* botCore = swapped ? emuA.core : emuB.core;
+						const GameProfile* gp = profile_for(botCore);
+						GameState gsr;
+						if (game_read(botCore, gp, &gsr)) {
+							sm.valid = gsr.valid; sm.ctx = gsr.ctx;
+							sm.actionCursor = gsr.actionCursor; sm.moveCursor = gsr.moveCursor;
+							sm.px = gsr.px; sm.py = gsr.py;
+							for (int i = 0; i < 4; i++) sm.moveValid[i] = gsr.moveValid[i];
+							sm.core = botCore; sm.actionAddr = gp->actionCursor; sm.moveAddr = gp->moveCursor;
+						}
+					}
+					tk = touch_update(touchMode, touching, tp.px, tp.py, gx, gy, gvalid, &sm);
+				}
 				emuA.keys = ((focused == 0) ? g : 0) | (swapped ? tk : 0);
 				emuB.keys = ((focused == 1) ? g : 0) | (swapped ? 0 : tk);
 				if (linkOn) {
-					// Workers free-run on their own; main just samples the latest frames and stays
-					// responsive. Audio is paused while linked (cores run concurrently -> buffer race).
+					// Workers free-run + pump their own audio rings; main just samples the latest frames
+					// and stays responsive. Audio keeps playing during a link (rings are worker-private).
 					if (emuA.core) upload_frame(&emuA);
 					if (emuB.core) upload_frame(&emuB);
 				} else {
-					LightEvent_Signal(&emuA.go);
-					LightEvent_Signal(&emuB.go);
-					LightEvent_Wait(&emuA.done);
-					LightEvent_Wait(&emuB.done);
-					if (emuA.core) upload_frame(&emuA);
-					if (emuB.core) upload_frame(&emuB);
-					audio_feed(emuA.core, emuB.core, focused, audioMode, volA, volB);
+					LightEvent_Signal(&emuA.go);   // start THIS frame; it is waited at the top of next iter
+					LightEvent_Signal(&emuB.go);   // (render below overlaps this emulation)
+					workersRunning = true;
 				}
+				// The audio thread (core 1) mixes the worker-filled rings + feeds ndsp off the frame path.
+				audio_set_params(focused, audioMode, volA, volB);
 			}
 		} else {
-			if (kDown & (KEY_DDOWN | KEY_CPAD_DOWN)) menuSel = (menuSel + 1) % MENU_N;
-			if (kDown & (KEY_DUP   | KEY_CPAD_UP))   menuSel = (menuSel - 1 + MENU_N) % MENU_N;
+			bool onAudio = (menuSel == MENU_AUDIO_IDX);
+			if (kDown & (KEY_DDOWN | KEY_CPAD_DOWN)) { if (menuSel + 2 < MENU_N) menuSel += 2; }
+			if (kDown & (KEY_DUP   | KEY_CPAD_UP))   { if (menuSel - 2 >= 0)      menuSel -= 2; }
+			if (!onAudio && (kDown & (KEY_DRIGHT | KEY_CPAD_RIGHT))) { if (menuSel + 1 < MENU_N) menuSel++; }
+			if (!onAudio && (kDown & (KEY_DLEFT  | KEY_CPAD_LEFT)))  { if (menuSel - 1 >= 0)      menuSel--; }
 			if (menuSel == MENU_AUDIO_IDX && (kDown & (KEY_DLEFT | KEY_CPAD_LEFT | KEY_DRIGHT | KEY_CPAD_RIGHT))) {
 					int* v = (focused == 0) ? &volA : &volB;   // adjust the focused game's volume
 					*v += (kDown & (KEY_DRIGHT | KEY_CPAD_RIGHT)) ? 32 : -32;
 					if (*v < 0) *v = 0; else if (*v > 256) *v = 256;
 					snprintf(status, sizeof status, "Vol %c: %d%%", focused == 0 ? 'A' : 'B', *v * 100 / 256);
-					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB, touchOn, fsOn);
+					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB, touchMode, fsOn);
 				}
 				if (kDown & KEY_B) menuOpen = false;                 // resume
-			if (kDown & KEY_A) {
+			bool activate = (kDown & KEY_A) != 0;
+			if (kDown & KEY_TOUCH) {   // tap a button to select it
+				touchPosition mtp; hidTouchRead(&mtp);
+				for (int i = 0; i < MENU_N; i++) {
+					float bx = 4.0f + (i & 1) * 160.0f, by = 4.0f + (i >> 1) * 32.0f;
+					if (mtp.px >= bx && mtp.px < bx + 152 && mtp.py >= by && mtp.py < by + 29) { menuSel = i; activate = true; break; }
+				}
+			}
+			if (activate) {
 				if      (menuSel == 0) menuOpen = false;         // Resume
 				else if (menuSel == 1) {                         // Link cable (experimental)
 					if (!emuA.core || !emuB.core || !link) {
@@ -451,29 +525,30 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 					audioMode = (audioMode + 1) % 3;
 					snprintf(status, sizeof status, "Audio: %s", AUDIO_NAMES[audioMode]);
 					audio_reset_stream();                        // clean cut between modes
-					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB, touchOn, fsOn);
+					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB, touchMode, fsOn);
 				}
-				else if (menuSel == 3) {                         // Touch (virtual gamepad)
-					touchOn = !touchOn;
-					snprintf(status, sizeof status, "Touch %s", touchOn ? "on" : "off");
+				else if (menuSel == 3) {                         // Touch mode (off / gamepad / smart)
+					touchMode = (touchMode + 1) % 3;
+					snprintf(status, sizeof status, "Touch: %s", TOUCH_NAMES[touchMode]);
+					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB, touchMode, fsOn);
 				}
 				else if (menuSel == 4) {                         // Frameskip (unfocused game)
 					fsOn = !fsOn;
 					gbacore_set_frameskip(emuA.core, (fsOn && focused != 0) ? 2 : 0);
 					gbacore_set_frameskip(emuB.core, (fsOn && focused != 1) ? 2 : 0);
 					snprintf(status, sizeof status, "Frameskip %s", fsOn ? "on" : "off");
-					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB, touchOn, fsOn);
+					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB, touchMode, fsOn);
 				}
 				else if (menuSel == 5) {                         // Toggle HUD
 					hudOn = !hudOn;
 					snprintf(status, sizeof status, "HUD %s", hudOn ? "on" : "off");
-					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB, touchOn, fsOn);
+					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB, touchMode, fsOn);
 				}
 				else if (menuSel == 6) {                         // Swap screens
 					swapped = !swapped; menuOpen = false;
 					snprintf(toast, sizeof toast, "Layout: %s", swapped ? "B top / A bottom" : "A top / B bottom");
 					toastTimer = 90;
-					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB, touchOn, fsOn);
+					settings_save(scaleMode, smooth, swapped, hudOn, audioMode, volA, volB, touchMode, fsOn);
 				}
 				else if (menuSel == 7) {                         // Save state (focused game)
 					EmuInstance* fg = (focused == 0) ? &emuA : &emuB;
@@ -491,7 +566,16 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 					else
 						snprintf(status, sizeof status, "no .sav files");
 				}
-				else if (menuSel == 10) { result = SESSION_CHANGE; break; }
+				else if (menuSel == 10) {                        // Mute (hard: stops sound rendering)
+					muted = !muted; audio_set_muted(muted);
+					snprintf(status, sizeof status, "Mute %s", muted ? "on" : "off");
+				}
+				else if (menuSel == 11) {                        // Pause / resume the focused game
+					EmuInstance* fg = (focused == 0) ? &emuA : &emuB;
+					fg->paused = !fg->paused;
+					snprintf(status, sizeof status, "Game %c %s", focused == 0 ? 'A' : 'B', fg->paused ? "paused" : "resumed");
+				}
+				else if (menuSel == 12) { result = SESSION_CHANGE; break; }
 				else                    { result = SESSION_QUIT;   break; }
 			}
 		}
@@ -527,10 +611,17 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 					label = llabel;
 				
 				} else if (i == MENU_TOUCH_IDX) {
-					snprintf(llabel, sizeof llabel, "Touch: %s", touchOn ? "on" : "off");
+					snprintf(llabel, sizeof llabel, "Touch: %s", TOUCH_NAMES[touchMode]);
 					label = llabel;
 				} else if (i == MENU_FS_IDX) {
 					snprintf(llabel, sizeof llabel, "Frameskip: %s", fsOn ? "on" : "off");
+					label = llabel;
+				} else if (i == MENU_MUTE_IDX) {
+					snprintf(llabel, sizeof llabel, "Mute: %s", muted ? "on" : "off");
+					label = llabel;
+				} else if (i == MENU_PAUSE_IDX) {
+					bool fp = (focused == 0) ? emuA.paused : emuB.paused;
+					snprintf(llabel, sizeof llabel, "Pause %c: %s", focused == 0 ? 'A' : 'B', fp ? "on" : "off");
 					label = llabel;
 				}
 				C2D_TextParse(&items[i], txtBuf, label); C2D_TextOptimize(&items[i]);
@@ -540,7 +631,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 			              status[0] ? status : "Y focus  X pause  ZL/ZR filter/scale  L/R = GBA");
 			C2D_TextOptimize(&tStatus);
 		} else {
-			C2D_TextParse(&tHint, txtBuf, touchOn ? "START+SELECT: menu  (touch drives bottom game)"
+			C2D_TextParse(&tHint, txtBuf, touchMode != TOUCH_OFF ? "START+SELECT: menu  (touch drives bottom game)"
 			                                      : "tap / START+SELECT: menu");
 			C2D_TextOptimize(&tHint);
 			if (toastTimer > 0) { C2D_TextParse(&tToast, txtBuf, toast); C2D_TextOptimize(&tToast); }
@@ -581,43 +672,44 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 14.0f, THEME_HUD_BAR);
 				if (focScreen == 1) C2D_DrawRectSolid(0.0f, 14.0f, 0.0f, 320.0f, 2.0f, clrHi);
 				C2D_DrawText(&tHudBot, C2D_WithColor, 4.0f, 1.0f, 0.0f, 0.4f, 0.4f, clrTxt);
+				float bsw, bsh; C2D_TextGetDimensions(&tHudStat, 0.4f, 0.4f, &bsw, &bsh);
+				C2D_DrawText(&tHudStat, C2D_WithColor, 316.0f - bsw, 1.0f, 0.0f, 0.4f, 0.4f, clrTxt);
 			} else if (focScreen == 1) {
 				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 4.0f, clrHi);
 			}
-			if (touchOn) {   // translucent virtual gamepad over the bottom game
-				u16 th = 0;
-				if (kHeld & KEY_TOUCH) { touchPosition tp; hidTouchRead(&tp); th = touch_keys(tp.px, tp.py); }
-				touch_overlay(th);
-				const GameProfile* gp = profile_for(botG->core);   // TEMP: confirm RAM addresses
-				if (gp) {
-					int gx = -1, gy = -1; bool gb = false; game_state(botG->core, gp, &gx, &gy, &gb);
-					char gs[48]; snprintf(gs, sizeof gs, "%s xy=%d,%d battle=%d", gp->code, gx, gy, (int)gb);
-					C2D_Text tg; C2D_TextParse(&tg, txtBuf, gs); C2D_TextOptimize(&tg);
-					C2D_DrawText(&tg, C2D_WithColor, 4.0f, 224.0f, 0.0f, 0.42f, 0.42f, C2D_Color32(0x42, 0xF5, 0xD0, 0xFF));
-				}
+			if (touchMode == TOUCH_PAD) {   // virtual gamepad overlay (SMART draws nothing -> real UI)
+				touch_draw(touchMode, tk, &sm);
+			}
+			if (touchMode == TOUCH_SMART && !linkOn && sm.valid) {   // TEMP debug: confirm RAM reads on device
+				static const char* const CTXN[] = { "none", "field", "b.act", "b.move", "b.other" };
+				char gs[64]; snprintf(gs, sizeof gs, "%s xy=%d,%d a=%d m=%d",
+				         CTXN[sm.ctx], sm.px, sm.py, sm.actionCursor, sm.moveCursor);
+				C2D_Text tg; C2D_TextParse(&tg, txtBuf, gs); C2D_TextOptimize(&tg);
+				C2D_DrawText(&tg, C2D_WithColor, 4.0f, 224.0f, 0.0f, 0.40f, 0.40f, C2D_Color32(0x42, 0xF5, 0xD0, 0xFF));
 			}
 		}
 		if (menuOpen) {
 			C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 240.0f, clrDim);
-			C2D_DrawRectSolid(32.0f, 2.0f, 0.0f, 256.0f, 236.0f, clrPanel);
-			for (int i = 0; i < MENU_N; i++) {
-				float y = 6.0f + i * 18.0f;
+			for (int i = 0; i < MENU_N; i++) {   // 2x7 grid of buttons (D-pad or tap to select)
+				float bx = 4.0f + (i & 1) * 160.0f, by = 4.0f + (i >> 1) * 32.0f;
 				bool s = (i == menuSel);
-				if (s) C2D_DrawRectSolid(42.0f, y - 1.0f, 0.0f, 236.0f, 16.0f, clrHi);
-				C2D_DrawText(&items[i], C2D_WithColor, 50.0f, y, 0.0f, 0.45f, 0.45f, s ? clrSelTxt : clrTxt);
+				C2D_DrawRectSolid(bx, by, 0.0f, 152.0f, 29.0f, s ? clrHi : clrPanel);
+				C2D_DrawText(&items[i], C2D_WithColor, bx + 6.0f, by + 7.0f, 0.0f, 0.4f, 0.4f, s ? clrSelTxt : clrTxt);
 			}
-			C2D_DrawText(&tStatus, C2D_WithColor, 38.0f, 222.0f, 0.0f, 0.38f, 0.38f, clrTxt);
+			C2D_DrawText(&tStatus, C2D_WithColor, 4.0f, 228.0f, 0.0f, 0.35f, 0.35f, clrTxt);
 		} else {
 			C2D_DrawText(&tHint, C2D_WithColor, 6.0f, 224.0f, 0.0f, 0.4f, 0.4f, clrTxt);
 		}
 
 		{ float wms = (svcGetSystemTick() - wfStart) * 1000.0f / SYSCLOCK_ARM11; if (wms > worstMs) worstMs = wms; }
 		C3D_FrameEnd(0);
+		// Real-time cap to the 3DS LCD refresh (the rate audio is matched to): freed-up CPU must not run
+		// the games + audio faster than 60fps. Only waits when UNDER budget, so heavy frames are untouched.
+		while (svcGetSystemTick() - wfStart < FRAME_TICKS) svcSleepThread(100000);
 		if (toastTimer > 0) toastTimer--;
 	}
 
 	// teardown this session's workers + cores; reset g_quit for the next session
-	audio_reset_stream();   // stop sound between sessions
 	emuA.linked = emuB.linked = false;        // stop the free-run loop
 	g_quit = true;
 	LightEvent_Signal(&emuA.waitEv);          // release any worker parked on a link wait
@@ -626,6 +718,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 	LightEvent_Signal(&emuB.go);
 	if (emuA.thread) { threadJoin(emuA.thread, U64_MAX); threadFree(emuA.thread); }
 	if (emuB.thread) { threadJoin(emuB.thread, U64_MAX); threadFree(emuB.thread); }
+	audio_thread_stop();   // workers joined -> nothing pumps the rings; safe to stop audio + free them
 	if (linkOn) { gbacore_link_detach(emuA.core); gbacore_link_detach(emuB.core); }
 	teardown_core(&emuA);
 	teardown_core(&emuB);
@@ -651,7 +744,17 @@ static void splash_panel(float x, float y, float w, float h, u32 inner, u32 dot)
 
 static float ease_out(float p) { float q = 1.0f - p; return 1.0f - q * q * q; }
 
-static void run_splash(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txtBuf) {
+// Empirical New-3DS clock probe: a fixed busy loop runs ~3x faster at 804MHz while svcGetSystemTick
+// stays at 268MHz, so comparing the loop's tick cost BEFORE vs AFTER osSetSpeedupEnable() is a
+// self-calibrating test (no per-build constant) of whether the speedup actually engaged.
+static u64 busy_ticks(void) {
+	volatile u32 x = 0;
+	u64 t0 = svcGetSystemTick();
+	for (volatile u32 i = 0; i < 2000000u; i++) x += i;
+	return svcGetSystemTick() - t0;
+}
+
+static void run_splash(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txtBuf, const char* warn) {
 	const u32 bg   = THEME_BG;
 	const u32 gold = THEME_GOLD;
 	const u32 grn  = THEME_GAME_A;
@@ -698,6 +801,10 @@ static void run_splash(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 		splash_panel(bx, by, pw, ph, blu, C2D_Color32(0xE6, 0x4B, 0x41, 0xFF));
 		C2D_DrawText(&tSub, C2D_WithColor, (320.0f - twS) / 2.0f, 220.0f, 0.0f, 0.5f, 0.5f,
 		             C2D_Color32(0xBE, 0xB4, 0xD7, (u8)(titleA * 255)));
+		if (warn && warn[0]) {   // perf warning (Old 3DS, or New 3DS not at full speed)
+			C2D_Text tw; C2D_TextParse(&tw, txtBuf, warn); C2D_TextOptimize(&tw);
+			C2D_DrawText(&tw, C2D_WithColor, 6.0f, 4.0f, 0.0f, 0.42f, 0.42f, C2D_Color32(0xFF, 0x80, 0x40, 0xFF));
+		}
 		if (fade > 0.0f) C2D_DrawRectSolid(0, 0, 0, 320, 240, C2D_Color32(0x18, 0x11, 0x28, (u8)(fade * 255)));
 
 		C3D_FrameEnd(0);
@@ -707,8 +814,23 @@ static void run_splash(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 int main(int argc, char** argv) {
 	bool isN3DS = false;
 	APT_CheckNew3DS(&isN3DS);
-	if (isN3DS) osSetSpeedupEnable(true);
+	// Self-calibrating 804MHz probe: time a busy loop at the base clock, enable the speedup, time it
+	// again. A real clock jump (the .cia exheader granting 804MHz/L2) makes the 2nd run ~3x faster; a
+	// .3dsx from the Homebrew Launcher can't claim it, so the two times match.
+	u64 clkOff = busy_ticks();
+	osSetSpeedupEnable(true);            // request 804MHz + L2 (no-op on O3DS / without the .cia flags)
+	u64 clkOn  = busy_ticks();
 	APT_SetAppCpuTimeLimit(80);
+	aptHook(&s_aptCookie, apt_hook, NULL);   // pause emulation/render while backgrounded
+	bool speedupActive = (clkOn * 100 < clkOff * 65);   // 2nd run >~1.5x faster => speedup engaged
+
+	char perfWarn[160] = "";
+	if (!isN3DS)
+		snprintf(perfWarn, sizeof perfWarn,
+		         "Old 3DS detected.\nTwo GBA cores need a New 3DS - expect slowdown.");
+	else if (!speedupActive)
+		snprintf(perfWarn, sizeof perfWarn,
+		         "Running SLOW (no 804MHz / L2).\nInstall + run the .CIA for full speed.");
 
 	gfxInitDefault();
 	C3D_Init(C3D_DEFAULT_CMDBUF_SIZE);
@@ -723,7 +845,7 @@ int main(int argc, char** argv) {
 	s32 mainPrio = 0x30;
 	svcGetThreadPriority(&mainPrio, CUR_THREAD_HANDLE);
 
-	run_splash(top, bot, txtBuf);   // animated GBA-nostalgic boot splash (skippable)
+	run_splash(top, bot, txtBuf, perfWarn);   // animated boot splash (skippable) + perf warning
 
 	// Session loop: pick two ROMs, play, and on "Change games" pick again.
 	while (aptMainLoop()) {

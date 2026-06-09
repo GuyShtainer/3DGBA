@@ -72,6 +72,8 @@ uint32_t gbacore_frame_counter(GbaCore* c);   // bumps once per produced video f
 uint8_t  gbacore_read8(GbaCore* c, uint32_t addr);
 uint16_t gbacore_read16(GbaCore* c, uint32_t addr);
 uint32_t gbacore_read32(GbaCore* c, uint32_t addr);
+// Write a byte to the running game's bus (set a menu cursor before injecting A). Same-thread/parked only.
+void     gbacore_write8(GbaCore* c, uint32_t addr, uint8_t val);
 // 4-char ROM game code from the header (e.g. "BPEE"); out must hold >=5 bytes (NUL-terminated).
 void     gbacore_game_code(GbaCore* c, char out[5]);
 
