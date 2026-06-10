@@ -16,17 +16,20 @@ static const GameProfile PROFILES[] = {
             0x0203CEC8u, 0x020244E9u, 0x030022C4u, 0x081B01B0u, 0x081B01E0u, 0x030022EEu,
             0x03005D60u, 0x08057824u, 0x03005D74u, 0x02024076u, 0x0202406Cu, 0x02024210u, 0x02024064u, 0x03005DC0u,
             0x03005DF4u, 0x0809FAC4u, 0x0203CD90u, 0x02020004u, 0x0203760Eu, 0x03005E00u, 0x081AAD5Cu, 0x081ABD28u, 0x00000000u,
-            0x081B1370u, 0x080E215Cu, 0x080E2058u, 0x081B3730u, 0x0809FA34u, 0x02037318u },
+            0x081B1370u, 0x080E215Cu, 0x080E2058u, 0x081B3730u, 0x0809FA34u, 0x02037318u,
+            0x08038420u, 0x02037350u },
   { "BPRE", 0x03005008u, 0x02022B4Cu, 0x02023FF8u, 0x02023FFCu, 0x02023BE4u, 0x02022976u,
             0x0203B0A0u, 0x02024029u, 0x030030F4u, 0x0811EBA0u, 0x0811EBD0u, 0x0303011Eu,
             0x03004FE0u, 0x0802E674u, 0x03004FF4u, 0x02023BD6u, 0x02023BCCu, 0x02023D70u, 0x02023BC4u, 0x03005040u,
             0x020370F0u, 0x0806F280u, 0x0203ADE4u, 0x020204B4u, 0x020370F4u, 0x03005090u, 0x08107EE0u, 0x08108F0Cu, 0x0203AD01u,
-            0x0811FB28u, 0x0809CE54u, 0x0809CC98u, 0x08122C5Cu, 0x0806F1F0u, 0x00000000u },
+            0x0811FB28u, 0x0809CE54u, 0x0809CC98u, 0x08122C5Cu, 0x0806F1F0u, 0x00000000u,
+            0x08011100u, 0x02036E38u },
   { "BPGE", 0x03005008u, 0x02022B4Cu, 0x02023FF8u, 0x02023FFCu, 0x02023BE4u, 0x02022976u,
             0x0203B0A0u, 0x02024029u, 0x030030F4u, 0x0811EBA0u, 0x0811EBD0u, 0x0303011Eu,
             0x03004FE0u, 0x0802E674u, 0x03004FF4u, 0x02023BD6u, 0x02023BCCu, 0x02023D70u, 0x02023BC4u, 0x03005040u,
             0x020370F0u, 0x0806F280u, 0x0203ADE4u, 0x020204B4u, 0x020370F4u, 0x03005090u, 0x08107EE0u, 0x08108F0Cu, 0x0203AD01u,
-            0x0811FB28u, 0x0809CE54u, 0x0809CC98u, 0x08122C5Cu, 0x0806F1F0u, 0x00000000u },
+            0x0811FB28u, 0x0809CE54u, 0x0809CC98u, 0x08122C5Cu, 0x0806F1F0u, 0x00000000u,
+            0x08011100u, 0x02036E38u },
 };
 
 const GameProfile* profile_for(GbaCore* c) {
@@ -73,7 +76,10 @@ bool game_read(GbaCore* c, const GameProfile* p, GameState* out) {
 		out->px = (int16_t)gbacore_read16(c, sb1);
 		out->py = (int16_t)gbacore_read16(c, sb1 + 2);
 	}
-	bool inBattle = gbacore_read32(c, p->battleFlags) != 0;
+	// 'In battle' = the battle main loop is the active callback2. (gBattleTypeFlags is zeroed at battle
+	// SETUP, not end, so it lingers into the overworld -> the old battleFlags test made the whole
+	// post-battle field read as a battle dialog = tap-anywhere-A. callback2 returns to the field cleanly.)
+	bool inBattle = p->battleMainCb && (gbacore_read32(c, p->mainCb2) & ~1u) == p->battleMainCb;
 
 	// Menu detection is TASK-BASED (scan gTasks for the menu's active input handler): robust and
 	// FAIL-SAFE — a wrong/absent address just means "not detected" (the overworld still WALKS), never a
