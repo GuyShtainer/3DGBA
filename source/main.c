@@ -218,6 +218,7 @@ typedef struct {
 } DepthSnap;
 #define POP3D_PLAYER_GX 112   // player tile (7,5) -> sprite rect (16x32, head 16px above the tile)
 #define POP3D_PLAYER_GY 64
+#define POP3D_PX  4.0f        // character pop disparity (px) at full slider (left +, right - = pops OUT)
 static void calc_xform(int mode, float sW, float sH, float* ox, float* oy, float* sx, float* sy) {
 	if (mode == SCALE_1X)           { *sx = *sy = 1.0f; }
 	else if (mode == SCALE_STRETCH) { *sx = sW / GBA_W; *sy = sH / GBA_H; }
@@ -759,7 +760,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		float slider3d = osGet3DSliderState();
 		bool pop3d = slider3d > 0.03f && depth3d.overworld && topG->core;
 		render_game(topG, top, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], topTint, clrBg);
-		if (pop3d) pop_eye(top, topG, &depth3d, scaleMode[0], -4.0f * slider3d);   // LEFT eye: characters pop forward
+		if (pop3d) pop_eye(top, topG, &depth3d, scaleMode[0], +POP3D_PX * slider3d);   // LEFT eye shifts RIGHT -> crossed disparity -> pops OUT
 		if (!menuOpen) {
 			if (hudMode & 1) {
 				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 400.0f, 14.0f, THEME_HUD_BAR);
@@ -776,7 +777,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		// top RIGHT eye = the SAME (top) game -> single-game stereoscopic depth. Player pops forward
 		// (positive disparity). (Per-eye dual-game retired; can return later as a menu toggle.)
 		render_game(topG, topR, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], NULL, clrBg);
-		if (pop3d) pop_eye(topR, topG, &depth3d, scaleMode[0], +4.0f * slider3d);   // RIGHT eye
+		if (pop3d) pop_eye(topR, topG, &depth3d, scaleMode[0], -POP3D_PX * slider3d);   // RIGHT eye shifts LEFT
 
 		// bottom screen (+ menu overlay when open). render_game leaves `bot` bound.
 		render_game(botG, bot, preTgt, &preTex, 320.0f, 240.0f, scaleMode[1], smooth[1], botTint, clrBg);
