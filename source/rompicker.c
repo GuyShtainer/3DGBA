@@ -8,6 +8,7 @@
 #include <string.h>
 #include <strings.h>   // strcasecmp
 #include <stdio.h>
+#include <stdlib.h>   // abs
 
 #include "rompicker.h"
 #include "theme.h"
@@ -170,14 +171,32 @@ bool rompicker_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txt
 	int idxA  = 0;
 	int sel   = 0;
 	int topRow = 0;
+	int tDownY = 0, tCurY = 0, tLastY = 0; bool tDrag = false;   // touch: tap a game / drag to scroll
 
 	while (aptMainLoop()) {
 		hidScanInput();
-		u32 k = hidKeysDown();
+		u32 k = hidKeysDown(), kHeld = hidKeysHeld(), kUp = hidKeysUp();
 		if (k & KEY_START) return false;                       // cancel -> defaults
 		if (k & (KEY_DDOWN | KEY_CPAD_DOWN)) sel = (sel + 1) % n;
 		if (k & (KEY_DUP   | KEY_CPAD_UP))   sel = (sel - 1 + n) % n;
-		if (k & KEY_A) {
+		bool confirm = (k & KEY_A) != 0;
+
+		touchPosition tp; hidTouchRead(&tp);                   // TOUCH: tap a row to pick, drag to scroll
+		if (k & KEY_TOUCH) { tDownY = tCurY = tLastY = tp.py; tDrag = false; }
+		if (kHeld & KEY_TOUCH) {
+			tCurY = tp.py;
+			if (abs((int)tp.py - tDownY) > 6) tDrag = true;
+			if (tDrag) {
+				while ((int)tp.py - tLastY >= (int)ROW_H) { if (topRow + VIS_ROWS < n) topRow++; tLastY += (int)ROW_H; }
+				while (tLastY - (int)tp.py >= (int)ROW_H) { if (topRow > 0) topRow--; tLastY -= (int)ROW_H; }
+			}
+		}
+		if ((kUp & KEY_TOUCH) && !tDrag) {                     // a clean tap -> pick the touched game
+			int r = (tCurY - 30) / (int)ROW_H;
+			if (r >= 0 && r < VIS_ROWS && topRow + r < n) { sel = topRow + r; confirm = true; }
+		}
+		if (k & KEY_B) { if (phase == 1) phase = 0; else return false; }
+		if (confirm) {
 			if (phase == 0) { idxA = sel; phase = 1; }
 			else {
 				snprintf(pathA, cap, "%s/%s", ROM_DIR, names[idxA]);
@@ -185,7 +204,6 @@ bool rompicker_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txt
 				return true;
 			}
 		}
-		if (k & KEY_B) { if (phase == 1) phase = 0; else return false; }
 
 		// keep selection in the visible window
 		if (sel < topRow) topRow = sel;
@@ -197,8 +215,8 @@ bool rompicker_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txt
 		const char* title = (phase == 0) ? "Pick GAME A  (top screen)"
 		                                 : "Pick GAME B  (bottom screen)";
 		C2D_TextParse(&tTitle, txtBuf, title);                 C2D_TextOptimize(&tTitle);
-		const char* help = (phase == 0) ? "Up/Down: move   A: choose   START: defaults"
-		                                : "Up/Down: move   A: choose   B: back";
+		const char* help = (phase == 0) ? "Tap a game (or A)   drag: scroll   START: defaults"
+		                                : "Tap a game (or A)   drag: scroll   B: back";
 		C2D_TextParse(&tHelp, txtBuf, help);                   C2D_TextOptimize(&tHelp);
 		int shown = 0;
 		for (int i = 0; i < VIS_ROWS && topRow + i < n; i++) {
@@ -222,12 +240,18 @@ bool rompicker_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txt
 			if (s) C2D_DrawRectSolid(6.0f, y - 1.0f, 0.0f, 388.0f, ROW_H - 1.0f, clrSel);
 			C2D_DrawText(&rows[i], C2D_WithColor, 12.0f, y, 0.0f, 0.5f, 0.5f, s ? clrSelTxt : clrTxt);
 		}
+		C2D_DrawText(&tHelp, C2D_WithColor, 8.0f, 224.0f, 0.0f, 0.45f, 0.45f, clrDim);
 
-		// bottom: chosen Game A (during phase B) + help
+		// bottom: the SAME list, TOUCHABLE -- tap a game to pick it, drag to scroll.
 		C2D_TargetClear(bot, clrBg);
 		C2D_SceneBegin(bot);
-		if (phase == 1) C2D_DrawText(&tA, C2D_WithColor, 8.0f, 8.0f, 0.0f, 0.5f, 0.5f, clrSel);
-		C2D_DrawText(&tHelp, C2D_WithColor, 8.0f, 214.0f, 0.0f, 0.45f, 0.45f, clrDim);
+		for (int i = 0; i < shown; i++) {
+			float y = 30.0f + i * ROW_H;
+			bool s = (topRow + i == sel);
+			if (s) C2D_DrawRectSolid(6.0f, y - 1.0f, 0.0f, 308.0f, ROW_H - 1.0f, clrSel);
+			C2D_DrawText(&rows[i], C2D_WithColor, 12.0f, y, 0.0f, 0.5f, 0.5f, s ? clrSelTxt : clrTxt);
+		}
+		if (phase == 1) C2D_DrawText(&tA, C2D_WithColor, 8.0f, 8.0f, 0.0f, 0.45f, 0.45f, clrSel);
 
 		C3D_FrameEnd(0);
 	}
