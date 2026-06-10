@@ -321,8 +321,8 @@ static const char* const HUD_NAMES[4] = { "off", "top", "bottom", "both" };
 
 // Run one play session with the two chosen ROMs. Returns SESSION_CHANGE (re-pick) or
 // SESSION_QUIT. Creates/destroys the cores + worker threads itself.
-static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txtBuf,
-                       bool isN3DS, s32 mainPrio, const char* pathA, const char* pathB) {
+static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderTarget* topR,
+                       C2D_TextBuf txtBuf, bool isN3DS, s32 mainPrio, const char* pathA, const char* pathB) {
 	const u32 clrBg     = THEME_LETTERBOX;
 	const u32 clrHi     = THEME_GOLD;
 	const u32 clrTxt    = THEME_TEXT;
@@ -360,6 +360,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 	bool workersRunning = false;   // pipeline: a non-link frame is computing while we render the last
 	int  menuSel = 0;
 	int  result = SESSION_QUIT;
+	gfxSet3D(true);   // enable stereoscopic top screen; the right eye is driven below (slider-gated)
 	char status[24] = "";   // last save/load result, shown in the menu
 	// Scale + filter are PER SCREEN ([0]=top, [1]=bottom): the 400x240 top and 320x240 bottom
 	// have different best fits. ZR/ZL adjust the focused screen (X/Y switches focus).
@@ -700,6 +701,13 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 			if (toastTimer > 0) C2D_DrawText(&tToast, C2D_WithColor, 8.0f, (hudMode & 1) ? 20.0f : 8.0f, 0.0f, 0.5f, 0.5f, clrHi);
 		}
 
+			// top RIGHT eye (stereoscopic 3D). Slider up -> show the BOTTOM game here, so both games
+			// share the top screen in 3D (per-eye dual-game). Slider down -> mirror the left eye (flat).
+			// Carries the game only (no HUD), at the top screen's scale/filter.
+			float slider3d = osGet3DSliderState();
+			EmuInstance* rightG = (slider3d > 0.03f) ? botG : topG;
+			render_game(rightG, topR, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], NULL, clrBg);
+
 		// bottom screen (+ menu overlay when open). render_game leaves `bot` bound.
 		render_game(botG, bot, preTgt, &preTex, 320.0f, 240.0f, scaleMode[1], smooth[1], botTint, clrBg);
 		if (!menuOpen) {
@@ -781,6 +789,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 	gbalink_destroy(link);
 	if (preTgt) { C3D_RenderTargetDelete(preTgt); C3D_TexDelete(&preTex); }
 	g_quit = false;
+	gfxSet3D(false);   // back to flat for the ROM picker / splash between sessions
 	return result;
 }
 
@@ -894,8 +903,9 @@ int main(int argc, char** argv) {
 	C2D_Prepare();
 	audio_init();   // ndsp; silently no-ops if dspfirm.cdc isn't present
 	s_hasPtm = R_SUCCEEDED(ptmuInit());   // battery level for the HUD
-	C3D_RenderTarget* top = C2D_CreateScreenTarget(GFX_TOP, GFX_LEFT);
-	C3D_RenderTarget* bot = C2D_CreateScreenTarget(GFX_BOTTOM, GFX_LEFT);
+	C3D_RenderTarget* top  = C2D_CreateScreenTarget(GFX_TOP, GFX_LEFT);
+	C3D_RenderTarget* topR = C2D_CreateScreenTarget(GFX_TOP, GFX_RIGHT);   // right eye (stereoscopic 3D)
+	C3D_RenderTarget* bot  = C2D_CreateScreenTarget(GFX_BOTTOM, GFX_LEFT);
 	C2D_TextBuf txtBuf = C2D_TextBufNew(4096);
 
 	s32 mainPrio = 0x30;
@@ -912,7 +922,7 @@ int main(int argc, char** argv) {
 		} else {
 			rompicker_save_recent(pathA, pathB);   // remember for next boot's resume prompt
 		}
-		int r = run_session(top, bot, txtBuf, isN3DS, mainPrio, pathA, pathB);
+		int r = run_session(top, bot, topR, txtBuf, isN3DS, mainPrio, pathA, pathB);
 		if (r == SESSION_QUIT) break;
 		// SESSION_CHANGE -> loop back to the picker
 	}
