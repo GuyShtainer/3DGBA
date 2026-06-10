@@ -116,6 +116,7 @@ static int battler_index_for_pos(const TouchSmart* sm, int pos) {
 #define WBOX  65          // BFS window edge (tiles); ~+-32 around the player
 #define WHALF 32
 #define TAP_FRAMES 12     // released within this many frames AND barely moved => a "tap" -> BFS route
+#define DOUBLE_FRAMES 16  // second tap-on-self within this many frames => START
 static const u16 s_keyDir[4] = { 1 << GBAKEY_RIGHT, 1 << GBAKEY_LEFT, 1 << GBAKEY_DOWN, 1 << GBAKEY_UP };
 
 static int s_aPulse = 0;
@@ -124,8 +125,23 @@ static int  s_goalX = -1, s_goalY = -1, s_stall, s_lpx, s_lpy;
 static int  s_mapW, s_mapH; static uint32_t s_mapPtr;
 static int8_t s_pathDir[WBOX * WBOX]; static int s_pathLen, s_pathPos;
 static int  s_touchFrames = 0, s_downGx, s_downGy, s_downPx, s_downPy; static bool s_moved;
+static int  s_tick = 0, s_lastSelfTap = -999, s_startPulse = 0;   // double-tap-self -> START
+static int  s_npcN = 0; static short s_npcG[16][2];              // active object-event grid coords (+7 space)
 static void walk_reset(void) {
-	s_aPulse = 0; s_walking = false; s_pathLen = s_pathPos = 0; s_touchFrames = 0; s_moved = false;
+	s_aPulse = 0; s_startPulse = 0; s_walking = false; s_pathLen = s_pathPos = 0; s_touchFrames = 0; s_moved = false;
+}
+
+// Read active overworld object-events (NPCs) so the BFS routes AROUND them. Skips slot 0 (the player).
+static void read_npcs(GbaCore* core, const GameProfile* p) {
+	s_npcN = 0;
+	if (!p->mapObjects) return;
+	for (int i = 1; i < 16; i++) {
+		uint32_t e = p->mapObjects + 0x24u * (uint32_t)i;
+		if (!(gbacore_read32(core, e) & 1u)) continue;                 // active:1
+		s_npcG[s_npcN][0] = (short)(int16_t)gbacore_read16(core, e + 0x10);   // currentCoords.x (grid, +7)
+		s_npcG[s_npcN][1] = (short)(int16_t)gbacore_read16(core, e + 0x12);   // currentCoords.y
+		s_npcN++;
+	}
 }
 
 static bool map_read(GbaCore* core, const GameProfile* p, int* w, int* h, uint32_t* ptr) {
@@ -138,6 +154,7 @@ static bool map_read(GbaCore* core, const GameProfile* p, int* w, int* h, uint32
 static bool walkable(GbaCore* core, uint32_t ptr, int w, int h, int wx, int wy) {
 	int gx_ = wx + 7, gy_ = wy + 7;                      // MAP_OFFSET border
 	if (gx_ < 0 || gx_ >= w || gy_ < 0 || gy_ >= h) return false;
+	for (int i = 0; i < s_npcN; i++) if (s_npcG[i][0] == gx_ && s_npcG[i][1] == gy_) return false;   // NPC here
 	uint16_t block = gbacore_read16(core, ptr + 2u * (uint32_t)(gx_ + w * gy_));
 	if (block == 0x03FF) return false;                  // MAPGRID_UNDEFINED
 	return ((block & 0x0C00) >> 10) == 0;               // collision bits clear
@@ -147,6 +164,7 @@ static bool plan_bfs(GbaCore* core, const GameProfile* p, int sx, int sy, int gx
 	int w, h; uint32_t ptr;
 	if (!map_read(core, p, &w, &h, &ptr)) return false;
 	if (abs(gxw - sx) > WHALF || abs(gyw - sy) > WHALF) return false;
+	read_npcs(core, p);   // NPCs block transit so the route goes AROUND them
 	s_mapW = w; s_mapH = h; s_mapPtr = ptr;
 	static int16_t parent[WBOX * WBOX];
 	static int8_t  dirOf[WBOX * WBOX];
@@ -183,16 +201,28 @@ static bool plan_bfs(GbaCore* core, const GameProfile* p, int sx, int sy, int gx
 
 static u16 walk_update(bool touching, bool newPress, bool gvalid, int gx, int gy,
                        int px, int py, GbaCore* core, const GameProfile* p) {
-	if (s_aPulse > 0) { s_aPulse--; return 1 << GBAKEY_A; }
+	s_tick++;
+	if (s_startPulse > 0) { s_startPulse--; return 1 << GBAKEY_START; }
+	if (s_aPulse > 0)     { s_aPulse--;     return 1 << GBAKEY_A; }
 
 	if (newPress && gvalid) { s_downGx = gx; s_downGy = gy; s_downPx = px; s_downPy = py; s_touchFrames = 0; s_moved = false; }
+	if (touching && gvalid) { s_touchFrames++; if (abs(gx - s_downGx) > 8 || abs(gy - s_downGy) > 8) s_moved = true; }
+
+	// No loaded overworld map (title / intro / main menu): a tap = A, a double-tap = START. No walking.
+	if (px < 0) {
+		if (!touching && s_touchFrames > 0) {
+			bool tap = s_touchFrames <= TAP_FRAMES && !s_moved; s_touchFrames = 0;
+			if (tap) { if (s_tick - s_lastSelfTap < DOUBLE_FRAMES) s_startPulse = 3; else s_aPulse = 3; s_lastSelfTap = s_tick; }
+		}
+		if (s_startPulse > 0) { s_startPulse--; return 1 << GBAKEY_START; }
+		if (s_aPulse > 0)     { s_aPulse--;     return 1 << GBAKEY_A; }
+		return 0;
+	}
 
 	if (touching && gvalid) {                            // HOLD -> steer toward the touch (cancels a route)
-		s_touchFrames++;
-		if (abs(gx - s_downGx) > 8 || abs(gy - s_downGy) > 8) s_moved = true;
 		s_walking = false;
 		int ddx = gx / 16 - 7, ddy = gy / 16 - 5;
-		if (ddx == 0 && ddy == 0) return 0;              // on the player tile -> stand (tap-self A on release)
+		if (ddx == 0 && ddy == 0) return 0;              // on the player tile -> stand (tap-self handled on release)
 		if (abs(ddx) > abs(ddy)) return ddx > 0 ? s_keyDir[0] : s_keyDir[1];
 		return ddy > 0 ? s_keyDir[2] : s_keyDir[3];
 	}
@@ -202,12 +232,16 @@ static u16 walk_update(bool touching, bool newPress, bool gvalid, int gx, int gy
 		int ddx = s_downGx / 16 - 7, ddy = s_downGy / 16 - 5;
 		s_touchFrames = 0;
 		if (tap && core && p) {
-			if (ddx == 0 && ddy == 0) s_aPulse = 3;        // tapped self -> A (interact/advance)
-			else if (plan_bfs(core, p, px, py, s_downPx + ddx, s_downPy + ddy)) {   // route to the tapped tile
+			if (ddx == 0 && ddy == 0) {                  // tapped self
+				if (s_tick - s_lastSelfTap < DOUBLE_FRAMES) s_startPulse = 3;   // double-tap self -> START
+				else s_aPulse = 3;                                              // single -> A (interact/advance)
+				s_lastSelfTap = s_tick;
+			} else if (plan_bfs(core, p, px, py, s_downPx + ddx, s_downPy + ddy)) {   // route to the tapped tile
 				s_walking = true; s_lpx = px; s_lpy = py; s_stall = 0;
 			}
 		}
-		if (s_aPulse > 0) { s_aPulse--; return 1 << GBAKEY_A; }
+		if (s_startPulse > 0) { s_startPulse--; return 1 << GBAKEY_START; }
+		if (s_aPulse > 0)     { s_aPulse--;     return 1 << GBAKEY_A; }
 	}
 
 	if (!s_walking || !core || !p) return 0;            // BFS path-follow (released, routing)
