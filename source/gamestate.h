@@ -58,6 +58,7 @@ typedef struct {
 	uint32_t partyTask;     // Task_HandleChooseMonInput (party input handler — field OR battle)
 	uint32_t yesNoTask;     // Task_HandleYesNoInput
 	uint32_t multiTask;     // Task_HandleMultichoiceInput
+	uint32_t selMenuTask;   // Task_HandleSelectionMenuInput (party SUMMARY/SWITCH/ITEM/CANCEL popup; uses sMenu)
 } GameProfile;
 
 // One-pass snapshot of the live game.
