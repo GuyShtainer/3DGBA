@@ -717,8 +717,16 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 			}
 			if (touchMode == TOUCH_SMART && sm.valid) {   // TEMP debug: confirm RAM reads on device
 				static const char* const CTXN[] = { "none", "field", "b.act", "b.move", "b.tgt", "party", "fmenu", "bag", "b.oth" };
-				char gs[64]; snprintf(gs, sizeof gs, "%s xy=%d,%d a=%d m=%d",
-				         CTXN[sm.ctx], sm.px, sm.py, sm.actionCursor, sm.moveCursor);
+				char kb[8]; int ki = 0;   // decode the key touch is injecting this frame (on-device diagnostic)
+				if (tk & (1 << GBAKEY_UP))    kb[ki++] = 'U';
+				if (tk & (1 << GBAKEY_DOWN))  kb[ki++] = 'D';
+				if (tk & (1 << GBAKEY_LEFT))  kb[ki++] = 'L';
+				if (tk & (1 << GBAKEY_RIGHT)) kb[ki++] = 'R';
+				if (tk & (1 << GBAKEY_A))     kb[ki++] = 'A';
+				if (tk & (1 << GBAKEY_B))     kb[ki++] = 'B';
+				if (!ki) kb[ki++] = '-';
+				kb[ki] = '\0';
+				char gs[64]; snprintf(gs, sizeof gs, "%s p=%d,%d key=%s", CTXN[sm.ctx], sm.px, sm.py, kb);
 				C2D_Text tg; C2D_TextParse(&tg, txtBuf, gs); C2D_TextOptimize(&tg);
 				C2D_DrawText(&tg, C2D_WithColor, 4.0f, 224.0f, 0.0f, 0.40f, 0.40f, C2D_Color32(0x42, 0xF5, 0xD0, 0xFF));
 			}

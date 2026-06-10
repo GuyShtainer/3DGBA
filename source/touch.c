@@ -109,111 +109,21 @@ static int battler_index_for_pos(const TouchSmart* sm, int pos) {
 	return -1;
 }
 
-// =================== SMART: tap-to-walk with BFS pathfinding =================
-// Tap (or slide) a tile -> BFS over the live collision grid -> follow the route, holding the D-pad
-// toward each node. Continuously RE-TARGETS while the screen is touched (drag to steer; on a bike the
-// held screen tile maps to a moving world tile, so you keep riding that way). Tap your own tile = A.
-#define WBOX  65          // BFS window edge (tiles); ~+-32 around the player (doubled)
-#define WHALF 32
-#define KEY_DIR(d) (s_keyDir[d])
-static const u16 s_keyDir[4] = { 1 << GBAKEY_RIGHT, 1 << GBAKEY_LEFT, 1 << GBAKEY_DOWN, 1 << GBAKEY_UP };
+// ======================= SMART: directional tap-to-walk =====================
+// The overworld camera centers the player at screen tile (7,5). Touch (or hold/slide) and the player
+// steers toward the touch — dominant of the 4 axes, like a touch d-pad centered on you. Hold to keep
+// walking that way (any speed, incl. bike); release to stop. Tap your own tile = A (interact/advance).
+static int s_aPulse = 0;
+static void walk_reset(void) { s_aPulse = 0; }
 
-static bool s_walking = false;
-static int  s_goalX = -1, s_goalY = -1, s_stall, s_lpx, s_lpy, s_aPulse, s_replans;
-static int  s_mapW, s_mapH; static uint32_t s_mapPtr;
-static int8_t s_pathDir[WBOX * WBOX]; static int s_pathLen, s_pathPos;
-static void walk_reset(void) { s_walking = false; s_stall = 0; s_pathLen = s_pathPos = 0; s_goalX = s_goalY = -1; }
-
-static bool map_read(GbaCore* core, const GameProfile* p, int* w, int* h, uint32_t* ptr) {
-	if (!p) return false;
-	*w   = (int32_t)gbacore_read32(core, p->mapLayout + 0);
-	*h   = (int32_t)gbacore_read32(core, p->mapLayout + 4);
-	*ptr =          gbacore_read32(core, p->mapLayout + 8);
-	return (*ptr >> 24) == 0x02 && *w > 0 && *w <= 512 && *h > 0 && *h <= 512;
-}
-static bool walkable(GbaCore* core, uint32_t ptr, int w, int h, int wx, int wy) {
-	int gx_ = wx + 7, gy_ = wy + 7;                                  // MAP_OFFSET border
-	if (gx_ < 0 || gx_ >= w || gy_ < 0 || gy_ >= h) return false;
-	uint16_t block = gbacore_read16(core, ptr + 2u * (uint32_t)(gx_ + w * gy_));
-	if (block == 0x03FF) return false;                              // MAPGRID_UNDEFINED
-	return ((block & 0x0C00) >> 10) == 0;                           // collision bits clear
-}
-
-// BFS from (sx,sy) to (gxw,gyw) within the +-WHALF window. Fills s_pathDir/s_pathLen on success.
-static bool plan_bfs(GbaCore* core, const GameProfile* p, int sx, int sy, int gxw, int gyw) {
-	int w, h; uint32_t ptr;
-	if (!map_read(core, p, &w, &h, &ptr)) return false;
-	if (abs(gxw - sx) > WHALF || abs(gyw - sy) > WHALF) return false;
-	// (a blocked goal is allowed as a TERMINAL below — so tapping a door/ladder/NPC/sign routes to it
-	//  and steps in, triggering the warp/interact; the map-change check then ends the walk.)
-	s_mapW = w; s_mapH = h; s_mapPtr = ptr;
-
-	static int16_t parent[WBOX * WBOX];
-	static int8_t  dirOf[WBOX * WBOX];
-	static int16_t q[WBOX * WBOX];
-	for (int i = 0; i < WBOX * WBOX; i++) parent[i] = -1;
-	const int dxs[4] = { 1, -1, 0, 0 }, dys[4] = { 0, 0, 1, -1 };
-	int start = WHALF + WBOX * WHALF;
-	int goal  = (gxw - sx + WHALF) + WBOX * (gyw - sy + WHALF);
-	int head = 0, tail = 0;
-	parent[start] = start; q[tail++] = start;
-	bool found = false;
-	while (head < tail) {
-		int cur = q[head++];
-		if (cur == goal) { found = true; break; }
-		int clx = cur % WBOX, cly = cur / WBOX;
-		for (int d = 0; d < 4; d++) {
-			int nlx = clx + dxs[d], nly = cly + dys[d];
-			if (nlx < 0 || nlx >= WBOX || nly < 0 || nly >= WBOX) continue;
-			int nidx = nlx + WBOX * nly;
-			if (parent[nidx] != -1) continue;
-			if (nidx != goal && !walkable(core, ptr, w, h, sx + nlx - WHALF, sy + nly - WHALF)) continue;
-			parent[nidx] = cur; dirOf[nidx] = (int8_t)d; q[tail++] = nidx;
-		}
-	}
-	if (!found) return false;
-	int n = 0, cur = goal;
-	static int8_t tmp[WBOX * WBOX];
-	while (cur != start) { tmp[n++] = dirOf[cur]; cur = parent[cur]; if (n >= WBOX * WBOX) return false; }
-	s_pathLen = n; s_pathPos = 0;
-	for (int i = 0; i < n; i++) s_pathDir[i] = tmp[n - 1 - i];      // reverse to start->goal order
-	s_goalX = gxw; s_goalY = gyw;
-	return true;
-}
-
-static u16 walk_update(bool touching, bool newPress, bool gvalid, int gx, int gy,
-                       int px, int py, GbaCore* core, const GameProfile* p) {
-	if (px < 0 || py < 0 || !core || !p) { walk_reset(); s_aPulse = 0; return 0; }
-	bool onSelf = gvalid && (gx / 16 == 7) && (gy / 16 == 5);       // player is centered at tile (7,5)
-	if (newPress && onSelf) { s_aPulse = 3; walk_reset(); }         // tap self -> interact/advance (A)
+static u16 walk_update(bool touching, bool newPress, bool gvalid, int gx, int gy) {
+	int ddx = gvalid ? (gx / 16 - 7) : 0, ddy = gvalid ? (gy / 16 - 5) : 0;
+	if (newPress && gvalid && ddx == 0 && ddy == 0) s_aPulse = 3;   // tapped self -> interact/advance (A)
 	if (s_aPulse > 0) { s_aPulse--; return 1 << GBAKEY_A; }
-
-	// Continuous (re)target while the finger is down: route to the world tile under it; re-plan only
-	// when that tile changes (or we're idle). Released -> keep following the last path to its goal.
-	if (touching && gvalid && !onSelf) {
-		int twx = px + (gx / 16 - 7), twy = py + (gy / 16 - 5);
-		if (!s_walking || twx != s_goalX || twy != s_goalY) {
-			if (plan_bfs(core, p, px, py, twx, twy)) {
-				s_walking = true; s_stall = 0; s_lpx = px; s_lpy = py; s_replans = 0;
-			}
-		}
-	}
-	if (!s_walking) return 0;
-
-	int w, h; uint32_t ptr;                                         // map changed (door/warp) -> stop
-	if (!map_read(core, p, &w, &h, &ptr) || ptr != s_mapPtr || w != s_mapW || h != s_mapH) { walk_reset(); return 0; }
-	if ((px == s_goalX && py == s_goalY) || s_pathPos >= s_pathLen) { walk_reset(); return 0; }
-
-	if (px != s_lpx || py != s_lpy) {                              // a step completed -> advance the path
-		s_pathPos++; s_lpx = px; s_lpy = py; s_stall = 0;
-		if (s_pathPos >= s_pathLen) { walk_reset(); return 0; }
-	} else if (++s_stall > 24) {                                    // blocked (NPC/ledge/elevation/door)
-		if (s_replans < 2 && plan_bfs(core, p, px, py, s_goalX, s_goalY)) { s_replans++; s_stall = 0; }
-		else { walk_reset(); s_aPulse = 3; return 0; }             // give up -> face + A (tap an NPC/sign)
-	}
-	int d = s_pathDir[s_pathPos];
-	if (d < 0 || d > 3) { walk_reset(); return 0; }
-	return KEY_DIR(d);
+	if (!touching || !gvalid) return 0;
+	if (ddx == 0 && ddy == 0) return 0;                            // holding on yourself -> stand still
+	if (abs(ddx) > abs(ddy)) return ddx > 0 ? (1 << GBAKEY_RIGHT) : (1 << GBAKEY_LEFT);
+	return ddy > 0 ? (1 << GBAKEY_DOWN) : (1 << GBAKEY_UP);
 }
 
 // =================== SMART: general field menu (sMenu) =======================
@@ -328,7 +238,7 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 		return select_pulse(sm->core, sm->prof ? sm->prof->partyMenu + 0x09 : 0, &s_party, &s_partyTick);
 	case GCTX_OVERWORLD:
 		battle_reset(); party_reset(); target_reset(); fmenu_reset(); bag_reset();
-		return walk_update(touching, newPress, gvalid, gx, gy, sm->px, sm->py, sm->core, sm->prof);
+		return walk_update(touching, newPress, gvalid, gx, gy);
 	case GCTX_FIELDMENU:
 		battle_reset(); walk_reset(); party_reset(); target_reset(); bag_reset();
 		if (newPress && gvalid && sm->prof) { int i = hit_fieldmenu(sm->core, sm->prof, gx, gy); if (i >= 0) { s_fmenu = i; s_fmenuTick = 0; } }
