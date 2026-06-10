@@ -59,6 +59,7 @@ typedef struct {
 	uint32_t yesNoTask;     // Task_HandleYesNoInput
 	uint32_t multiTask;     // Task_HandleMultichoiceInput
 	uint32_t selMenuTask;   // Task_HandleSelectionMenuInput (party SUMMARY/SWITCH/ITEM/CANCEL popup; uses sMenu)
+	uint32_t startMenuTask; // Task_ShowStartMenu / Task_StartMenuHandleInput (active only while START menu is up)
 } GameProfile;
 
 // One-pass snapshot of the live game.
