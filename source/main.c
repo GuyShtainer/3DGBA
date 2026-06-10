@@ -208,6 +208,33 @@ static bool touch_to_gba(int px, int py, int mode, int* gx, int* gy) {
 #define PRE_H    (GBA_H * PRESCALE)   // 320
 #define PRE_TEX  512
 
+// Stereoscopic single-game depth: pop elements forward per eye on the ALREADY-composited frame
+// (no extra emulation pass). depth3d.overworld is snapshotted in the race-safe window. M2 = player.
+typedef struct { bool overworld; } DepthSnap;
+#define POP3D_PLAYER_GX 112   // player tile (7,5) -> sprite rect (16x32, head 16px above the tile)
+#define POP3D_PLAYER_GY 64
+static void calc_xform(int mode, float sW, float sH, float* ox, float* oy, float* sx, float* sy) {
+	if (mode == SCALE_1X)           { *sx = *sy = 1.0f; }
+	else if (mode == SCALE_STRETCH) { *sx = sW / GBA_W; *sy = sH / GBA_H; }
+	else { float f = (sW / GBA_W < sH / GBA_H) ? sW / GBA_W : sH / GBA_H; *sx = *sy = f; }
+	*ox = (sW - GBA_W * *sx) / 2.0f;
+	*oy = (sH - GBA_H * *sy) / 2.0f;
+}
+// Re-draw a sub-rect of the GBA frame texture shifted horizontally (the per-eye pop overdraw).
+static void draw_pop(C3D_Tex* tex, int gx, int gy, int gw, int gh,
+                     float ox, float oy, float sx, float sy, float xoff) {
+	if (gx < 0) { gw += gx; gx = 0; }
+	if (gy < 0) { gh += gy; gy = 0; }
+	if (gx + gw > GBA_W) gw = GBA_W - gx;
+	if (gy + gh > GBA_H) gh = GBA_H - gy;
+	if (gw <= 0 || gh <= 0) return;
+	Tex3DS_SubTexture st = { (u16)gw, (u16)gh, (float)gx / 256.0f, 1.0f - (float)gy / 256.0f,
+	                        (float)(gx + gw) / 256.0f, 1.0f - (float)(gy + gh) / 256.0f };
+	C2D_Image img = { tex, &st };
+	C3D_TexSetFilter(tex, GPU_NEAREST, GPU_NEAREST);
+	C2D_DrawImageAt(img, ox + gx * sx + xoff, oy + gy * sy, 0.0f, NULL, sx, sy);
+}
+
 // Draw one game to `screen` at the current scale + filter, leaving `screen` bound so the
 // caller can draw overlays (focus bar, toast, menu) on top. `preTgt`/`preTex` are the shared
 // offscreen prescale buffer, reused per screen (sequential on the render thread -> no race).
@@ -358,6 +385,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	int focused = 0;
 	bool menuOpen = false;
 	bool workersRunning = false;   // pipeline: a non-link frame is computing while we render the last
+	DepthSnap depth3d = { false };  // top game's overworld state for stereoscopic depth (M2)
 	int  menuSel = 0;
 	int  result = SESSION_QUIT;
 	gfxSet3D(true);   // enable stereoscopic top screen; the right eye is driven below (slider-gated)
@@ -479,6 +507,10 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 						}
 					}
 					tk = touch_update(touchMode, touching, tp.px, tp.py, gx, gy, gvalid, &sm);
+				}
+				{   // stereoscopic depth: read the TOP game's overworld state while cores are parked
+					GbaCore* topCore = swapped ? emuB.core : emuA.core;
+					GameState ts; depth3d.overworld = game_read(topCore, profile_for(topCore), &ts) && ts.ctx == GCTX_OVERWORLD;
 				}
 				emuA.keys = ((focused == 0) ? g : 0) | (swapped ? tk : 0);
 				emuB.keys = ((focused == 1) ? g : 0) | (swapped ? 0 : tk);
@@ -687,7 +719,13 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
 
 		// top screen (sharp-bilinear two-pass when applicable). render_game leaves `top` bound.
+		float slider3d = osGet3DSliderState();
+		bool pop3d = slider3d > 0.03f && depth3d.overworld && topG->core;
 		render_game(topG, top, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], topTint, clrBg);
+		if (pop3d) {   // LEFT eye: player pops forward (negative disparity); HUD draws on top, at screen plane
+			float ox, oy, sx, sy; calc_xform(scaleMode[0], 400.0f, 240.0f, &ox, &oy, &sx, &sy);
+			C2D_SceneBegin(top); draw_pop(&topG->tex, POP3D_PLAYER_GX, POP3D_PLAYER_GY, 16, 32, ox, oy, sx, sy, -4.0f * slider3d);
+		}
 		if (!menuOpen) {
 			if (hudMode & 1) {
 				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 400.0f, 14.0f, THEME_HUD_BAR);
@@ -701,12 +739,13 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			if (toastTimer > 0) C2D_DrawText(&tToast, C2D_WithColor, 8.0f, (hudMode & 1) ? 20.0f : 8.0f, 0.0f, 0.5f, 0.5f, clrHi);
 		}
 
-			// top RIGHT eye (stereoscopic 3D). Slider up -> show the BOTTOM game here, so both games
-			// share the top screen in 3D (per-eye dual-game). Slider down -> mirror the left eye (flat).
-			// Carries the game only (no HUD), at the top screen's scale/filter.
-			float slider3d = osGet3DSliderState();
-			EmuInstance* rightG = (slider3d > 0.03f) ? botG : topG;
-			render_game(rightG, topR, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], NULL, clrBg);
+		// top RIGHT eye = the SAME (top) game -> single-game stereoscopic depth. Player pops forward
+		// (positive disparity). (Per-eye dual-game retired; can return later as a menu toggle.)
+		render_game(topG, topR, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], NULL, clrBg);
+		if (pop3d) {
+			float ox, oy, sx, sy; calc_xform(scaleMode[0], 400.0f, 240.0f, &ox, &oy, &sx, &sy);
+			C2D_SceneBegin(topR); draw_pop(&topG->tex, POP3D_PLAYER_GX, POP3D_PLAYER_GY, 16, 32, ox, oy, sx, sy, +4.0f * slider3d);
+		}
 
 		// bottom screen (+ menu overlay when open). render_game leaves `bot` bound.
 		render_game(botG, bot, preTgt, &preTex, 320.0f, 240.0f, scaleMode[1], smooth[1], botTint, clrBg);
