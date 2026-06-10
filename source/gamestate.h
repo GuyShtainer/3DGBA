@@ -60,6 +60,7 @@ typedef struct {
 	uint32_t multiTask;     // Task_HandleMultichoiceInput
 	uint32_t selMenuTask;   // Task_HandleSelectionMenuInput (party SUMMARY/SWITCH/ITEM/CANCEL popup; uses sMenu)
 	uint32_t startMenuTask; // Task_ShowStartMenu / Task_StartMenuHandleInput (active only while START menu is up)
+	uint32_t mapHeader;     // gMapHeader (BPEE 0x02037318) for stereoscopic scenery depth; 0 = no M4
 } GameProfile;
 
 // One-pass snapshot of the live game.

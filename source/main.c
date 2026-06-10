@@ -215,10 +215,13 @@ typedef struct {
 	bool overworld;
 	int  nspr;
 	struct { short x, y; unsigned char w, h; } spr[DEPTH_MAX_SPR];   // on-screen OAM rects to pop
+	unsigned char tdepth[10][15];   // M4: smoothed per-visible-tile scenery pop px (0 = ground plane)
 } DepthSnap;
 #define POP3D_PLAYER_GX 112   // player tile (7,5) -> sprite rect (16x32, head 16px above the tile)
 #define POP3D_PLAYER_GY 64
 #define POP3D_PX  4.0f        // character pop disparity (px) at full slider (left +, right - = pops OUT)
+#define ENV3D_NORMAL 6        // foreground scenery tile (tree/roof/wall) pop px @ full slider
+#define ENV3D_SPLIT  3        // ledge / low fence mid pop
 static void calc_xform(int mode, float sW, float sH, float* ox, float* oy, float* sx, float* sy) {
 	if (mode == SCALE_1X)           { *sx = *sy = 1.0f; }
 	else if (mode == SCALE_STRETCH) { *sx = sW / GBA_W; *sy = sH / GBA_H; }
@@ -250,6 +253,67 @@ static void pop_eye(C3D_RenderTarget* tgt, EmuInstance* g, const DepthSnap* d, i
 			draw_pop(&g->tex, d->spr[i].x, d->spr[i].y, d->spr[i].w, d->spr[i].h, ox, oy, sx, sy, disp);
 	else
 		draw_pop(&g->tex, POP3D_PLAYER_GX, POP3D_PLAYER_GY, 16, 32, ox, oy, sx, sy, disp);
+}
+
+// M4: metatile id -> layer type (0 NORMAL=foreground / 1 COVERED=ground / 2 SPLIT=mid) via the
+// gMapHeader -> MapLayout -> Tileset -> metatileAttributes chain. Cached per map + memoized by id.
+static uint8_t metatile_layer(GbaCore* c, const GameProfile* p, uint16_t id) {
+	static uint32_t cLayout = 0, cPri = 0, cSec = 0;
+	static uint8_t  cLayer[1024], cValid[1024];
+	if (!p->mapHeader || id >= 0x03FF) return 1;                 // no M4 / sentinel border -> ground
+	uint32_t layoutP = gbacore_read32(c, p->mapHeader + 0x00);   // MapHeader.mapLayout
+	if (layoutP != cLayout) {                                    // map changed -> rebuild bases + memo
+		cLayout = layoutP;
+		uint32_t tsP = gbacore_read32(c, layoutP + 0x10), tsS = gbacore_read32(c, layoutP + 0x14);
+		cPri = tsP ? gbacore_read32(c, tsP + 0x10) : 0;            // Tileset.metatileAttributes
+		cSec = tsS ? gbacore_read32(c, tsS + 0x10) : 0;
+		memset(cValid, 0, sizeof cValid);
+	}
+	if (cValid[id]) return cLayer[id];
+	uint32_t attrP = (id < 512) ? cPri : cSec;
+	uint8_t  layer = 1;
+	if (attrP) { uint16_t a = gbacore_read16(c, attrP + 2u * (uint32_t)((id < 512) ? id : id - 512)); layer = (a & 0xF000) >> 12; }
+	cLayer[id] = layer; cValid[id] = 1;
+	return layer;
+}
+
+// M4: build the smoothed scenery-depth grid for the visible 15x10 tiles (cores parked; safe reads).
+static void build_depth_grid(GbaCore* core, const GameProfile* p, int px, int py, DepthSnap* d) {
+	memset(d->tdepth, 0, sizeof d->tdepth);
+	if (!core || !p || !p->mapHeader || px < 0 || py < 0) return;
+	int w = (int32_t)gbacore_read32(core, p->mapLayout + 0);
+	int h = (int32_t)gbacore_read32(core, p->mapLayout + 4);
+	uint32_t ptr = gbacore_read32(core, p->mapLayout + 8);
+	if ((ptr >> 24) != 0x02 || w <= 0 || w > 512 || h <= 0 || h > 512) return;
+	unsigned char raw[10][15];
+	for (int r = 0; r < 10; r++) for (int c = 0; c < 15; c++) {
+		int gx = px + c, gy = py + r + 2;                          // visible tile (c,r) -> map grid (see kb)
+		unsigned char dep = 0;
+		if (gx >= 0 && gx < w && gy >= 0 && gy < h) {
+			uint16_t id = gbacore_read16(core, ptr + 2u * (uint32_t)(gx + w * gy)) & 0x03FF;
+			uint8_t layer = metatile_layer(core, p, id);
+			dep = (layer == 0) ? ENV3D_NORMAL : (layer == 2) ? ENV3D_SPLIT : 0;
+		}
+		raw[r][c] = dep;
+	}
+	for (int r = 0; r < 10; r++) for (int c = 0; c < 15; c++) {   // 3x3 box average -> smooth arches/slopes
+		int sum = 0, n = 0;
+		for (int dr = -1; dr <= 1; dr++) for (int dc = -1; dc <= 1; dc++) {
+			int rr = r + dr, cc = c + dc;
+			if (rr >= 0 && rr < 10 && cc >= 0 && cc < 15) { sum += raw[rr][cc]; n++; }
+		}
+		d->tdepth[r][c] = (unsigned char)(sum / n);
+	}
+}
+
+// M4: pop the foreground scenery tiles forward on one eye (shifted 16x16 sub-rect overdraws).
+static void warp_scenery_eye(C3D_RenderTarget* tgt, EmuInstance* g, const DepthSnap* d, int mode, float dispUnit) {
+	float ox, oy, sx, sy; calc_xform(mode, 400.0f, 240.0f, &ox, &oy, &sx, &sy);
+	C2D_SceneBegin(tgt);
+	for (int r = 0; r < 10; r++) for (int c = 0; c < 15; c++) {
+		int dep = d->tdepth[r][c];
+		if (dep > 0) draw_pop(&g->tex, c * 16, r * 16, 16, 16, ox, oy, sx, sy, dispUnit * dep);
+	}
 }
 
 // Draw one game to `screen` at the current scale + filter, leaving `screen` bound so the
@@ -527,8 +591,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 				}
 				{   // stereoscopic depth: TOP game overworld state + on-screen OAM rects (cores parked)
 					GbaCore* topCore = swapped ? emuB.core : emuA.core;
-					GameState ts; depth3d.overworld = game_read(topCore, profile_for(topCore), &ts) && ts.ctx == GCTX_OVERWORLD;
-					depth3d.nspr = 0;
+					const GameProfile* tprof = profile_for(topCore);
+					GameState ts; depth3d.overworld = game_read(topCore, tprof, &ts) && ts.ctx == GCTX_OVERWORLD;
+					depth3d.nspr = 0; memset(depth3d.tdepth, 0, sizeof depth3d.tdepth);
 					if (depth3d.overworld && topCore) {
 						static const unsigned char SW[3][4] = {{8,16,32,64},{16,32,32,64},{8,8,16,32}};
 						static const unsigned char SH[3][4] = {{8,16,32,64},{8,8,16,32},{16,32,32,64}};
@@ -548,6 +613,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 							depth3d.spr[depth3d.nspr].w = (unsigned char)w; depth3d.spr[depth3d.nspr].h = (unsigned char)h;
 							depth3d.nspr++;
 						}
+						build_depth_grid(topCore, tprof, ts.px, ts.py, &depth3d);   // M4 scenery depth
 					}
 				}
 				emuA.keys = ((focused == 0) ? g : 0) | (swapped ? tk : 0);
@@ -761,6 +827,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		bool pop3d = slider3d > 0.03f && depth3d.overworld && topG->core;
 		render_game(topG, top, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], topTint, clrBg);
 		if (pop3d) pop_eye(top, topG, &depth3d, scaleMode[0], +POP3D_PX * slider3d);   // LEFT eye shifts RIGHT -> crossed disparity -> pops OUT
+		if (pop3d) warp_scenery_eye(top, topG, &depth3d, scaleMode[0], +slider3d);     // foreground scenery pops too
 		if (!menuOpen) {
 			if (hudMode & 1) {
 				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 400.0f, 14.0f, THEME_HUD_BAR);
@@ -778,6 +845,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		// (positive disparity). (Per-eye dual-game retired; can return later as a menu toggle.)
 		render_game(topG, topR, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], NULL, clrBg);
 		if (pop3d) pop_eye(topR, topG, &depth3d, scaleMode[0], -POP3D_PX * slider3d);   // RIGHT eye shifts LEFT
+		if (pop3d) warp_scenery_eye(topR, topG, &depth3d, scaleMode[0], -slider3d);
 
 		// bottom screen (+ menu overlay when open). render_game leaves `bot` bound.
 		render_game(botG, bot, preTgt, &preTex, 320.0f, 240.0f, scaleMode[1], smooth[1], botTint, clrBg);
