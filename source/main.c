@@ -380,6 +380,74 @@ static void warp_scenery_eye(C3D_RenderTarget* tgt, EmuInstance* g, const DepthS
 	}
 }
 
+// ---- HD-2D M4: time-of-day directional lighting + day/night color grade --------------------
+// A per-tile light field modulates the overworld frame: a key light whose colour & direction
+// track the time of day (warm low-angle dawn/dusk, bright neutral noon, dim blue night) shades
+// the terrain by its surface normal (from the tdepth elevation field) and is drawn as a gouraud
+// MULTIPLY mesh over the frame. Pure citro2d (no shader); analytic normals -- the study's
+// AI-baked-normal atlas is the deferred optional upgrade. Cheap: ~150 gouraud quads per eye.
+typedef struct { float r, g, b, lx, ly, lz, amb, dif; } LightEnv;
+
+// Interpolate the key-light for hour-of-day hf in [0,24). L is a screen-space direction
+// (x: +east/-west, y: +down, z: out toward the viewer); ground faces +z.
+static LightEnv light_for_hour(float hf) {
+	static const float K[][9] = {   // hour, r,g,b(0..1), lx,ly,lz, ambient, diffuse
+		{  0.f, 0.59f,0.65f,0.82f,  0.00f,-0.25f,0.97f, 0.52f,0.30f },   // deep night (blue)
+		{  5.f, 0.62f,0.63f,0.78f,  0.50f,-0.20f,0.84f, 0.55f,0.32f },   // pre-dawn
+		{  7.f, 1.00f,0.78f,0.56f,  0.72f,-0.18f,0.67f, 0.74f,0.40f },   // dawn (warm, low east)
+		{ 12.f, 1.00f,0.99f,0.96f,  0.05f,-0.10f,0.99f, 0.95f,0.34f },   // noon (near-white, high)
+		{ 17.f, 1.00f,0.82f,0.58f, -0.62f,-0.18f,0.76f, 0.85f,0.40f },   // golden hour (warm, low west)
+		{ 19.f, 0.92f,0.60f,0.48f, -0.74f,-0.16f,0.65f, 0.66f,0.38f },   // dusk (orange-red)
+		{ 21.f, 0.60f,0.64f,0.82f, -0.20f,-0.22f,0.95f, 0.54f,0.30f },   // night falls
+		{ 24.f, 0.59f,0.65f,0.82f,  0.00f,-0.25f,0.97f, 0.52f,0.30f },   // wrap == 0h
+	};
+	int n = sizeof K / sizeof K[0], i = 0;
+	while (i < n - 1 && hf >= K[i + 1][0]) i++;
+	const float* a = K[i]; const float* b = K[i + 1];
+	float u = (b[0] > a[0]) ? (hf - a[0]) / (b[0] - a[0]) : 0.0f;
+	LightEnv e;
+	e.r = a[1]+(b[1]-a[1])*u; e.g = a[2]+(b[2]-a[2])*u; e.b = a[3]+(b[3]-a[3])*u;
+	e.lx= a[4]+(b[4]-a[4])*u; e.ly= a[5]+(b[5]-a[5])*u; e.lz= a[6]+(b[6]-a[6])*u;
+	e.amb=a[7]+(b[7]-a[7])*u; e.dif=a[8]+(b[8]-a[8])*u;
+	float il = 1.0f / sqrtf(e.lx*e.lx + e.ly*e.ly + e.lz*e.lz + 1e-6f);
+	e.lx*=il; e.ly*=il; e.lz*=il;
+	return e;
+}
+
+// Per-vertex tint = lightColor * (ambient + diffuse*max(0,N.L)); N from the tdepth gradient at
+// the grid vertex (raised terrain catches side light). Returned as a citro2d colour for MULTIPLY.
+static u32 light_vert(const DepthSnap* d, const LightEnv* e, int vr, int vc) {
+	#define LCELL(R,C) d->tdepth[(R)<0?0:((R)>9?9:(R))][(C)<0?0:((C)>14?14:(C))]
+	float lf = (LCELL(vr-1, vc-1) + LCELL(vr, vc-1)) * 0.5f;   // left  column avg
+	float rt = (LCELL(vr-1, vc)   + LCELL(vr, vc))   * 0.5f;   // right column avg
+	float up = (LCELL(vr-1, vc-1) + LCELL(vr-1, vc)) * 0.5f;   // upper row avg
+	float dn = (LCELL(vr, vc-1)   + LCELL(vr, vc))   * 0.5f;   // lower row avg
+	#undef LCELL
+	const float kSlope = 0.18f;                       // depth-px -> normal tilt
+	float nx = -(rt - lf) * kSlope, ny = -(dn - up) * kSlope, nz = 1.0f;
+	float ndl = (nx*e->lx + ny*e->ly + nz*e->lz) / sqrtf(nx*nx + ny*ny + nz*nz);
+	if (ndl < 0.0f) ndl = 0.0f;
+	float s = e->amb + e->dif * ndl;
+	int R = (int)(e->r*s*255.0f + 0.5f), G = (int)(e->g*s*255.0f + 0.5f), B = (int)(e->b*s*255.0f + 0.5f);
+	if (R > 255) R = 255; if (G > 255) G = 255; if (B > 255) B = 255;
+	return C2D_Color32((u8)R, (u8)G, (u8)B, 0xFF);
+}
+
+// Draw the light field over one eye as a MULTIPLY gouraud mesh (15x10 quads over the frame box).
+static void light_pass(C3D_RenderTarget* tgt, const DepthSnap* d, int mode, const LightEnv* e) {
+	float ox, oy, sx, sy; calc_xform(mode, 400.0f, 240.0f, &ox, &oy, &sx, &sy);
+	u32 col[11][16];
+	for (int vr = 0; vr <= 10; vr++) for (int vc = 0; vc <= 15; vc++) col[vr][vc] = light_vert(d, e, vr, vc);
+	C2D_SceneBegin(tgt);
+	C2D_Flush();   // commit the pending image batch before swapping the blend equation
+	C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_DST_COLOR, GPU_ZERO, GPU_DST_COLOR, GPU_ZERO);  // dst*src = MULTIPLY
+	for (int r = 0; r < 10; r++) for (int c = 0; c < 15; c++)
+		C2D_DrawRectangle(ox + c*16*sx, oy + r*16*sy, 0.0f, 16*sx, 16*sy,
+		                  col[r][c], col[r][c+1], col[r+1][c], col[r+1][c+1]);
+	C2D_Flush();   // commit the mesh while MULTIPLY is still active, then restore citro2d's blend
+	C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);
+}
+
 // M2: continuous vertex-grid scenery warp (one mesh per eye). Verts sit at 16px tile corners
 // and shift by the smoothed tile depth, so depth steps STRETCH the texture between cells
 // instead of tearing at tile edges (the per-tile quad shift's artifact). citro2d has no mesh
@@ -739,17 +807,18 @@ typedef struct {
 	s32 frameskip;
 	s32 dof;
 	s32 bloom;
+	s32 light;
 } Settings;
 
 static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, int* hudMode,
-                          int* audioMode, int* volA, int* volB, int* touchMode, bool* fsOn, bool* dofOn, bool* bloomOn) {
+                          int* audioMode, int* volA, int* volB, int* touchMode, bool* fsOn, bool* dofOn, bool* bloomOn, bool* lightOn) {
 	FILE* f = fopen(SETTINGS_PATH, "rb");
 	if (!f) return;
 	Settings s;
 	size_t n = fread(&s, 1, sizeof s, f);
 	fclose(f);
-	size_t noBloom = sizeof s - sizeof s.bloom, noDof = noBloom - sizeof s.dof;
-	if ((n != sizeof s && n != noBloom && n != noDof) || s.magic != SETTINGS_MAGIC) return;   // tolerate older files
+	size_t noLight = sizeof s - sizeof s.light, noBloom = noLight - sizeof s.bloom, noDof = noBloom - sizeof s.dof;
+	if ((n != sizeof s && n != noLight && n != noBloom && n != noDof) || s.magic != SETTINGS_MAGIC) return;   // tolerate older files
 	scaleMode[0] = ((unsigned)s.scaleMode[0]) % 3;
 	scaleMode[1] = ((unsigned)s.scaleMode[1]) % 3;
 	smooth[0] = s.smooth[0] != 0;
@@ -762,13 +831,14 @@ static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, int* 
 	*touchMode = ((unsigned)s.touchMode) % 3;
 	*fsOn = s.frameskip != 0;
 	if (n >= noBloom)  *dofOn   = s.dof != 0;     // older files keep the defaults
-	if (n == sizeof s) *bloomOn = s.bloom != 0;
+	if (n >= noLight)  *bloomOn = s.bloom != 0;
+	if (n == sizeof s) *lightOn = s.light != 0;
 }
 
 static void settings_save(const int scaleMode[2], const bool smooth[2], bool swapped, int hudMode,
-                          int audioMode, int volA, int volB, int touchMode, bool fsOn, bool dofOn, bool bloomOn) {
+                          int audioMode, int volA, int volB, int touchMode, bool fsOn, bool dofOn, bool bloomOn, bool lightOn) {
 	Settings s = { SETTINGS_MAGIC, { scaleMode[0], scaleMode[1] },
-	               { smooth[0], smooth[1] }, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn };
+	               { smooth[0], smooth[1] }, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn };
 	FILE* f = fopen(SETTINGS_PATH, "wb");
 	if (!f) return;
 	fwrite(&s, 1, sizeof s, f);
@@ -780,9 +850,9 @@ enum { SESSION_CHANGE, SESSION_QUIT };
 static const char* MENU_ITEMS[] = {
 	"Resume", "Link", "Audio", "Touch", "Frameskip", "Toggle HUD", "Swap screens",
 	"Save state", "Load state", "Load .sav (focused)", "Mute", "Pause", "DoF",
-	"Bloom", "Change games", "Quit"
+	"Bloom", "Light", "Change games", "Quit"
 };
-#define MENU_N 16
+#define MENU_N 17
 #define MENU_LINK_IDX  1   // dynamic label ("Link: off/on")
 #define MENU_AUDIO_IDX 2   // dynamic label ("Audio: <mode>")
 #define MENU_TOUCH_IDX 3   // dynamic label ("Touch: on/off")
@@ -792,6 +862,7 @@ static const char* MENU_ITEMS[] = {
 #define MENU_HUD_IDX   5   // dynamic label ("HUD: off/top/bottom/both")
 #define MENU_DOF_IDX   12  // dynamic label ("DoF: on/off")
 #define MENU_BLOOM_IDX 13  // dynamic label ("Bloom: on/off")
+#define MENU_LIGHT_IDX 14  // dynamic label ("Light: on/off")
 static const char* const HUD_NAMES[4] = { "off", "top", "bottom", "both" };
 
 // Run one play session with the two chosen ROMs. Returns SESSION_CHANGE (re-pick) or
@@ -849,6 +920,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	bool dofOn = true;      // HD-2D M1: tilt-shift depth-of-field on the top screen (overworld only)
 	float dofLvlTop = 1.0f, dofLvlBot = 1.0f;   // per-band engagement 0..1 (text kills its band's blur)
 	bool bloomOn = true;    // HD-2D M3: LDR bloom on the focused top screen (overworld only)
+	bool lightOn = true;    // HD-2D M4: time-of-day lighting on the overworld
 	float bloomLvl = 1.0f;  // eased like the DoF bands; any on-screen text kills the glow
 	bool muted = false;     // HARD mute (stops audio rendering, saves CPU)
 
@@ -883,7 +955,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	int audioMode = AUD_SOLO;
 	int volA = 256, volB = 256;
 
-	settings_load(scaleMode, smooth, &swapped, &hudMode, &audioMode, &volA, &volB, &touchMode, &fsOn, &dofOn, &bloomOn);   // restore prefs
+	settings_load(scaleMode, smooth, &swapped, &hudMode, &audioMode, &volA, &volB, &touchMode, &fsOn, &dofOn, &bloomOn, &lightOn);   // restore prefs
 	gbacore_set_frameskip(emuA.core, (fsOn && focused != 0) ? 2 : 0);   // unfocused-frameskip
 	gbacore_set_frameskip(emuB.core, (fsOn && focused != 1) ? 2 : 0);
 
@@ -932,7 +1004,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					swapped = !swapped;
 					snprintf(toast, sizeof toast, "Layout: %s", swapped ? "B top / A bottom" : "A top / B bottom");
 					toastTimer = 90;
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn);
 				}
 				int fs = swapped ? (focused ^ 1) : focused;   // screen the focused game sits on
 				if (kDown & KEY_ZR) {
@@ -940,14 +1012,14 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					snprintf(toast, sizeof toast, "%s scale: %s",
 					         fs == 0 ? "Top" : "Bottom", SCALE_NAMES[scaleMode[fs]]);
 					toastTimer = 90;
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn);
 				}
 				if (kDown & KEY_ZL) {
 					smooth[fs] = !smooth[fs];   // render_game sets the per-pass filters
 					snprintf(toast, sizeof toast, "%s filter: %s", fs == 0 ? "Top" : "Bottom",
 					         smooth[fs] ? "Smooth" : "Sharp-bilinear");
 					toastTimer = 90;
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn);
 				}
 				u16 g = to_gba_keys(kHeld);
 				// Touchscreen drives the BOTTOM game (A is on bottom iff swapped) as a POINTER on the
@@ -1034,22 +1106,22 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					*v += (kDown & (KEY_DRIGHT | KEY_CPAD_RIGHT)) ? 32 : -32;
 					if (*v < 0) *v = 0; else if (*v > 256) *v = 256;
 					snprintf(status, sizeof status, "Vol %c: %d%%", focused == 0 ? 'A' : 'B', *v * 100 / 256);
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn);
 				}
 				if (kDown & KEY_B) menuOpen = false;                 // resume
 			bool activate = (kDown & KEY_A) != 0;
 			if (kDown & KEY_TOUCH) {   // tap a button to select it
 				touchPosition mtp; hidTouchRead(&mtp);
 				for (int i = 0; i < MENU_N; i++) {
-					float bx = 4.0f + (i & 1) * 160.0f, by = 2.0f + (i >> 1) * 28.0f;
-					if (mtp.px >= bx && mtp.px < bx + 152 && mtp.py >= by && mtp.py < by + 27) {
+					float bx = 4.0f + (i & 1) * 160.0f, by = 2.0f + (i >> 1) * 25.0f;
+					if (mtp.px >= bx && mtp.px < bx + 152 && mtp.py >= by && mtp.py < by + 23) {
 						menuSel = i;
 						if (i == MENU_AUDIO_IDX) {   // 3 sub-buttons: A vol | B vol | mode (no full-cell activate)
 							int j = (int)((mtp.px - bx) / 50.5f); if (j < 0) j = 0; if (j > 2) j = 2;
 							if      (j == 0) { volA += 64; if (volA > 256) volA = 0; }
 							else if (j == 1) { volB += 64; if (volB > 256) volB = 0; }
 							else            { audioMode = (audioMode + 1) % 3; audio_reset_stream(); }
-							settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn);
+							settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn);
 						} else {
 							activate = true;
 						}
@@ -1086,30 +1158,30 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					audioMode = (audioMode + 1) % 3;
 					snprintf(status, sizeof status, "Audio: %s", AUDIO_NAMES[audioMode]);
 					audio_reset_stream();                        // clean cut between modes
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn);
 				}
 				else if (menuSel == 3) {                         // Touch mode (off / gamepad / smart)
 					touchMode = (touchMode + 1) % 3;
 					snprintf(status, sizeof status, "Touch: %s", TOUCH_NAMES[touchMode]);
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn);
 				}
 				else if (menuSel == 4) {                         // Frameskip (unfocused game)
 					fsOn = !fsOn;
 					gbacore_set_frameskip(emuA.core, (fsOn && focused != 0) ? 2 : 0);
 					gbacore_set_frameskip(emuB.core, (fsOn && focused != 1) ? 2 : 0);
 					snprintf(status, sizeof status, "Frameskip %s", fsOn ? "on" : "off");
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn);
 				}
 				else if (menuSel == 5) {                         // Toggle HUD
 					hudMode = (hudMode + 1) & 3;
 					snprintf(status, sizeof status, "HUD: %s", HUD_NAMES[hudMode]);
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn);
 				}
 				else if (menuSel == 6) {                         // Swap screens
 					swapped = !swapped; menuOpen = false;
 					snprintf(toast, sizeof toast, "Layout: %s", swapped ? "B top / A bottom" : "A top / B bottom");
 					toastTimer = 90;
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn);
 				}
 				else if (menuSel == 7) {                         // Save state (focused game)
 					EmuInstance* fg = (focused == 0) ? &emuA : &emuB;
@@ -1139,14 +1211,19 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 				else if (menuSel == MENU_DOF_IDX) {              // HD-2D tilt-shift DoF (top screen)
 					dofOn = !dofOn;
 					snprintf(status, sizeof status, "DoF %s", dofOn ? "on" : "off");
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn);
 				}
 				else if (menuSel == MENU_BLOOM_IDX) {            // HD-2D LDR bloom (focused top)
 					bloomOn = !bloomOn;
 					snprintf(status, sizeof status, "Bloom %s", bloomOn ? "on" : "off");
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn);
 				}
-				else if (menuSel == 14) { result = SESSION_CHANGE; break; }
+				else if (menuSel == MENU_LIGHT_IDX) {            // HD-2D time-of-day lighting
+					lightOn = !lightOn;
+					snprintf(status, sizeof status, "Light %s", lightOn ? "on" : "off");
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn);
+				}
+				else if (menuSel == 15) { result = SESSION_CHANGE; break; }
 				else                    { result = SESSION_QUIT;   break; }
 			}
 		}
@@ -1203,6 +1280,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 				} else if (i == MENU_BLOOM_IDX) {
 					snprintf(llabel, sizeof llabel, "Bloom: %s", bloomOn ? "on" : "off");
 					label = llabel;
+				} else if (i == MENU_LIGHT_IDX) {
+					snprintf(llabel, sizeof llabel, "Light: %s", lightOn ? "on" : "off");
+					label = llabel;
 				}
 				C2D_TextParse(&items[i], txtBuf, label); C2D_TextOptimize(&items[i]);
 			}
@@ -1245,6 +1325,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		bool dofPass = dofOn && dofTgtA && depth3d.overworld && topG->core && (dofLvlTop > 0.01f || dofLvlBot > 0.01f);
 		bool bloomPass = bloomOn && bloomTgt && dofTgtA && depth3d.overworld && topG->core
 		              && focScreen == 0 && bloomLvl > 0.01f;   // focused top only (study budget rule)
+		bool litPass = lightOn && depth3d.overworld && topG->core;   // time-of-day grade (slider-independent)
+		LightEnv lenv; if (litPass) { time_t _tt = time(NULL); struct tm* _lt = localtime(&_tt);
+			lenv = light_for_hour(_lt ? _lt->tm_hour + _lt->tm_min / 60.0f : 12.0f); }
 		if (dofPass || bloomPass) dof_prepare(&topG->tex, dofTgtA);   // shared half-res copy (DoF + bloom source)
 		if (bloomPass) bloom_bright(&dofTexA, bloomTgt);              // bright-pass glow map, shared by both eyes
 		bool sharpTop = !smooth[0] && scaleMode[0] != SCALE_1X && preTgt;     // matches render_game's two-pass choice
@@ -1255,6 +1338,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			else        warp_scenery_eye(top, topG, &depth3d, scaleMode[0], +slider3d);
 			pop_eye(top, topG, &depth3d, scaleMode[0], +slider3d);   // LEFT eye shifts RIGHT -> pops OUT (ramp+char per sprite)
 		}
+		if (litPass) light_pass(top, &depth3d, scaleMode[0], &lenv);   // day/night grade on the lit scene
 		if (dofPass) dof_bands(top, &dofTexA, scaleMode[0], dofLvlTop, dofLvlBot, warpOk ? +slider3d : 0.0f);   // bands OVER the pops
 		if (bloomPass) bloom_add(top, &bloomTex, scaleMode[0], bloomLvl, 0);   // additive glow, over the blur
 		if (uipop) ui_pop_eye(top, topG, &depth3d, scaleMode[0], +UIPOP3D_PX * slider3d, sharpTop, &preTex);   // UI panels pop hardest
@@ -1279,6 +1363,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			else        warp_scenery_eye(topR, topG, &depth3d, scaleMode[0], -slider3d);
 			pop_eye(topR, topG, &depth3d, scaleMode[0], -slider3d);   // RIGHT eye shifts LEFT
 		}
+		if (litPass) light_pass(topR, &depth3d, scaleMode[0], &lenv);
 		if (dofPass) dof_bands(topR, &dofTexA, scaleMode[0], dofLvlTop, dofLvlBot, warpOk ? -slider3d : 0.0f);
 		if (bloomPass) bloom_add(topR, &bloomTex, scaleMode[0], bloomLvl, 1);
 		if (uipop) ui_pop_eye(topR, topG, &depth3d, scaleMode[0], -UIPOP3D_PX * slider3d, sharpTop, &preTex);
@@ -1316,8 +1401,8 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		}
 		if (menuOpen) {
 			C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 240.0f, clrDim);
-			for (int i = 0; i < MENU_N; i++) {   // 2x8 grid of buttons (D-pad or tap to select)
-				float bx = 4.0f + (i & 1) * 160.0f, by = 2.0f + (i >> 1) * 28.0f;
+			for (int i = 0; i < MENU_N; i++) {   // 2x9 grid of buttons (D-pad or tap to select)
+				float bx = 4.0f + (i & 1) * 160.0f, by = 2.0f + (i >> 1) * 25.0f;
 				bool s = (i == menuSel);
 				if (i == MENU_AUDIO_IDX) {   // split cell: A vol | B vol | mode
 					char vlab[3][12];
@@ -1326,14 +1411,14 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					snprintf(vlab[2], 12, "%s", AUDIO_NAMES[audioMode]);
 					for (int j = 0; j < 3; j++) {
 						float sx = bx + j * 50.5f;
-						C2D_DrawRectSolid(sx, by, 0.0f, 49.0f, 27.0f, s ? clrHi : clrPanel);
+						C2D_DrawRectSolid(sx, by, 0.0f, 49.0f, 23.0f, s ? clrHi : clrPanel);
 						C2D_Text st; C2D_TextParse(&st, txtBuf, vlab[j]); C2D_TextOptimize(&st);
-						C2D_DrawText(&st, C2D_WithColor, sx + 4.0f, by + 7.0f, 0.0f, 0.36f, 0.36f, s ? clrSelTxt : clrTxt);
+						C2D_DrawText(&st, C2D_WithColor, sx + 4.0f, by + 5.0f, 0.0f, 0.36f, 0.36f, s ? clrSelTxt : clrTxt);
 					}
 					continue;
 				}
-				C2D_DrawRectSolid(bx, by, 0.0f, 152.0f, 27.0f, s ? clrHi : clrPanel);
-				C2D_DrawText(&items[i], C2D_WithColor, bx + 6.0f, by + 6.0f, 0.0f, 0.4f, 0.4f, s ? clrSelTxt : clrTxt);
+				C2D_DrawRectSolid(bx, by, 0.0f, 152.0f, 23.0f, s ? clrHi : clrPanel);
+				C2D_DrawText(&items[i], C2D_WithColor, bx + 6.0f, by + 5.0f, 0.0f, 0.4f, 0.4f, s ? clrSelTxt : clrTxt);
 			}
 			C2D_DrawText(&tStatus, C2D_WithColor, 4.0f, 228.0f, 0.0f, 0.35f, 0.35f, clrTxt);
 		} else {
