@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <time.h>
 #include <math.h>
+#include <stdlib.h>
 
 #include "gbacore.h"
 #include "rompicker.h"
@@ -235,7 +236,7 @@ static bool touch_to_gba(int px, int py, int mode, int* gx, int* gy) {
 typedef struct {
 	bool overworld;
 	int  nspr;
-	struct { short x, y; unsigned char w, h; } spr[DEPTH_MAX_SPR];   // on-screen OAM rects to pop
+	struct { short x, y; unsigned char w, h, elev; } spr[DEPTH_MAX_SPR];   // on-screen OAM rects (+ matched object elevation tier)
 	float tdepth[10][15];           // smoothed scenery EXTRA depth px (layer-type + elevation)
 	bool textTop, textBot;          // text/UI under the top/bottom blur band -> suppress that band
 	struct { unsigned char x0, y0, x1, y1; } uiRect[6];   // BG0 window panels (tile coords, incl.)
@@ -248,13 +249,28 @@ typedef struct {
 // elevation nibble (a hilltop pops above the grass at its feet), characters always floating
 // CHAR_PX above the floor at their own feet (the floor can never pop over them), and BG0
 // window panels (dialogs/menus) popping hardest of all as clean shifted copies.
-#define POP3D_RAMP_PX 2.4f    // ground ramp: bottom-edge pop (px @ full slider); top edge = 0
-#define POP3D_CHAR_PX 2.0f    // characters float this far above the floor at their feet
+#define POP3D_RAMP_PX 3.6f    // ground ramp: bottom-edge pop (px @ full slider); top edge = 0 (moderate for comfort)
+#define POP3D_CHAR_PX 1.8f    // characters float this far above the floor at their feet
 #define ENV3D_NORMAL  2.5f    // foreground layer-type extra (trees/roofs/walls)
 #define ENV3D_SPLIT   1.2f    // ledge / low fence mid extra
-#define ENV3D_ELEV    0.8f    // extra per map-grid elevation level above the base ground (3)
+#define ENV3D_RAISED  2.6f    // a "raised" elevation tier (engine priority 1) pops this far above ground
+#define ENV3D_FRONT   3.6f    // a "frontmost" tier (engine priority 0) pops this far
+#define TDEPTH_MAX    4.2f    // clamp the per-tile scenery depth (elevation plane + feature)
+#define POP_DISP_MAX  6.5f    // hard comfort ceiling on any element's forward disparity (px @ full slider)
 #define UIPOP3D_PX    5.0f    // BG0 window panels (dialogs/menus): strong clean-copy pop
 #define RAMP_AT(gy)   (POP3D_RAMP_PX * (float)(gy) / (float)GBA_H)
+
+// Map a Gen-3 map-grid / object elevation tier (0..15) to a forward depth PLANE. Baked from the
+// engine's own sElevationToPriority {2,2,2,2,1,2,1,2,1,2,1,2,1,0,0,2}: priority 2 = ground (0),
+// priority 1 = a raised tier, priority 0 = frontmost -> our depth order matches what the game draws
+// in front ("C"). Tiers 0 (TRANSITION) and 15 (MULTI_LEVEL) are -1 = "no own height" -> interpolated
+// from neighbours so stairs/ledges/bridges ramp between the tiers they join.
+static const float ELEV_PLANE[16] = {
+	-1.f, 0.f, 0.f, 0.f, ENV3D_RAISED, 0.f, ENV3D_RAISED, 0.f,
+	ENV3D_RAISED, 0.f, ENV3D_RAISED, 0.f, ENV3D_RAISED, ENV3D_FRONT, ENV3D_FRONT, -1.f
+};
+static inline float elev_plane(int e) { return (e >= 0 && e < 16 && ELEV_PLANE[e] >= 0.f) ? ELEV_PLANE[e] : 0.f; }
+static inline float clamp_disp(float v) { return v > POP_DISP_MAX ? POP_DISP_MAX : v; }
 static void calc_xform(int mode, float sW, float sH, float* ox, float* oy, float* sx, float* sy) {
 	if (mode == SCALE_1X)           { *sx = *sy = 1.0f; }
 	else if (mode == SCALE_STRETCH) { *sx = sW / GBA_W; *sy = sH / GBA_H; }
@@ -306,12 +322,17 @@ static void pop_eye(C3D_RenderTarget* tgt, EmuInstance* g, const DepthSnap* d, i
 	if (d->nspr > 0)
 		for (int i = 0; i < d->nspr; i++) {
 			int cx = d->spr[i].x + d->spr[i].w / 2, fy = d->spr[i].y + d->spr[i].h;
-			float disp = eyeSl * (RAMP_AT(fy) + floor_at(d, cx, fy) + POP3D_CHAR_PX);
+			// Floor under the sprite = the smoothed grid depth at its feet (elevation + feature),
+			// RAISED to its own object-elevation plane when matched (authoritative on stairs). The
+			// max keeps the character at least level with the scenery on its feet tile, never behind.
+			float floorD = floor_at(d, cx, fy);
+			if (d->spr[i].elev != 0xFF) { float pl = elev_plane(d->spr[i].elev); if (pl > floorD) floorD = pl; }
+			float disp = eyeSl * clamp_disp(RAMP_AT(fy) + floorD + POP3D_CHAR_PX);
 			draw_pop(&g->tex, d->spr[i].x, d->spr[i].y, d->spr[i].w, d->spr[i].h, ox, oy, sx, sy, disp);
 		}
 	else
 		draw_pop(&g->tex, POP3D_PLAYER_GX, POP3D_PLAYER_GY, 16, 32, ox, oy, sx, sy,
-		         eyeSl * (RAMP_AT(POP3D_PLAYER_GY + 32)
+		         eyeSl * clamp_disp(RAMP_AT(POP3D_PLAYER_GY + 32)
 		                  + floor_at(d, POP3D_PLAYER_GX + 8, POP3D_PLAYER_GY + 32) + POP3D_CHAR_PX));
 }
 
@@ -345,28 +366,45 @@ static void build_depth_grid(GbaCore* core, const GameProfile* p, int px, int py
 	int h = (int32_t)gbacore_read32(core, p->mapLayout + 4);
 	uint32_t ptr = gbacore_read32(core, p->mapLayout + 8);
 	if ((ptr >> 24) != 0x02 || w <= 0 || w > 512 || h <= 0 || h > 512) return;
-	float raw[10][15];
+	// Per visible tile: feature depth (layer-type) + elevation-plane depth. Elevation 0/15 (stairs/
+	// ledges/bridges) carry no own height -> left "unknown" and filled below. (Border +7 and the -7
+	// player-centring cancel, so screen col c == map gx px+c -- verified against the touch BFS.)
+	float feat[10][15], ed[10][15]; bool has[10][15];
 	for (int r = 0; r < 10; r++) for (int c = 0; c < 15; c++) {
-		int gx = px + c, gy = py + r + 2;                          // visible tile (c,r) -> map grid (see kb)
-		float dep = 0.0f;
+		int gx = px + c, gy = py + r + 2;
+		feat[r][c] = 0.0f; ed[r][c] = 0.0f; has[r][c] = false;
 		if (gx >= 0 && gx < w && gy >= 0 && gy < h) {
 			uint16_t e = gbacore_read16(core, ptr + 2u * (uint32_t)(gx + w * gy));
-			uint16_t id = e & 0x03FF;
-			uint8_t layer = metatile_layer(core, p, id);
-			dep = (layer == 0) ? ENV3D_NORMAL : (layer == 2) ? ENV3D_SPLIT : 0.0f;
-			int elev = e >> 12;                                      // map-grid elevation nibble
-			if (elev == 0 || elev >= 15) elev = 3;                   // 0/15 = wildcard/multi-level -> base
-			if (elev > 3) dep += (float)((elev - 3 > 4) ? 4 : elev - 3) * ENV3D_ELEV;   // hilltop > grass
+			uint8_t layer = metatile_layer(core, p, e & 0x03FF);
+			feat[r][c] = (layer == 0) ? ENV3D_NORMAL : (layer == 2) ? ENV3D_SPLIT : 0.0f;
+			float pl = ELEV_PLANE[e >> 12];
+			if (pl >= 0.0f) { ed[r][c] = pl; has[r][c] = true; }
 		}
-		raw[r][c] = dep;
 	}
-	for (int r = 0; r < 10; r++) for (int c = 0; c < 15; c++) {   // 3x3 box average -> smooth arches/slopes
+	// Fill stairs/ledges/bridges by relaxing from known neighbours, so depth RAMPS across them
+	// instead of dropping to ground (Gauss-Seidel; cap spans the 10x15 grid, early-exits when stable).
+	for (int pass = 0; pass < 16; pass++) {
+		bool changed = false;
+		for (int r = 0; r < 10; r++) for (int c = 0; c < 15; c++) if (!has[r][c]) {
+			float sum = 0.0f; int n = 0;
+			if (r > 0  && has[r-1][c]) { sum += ed[r-1][c]; n++; }
+			if (r < 9  && has[r+1][c]) { sum += ed[r+1][c]; n++; }
+			if (c > 0  && has[r][c-1]) { sum += ed[r][c-1]; n++; }
+			if (c < 14 && has[r][c+1]) { sum += ed[r][c+1]; n++; }
+			if (n > 0) { ed[r][c] = sum / (float)n; has[r][c] = true; changed = true; }
+		}
+		if (!changed) break;
+	}
+	// Smooth ONLY the feature term (3x3) for soft tree/arch tops; keep the elevation planes crisp
+	// (the vertex-grid warp turns a plateau edge into a clean stretch, not a tear). Clamp the sum.
+	for (int r = 0; r < 10; r++) for (int c = 0; c < 15; c++) {
 		float sum = 0.0f; int n = 0;
 		for (int dr = -1; dr <= 1; dr++) for (int dc = -1; dc <= 1; dc++) {
 			int rr = r + dr, cc = c + dc;
-			if (rr >= 0 && rr < 10 && cc >= 0 && cc < 15) { sum += raw[rr][cc]; n++; }
+			if (rr >= 0 && rr < 10 && cc >= 0 && cc < 15) { sum += feat[rr][cc]; n++; }
 		}
-		d->tdepth[r][c] = sum / (float)n;
+		float t = ed[r][c] + sum / (float)n;
+		d->tdepth[r][c] = (t > TDEPTH_MAX) ? TDEPTH_MAX : t;
 	}
 }
 
@@ -509,7 +547,7 @@ static void warp_grid_eye(C3D_RenderTarget* tgt, EmuInstance* g, const DepthSnap
 	for (int r = 0; r <= WARP_ROWS; r++) for (int c = 0; c <= WARP_COLS; c++) {
 		WarpVert* w = &v[r * (WARP_COLS + 1) + c];
 		float gx = (float)(c * 16), gy = (float)(r * 16);
-		w->x = ox + gx * sx + dispUnit * (RAMP_AT(gy) + warp_vert_depth(d, r, c));   // floor ramp everywhere
+		w->x = ox + gx * sx + dispUnit * clamp_disp(RAMP_AT(gy) + warp_vert_depth(d, r, c));   // ramp + scenery depth, comfort-clamped
 		w->y = oy + gy * sy;
 		w->u = gx / 256.0f;             // preTex UVs coincide: PRESCALE/PRE_TEX == 1/256
 		w->v = 1.0f - gy / 256.0f;
@@ -1075,9 +1113,36 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 							if (x + w <= 0 || x >= GBA_W || y + h <= 0 || y >= GBA_H) continue;
 							depth3d.spr[depth3d.nspr].x = (short)x; depth3d.spr[depth3d.nspr].y = (short)y;
 							depth3d.spr[depth3d.nspr].w = (unsigned char)w; depth3d.spr[depth3d.nspr].h = (unsigned char)h;
+							depth3d.spr[depth3d.nspr].elev = 0xFF;   // 0xFF = unmatched -> floor_at fallback
 							depth3d.nspr++;
 						}
-						build_depth_grid(topCore, tprof, ts.px, ts.py, &depth3d);   // M4 scenery depth
+						build_depth_grid(topCore, tprof, ts.px, ts.py, &depth3d);   // scenery depth (elevation priority planes)
+						// B/C: tag each on-screen sprite with its object-event elevation tier (previousElevation =
+						// what the engine uses for draw priority) so NPCs/the player pop with the tier they stand on.
+						if (tprof->mapObjects) {
+							short ogx[16], ogy[16]; unsigned char oel[16]; int nobj = 0;
+							for (int o = 0; o < 16; o++) {
+								uint32_t oe = tprof->mapObjects + 0x24u * (uint32_t)o;
+								if (!(gbacore_read32(topCore, oe) & 1u)) continue;                       // active:1
+								ogx[nobj] = (short)(int16_t)gbacore_read16(topCore, oe + 0x10);          // currentCoords.x (grid, +7)
+								ogy[nobj] = (short)(int16_t)gbacore_read16(topCore, oe + 0x12);          // currentCoords.y
+								oel[nobj] = (gbacore_read8(topCore, oe + 0x0B) >> 4) & 0x0F;             // previousElevation (high nibble)
+								nobj++;
+							}
+							for (int s = 0; s < depth3d.nspr; s++) {                                     // match each sprite by feet grid-tile
+								int col = (depth3d.spr[s].x + depth3d.spr[s].w / 2) / 16;
+								int row = (depth3d.spr[s].y + depth3d.spr[s].h - 1) / 16;
+								if (col < 0) col = 0; else if (col > 14) col = 14;
+								if (row < 0) row = 0; else if (row > 9) row = 9;
+								int ggx = ts.px + col, ggy = ts.py + row + 2;
+								int best = -1, bestd = 3;
+								for (int o = 0; o < nobj; o++) {
+									int dd = abs(ogx[o] - ggx) + abs(ogy[o] - ggy);
+									if (dd < bestd) { bestd = dd; best = o; }
+								}
+								if (best >= 0) depth3d.spr[s].elev = oel[best];
+							}
+						}
 					}
 				}
 				emuA.keys = ((focused == 0) ? g : 0) | (swapped ? tk : 0);
