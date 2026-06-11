@@ -14,6 +14,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
+#include <math.h>
 
 #include "gbacore.h"
 #include "rompicker.h"
@@ -252,7 +253,7 @@ typedef struct {
 #define ENV3D_NORMAL  2.5f    // foreground layer-type extra (trees/roofs/walls)
 #define ENV3D_SPLIT   1.2f    // ledge / low fence mid extra
 #define ENV3D_ELEV    0.8f    // extra per map-grid elevation level above the base ground (3)
-#define UIPOP3D_PX    4.0f    // BG0 window panels (dialogs/menus): strong clean-copy pop
+#define UIPOP3D_PX    5.0f    // BG0 window panels (dialogs/menus): strong clean-copy pop
 #define RAMP_AT(gy)   (POP3D_RAMP_PX * (float)(gy) / (float)GBA_H)
 static void calc_xform(int mode, float sW, float sH, float* ox, float* oy, float* sx, float* sy) {
 	if (mode == SCALE_1X)           { *sx = *sy = 1.0f; }
@@ -261,19 +262,39 @@ static void calc_xform(int mode, float sW, float sH, float* ox, float* oy, float
 	*ox = (sW - GBA_W * *sx) / 2.0f;
 	*oy = (sH - GBA_H * *sy) / 2.0f;
 }
-// Re-draw a sub-rect of the GBA frame texture shifted horizontally (the per-eye pop overdraw).
-static void draw_pop(C3D_Tex* tex, int gx, int gy, int gw, int gh,
-                     float ox, float oy, float sx, float sy, float xoff) {
+// Re-draw a sub-rect of a frame texture shifted horizontally (the per-eye pop overdraw).
+// pscale/texDim pick the source: the raw 256px GBA tex (1/256) or the sharp-bilinear prescale
+// (PRESCALE/PRE_TEX) so popped text stays crisp. The destination is clipped to the on-screen
+// frame box, so a shifted pop never bleeds into the letterbox (per-eye rivalry on the border).
+static void draw_pop_tex(C3D_Tex* tex, int pscale, int texDim, GPU_TEXTURE_FILTER_PARAM filt,
+                         int gx, int gy, int gw, int gh, float ox, float oy, float sx, float sy, float xoff) {
 	if (gx < 0) { gw += gx; gx = 0; }
 	if (gy < 0) { gh += gy; gy = 0; }
 	if (gx + gw > GBA_W) gw = GBA_W - gx;
 	if (gy + gh > GBA_H) gh = GBA_H - gy;
+	float xs = xoff / sx;                                   // shift expressed in GBA pixels
+	int loCol = (int)ceilf(-xs);              if (gx < loCol) { gw -= (loCol - gx); gx = loCol; }
+	int hiCol = (int)floorf((float)GBA_W - xs); if (gx + gw > hiCol) gw = hiCol - gx;
 	if (gw <= 0 || gh <= 0) return;
-	Tex3DS_SubTexture st = { (u16)gw, (u16)gh, (float)gx / 256.0f, 1.0f - (float)gy / 256.0f,
-	                        (float)(gx + gw) / 256.0f, 1.0f - (float)(gy + gh) / 256.0f };
+	float t = (float)pscale, D = (float)texDim;
+	Tex3DS_SubTexture st = { (u16)(gw * pscale), (u16)(gh * pscale),
+	                        gx * t / D, 1.0f - gy * t / D, (gx + gw) * t / D, 1.0f - (gy + gh) * t / D };
 	C2D_Image img = { tex, &st };
-	C3D_TexSetFilter(tex, GPU_NEAREST, GPU_NEAREST);
-	C2D_DrawImageAt(img, ox + gx * sx + xoff, oy + gy * sy, 0.0f, NULL, sx, sy);
+	C3D_TexSetFilter(tex, filt, filt);
+	C2D_DrawImageAt(img, ox + gx * sx + xoff, oy + gy * sy, 0.0f, NULL, sx / t, sy / t);
+}
+static void draw_pop(C3D_Tex* tex, int gx, int gy, int gw, int gh,
+                     float ox, float oy, float sx, float sy, float xoff) {
+	draw_pop_tex(tex, 1, 256, GPU_NEAREST, gx, gy, gw, gh, ox, oy, sx, sy, xoff);
+}
+
+// Smoothed floor depth (px) under a screen pixel, so a character can pop ABOVE the very floor
+// (ground ramp already separate; this adds the scenery/elevation extra) it stands on.
+static float floor_at(const DepthSnap* d, int gx_px, int gy_px) {
+	int c = gx_px / 16, r = gy_px / 16;
+	if (c < 0) c = 0; else if (c > 14) c = 14;
+	if (r < 0) r = 0; else if (r > 9) r = 9;
+	return d->tdepth[r][c];
 }
 
 // Pop the captured characters forward on one eye (shifted sub-rect overdraws on the flat frame).
@@ -284,12 +305,14 @@ static void pop_eye(C3D_RenderTarget* tgt, EmuInstance* g, const DepthSnap* d, i
 	C2D_SceneBegin(tgt);
 	if (d->nspr > 0)
 		for (int i = 0; i < d->nspr; i++) {
-			float disp = eyeSl * (RAMP_AT(d->spr[i].y + d->spr[i].h) + POP3D_CHAR_PX);
+			int cx = d->spr[i].x + d->spr[i].w / 2, fy = d->spr[i].y + d->spr[i].h;
+			float disp = eyeSl * (RAMP_AT(fy) + floor_at(d, cx, fy) + POP3D_CHAR_PX);
 			draw_pop(&g->tex, d->spr[i].x, d->spr[i].y, d->spr[i].w, d->spr[i].h, ox, oy, sx, sy, disp);
 		}
 	else
 		draw_pop(&g->tex, POP3D_PLAYER_GX, POP3D_PLAYER_GY, 16, 32, ox, oy, sx, sy,
-		         eyeSl * (RAMP_AT(POP3D_PLAYER_GY + 32) + POP3D_CHAR_PX));
+		         eyeSl * (RAMP_AT(POP3D_PLAYER_GY + 32)
+		                  + floor_at(d, POP3D_PLAYER_GX + 8, POP3D_PLAYER_GY + 32) + POP3D_CHAR_PX));
 }
 
 // M4: metatile id -> layer type (0 NORMAL=foreground / 1 COVERED=ground / 2 SPLIT=mid) via the
@@ -353,8 +376,7 @@ static void warp_scenery_eye(C3D_RenderTarget* tgt, EmuInstance* g, const DepthS
 	C2D_SceneBegin(tgt);
 	for (int r = 0; r < 10; r++) for (int c = 0; c < 15; c++) {
 		float dep = d->tdepth[r][c];
-		if (dep > 0.01f) draw_pop(&g->tex, c * 16, r * 16, 16, 16, ox, oy, sx, sy,
-		                          dispUnit * (RAMP_AT(r * 16 + 8) + dep));
+		if (dep > 0.01f) draw_pop(&g->tex, c * 16, r * 16, 16, 16, ox, oy, sx, sy, dispUnit * dep);
 	}
 }
 
@@ -508,7 +530,7 @@ static void dof_bands(C3D_RenderTarget* tgt, C3D_Tex* texA, int mode, float lvlT
 // readable, and (b) the window-panel RECTS -> popped out per eye in ANY context (dialog, START
 // menu, bag, party, battle text). Filler = the dominant entry of the visible grid (not assumed
 // 0); unscannable modes fail toward readable. Runs at the parked per-frame handshake.
-static void bg0_scan(GbaCore* c, DepthSnap* d) {
+static void bg0_scan(GbaCore* c, const GameProfile* p, bool overworld, DepthSnap* d) {
 	uint16_t disp = gbacore_read16(c, 0x04000000);
 	if (!(disp & 0x0100)) return;                       // BG0 disabled -> no text layer
 	uint16_t cnt = gbacore_read16(c, 0x04000008);
@@ -539,6 +561,10 @@ static void bg0_scan(GbaCore* c, DepthSnap* d) {
 	}
 	if (topBusy >= 8) d->textTop = true;                // tile rows 0..6  ~ GBA y 0..55
 	if (botBusy >= 8) d->textBot = true;                // tile rows 13..19 ~ GBA y 104..159
+	// UI-panel RECTS are gen-3 only: BG0 is the text/window layer there, but an arbitrary GBA
+	// game's BG0 is usually the main playfield -> a full-screen 'panel' popped at max disparity.
+	// (The blur text-flags above stay general; they only gate DoF, which is itself gen-3-gated.)
+	if (!p) return;
 	for (int r = 0; r < 20 && d->nui < 6; ) {           // merge busy rows (>=2 tiles) into panels
 		if (rowN[r] < 2) { r++; continue; }
 		int q = r, lo = rlo[r], hi = rhi[r];
@@ -547,23 +573,30 @@ static void bg0_scan(GbaCore* c, DepthSnap* d) {
 			if (rlo[q] < lo) lo = rlo[q];
 			if (rhi[q] > hi) hi = rhi[q];
 		}
-		d->uiRect[d->nui].x0 = (unsigned char)lo;  d->uiRect[d->nui].y0 = (unsigned char)r;
-		d->uiRect[d->nui].x1 = (unsigned char)hi;  d->uiRect[d->nui].y1 = (unsigned char)q;
-		d->nui++;
+		int wc = hi - lo + 1, hr = q - r + 1;
+		// Drop a near-full-screen rect in the OVERWORLD (a transient full BG0 = playfield false
+		// positive); menus/bag/party run with overworld=false and legitimately fill the screen.
+		if (!(overworld && wc >= 24 && hr >= 14)) {
+			d->uiRect[d->nui].x0 = (unsigned char)lo;  d->uiRect[d->nui].y0 = (unsigned char)r;
+			d->uiRect[d->nui].x1 = (unsigned char)hi;  d->uiRect[d->nui].y1 = (unsigned char)q;
+			d->nui++;
+		}
 		r = q + 1;
 	}
 }
 
 // Pop the BG0 window panels out of the screen on one eye: clean shifted overdraws of the SAME
 // pixels -> strong depth while the text stays pixel-sharp (no blending, no blur).
-static void ui_pop_eye(C3D_RenderTarget* tgt, EmuInstance* g, const DepthSnap* d, int mode, float disp) {
+static void ui_pop_eye(C3D_RenderTarget* tgt, EmuInstance* g, const DepthSnap* d, int mode,
+                       float disp, bool sharpPre, C3D_Tex* pre) {
 	float ox, oy, sx, sy; calc_xform(mode, 400.0f, 240.0f, &ox, &oy, &sx, &sy);
 	C2D_SceneBegin(tgt);
 	for (int i = 0; i < d->nui; i++) {
 		int x = d->uiRect[i].x0 * 8, y = d->uiRect[i].y0 * 8;
 		int w = (d->uiRect[i].x1 - d->uiRect[i].x0 + 1) * 8;
 		int h = (d->uiRect[i].y1 - d->uiRect[i].y0 + 1) * 8;
-		draw_pop(&g->tex, x, y, w, h, ox, oy, sx, sy, disp);
+		if (sharpPre) draw_pop_tex(pre, PRESCALE, PRE_TEX, GPU_LINEAR, x, y, w, h, ox, oy, sx, sy, disp);
+		else          draw_pop(&g->tex, x, y, w, h, ox, oy, sx, sy, disp);
 	}
 }
 
@@ -952,7 +985,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					depth3d.textTop = ts.textBanner;   // map-name banner lives in the top band
 					depth3d.textBot = ts.textDlg;      // dialog textbox lives in the bottom band
 					depth3d.nspr = 0; depth3d.nui = 0; memset(depth3d.tdepth, 0, sizeof depth3d.tdepth);
-					if (topCore) bg0_scan(topCore, &depth3d);   // text flags + UI panel rects (ANY context)
+					if (topCore) bg0_scan(topCore, tprof, depth3d.overworld, &depth3d);   // text flags + gen-3 UI panel rects
 					if (depth3d.overworld && topCore) {
 						static const unsigned char SW[3][4] = {{8,16,32,64},{16,32,32,64},{8,8,16,32}};
 						static const unsigned char SH[3][4] = {{8,16,32,64},{8,8,16,32},{16,32,32,64}};
@@ -1222,9 +1255,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			else        warp_scenery_eye(top, topG, &depth3d, scaleMode[0], +slider3d);
 			pop_eye(top, topG, &depth3d, scaleMode[0], +slider3d);   // LEFT eye shifts RIGHT -> pops OUT (ramp+char per sprite)
 		}
-		if (dofPass) dof_bands(top, &dofTexA, scaleMode[0], dofLvlTop, dofLvlBot, +slider3d);   // bands OVER the pops
+		if (dofPass) dof_bands(top, &dofTexA, scaleMode[0], dofLvlTop, dofLvlBot, warpOk ? +slider3d : 0.0f);   // bands OVER the pops
 		if (bloomPass) bloom_add(top, &bloomTex, scaleMode[0], bloomLvl, 0);   // additive glow, over the blur
-		if (uipop) ui_pop_eye(top, topG, &depth3d, scaleMode[0], +UIPOP3D_PX * slider3d);   // UI panels pop hardest
+		if (uipop) ui_pop_eye(top, topG, &depth3d, scaleMode[0], +UIPOP3D_PX * slider3d, sharpTop, &preTex);   // UI panels pop hardest
 		if (!menuOpen) {
 			if (hudMode & 1) {
 				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 400.0f, 14.0f, THEME_HUD_BAR);
@@ -1246,9 +1279,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			else        warp_scenery_eye(topR, topG, &depth3d, scaleMode[0], -slider3d);
 			pop_eye(topR, topG, &depth3d, scaleMode[0], -slider3d);   // RIGHT eye shifts LEFT
 		}
-		if (dofPass) dof_bands(topR, &dofTexA, scaleMode[0], dofLvlTop, dofLvlBot, -slider3d);
+		if (dofPass) dof_bands(topR, &dofTexA, scaleMode[0], dofLvlTop, dofLvlBot, warpOk ? -slider3d : 0.0f);
 		if (bloomPass) bloom_add(topR, &bloomTex, scaleMode[0], bloomLvl, 1);
-		if (uipop) ui_pop_eye(topR, topG, &depth3d, scaleMode[0], -UIPOP3D_PX * slider3d);
+		if (uipop) ui_pop_eye(topR, topG, &depth3d, scaleMode[0], -UIPOP3D_PX * slider3d, sharpTop, &preTex);
 
 		// bottom screen (+ menu overlay when open). render_game leaves `bot` bound.
 		render_game(botG, bot, preTgt, &preTex, 320.0f, 240.0f, scaleMode[1], smooth[1], botTint, clrBg);
