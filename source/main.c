@@ -855,17 +855,18 @@ typedef struct {
 	s32 dof;
 	s32 bloom;
 	s32 light;
+	s32 vivid;
 } Settings;
 
 static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, int* hudMode,
-                          int* audioMode, int* volA, int* volB, int* touchMode, bool* fsOn, bool* dofOn, bool* bloomOn, bool* lightOn) {
+                          int* audioMode, int* volA, int* volB, int* touchMode, bool* fsOn, bool* dofOn, bool* bloomOn, bool* lightOn, bool* vividOn) {
 	FILE* f = fopen(SETTINGS_PATH, "rb");
 	if (!f) return;
 	Settings s;
 	size_t n = fread(&s, 1, sizeof s, f);
 	fclose(f);
-	size_t noLight = sizeof s - sizeof s.light, noBloom = noLight - sizeof s.bloom, noDof = noBloom - sizeof s.dof;
-	if ((n != sizeof s && n != noLight && n != noBloom && n != noDof) || s.magic != SETTINGS_MAGIC) return;   // tolerate older files
+	size_t noVivid = sizeof s - sizeof s.vivid, noLight = noVivid - sizeof s.light, noBloom = noLight - sizeof s.bloom, noDof = noBloom - sizeof s.dof;
+	if ((n != sizeof s && n != noVivid && n != noLight && n != noBloom && n != noDof) || s.magic != SETTINGS_MAGIC) return;   // tolerate older files
 	scaleMode[0] = ((unsigned)s.scaleMode[0]) % 3;
 	scaleMode[1] = ((unsigned)s.scaleMode[1]) % 3;
 	smooth[0] = s.smooth[0] != 0;
@@ -879,13 +880,14 @@ static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, int* 
 	*fsOn = s.frameskip != 0;
 	if (n >= noBloom)  *dofOn   = s.dof != 0;     // older files keep the defaults
 	if (n >= noLight)  *bloomOn = s.bloom != 0;
-	if (n == sizeof s) *lightOn = s.light != 0;
+	if (n >= noVivid)  *lightOn = s.light != 0;
+	if (n == sizeof s) *vividOn = s.vivid != 0;
 }
 
 static void settings_save(const int scaleMode[2], const bool smooth[2], bool swapped, int hudMode,
-                          int audioMode, int volA, int volB, int touchMode, bool fsOn, bool dofOn, bool bloomOn, bool lightOn) {
+                          int audioMode, int volA, int volB, int touchMode, bool fsOn, bool dofOn, bool bloomOn, bool lightOn, bool vividOn) {
 	Settings s = { SETTINGS_MAGIC, { scaleMode[0], scaleMode[1] },
-	               { smooth[0], smooth[1] }, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn };
+	               { smooth[0], smooth[1] }, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn };
 	FILE* f = fopen(SETTINGS_PATH, "wb");
 	if (!f) return;
 	fwrite(&s, 1, sizeof s, f);
@@ -897,9 +899,9 @@ enum { SESSION_CHANGE, SESSION_QUIT };
 static const char* MENU_ITEMS[] = {
 	"Resume", "Link", "Audio", "Touch", "Frameskip", "Toggle HUD", "Swap screens",
 	"Save state", "Load state", "Load .sav (focused)", "Mute", "Pause", "DoF",
-	"Bloom", "Light", "Change games", "Quit"
+	"Bloom", "Light", "Vivid", "Change games", "Quit"
 };
-#define MENU_N 17
+#define MENU_N 18
 #define MENU_LINK_IDX  1   // dynamic label ("Link: off/on")
 #define MENU_AUDIO_IDX 2   // dynamic label ("Audio: <mode>")
 #define MENU_TOUCH_IDX 3   // dynamic label ("Touch: on/off")
@@ -910,6 +912,7 @@ static const char* MENU_ITEMS[] = {
 #define MENU_DOF_IDX   12  // dynamic label ("DoF: on/off")
 #define MENU_BLOOM_IDX 13  // dynamic label ("Bloom: on/off")
 #define MENU_LIGHT_IDX 14  // dynamic label ("Light: on/off")
+#define MENU_VIVID_IDX 15  // dynamic label ("Vivid: on/off")
 static const char* const HUD_NAMES[4] = { "off", "top", "bottom", "both" };
 
 // Run one play session with the two chosen ROMs. Returns SESSION_CHANGE (re-pick) or
@@ -968,6 +971,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	float dofLvlTop = 1.0f, dofLvlBot = 1.0f;   // per-band engagement 0..1 (text kills its band's blur)
 	bool bloomOn = true;    // HD-2D M3: LDR bloom on the focused top screen (overworld only)
 	bool lightOn = true;    // HD-2D M4: time-of-day lighting on the overworld
+	bool vividOn = false;   // round 7: bright+sharp "sign look" everywhere (no lighting/DoF/bloom haze)
 	float bloomLvl = 1.0f;  // eased like the DoF bands; any on-screen text kills the glow
 	bool muted = false;     // HARD mute (stops audio rendering, saves CPU)
 
@@ -1002,7 +1006,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	int audioMode = AUD_SOLO;
 	int volA = 256, volB = 256;
 
-	settings_load(scaleMode, smooth, &swapped, &hudMode, &audioMode, &volA, &volB, &touchMode, &fsOn, &dofOn, &bloomOn, &lightOn);   // restore prefs
+	settings_load(scaleMode, smooth, &swapped, &hudMode, &audioMode, &volA, &volB, &touchMode, &fsOn, &dofOn, &bloomOn, &lightOn, &vividOn);   // restore prefs
 	gbacore_set_frameskip(emuA.core, (fsOn && focused != 0) ? 2 : 0);   // unfocused-frameskip
 	gbacore_set_frameskip(emuB.core, (fsOn && focused != 1) ? 2 : 0);
 
@@ -1051,7 +1055,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					swapped = !swapped;
 					snprintf(toast, sizeof toast, "Layout: %s", swapped ? "B top / A bottom" : "A top / B bottom");
 					toastTimer = 90;
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
 				}
 				int fs = swapped ? (focused ^ 1) : focused;   // screen the focused game sits on
 				if (kDown & KEY_ZR) {
@@ -1059,14 +1063,14 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					snprintf(toast, sizeof toast, "%s scale: %s",
 					         fs == 0 ? "Top" : "Bottom", SCALE_NAMES[scaleMode[fs]]);
 					toastTimer = 90;
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
 				}
 				if (kDown & KEY_ZL) {
 					smooth[fs] = !smooth[fs];   // render_game sets the per-pass filters
 					snprintf(toast, sizeof toast, "%s filter: %s", fs == 0 ? "Top" : "Bottom",
 					         smooth[fs] ? "Smooth" : "Sharp-bilinear");
 					toastTimer = 90;
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
 				}
 				u16 g = to_gba_keys(kHeld);
 				// Touchscreen drives the BOTTOM game (A is on bottom iff swapped) as a POINTER on the
@@ -1180,7 +1184,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					*v += (kDown & (KEY_DRIGHT | KEY_CPAD_RIGHT)) ? 32 : -32;
 					if (*v < 0) *v = 0; else if (*v > 256) *v = 256;
 					snprintf(status, sizeof status, "Vol %c: %d%%", focused == 0 ? 'A' : 'B', *v * 100 / 256);
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
 				}
 				if (kDown & KEY_B) menuOpen = false;                 // resume
 			bool activate = (kDown & KEY_A) != 0;
@@ -1195,7 +1199,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 							if      (j == 0) { volA += 64; if (volA > 256) volA = 0; }
 							else if (j == 1) { volB += 64; if (volB > 256) volB = 0; }
 							else            { audioMode = (audioMode + 1) % 3; audio_reset_stream(); }
-							settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn);
+							settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
 						} else {
 							activate = true;
 						}
@@ -1232,30 +1236,30 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					audioMode = (audioMode + 1) % 3;
 					snprintf(status, sizeof status, "Audio: %s", AUDIO_NAMES[audioMode]);
 					audio_reset_stream();                        // clean cut between modes
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
 				}
 				else if (menuSel == 3) {                         // Touch mode (off / gamepad / smart)
 					touchMode = (touchMode + 1) % 3;
 					snprintf(status, sizeof status, "Touch: %s", TOUCH_NAMES[touchMode]);
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
 				}
 				else if (menuSel == 4) {                         // Frameskip (unfocused game)
 					fsOn = !fsOn;
 					gbacore_set_frameskip(emuA.core, (fsOn && focused != 0) ? 2 : 0);
 					gbacore_set_frameskip(emuB.core, (fsOn && focused != 1) ? 2 : 0);
 					snprintf(status, sizeof status, "Frameskip %s", fsOn ? "on" : "off");
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
 				}
 				else if (menuSel == 5) {                         // Toggle HUD
 					hudMode = (hudMode + 1) & 3;
 					snprintf(status, sizeof status, "HUD: %s", HUD_NAMES[hudMode]);
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
 				}
 				else if (menuSel == 6) {                         // Swap screens
 					swapped = !swapped; menuOpen = false;
 					snprintf(toast, sizeof toast, "Layout: %s", swapped ? "B top / A bottom" : "A top / B bottom");
 					toastTimer = 90;
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
 				}
 				else if (menuSel == 7) {                         // Save state (focused game)
 					EmuInstance* fg = (focused == 0) ? &emuA : &emuB;
@@ -1285,19 +1289,24 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 				else if (menuSel == MENU_DOF_IDX) {              // HD-2D tilt-shift DoF (top screen)
 					dofOn = !dofOn;
 					snprintf(status, sizeof status, "DoF %s", dofOn ? "on" : "off");
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
 				}
 				else if (menuSel == MENU_BLOOM_IDX) {            // HD-2D LDR bloom (focused top)
 					bloomOn = !bloomOn;
 					snprintf(status, sizeof status, "Bloom %s", bloomOn ? "on" : "off");
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
 				}
 				else if (menuSel == MENU_LIGHT_IDX) {            // HD-2D time-of-day lighting
 					lightOn = !lightOn;
 					snprintf(status, sizeof status, "Light %s", lightOn ? "on" : "off");
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
 				}
-				else if (menuSel == 15) { result = SESSION_CHANGE; break; }
+				else if (menuSel == MENU_VIVID_IDX) {            // bright+sharp "sign look" everywhere
+					vividOn = !vividOn;
+					snprintf(status, sizeof status, "Vivid %s", vividOn ? "on" : "off");
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
+				}
+				else if (menuSel == 16) { result = SESSION_CHANGE; break; }
 				else                    { result = SESSION_QUIT;   break; }
 			}
 		}
@@ -1357,6 +1366,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 				} else if (i == MENU_LIGHT_IDX) {
 					snprintf(llabel, sizeof llabel, "Light: %s", lightOn ? "on" : "off");
 					label = llabel;
+				} else if (i == MENU_VIVID_IDX) {
+					snprintf(llabel, sizeof llabel, "Vivid: %s", vividOn ? "on" : "off");
+					label = llabel;
 				}
 				C2D_TextParse(&items[i], txtBuf, label); C2D_TextOptimize(&items[i]);
 			}
@@ -1386,7 +1398,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 
 		// top screen (sharp-bilinear two-pass when applicable). render_game leaves `top` bound.
 		float slider3d = osGet3DSliderState();
-		bool s3dOn = slider3d > 0.03f;   // 3D slider engaged; OFF => plain 2D (gates every 3D effect below)
+		bool s3dOn = slider3d > 0.03f && !menuOpen;   // 3D engaged AND not in the menu; else plain 2D (gates every 3D effect)
 		bool pop3d = s3dOn && depth3d.overworld && topG->core;
 		bool uipop = s3dOn && depth3d.nui > 0 && topG->core;   // BG0 panels pop in ANY context
 		// Text-aware DoF: kill a band's blur the moment text/UI shows under it (BG0 scan + RAM
@@ -1397,10 +1409,10 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		if (dofLvlBot > 1.0f) dofLvlBot = 1.0f; else if (dofLvlBot < 0.0f) dofLvlBot = 0.0f;
 		bloomLvl += (depth3d.overworld && !depth3d.textTop && !depth3d.textBot) ? 0.08f : -0.34f;
 		if (bloomLvl > 1.0f) bloomLvl = 1.0f; else if (bloomLvl < 0.0f) bloomLvl = 0.0f;
-		bool dofPass = s3dOn && dofOn && dofTgtA && depth3d.overworld && topG->core && (dofLvlTop > 0.01f || dofLvlBot > 0.01f);
-		bool bloomPass = s3dOn && bloomOn && bloomTgt && dofTgtA && depth3d.overworld && topG->core
+		bool dofPass = s3dOn && !vividOn && dofOn && dofTgtA && depth3d.overworld && topG->core && (dofLvlTop > 0.01f || dofLvlBot > 0.01f);
+		bool bloomPass = s3dOn && !vividOn && bloomOn && bloomTgt && dofTgtA && depth3d.overworld && topG->core
 		              && focScreen == 0 && bloomLvl > 0.01f;   // focused top only (study budget rule)
-		bool litPass = s3dOn && lightOn && depth3d.overworld && topG->core;   // time-of-day grade (3D-slider-gated)
+		bool litPass = s3dOn && !vividOn && lightOn && depth3d.overworld && topG->core;   // time-of-day grade
 		LightEnv lenv; if (litPass) { time_t _tt = time(NULL); struct tm* _lt = localtime(&_tt);
 			lenv = light_for_hour(_lt ? _lt->tm_hour + _lt->tm_min / 60.0f : 12.0f); }
 		if (dofPass || bloomPass) dof_prepare(&topG->tex, dofTgtA);   // shared half-res copy (DoF + bloom source)
@@ -1413,10 +1425,10 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			else        warp_scenery_eye(top, topG, &depth3d, scaleMode[0], +slider3d);
 			pop_eye(top, topG, &depth3d, scaleMode[0], +slider3d);   // LEFT eye shifts RIGHT -> pops OUT (ramp+char per sprite)
 		}
-		if (litPass) light_pass(top, &depth3d, scaleMode[0], &lenv);   // day/night grade on the lit scene
 		if (dofPass) dof_bands(top, &dofTexA, scaleMode[0], dofLvlTop, dofLvlBot, warpOk ? +slider3d : 0.0f);   // bands OVER the pops
 		if (bloomPass) bloom_add(top, &bloomTex, scaleMode[0], bloomLvl, 0);   // additive glow, over the blur
 		if (uipop) ui_pop_eye(top, topG, &depth3d, scaleMode[0], +UIPOP3D_PX * slider3d, sharpTop, &preTex);   // UI panels pop hardest
+		if (litPass) light_pass(top, &depth3d, scaleMode[0], &lenv);   // lit LAST -> tints the UI panels too (sign is not a bright patch)
 		if (!menuOpen) {
 			if (hudMode & 1) {
 				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 400.0f, 14.0f, THEME_HUD_BAR);
@@ -1438,10 +1450,10 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			else        warp_scenery_eye(topR, topG, &depth3d, scaleMode[0], -slider3d);
 			pop_eye(topR, topG, &depth3d, scaleMode[0], -slider3d);   // RIGHT eye shifts LEFT
 		}
-		if (litPass) light_pass(topR, &depth3d, scaleMode[0], &lenv);
 		if (dofPass) dof_bands(topR, &dofTexA, scaleMode[0], dofLvlTop, dofLvlBot, warpOk ? -slider3d : 0.0f);
 		if (bloomPass) bloom_add(topR, &bloomTex, scaleMode[0], bloomLvl, 1);
 		if (uipop) ui_pop_eye(topR, topG, &depth3d, scaleMode[0], -UIPOP3D_PX * slider3d, sharpTop, &preTex);
+		if (litPass) light_pass(topR, &depth3d, scaleMode[0], &lenv);
 
 		// bottom screen (+ menu overlay when open). render_game leaves `bot` bound.
 		render_game(botG, bot, preTgt, &preTex, 320.0f, 240.0f, scaleMode[1], smooth[1], botTint, clrBg);
