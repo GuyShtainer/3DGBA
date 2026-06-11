@@ -208,6 +208,16 @@ static bool touch_to_gba(int px, int py, int mode, int* gx, int* gy) {
 #define PRE_H    (GBA_H * PRESCALE)   // 320
 #define PRE_TEX  512
 
+// HD-2D M1 (tilt-shift DoF): no fragment shader on the PICA200, so "blur" = two GPU_LINEAR
+// down-bounces (240x160 -> 120x80 -> 60x40); the quarter-res copy bilinear-upscaled back to
+// the screen is a ~4x4 box blur. Composited as top/bottom bands over the TOP screen only
+// (overworld only; both eyes share the one blurred copy) -> sharp focal band = "diorama" read.
+#define DOF_TEXA      128   // POT texture backing the 120x80 half-res bounce
+#define DOF_TEXB      64    // POT texture backing the 60x40 quarter-res bounce
+#define DOF_SHARP_Y0  56    // sharp focal band (GBA rows Y0..Y1; player sits ~64..96)
+#define DOF_SHARP_Y1  104
+#define DOF_FADE      24    // blur alpha-ramps in over this many rows outside the band
+
 // Stereoscopic single-game depth: pop elements forward per eye on the ALREADY-composited frame
 // (no extra emulation pass). depth3d.overworld is snapshotted in the race-safe window. M2 = player.
 #define DEPTH_MAX_SPR 32
@@ -219,7 +229,7 @@ typedef struct {
 } DepthSnap;
 #define POP3D_PLAYER_GX 112   // player tile (7,5) -> sprite rect (16x32, head 16px above the tile)
 #define POP3D_PLAYER_GY 64
-#define POP3D_PX  4.0f        // character pop disparity (px) at full slider (left +, right - = pops OUT)
+#define POP3D_PX  3.0f        // character pop disparity (px) at full slider; 2-3px ceiling tames edge ghosting
 #define ENV3D_NORMAL 6        // foreground scenery tile (tree/roof/wall) pop px @ full slider
 #define ENV3D_SPLIT  3        // ledge / low fence mid pop
 static void calc_xform(int mode, float sW, float sH, float* ox, float* oy, float* sx, float* sy) {
@@ -316,6 +326,54 @@ static void warp_scenery_eye(C3D_RenderTarget* tgt, EmuInstance* g, const DepthS
 	}
 }
 
+// HD-2D M1: build the blurred copy of the top game's frame (two LINEAR down-bounces). Runs
+// once per frame before the per-eye composites; both eyes sample texB. Half-texel insets on
+// the outer sample edges keep the cleared/stride texels from bleeding into the blur.
+static void dof_prepare(C3D_Tex* src, C3D_RenderTarget* tgtA, C3D_Tex* texA, C3D_RenderTarget* tgtB) {
+	Tex3DS_SubTexture s0 = { GBA_W, GBA_H, 0.0f, 1.0f,
+	                         ((float)GBA_W - 0.5f) / 256.0f, 1.0f - ((float)GBA_H - 0.5f) / 256.0f };
+	C2D_Image i0 = { src, &s0 };
+	C3D_TexSetFilter(src, GPU_LINEAR, GPU_LINEAR);   // averaging downsample (render_game resets it)
+	C2D_TargetClear(tgtA, C2D_Color32(0, 0, 0, 0xFF));
+	C2D_SceneBegin(tgtA);
+	C2D_DrawImageAt(i0, 0.0f, 0.0f, 0.0f, NULL, 0.5f, 0.5f);
+	Tex3DS_SubTexture s1 = { GBA_W / 2, GBA_H / 2, 0.0f, 1.0f,
+	                         ((float)(GBA_W / 2) - 0.5f) / DOF_TEXA, 1.0f - ((float)(GBA_H / 2) - 0.5f) / DOF_TEXA };
+	C2D_Image i1 = { texA, &s1 };
+	C2D_TargetClear(tgtB, C2D_Color32(0, 0, 0, 0xFF));
+	C2D_SceneBegin(tgtB);
+	C2D_DrawImageAt(i1, 0.0f, 0.0f, 0.0f, NULL, 0.5f, 0.5f);
+}
+
+// One blurred horizontal band: GBA rows gy0..gy1 (multiples of 4) of the quarter-res copy,
+// bilinear-upscaled through the same screen transform, vertical alpha ramp a0(top)->a1(bottom).
+// Tint blend 0 leaves RGB untouched; the tint color's alpha is per-corner transparency.
+static void dof_band(C3D_Tex* texB, int gy0, int gy1, float ox, float oy, float sx, float sy, u8 a0, u8 a1) {
+	if (gy1 <= gy0) return;
+	float u1 = ((float)(GBA_W / 4) - 0.5f) / DOF_TEXB;
+	float v1 = 1.0f - ((float)(gy1 / 4) - (gy1 == GBA_H ? 0.5f : 0.0f)) / DOF_TEXB;
+	Tex3DS_SubTexture st = { (u16)(GBA_W / 4), (u16)((gy1 - gy0) / 4),
+	                        0.0f, 1.0f - (float)(gy0 / 4) / DOF_TEXB, u1, v1 };
+	C2D_Image img = { texB, &st };
+	C2D_ImageTint t;
+	C2D_SetImageTint(&t, C2D_TopLeft,  C2D_Color32(0, 0, 0, a0), 0.0f);
+	C2D_SetImageTint(&t, C2D_TopRight, C2D_Color32(0, 0, 0, a0), 0.0f);
+	C2D_SetImageTint(&t, C2D_BotLeft,  C2D_Color32(0, 0, 0, a1), 0.0f);
+	C2D_SetImageTint(&t, C2D_BotRight, C2D_Color32(0, 0, 0, a1), 0.0f);
+	C2D_DrawImageAt(img, ox, oy + gy0 * sy, 0.0f, &t, 4.0f * sx, 4.0f * sy);
+}
+
+// Tilt-shift composite on one eye target: solid blur at the frame edges, alpha ramp into the
+// sharp focal band. Drawn AFTER the pops, so out-of-focus pop edges blur away with the band.
+static void dof_bands(C3D_RenderTarget* tgt, C3D_Tex* texB, int mode) {
+	float ox, oy, sx, sy; calc_xform(mode, 400.0f, 240.0f, &ox, &oy, &sx, &sy);
+	C2D_SceneBegin(tgt);
+	dof_band(texB, 0,                       DOF_SHARP_Y0 - DOF_FADE, ox, oy, sx, sy, 0xFF, 0xFF);
+	dof_band(texB, DOF_SHARP_Y0 - DOF_FADE, DOF_SHARP_Y0,            ox, oy, sx, sy, 0xFF, 0x00);
+	dof_band(texB, DOF_SHARP_Y1,            DOF_SHARP_Y1 + DOF_FADE, ox, oy, sx, sy, 0x00, 0xFF);
+	dof_band(texB, DOF_SHARP_Y1 + DOF_FADE, GBA_H,                   ox, oy, sx, sy, 0xFF, 0xFF);
+}
+
 // Draw one game to `screen` at the current scale + filter, leaving `screen` bound so the
 // caller can draw overlays (focus bar, toast, menu) on top. `preTgt`/`preTex` are the shared
 // offscreen prescale buffer, reused per screen (sequential on the render thread -> no race).
@@ -378,16 +436,17 @@ typedef struct {
 	s32 volA, volB;
 	s32 touchMode;
 	s32 frameskip;
+	s32 dof;
 } Settings;
 
 static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, int* hudMode,
-                          int* audioMode, int* volA, int* volB, int* touchMode, bool* fsOn) {
+                          int* audioMode, int* volA, int* volB, int* touchMode, bool* fsOn, bool* dofOn) {
 	FILE* f = fopen(SETTINGS_PATH, "rb");
 	if (!f) return;
 	Settings s;
 	size_t n = fread(&s, 1, sizeof s, f);
 	fclose(f);
-	if (n != sizeof s || s.magic != SETTINGS_MAGIC) return;
+	if ((n != sizeof s && n != sizeof s - sizeof s.dof) || s.magic != SETTINGS_MAGIC) return;   // tolerate pre-DoF files
 	scaleMode[0] = ((unsigned)s.scaleMode[0]) % 3;
 	scaleMode[1] = ((unsigned)s.scaleMode[1]) % 3;
 	smooth[0] = s.smooth[0] != 0;
@@ -399,12 +458,13 @@ static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, int* 
 	*volB = s.volB < 0 ? 0 : (s.volB > 256 ? 256 : s.volB);
 	*touchMode = ((unsigned)s.touchMode) % 3;
 	*fsOn = s.frameskip != 0;
+	if (n == sizeof s) *dofOn = s.dof != 0;   // pre-DoF settings file keeps the default
 }
 
 static void settings_save(const int scaleMode[2], const bool smooth[2], bool swapped, int hudMode,
-                          int audioMode, int volA, int volB, int touchMode, bool fsOn) {
+                          int audioMode, int volA, int volB, int touchMode, bool fsOn, bool dofOn) {
 	Settings s = { SETTINGS_MAGIC, { scaleMode[0], scaleMode[1] },
-	               { smooth[0], smooth[1] }, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn };
+	               { smooth[0], smooth[1] }, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn };
 	FILE* f = fopen(SETTINGS_PATH, "wb");
 	if (!f) return;
 	fwrite(&s, 1, sizeof s, f);
@@ -415,9 +475,10 @@ static void settings_save(const int scaleMode[2], const bool smooth[2], bool swa
 enum { SESSION_CHANGE, SESSION_QUIT };
 static const char* MENU_ITEMS[] = {
 	"Resume", "Link", "Audio", "Touch", "Frameskip", "Toggle HUD", "Swap screens",
-	"Save state", "Load state", "Load .sav (focused)", "Mute", "Pause", "Change games", "Quit"
+	"Save state", "Load state", "Load .sav (focused)", "Mute", "Pause", "DoF",
+	"Change games", "Quit"
 };
-#define MENU_N 14
+#define MENU_N 15
 #define MENU_LINK_IDX  1   // dynamic label ("Link: off/on")
 #define MENU_AUDIO_IDX 2   // dynamic label ("Audio: <mode>")
 #define MENU_TOUCH_IDX 3   // dynamic label ("Touch: on/off")
@@ -425,6 +486,7 @@ static const char* MENU_ITEMS[] = {
 #define MENU_MUTE_IDX  10  // dynamic label ("Mute: on/off")
 #define MENU_PAUSE_IDX 11  // dynamic label ("Pause A/B: on/off")
 #define MENU_HUD_IDX   5   // dynamic label ("HUD: off/top/bottom/both")
+#define MENU_DOF_IDX   12  // dynamic label ("DoF: on/off")
 static const char* const HUD_NAMES[4] = { "off", "top", "bottom", "both" };
 
 // Run one play session with the two chosen ROMs. Returns SESSION_CHANGE (re-pick) or
@@ -452,6 +514,20 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		preTgt = C3D_RenderTargetCreateFromTex(&preTex, GPU_TEXFACE_2D, 0, -1);
 	}
 
+	// HD-2D M1: the two DoF bounce targets (RGB565, VRAM). DoF silently disables if either fails.
+	C3D_Tex dofTexA, dofTexB;
+	C3D_RenderTarget *dofTgtA = NULL, *dofTgtB = NULL;
+	if (C3D_TexInitVRAM(&dofTexA, DOF_TEXA, DOF_TEXA, GPU_RGB565)) {
+		C3D_TexSetFilter(&dofTexA, GPU_LINEAR, GPU_LINEAR);
+		C3D_TexSetWrap(&dofTexA, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+		dofTgtA = C3D_RenderTargetCreateFromTex(&dofTexA, GPU_TEXFACE_2D, 0, -1);
+	}
+	if (dofTgtA && C3D_TexInitVRAM(&dofTexB, DOF_TEXB, DOF_TEXB, GPU_RGB565)) {
+		C3D_TexSetFilter(&dofTexB, GPU_LINEAR, GPU_LINEAR);
+		C3D_TexSetWrap(&dofTexB, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+		dofTgtB = C3D_RenderTargetCreateFromTex(&dofTexB, GPU_TEXFACE_2D, 0, -1);
+	}
+
 	// Audio: both cores share one rate (pitch-matched to the 3DS refresh); start clean.
 	GbaCore* anyCore = emuA.core ? emuA.core : emuB.core;
 	audio_thread_start(mainPrio, isN3DS);   // dedicated audio thread on the core-1 slice
@@ -461,6 +537,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	bool linkOn = false;
 	int  touchMode = TOUCH_OFF;   // 0 off / 1 gamepad / 2 smart (touch drives the bottom game)
 	bool fsOn = false;      // frameskip the unfocused game to free heavy-scene budget
+	bool dofOn = true;      // HD-2D M1: tilt-shift depth-of-field on the top screen (overworld only)
 	bool muted = false;     // HARD mute (stops audio rendering, saves CPU)
 
 	int focused = 0;
@@ -494,7 +571,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	int audioMode = AUD_SOLO;
 	int volA = 256, volB = 256;
 
-	settings_load(scaleMode, smooth, &swapped, &hudMode, &audioMode, &volA, &volB, &touchMode, &fsOn);   // restore prefs
+	settings_load(scaleMode, smooth, &swapped, &hudMode, &audioMode, &volA, &volB, &touchMode, &fsOn, &dofOn);   // restore prefs
 	gbacore_set_frameskip(emuA.core, (fsOn && focused != 0) ? 2 : 0);   // unfocused-frameskip
 	gbacore_set_frameskip(emuB.core, (fsOn && focused != 1) ? 2 : 0);
 
@@ -543,7 +620,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					swapped = !swapped;
 					snprintf(toast, sizeof toast, "Layout: %s", swapped ? "B top / A bottom" : "A top / B bottom");
 					toastTimer = 90;
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn);
 				}
 				int fs = swapped ? (focused ^ 1) : focused;   // screen the focused game sits on
 				if (kDown & KEY_ZR) {
@@ -551,14 +628,14 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					snprintf(toast, sizeof toast, "%s scale: %s",
 					         fs == 0 ? "Top" : "Bottom", SCALE_NAMES[scaleMode[fs]]);
 					toastTimer = 90;
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn);
 				}
 				if (kDown & KEY_ZL) {
 					smooth[fs] = !smooth[fs];   // render_game sets the per-pass filters
 					snprintf(toast, sizeof toast, "%s filter: %s", fs == 0 ? "Top" : "Bottom",
 					         smooth[fs] ? "Smooth" : "Sharp-bilinear");
 					toastTimer = 90;
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn);
 				}
 				u16 g = to_gba_keys(kHeld);
 				// Touchscreen drives the BOTTOM game (A is on bottom iff swapped) as a POINTER on the
@@ -633,7 +710,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			}
 		} else {
 			bool onAudio = (menuSel == MENU_AUDIO_IDX);
-			if (kDown & (KEY_DDOWN | KEY_CPAD_DOWN)) { if (menuSel + 2 < MENU_N) menuSel += 2; }
+			if (kDown & (KEY_DDOWN | KEY_CPAD_DOWN)) { if (menuSel + 2 < MENU_N) menuSel += 2; else if ((menuSel & 1) && menuSel + 1 < MENU_N) menuSel = MENU_N - 1; }
 			if (kDown & (KEY_DUP   | KEY_CPAD_UP))   { if (menuSel - 2 >= 0)      menuSel -= 2; }
 			if (!onAudio && (kDown & (KEY_DRIGHT | KEY_CPAD_RIGHT))) { if (menuSel + 1 < MENU_N) menuSel++; }
 			if (!onAudio && (kDown & (KEY_DLEFT  | KEY_CPAD_LEFT)))  { if (menuSel - 1 >= 0)      menuSel--; }
@@ -642,22 +719,22 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					*v += (kDown & (KEY_DRIGHT | KEY_CPAD_RIGHT)) ? 32 : -32;
 					if (*v < 0) *v = 0; else if (*v > 256) *v = 256;
 					snprintf(status, sizeof status, "Vol %c: %d%%", focused == 0 ? 'A' : 'B', *v * 100 / 256);
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn);
 				}
 				if (kDown & KEY_B) menuOpen = false;                 // resume
 			bool activate = (kDown & KEY_A) != 0;
 			if (kDown & KEY_TOUCH) {   // tap a button to select it
 				touchPosition mtp; hidTouchRead(&mtp);
 				for (int i = 0; i < MENU_N; i++) {
-					float bx = 4.0f + (i & 1) * 160.0f, by = 4.0f + (i >> 1) * 32.0f;
-					if (mtp.px >= bx && mtp.px < bx + 152 && mtp.py >= by && mtp.py < by + 29) {
+					float bx = 4.0f + (i & 1) * 160.0f, by = 2.0f + (i >> 1) * 28.0f;
+					if (mtp.px >= bx && mtp.px < bx + 152 && mtp.py >= by && mtp.py < by + 27) {
 						menuSel = i;
 						if (i == MENU_AUDIO_IDX) {   // 3 sub-buttons: A vol | B vol | mode (no full-cell activate)
 							int j = (int)((mtp.px - bx) / 50.5f); if (j < 0) j = 0; if (j > 2) j = 2;
 							if      (j == 0) { volA += 64; if (volA > 256) volA = 0; }
 							else if (j == 1) { volB += 64; if (volB > 256) volB = 0; }
 							else            { audioMode = (audioMode + 1) % 3; audio_reset_stream(); }
-							settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn);
+							settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn);
 						} else {
 							activate = true;
 						}
@@ -694,30 +771,30 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					audioMode = (audioMode + 1) % 3;
 					snprintf(status, sizeof status, "Audio: %s", AUDIO_NAMES[audioMode]);
 					audio_reset_stream();                        // clean cut between modes
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn);
 				}
 				else if (menuSel == 3) {                         // Touch mode (off / gamepad / smart)
 					touchMode = (touchMode + 1) % 3;
 					snprintf(status, sizeof status, "Touch: %s", TOUCH_NAMES[touchMode]);
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn);
 				}
 				else if (menuSel == 4) {                         // Frameskip (unfocused game)
 					fsOn = !fsOn;
 					gbacore_set_frameskip(emuA.core, (fsOn && focused != 0) ? 2 : 0);
 					gbacore_set_frameskip(emuB.core, (fsOn && focused != 1) ? 2 : 0);
 					snprintf(status, sizeof status, "Frameskip %s", fsOn ? "on" : "off");
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn);
 				}
 				else if (menuSel == 5) {                         // Toggle HUD
 					hudMode = (hudMode + 1) & 3;
 					snprintf(status, sizeof status, "HUD: %s", HUD_NAMES[hudMode]);
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn);
 				}
 				else if (menuSel == 6) {                         // Swap screens
 					swapped = !swapped; menuOpen = false;
 					snprintf(toast, sizeof toast, "Layout: %s", swapped ? "B top / A bottom" : "A top / B bottom");
 					toastTimer = 90;
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn);
 				}
 				else if (menuSel == 7) {                         // Save state (focused game)
 					EmuInstance* fg = (focused == 0) ? &emuA : &emuB;
@@ -744,7 +821,12 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					fg->paused = !fg->paused;
 					snprintf(status, sizeof status, "Game %c %s", focused == 0 ? 'A' : 'B', fg->paused ? "paused" : "resumed");
 				}
-				else if (menuSel == 12) { result = SESSION_CHANGE; break; }
+				else if (menuSel == MENU_DOF_IDX) {              // HD-2D tilt-shift DoF (top screen)
+					dofOn = !dofOn;
+					snprintf(status, sizeof status, "DoF %s", dofOn ? "on" : "off");
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn);
+				}
+				else if (menuSel == 13) { result = SESSION_CHANGE; break; }
 				else                    { result = SESSION_QUIT;   break; }
 			}
 		}
@@ -795,6 +877,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 				} else if (i == MENU_HUD_IDX) {
 					snprintf(llabel, sizeof llabel, "HUD: %s", HUD_NAMES[hudMode]);
 					label = llabel;
+				} else if (i == MENU_DOF_IDX) {
+					snprintf(llabel, sizeof llabel, "DoF: %s", dofOn ? "on" : "off");
+					label = llabel;
 				}
 				C2D_TextParse(&items[i], txtBuf, label); C2D_TextOptimize(&items[i]);
 			}
@@ -825,9 +910,12 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		// top screen (sharp-bilinear two-pass when applicable). render_game leaves `top` bound.
 		float slider3d = osGet3DSliderState();
 		bool pop3d = slider3d > 0.03f && depth3d.overworld && topG->core;
+		bool dofPass = dofOn && dofTgtB && depth3d.overworld && topG->core;   // tilt-shift DoF (slider-independent)
+		if (dofPass) dof_prepare(&topG->tex, dofTgtA, &dofTexA, dofTgtB);     // one blurred copy, shared by both eyes
 		render_game(topG, top, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], topTint, clrBg);
 		if (pop3d) pop_eye(top, topG, &depth3d, scaleMode[0], +POP3D_PX * slider3d);   // LEFT eye shifts RIGHT -> crossed disparity -> pops OUT
 		if (pop3d) warp_scenery_eye(top, topG, &depth3d, scaleMode[0], +slider3d);     // foreground scenery pops too
+		if (dofPass) dof_bands(top, &dofTexB, scaleMode[0]);   // blur bands OVER the pops: edge ghosts blur away too
 		if (!menuOpen) {
 			if (hudMode & 1) {
 				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 400.0f, 14.0f, THEME_HUD_BAR);
@@ -846,6 +934,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		render_game(topG, topR, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], NULL, clrBg);
 		if (pop3d) pop_eye(topR, topG, &depth3d, scaleMode[0], -POP3D_PX * slider3d);   // RIGHT eye shifts LEFT
 		if (pop3d) warp_scenery_eye(topR, topG, &depth3d, scaleMode[0], -slider3d);
+		if (dofPass) dof_bands(topR, &dofTexB, scaleMode[0]);
 
 		// bottom screen (+ menu overlay when open). render_game leaves `bot` bound.
 		render_game(botG, bot, preTgt, &preTex, 320.0f, 240.0f, scaleMode[1], smooth[1], botTint, clrBg);
@@ -880,8 +969,8 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		}
 		if (menuOpen) {
 			C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 240.0f, clrDim);
-			for (int i = 0; i < MENU_N; i++) {   // 2x7 grid of buttons (D-pad or tap to select)
-				float bx = 4.0f + (i & 1) * 160.0f, by = 4.0f + (i >> 1) * 32.0f;
+			for (int i = 0; i < MENU_N; i++) {   // 2x8 grid of buttons (D-pad or tap to select)
+				float bx = 4.0f + (i & 1) * 160.0f, by = 2.0f + (i >> 1) * 28.0f;
 				bool s = (i == menuSel);
 				if (i == MENU_AUDIO_IDX) {   // split cell: A vol | B vol | mode
 					char vlab[3][12];
@@ -890,14 +979,14 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					snprintf(vlab[2], 12, "%s", AUDIO_NAMES[audioMode]);
 					for (int j = 0; j < 3; j++) {
 						float sx = bx + j * 50.5f;
-						C2D_DrawRectSolid(sx, by, 0.0f, 49.0f, 29.0f, s ? clrHi : clrPanel);
+						C2D_DrawRectSolid(sx, by, 0.0f, 49.0f, 27.0f, s ? clrHi : clrPanel);
 						C2D_Text st; C2D_TextParse(&st, txtBuf, vlab[j]); C2D_TextOptimize(&st);
-						C2D_DrawText(&st, C2D_WithColor, sx + 4.0f, by + 8.0f, 0.0f, 0.36f, 0.36f, s ? clrSelTxt : clrTxt);
+						C2D_DrawText(&st, C2D_WithColor, sx + 4.0f, by + 7.0f, 0.0f, 0.36f, 0.36f, s ? clrSelTxt : clrTxt);
 					}
 					continue;
 				}
-				C2D_DrawRectSolid(bx, by, 0.0f, 152.0f, 29.0f, s ? clrHi : clrPanel);
-				C2D_DrawText(&items[i], C2D_WithColor, bx + 6.0f, by + 7.0f, 0.0f, 0.4f, 0.4f, s ? clrSelTxt : clrTxt);
+				C2D_DrawRectSolid(bx, by, 0.0f, 152.0f, 27.0f, s ? clrHi : clrPanel);
+				C2D_DrawText(&items[i], C2D_WithColor, bx + 6.0f, by + 6.0f, 0.0f, 0.4f, 0.4f, s ? clrSelTxt : clrTxt);
 			}
 			C2D_DrawText(&tStatus, C2D_WithColor, 4.0f, 228.0f, 0.0f, 0.35f, 0.35f, clrTxt);
 		} else {
@@ -927,6 +1016,8 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	teardown_core(&emuB);
 	gbalink_destroy(link);
 	if (preTgt) { C3D_RenderTargetDelete(preTgt); C3D_TexDelete(&preTex); }
+	if (dofTgtB) { C3D_RenderTargetDelete(dofTgtB); C3D_TexDelete(&dofTexB); }
+	if (dofTgtA) { C3D_RenderTargetDelete(dofTgtA); C3D_TexDelete(&dofTexA); }
 	g_quit = false;
 	gfxSet3D(false);   // back to flat for the ROM picker / splash between sessions
 	return result;
