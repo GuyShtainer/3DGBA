@@ -541,12 +541,18 @@ static void warp_grid_fini(void) {
 	if (warpDvlb) { shaderProgramFree(&warpProg); DVLB_Free(warpDvlb); }
 }
 
-// Vertex depth = average of the (up to 4) tiles meeting at this corner -> continuous field.
+// Standee depth field: a vertex carries the depth of the tile(s) just BELOW it (grid row vr), so a
+// foreground tile's TOP edge pops out while its BOTTOM edge (the next row down) sits at the ground.
+// Every foreground object (pole / thin tree / rock tile) thus STANDS UP all over the map -- not only
+// where it overlaps the player's sprite rect (the old 4-tile AVERAGE diluted an isolated tile down to
+// near-ground, so lone poles went flat). max() over the two tiles below keeps thin verticals at full
+// pop; a flat plateau (tiles below also raised) stays uniformly forward, leaning only at its front edge.
 static float warp_vert_depth(const DepthSnap* d, int vr, int vc) {
-	float sum = 0.0f; int n = 0;
-	for (int r = vr - 1; r <= vr; r++) for (int c = vc - 1; c <= vc; c++)
-		if (r >= 0 && r < WARP_ROWS && c >= 0 && c < WARP_COLS) { sum += d->tdepth[r][c]; n++; }
-	return n ? sum / (float)n : 0.0f;
+	if (vr < 0 || vr >= WARP_ROWS) return 0.0f;                       // bottom screen edge -> grounded
+	float dep = 0.0f;
+	if (vc - 1 >= 0       && d->tdepth[vr][vc - 1] > dep) dep = d->tdepth[vr][vc - 1];
+	if (vc < WARP_COLS    && d->tdepth[vr][vc]     > dep) dep = d->tdepth[vr][vc];
+	return dep;
 }
 
 static void warp_grid_eye(C3D_RenderTarget* tgt, EmuInstance* g, const DepthSnap* d, int mode,
