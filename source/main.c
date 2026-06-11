@@ -383,12 +383,14 @@ static void build_depth_grid(GbaCore* core, const GameProfile* p, int px, int py
 		if (gx >= 0 && gx < w && gy >= 0 && gy < h) {
 			uint16_t e = gbacore_read16(core, ptr + 2u * (uint32_t)(gx + w * gy));
 			uint8_t layer = metatile_layer(core, p, e & 0x03FF);
-			float f = (layer == 0) ? ENV3D_NORMAL : (layer == 2) ? ENV3D_SPLIT : 0.0f;
-			// A solid (impassable) tile is a stand-up object: pole/tree/wall/sign/fence. This is the
-			// game-agnostic foreground signal (the very collision bits the touch BFS walks on), so
-			// objects pop EVERYWHERE -- not just Emerald foreground tiles or the player's sprite rect.
-			// (Skip elevation 1 = surf water, which is impassable but flat.)
-			if ((e & 0x0C00) && (e >> 12) != 1 && f < ENV3D_NORMAL) f = ENV3D_NORMAL;
+			// The metatile NORMAL *layer type* is the default compositing mode -> ~EVERY tile, so using
+			// it as "foreground" floods the grid uniform and the whole map reads FLAT (the f~148/150
+			// diagnostic caught exactly this). The real stand-up signal is COLLISION: a solid/impassable
+			// tile is an object (pole/tree/wall/sign/fence); walkable ground is passable and stays flat.
+			// Same 0x0C00 bits the touch BFS walks on -> proven + game-agnostic. Keep SPLIT (ledges /
+			// grass edges) as a small extra; skip elevation 1 = surf water (impassable but flat).
+			float f = (layer == 2) ? ENV3D_SPLIT : 0.0f;
+			if ((e & 0x0C00) && (e >> 12) != 1) f = ENV3D_NORMAL;
 			feat[r][c] = f;
 			float pl = ELEV_PLANE[e >> 12];
 			if (pl >= 0.0f) { ed[r][c] = pl; has[r][c] = true; }
