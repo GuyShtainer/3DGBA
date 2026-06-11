@@ -23,6 +23,7 @@
 #include "gamestate.h"
 #include "touch.h"
 #include "audio.h"
+#include "netlink.h"
 #include "warp_shbin.h"   // M2 grid-warp vertex shader (generated from source/warp.v.pica)
 
 #define WORKER_STACKSIZE (512 * 1024)   // mGBA runFrame has deep call chains; 32KB overflows
@@ -1630,6 +1631,7 @@ int main(int argc, char** argv) {
 	C2D_Prepare();
 	warp_grid_init();   // M2 grid-warp shader (falls back to the quad warp if it fails)
 	audio_init();   // ndsp; silently no-ops if dspfirm.cdc isn't present
+	netlink_init(); // wireless link (UDS); no-ops without the .cia's nwm::UDS grant
 	s_hasPtm = R_SUCCEEDED(ptmuInit());   // battery level for the HUD
 	C3D_RenderTarget* top  = C2D_CreateScreenTarget(GFX_TOP, GFX_LEFT);
 	C3D_RenderTarget* topR = C2D_CreateScreenTarget(GFX_TOP, GFX_RIGHT);   // right eye (stereoscopic 3D)
@@ -1655,6 +1657,7 @@ int main(int argc, char** argv) {
 		// SESSION_CHANGE -> loop back to the picker
 	}
 
+	netlink_exit();
 	audio_exit();
 	if (s_hasPtm) ptmuExit();
 	C2D_TextBufDelete(txtBuf);
