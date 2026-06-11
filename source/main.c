@@ -21,6 +21,7 @@
 #include "gamestate.h"
 #include "touch.h"
 #include "audio.h"
+#include "warp_shbin.h"   // M2 grid-warp vertex shader (generated from source/warp.v.pica)
 
 #define WORKER_STACKSIZE (512 * 1024)   // mGBA runFrame has deep call chains; 32KB overflows
 #define FRAME_TICKS      4481520ULL    // SYSCLOCK_ARM11 / (16756991/280095) -> 59.826 fps real-time cap
@@ -217,6 +218,7 @@ static bool touch_to_gba(int px, int py, int mode, int* gx, int* gy) {
 #define DOF_SHARP_Y0  56    // sharp focal band (GBA rows Y0..Y1; player sits ~64..96)
 #define DOF_SHARP_Y1  104
 #define DOF_FADE      24    // blur alpha-ramps in over this many rows outside the band
+#define DOF_ALPHA     0xAA  // max band alpha (~67%): diorama blur that never fully erases detail
 
 // Stereoscopic single-game depth: pop elements forward per eye on the ALREADY-composited frame
 // (no extra emulation pass). depth3d.overworld is snapshotted in the race-safe window. M2 = player.
@@ -226,6 +228,7 @@ typedef struct {
 	int  nspr;
 	struct { short x, y; unsigned char w, h; } spr[DEPTH_MAX_SPR];   // on-screen OAM rects to pop
 	unsigned char tdepth[10][15];   // M4: smoothed per-visible-tile scenery pop px (0 = ground plane)
+	bool textUp;                    // field textbox / map-name banner on screen -> suppress DoF
 } DepthSnap;
 #define POP3D_PLAYER_GX 112   // player tile (7,5) -> sprite rect (16x32, head 16px above the tile)
 #define POP3D_PLAYER_GY 64
@@ -326,6 +329,96 @@ static void warp_scenery_eye(C3D_RenderTarget* tgt, EmuInstance* g, const DepthS
 	}
 }
 
+// M2: continuous vertex-grid scenery warp (one mesh per eye). Verts sit at 16px tile corners
+// and shift by the smoothed tile depth, so depth steps STRETCH the texture between cells
+// instead of tearing at tile edges (the per-tile quad shift's artifact). citro2d has no mesh
+// path, so this is a raw C3D draw with a passthrough shader (warp.v.pica); the warped X
+// positions are CPU-computed (176 verts/eye) and the GPU is handed back via C2D_Prepare.
+#define WARP_COLS  15
+#define WARP_ROWS  10
+#define WARP_VERTS ((WARP_COLS + 1) * (WARP_ROWS + 1))   // 16x11 = 176
+#define WARP_IDX   (WARP_COLS * WARP_ROWS * 6)           // 900
+typedef struct { float x, y, u, v; } WarpVert;
+static DVLB_s*         warpDvlb;
+static shaderProgram_s warpProg;
+static int             warpProjLoc = -1;
+static WarpVert*       warpVbo;   // linearAlloc; one slab per eye, rewritten per frame (SYNCDRAW-safe)
+static u16*            warpIbo;   // static triangle indices
+static bool            warpOk;
+
+static void warp_grid_init(void) {
+	warpDvlb = DVLB_ParseFile((u32*)warp_shbin, warp_shbin_size);
+	if (!warpDvlb) return;
+	shaderProgramInit(&warpProg);
+	shaderProgramSetVsh(&warpProg, &warpDvlb->DVLE[0]);
+	warpProjLoc = shaderInstanceGetUniformLocation(warpProg.vertexShader, "projection");
+	warpVbo = (WarpVert*)linearAlloc(sizeof(WarpVert) * WARP_VERTS * 2);
+	warpIbo = (u16*)linearAlloc(sizeof(u16) * WARP_IDX);
+	if (!warpVbo || !warpIbo || warpProjLoc < 0) return;   // leave warpOk false -> quad-warp fallback
+	int n = 0;
+	for (int r = 0; r < WARP_ROWS; r++) for (int c = 0; c < WARP_COLS; c++) {
+		u16 tl = (u16)(r * (WARP_COLS + 1) + c), tr = tl + 1;
+		u16 bl = tl + (WARP_COLS + 1), br = bl + 1;
+		warpIbo[n++] = tl; warpIbo[n++] = bl; warpIbo[n++] = tr;
+		warpIbo[n++] = tr; warpIbo[n++] = bl; warpIbo[n++] = br;
+	}
+	GSPGPU_FlushDataCache(warpIbo, sizeof(u16) * WARP_IDX);
+	warpOk = true;
+}
+
+static void warp_grid_fini(void) {
+	if (warpVbo) linearFree(warpVbo);
+	if (warpIbo) linearFree(warpIbo);
+	if (warpDvlb) { shaderProgramFree(&warpProg); DVLB_Free(warpDvlb); }
+}
+
+// Vertex depth = average of the (up to 4) tiles meeting at this corner -> continuous field.
+static float warp_vert_depth(const DepthSnap* d, int vr, int vc) {
+	int sum = 0, n = 0;
+	for (int r = vr - 1; r <= vr; r++) for (int c = vc - 1; c <= vc; c++)
+		if (r >= 0 && r < WARP_ROWS && c >= 0 && c < WARP_COLS) { sum += d->tdepth[r][c]; n++; }
+	return n ? (float)sum / (float)n : 0.0f;
+}
+
+static void warp_grid_eye(C3D_RenderTarget* tgt, EmuInstance* g, const DepthSnap* d, int mode,
+                          float dispUnit, bool sharpPre, C3D_Tex* pre, u32 mod, int eye) {
+	float ox, oy, sx, sy; calc_xform(mode, 400.0f, 240.0f, &ox, &oy, &sx, &sy);
+	WarpVert* v = warpVbo + (eye ? WARP_VERTS : 0);
+	for (int r = 0; r <= WARP_ROWS; r++) for (int c = 0; c <= WARP_COLS; c++) {
+		WarpVert* w = &v[r * (WARP_COLS + 1) + c];
+		float gx = (float)(c * 16), gy = (float)(r * 16);
+		w->x = ox + gx * sx + dispUnit * warp_vert_depth(d, r, c);
+		w->y = oy + gy * sy;
+		w->u = gx / 256.0f;             // preTex UVs coincide: PRESCALE/PRE_TEX == 1/256
+		w->v = 1.0f - gy / 256.0f;
+	}
+	GSPGPU_FlushDataCache(v, sizeof(WarpVert) * WARP_VERTS);
+	C2D_Flush();                        // submit citro2d's pending work before going raw C3D
+	C3D_FrameDrawOn(tgt);
+	C3D_BindProgram(&warpProg);
+	C3D_Mtx proj;
+	Mtx_OrthoTilt(&proj, 0.0f, 400.0f, 240.0f, 0.0f, 1.0f, -1.0f, true);
+	C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, warpProjLoc, &proj);
+	C3D_AttrInfo* ai = C3D_GetAttrInfo();
+	AttrInfo_Init(ai);
+	AttrInfo_AddLoader(ai, 0, GPU_FLOAT, 2);   // v0 = position
+	AttrInfo_AddLoader(ai, 1, GPU_FLOAT, 2);   // v1 = texcoord
+	C3D_BufInfo* bi = C3D_GetBufInfo();
+	BufInfo_Init(bi);
+	BufInfo_Add(bi, v, sizeof(WarpVert), 2, 0x10);
+	C3D_TexBind(0, sharpPre ? pre : &g->tex);  // sharp-bilinear keeps its crisp prescale as the source
+	C3D_TexEnv* env = C3D_GetTexEnv(0);
+	C3D_TexEnvInit(env);
+	C3D_TexEnvSrc(env, C3D_Both, GPU_TEXTURE0, GPU_CONSTANT, 0);
+	C3D_TexEnvFunc(env, C3D_Both, GPU_MODULATE);   // x mod = the unfocused dim-tint analog
+	C3D_TexEnvColor(env, mod);
+	C3D_TexEnvInit(C3D_GetTexEnv(1));
+	C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
+	C3D_CullFace(GPU_CULL_NONE);
+	C3D_DrawElements(GPU_TRIANGLES, WARP_IDX, C3D_UNSIGNED_SHORT, warpIbo);
+	C2D_Prepare();                      // hand the GPU back to citro2d (rebinds its shader/state)
+}
+
 // HD-2D M1: build the blurred copy of the top game's frame (two LINEAR down-bounces). Runs
 // once per frame before the per-eye composites; both eyes sample texB. Half-texel insets on
 // the outer sample edges keep the cleared/stride texels from bleeding into the blur.
@@ -365,13 +458,15 @@ static void dof_band(C3D_Tex* texB, int gy0, int gy1, float ox, float oy, float 
 
 // Tilt-shift composite on one eye target: solid blur at the frame edges, alpha ramp into the
 // sharp focal band. Drawn AFTER the pops, so out-of-focus pop edges blur away with the band.
-static void dof_bands(C3D_RenderTarget* tgt, C3D_Tex* texB, int mode) {
+static void dof_bands(C3D_RenderTarget* tgt, C3D_Tex* texB, int mode, float lvl) {
+	u8 aMax = (u8)(DOF_ALPHA * lvl + 0.5f);
+	if (!aMax) return;
 	float ox, oy, sx, sy; calc_xform(mode, 400.0f, 240.0f, &ox, &oy, &sx, &sy);
 	C2D_SceneBegin(tgt);
-	dof_band(texB, 0,                       DOF_SHARP_Y0 - DOF_FADE, ox, oy, sx, sy, 0xFF, 0xFF);
-	dof_band(texB, DOF_SHARP_Y0 - DOF_FADE, DOF_SHARP_Y0,            ox, oy, sx, sy, 0xFF, 0x00);
-	dof_band(texB, DOF_SHARP_Y1,            DOF_SHARP_Y1 + DOF_FADE, ox, oy, sx, sy, 0x00, 0xFF);
-	dof_band(texB, DOF_SHARP_Y1 + DOF_FADE, GBA_H,                   ox, oy, sx, sy, 0xFF, 0xFF);
+	dof_band(texB, 0,                       DOF_SHARP_Y0 - DOF_FADE, ox, oy, sx, sy, aMax, aMax);
+	dof_band(texB, DOF_SHARP_Y0 - DOF_FADE, DOF_SHARP_Y0,            ox, oy, sx, sy, aMax, 0x00);
+	dof_band(texB, DOF_SHARP_Y1,            DOF_SHARP_Y1 + DOF_FADE, ox, oy, sx, sy, 0x00, aMax);
+	dof_band(texB, DOF_SHARP_Y1 + DOF_FADE, GBA_H,                   ox, oy, sx, sy, aMax, aMax);
 }
 
 // Draw one game to `screen` at the current scale + filter, leaving `screen` bound so the
@@ -538,6 +633,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	int  touchMode = TOUCH_OFF;   // 0 off / 1 gamepad / 2 smart (touch drives the bottom game)
 	bool fsOn = false;      // frameskip the unfocused game to free heavy-scene budget
 	bool dofOn = true;      // HD-2D M1: tilt-shift depth-of-field on the top screen (overworld only)
+	float dofLevel = 1.0f;  // text-aware DoF engagement 0..1 (fast-out when text shows, slow-in after)
 	bool muted = false;     // HARD mute (stops audio rendering, saves CPU)
 
 	int focused = 0;
@@ -670,6 +766,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					GbaCore* topCore = swapped ? emuB.core : emuA.core;
 					const GameProfile* tprof = profile_for(topCore);
 					GameState ts; depth3d.overworld = game_read(topCore, tprof, &ts) && ts.ctx == GCTX_OVERWORLD;
+					depth3d.textUp = ts.textUp;   // field textbox / map-name banner -> keep the text sharp
 					depth3d.nspr = 0; memset(depth3d.tdepth, 0, sizeof depth3d.tdepth);
 					if (depth3d.overworld && topCore) {
 						static const unsigned char SW[3][4] = {{8,16,32,64},{16,32,32,64},{8,8,16,32}};
@@ -910,12 +1007,21 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		// top screen (sharp-bilinear two-pass when applicable). render_game leaves `top` bound.
 		float slider3d = osGet3DSliderState();
 		bool pop3d = slider3d > 0.03f && depth3d.overworld && topG->core;
-		bool dofPass = dofOn && dofTgtB && depth3d.overworld && topG->core;   // tilt-shift DoF (slider-independent)
+		// Text-aware DoF: drop the blur fast when a field textbox / map-name banner is up, ease it
+		// back in afterwards (fast-out ~3 frames, slow-in ~12 -> no flicker between dialog boxes).
+		dofLevel += (depth3d.overworld && !depth3d.textUp) ? 0.08f : -0.34f;
+		if (dofLevel > 1.0f) dofLevel = 1.0f; else if (dofLevel < 0.0f) dofLevel = 0.0f;
+		bool dofPass = dofOn && dofTgtB && depth3d.overworld && topG->core && dofLevel > 0.01f;
 		if (dofPass) dof_prepare(&topG->tex, dofTgtA, &dofTexA, dofTgtB);     // one blurred copy, shared by both eyes
+		bool sharpTop = !smooth[0] && scaleMode[0] != SCALE_1X && preTgt;     // matches render_game's two-pass choice
+		u32 topMod = (focScreen == 0) ? 0xFFFFFFFFu : C2D_Color32(0x80, 0x80, 0x80, 0xFF);   // grid analog of dimTint
 		render_game(topG, top, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], topTint, clrBg);
-		if (pop3d) pop_eye(top, topG, &depth3d, scaleMode[0], +POP3D_PX * slider3d);   // LEFT eye shifts RIGHT -> crossed disparity -> pops OUT
-		if (pop3d) warp_scenery_eye(top, topG, &depth3d, scaleMode[0], +slider3d);     // foreground scenery pops too
-		if (dofPass) dof_bands(top, &dofTexB, scaleMode[0]);   // blur bands OVER the pops: edge ghosts blur away too
+		if (pop3d) {   // M2: continuous grid warp (stretch, no tile tears); quad-warp fallback if no shader
+			if (warpOk) warp_grid_eye(top, topG, &depth3d, scaleMode[0], +slider3d, sharpTop, &preTex, topMod, 0);
+			else        warp_scenery_eye(top, topG, &depth3d, scaleMode[0], +slider3d);
+			pop_eye(top, topG, &depth3d, scaleMode[0], +POP3D_PX * slider3d);   // LEFT eye shifts RIGHT -> pops OUT
+		}
+		if (dofPass) dof_bands(top, &dofTexB, scaleMode[0], dofLevel);   // blur bands OVER the pops: edge ghosts blur away too
 		if (!menuOpen) {
 			if (hudMode & 1) {
 				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 400.0f, 14.0f, THEME_HUD_BAR);
@@ -932,9 +1038,12 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		// top RIGHT eye = the SAME (top) game -> single-game stereoscopic depth. Player pops forward
 		// (positive disparity). (Per-eye dual-game retired; can return later as a menu toggle.)
 		render_game(topG, topR, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], NULL, clrBg);
-		if (pop3d) pop_eye(topR, topG, &depth3d, scaleMode[0], -POP3D_PX * slider3d);   // RIGHT eye shifts LEFT
-		if (pop3d) warp_scenery_eye(topR, topG, &depth3d, scaleMode[0], -slider3d);
-		if (dofPass) dof_bands(topR, &dofTexB, scaleMode[0]);
+		if (pop3d) {
+			if (warpOk) warp_grid_eye(topR, topG, &depth3d, scaleMode[0], -slider3d, sharpTop, &preTex, 0xFFFFFFFFu, 1);
+			else        warp_scenery_eye(topR, topG, &depth3d, scaleMode[0], -slider3d);
+			pop_eye(topR, topG, &depth3d, scaleMode[0], -POP3D_PX * slider3d);   // RIGHT eye shifts LEFT
+		}
+		if (dofPass) dof_bands(topR, &dofTexB, scaleMode[0], dofLevel);
 
 		// bottom screen (+ menu overlay when open). render_game leaves `bot` bound.
 		render_game(botG, bot, preTgt, &preTex, 320.0f, 240.0f, scaleMode[1], smooth[1], botTint, clrBg);
@@ -1131,6 +1240,7 @@ int main(int argc, char** argv) {
 	C3D_Init(C3D_DEFAULT_CMDBUF_SIZE);
 	C2D_Init(C2D_DEFAULT_MAX_OBJECTS);
 	C2D_Prepare();
+	warp_grid_init();   // M2 grid-warp shader (falls back to the quad warp if it fails)
 	audio_init();   // ndsp; silently no-ops if dspfirm.cdc isn't present
 	s_hasPtm = R_SUCCEEDED(ptmuInit());   // battery level for the HUD
 	C3D_RenderTarget* top  = C2D_CreateScreenTarget(GFX_TOP, GFX_LEFT);
@@ -1160,6 +1270,7 @@ int main(int argc, char** argv) {
 	audio_exit();
 	if (s_hasPtm) ptmuExit();
 	C2D_TextBufDelete(txtBuf);
+	warp_grid_fini();
 	C2D_Fini();
 	C3D_Fini();
 	gfxExit();

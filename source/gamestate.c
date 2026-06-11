@@ -17,19 +17,22 @@ static const GameProfile PROFILES[] = {
             0x03005D60u, 0x08057824u, 0x03005D74u, 0x02024076u, 0x0202406Cu, 0x02024210u, 0x02024064u, 0x03005DC0u,
             0x03005DF4u, 0x0809FAC4u, 0x0203CD90u, 0x02020004u, 0x0203760Eu, 0x03005E00u, 0x081AAD5Cu, 0x081ABD28u, 0x00000000u,
             0x081B1370u, 0x080E215Cu, 0x080E2058u, 0x081B3730u, 0x0809FA34u, 0x02037318u,
-            0x08038420u, 0x02037350u },
+            0x08038420u, 0x02037350u,
+            0x020375BCu, 0x080D487Cu },
   { "BPRE", 0x03005008u, 0x02022B4Cu, 0x02023FF8u, 0x02023FFCu, 0x02023BE4u, 0x02022976u,
             0x0203B0A0u, 0x02024029u, 0x030030F4u, 0x0811EBA0u, 0x0811EBD0u, 0x0303011Eu,
             0x03004FE0u, 0x0802E674u, 0x03004FF4u, 0x02023BD6u, 0x02023BCCu, 0x02023D70u, 0x02023BC4u, 0x03005040u,
             0x020370F0u, 0x0806F280u, 0x0203ADE4u, 0x020204B4u, 0x020370F4u, 0x03005090u, 0x08107EE0u, 0x08108F0Cu, 0x0203AD01u,
             0x0811FB28u, 0x0809CE54u, 0x0809CC98u, 0x08122C5Cu, 0x0806F1F0u, 0x00000000u,
-            0x08011100u, 0x02036E38u },
+            0x08011100u, 0x02036E38u,
+            0x0203709Cu, 0x080981ACu },
   { "BPGE", 0x03005008u, 0x02022B4Cu, 0x02023FF8u, 0x02023FFCu, 0x02023BE4u, 0x02022976u,
             0x0203B0A0u, 0x02024029u, 0x030030F4u, 0x0811EBA0u, 0x0811EBD0u, 0x0303011Eu,
             0x03004FE0u, 0x0802E674u, 0x03004FF4u, 0x02023BD6u, 0x02023BCCu, 0x02023D70u, 0x02023BC4u, 0x03005040u,
             0x020370F0u, 0x0806F280u, 0x0203ADE4u, 0x020204B4u, 0x020370F4u, 0x03005090u, 0x08107EE0u, 0x08108F0Cu, 0x0203AD01u,
             0x0811FB28u, 0x0809CE54u, 0x0809CC98u, 0x08122C5Cu, 0x0806F1F0u, 0x00000000u,
-            0x08011100u, 0x02036E38u },
+            0x08011100u, 0x02036E38u,
+            0x0203709Cu, 0x080981ACu },
 };
 
 const GameProfile* profile_for(GbaCore* c) {
@@ -106,6 +109,10 @@ bool game_read(GbaCore* c, const GameProfile* p, GameState* out) {
 		// so once you opened START, the overworld read as a menu forever -> walk stuck on A (Emerald).
 		if (task_active(c, p, p->startMenuTask)) { out->ctx = GCTX_FIELDMENU; return true; }
 		out->ctx = GCTX_OVERWORLD;
+		// On-screen field text (dialog/sign textbox, map-name banner) — lets the renderer keep the
+		// text readable (DoF off) while it's up. Fail-safe: unknown address -> false (just blurs).
+		out->textUp = (p->fieldMsgMode && gbacore_read8(c, p->fieldMsgMode) != 0)
+		           || task_active(c, p, p->mapNameTask);
 		return true;
 	}
 

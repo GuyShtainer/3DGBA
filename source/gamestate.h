@@ -63,6 +63,8 @@ typedef struct {
 	uint32_t mapHeader;     // gMapHeader (BPEE 0x02037318) for stereoscopic scenery depth; 0 = no M4
 	uint32_t battleMainCb;  // BattleMainCB2 (callback2==this == interactive battle; battleFlags lingers post-battle)
 	uint32_t mapObjects;    // gObjectEvents[16] (stride 0x24; +0 active:1, +0x10/+0x12 currentCoords x/y) -> NPC collision
+	uint32_t fieldMsgMode;  // sFieldMessageBoxMode (EM) / sMessageBoxType (FRLG): u8, != 0 while a field textbox is up
+	uint32_t mapNameTask;   // Task_MapNamePopUpWindow (EM) / Task_MapNamePopup (FRLG) — map-name banner task (ROM)
 } GameProfile;
 
 // One-pass snapshot of the live game.
@@ -82,6 +84,7 @@ typedef struct {
 	uint8_t battlerPos[4];   // gBattlerPositions[0..3]
 	// bag (live list-task base, computed in game_read; 0 if N/A)
 	uint32_t bagListTaskBase; // gTasks + 40*listTaskId + 8 (+24 scroll, +26 row)
+	bool     textUp;          // overworld only: field textbox / map-name banner on screen (DoF suppression)
 } GameState;
 
 // Profile for a core's ROM (by header game code), or NULL if unknown.

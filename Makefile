@@ -100,6 +100,7 @@ export DEPSDIR	:=	$(CURDIR)/$(BUILD)
 CFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
 CPPFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
 SFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
+PICAFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.v.pica)))
 BINFILES	:=	$(foreach dir,$(DATA),$(notdir $(wildcard $(dir)/*.*)))
 
 ifeq ($(strip $(CPPFILES)),)
@@ -109,9 +110,9 @@ else
 endif
 
 export OFILES_SOURCES 	:=	$(CPPFILES:.cpp=.o) $(CFILES:.c=.o) $(SFILES:.s=.o)
-export OFILES_BIN	:=	$(addsuffix .o,$(BINFILES))
+export OFILES_BIN	:=	$(addsuffix .shbin.o,$(PICAFILES:.v.pica=)) $(addsuffix .o,$(BINFILES))
 export OFILES 		:=	$(OFILES_BIN) $(OFILES_SOURCES)
-export HFILES_BIN	:=	$(addsuffix .h,$(subst .,_,$(BINFILES)))
+export HFILES_BIN	:=	$(PICAFILES:.v.pica=_shbin.h) $(addsuffix .h,$(subst .,_,$(BINFILES)))
 
 export INCLUDE	:=	$(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
 			$(foreach dir,$(LIBDIRS),-I$(dir)/include) \
@@ -176,6 +177,11 @@ $(OFILES_SOURCES) : $(HFILES_BIN)
 $(OUTPUT).elf	:	$(OFILES)
 
 %.bin.o	%_bin.h :	%.bin
+	@echo $(notdir $<)
+	@$(bin2o)
+
+# GPU shaders: 3ds_rules assembles %.v.pica -> %.shbin (picasso); embed it like a data blob.
+%.shbin.o %_shbin.h : %.shbin
 	@echo $(notdir $<)
 	@$(bin2o)
 
