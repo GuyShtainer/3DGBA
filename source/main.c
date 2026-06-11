@@ -251,7 +251,7 @@ typedef struct {
 // CHAR_PX above the floor at their own feet (the floor can never pop over them), and BG0
 // window panels (dialogs/menus) popping hardest of all as clean shifted copies.
 #define POP3D_RAMP_PX 3.6f    // ground ramp: bottom-edge pop (px @ full slider); top edge = 0 (moderate for comfort)
-#define POP3D_CHAR_PX 1.8f    // characters float this far above the floor at their feet
+#define POP3D_STANDUP 3.0f    // a sprite's head pops this far out beyond its grounded feet (standee lean)
 #define ENV3D_NORMAL  2.5f    // foreground layer-type extra (trees/roofs/walls)
 #define ENV3D_SPLIT   1.2f    // ledge / low fence mid extra
 #define ENV3D_RAISED  2.6f    // a "raised" elevation tier (engine priority 1) pops this far above ground
@@ -320,21 +320,26 @@ static float floor_at(const DepthSnap* d, int gx_px, int gy_px) {
 static void pop_eye(C3D_RenderTarget* tgt, EmuInstance* g, const DepthSnap* d, int mode, float eyeSl) {
 	float ox, oy, sx, sy; calc_xform(mode, 400.0f, 240.0f, &ox, &oy, &sx, &sy);
 	C2D_SceneBegin(tgt);
-	if (d->nspr > 0)
-		for (int i = 0; i < d->nspr; i++) {
-			int cx = d->spr[i].x + d->spr[i].w / 2, fy = d->spr[i].y + d->spr[i].h;
-			// Floor under the sprite = the smoothed grid depth at its feet (elevation + feature),
-			// RAISED to its own object-elevation plane when matched (authoritative on stairs). The
-			// max keeps the character at least level with the scenery on its feet tile, never behind.
-			float floorD = floor_at(d, cx, fy);
-			if (d->spr[i].elev != 0xFF) { float pl = elev_plane(d->spr[i].elev); if (pl > floorD) floorD = pl; }
-			float disp = eyeSl * clamp_disp(RAMP_AT(fy) + floorD + POP3D_CHAR_PX);
-			draw_pop(&g->tex, d->spr[i].x, d->spr[i].y, d->spr[i].w, d->spr[i].h, ox, oy, sx, sy, disp);
+	// Every sprite (NPC, the player, sprite-objects) stands UP out of the ground: its feet sit at
+	// the ground depth and the disparity ramps to +STANDUP at its head -> a leaning standee. Applied
+	// precisely PER SPRITE (no special rectangle for the centre/player); drawn as a few horizontal
+	// strips so the head pops while the base stays anchored to the floor.
+	for (int i = 0; i < d->nspr; i++) {
+		int x0 = d->spr[i].x, y0 = d->spr[i].y, w = d->spr[i].w, h = d->spr[i].h;
+		int cx = x0 + w / 2, fy = y0 + h;
+		// Feet floor = smoothed grid depth there, RAISED to the sprite's own object-elevation plane
+		// when matched (authoritative on stairs); max keeps the standee never behind its feet tile.
+		float floorD = floor_at(d, cx, fy);
+		if (d->spr[i].elev != 0xFF) { float pl = elev_plane(d->spr[i].elev); if (pl > floorD) floorD = pl; }
+		float base = RAMP_AT(fy) + floorD;                          // disparity at the grounded feet
+		int strips = (h + 7) / 8; if (strips < 1) strips = 1;
+		for (int s = 0; s < strips; s++) {
+			int yy = y0 + s * h / strips, hh = y0 + (s + 1) * h / strips - yy;
+			float tmid = ((float)yy + 0.5f * (float)hh - (float)y0) / (float)h;   // 0 head .. 1 feet
+			float disp = eyeSl * clamp_disp(base + POP3D_STANDUP * (1.0f - tmid));
+			draw_pop(&g->tex, x0, yy, w, hh, ox, oy, sx, sy, disp);
 		}
-	else
-		draw_pop(&g->tex, POP3D_PLAYER_GX, POP3D_PLAYER_GY, 16, 32, ox, oy, sx, sy,
-		         eyeSl * clamp_disp(RAMP_AT(POP3D_PLAYER_GY + 32)
-		                  + floor_at(d, POP3D_PLAYER_GX + 8, POP3D_PLAYER_GY + 32) + POP3D_CHAR_PX));
+	}
 }
 
 // M4: metatile id -> layer type (0 NORMAL=foreground / 1 COVERED=ground / 2 SPLIT=mid) via the
@@ -430,15 +435,18 @@ typedef struct { float r, g, b, lx, ly, lz, amb, dif; } LightEnv;
 // Interpolate the key-light for hour-of-day hf in [0,24). L is a screen-space direction
 // (x: +east/-west, y: +down, z: out toward the viewer); ground faces +z.
 static LightEnv light_for_hour(float hf) {
+	// Kept BRIGHT on purpose: high ambient so the focused game never reads as "darkened" -- the time
+	// of day is a SUBTLE colour/lean, not a dimming (a MULTIPLY mesh can only darken, so we stay near
+	// white). Low diffuse = gentle slope shading only.
 	static const float K[][9] = {   // hour, r,g,b(0..1), lx,ly,lz, ambient, diffuse
-		{  0.f, 0.59f,0.65f,0.82f,  0.00f,-0.25f,0.97f, 0.52f,0.30f },   // deep night (blue)
-		{  5.f, 0.62f,0.63f,0.78f,  0.50f,-0.20f,0.84f, 0.55f,0.32f },   // pre-dawn
-		{  7.f, 1.00f,0.78f,0.56f,  0.72f,-0.18f,0.67f, 0.74f,0.40f },   // dawn (warm, low east)
-		{ 12.f, 1.00f,0.99f,0.96f,  0.05f,-0.10f,0.99f, 0.95f,0.34f },   // noon (near-white, high)
-		{ 17.f, 1.00f,0.82f,0.58f, -0.62f,-0.18f,0.76f, 0.85f,0.40f },   // golden hour (warm, low west)
-		{ 19.f, 0.92f,0.60f,0.48f, -0.74f,-0.16f,0.65f, 0.66f,0.38f },   // dusk (orange-red)
-		{ 21.f, 0.60f,0.64f,0.82f, -0.20f,-0.22f,0.95f, 0.54f,0.30f },   // night falls
-		{ 24.f, 0.59f,0.65f,0.82f,  0.00f,-0.25f,0.97f, 0.52f,0.30f },   // wrap == 0h
+		{  0.f, 0.86f,0.90f,1.00f,  0.00f,-0.25f,0.97f, 0.88f,0.12f },   // night (subtle cool, still bright)
+		{  5.f, 0.90f,0.92f,1.00f,  0.50f,-0.20f,0.84f, 0.90f,0.12f },   // pre-dawn
+		{  7.f, 1.00f,0.95f,0.86f,  0.72f,-0.18f,0.67f, 0.94f,0.14f },   // dawn (subtle warm)
+		{ 12.f, 1.00f,1.00f,1.00f,  0.05f,-0.10f,0.99f, 1.00f,0.10f },   // noon (full bright neutral)
+		{ 17.f, 1.00f,0.95f,0.86f, -0.62f,-0.18f,0.76f, 0.95f,0.14f },   // golden hour (subtle warm)
+		{ 19.f, 1.00f,0.90f,0.82f, -0.74f,-0.16f,0.65f, 0.90f,0.14f },   // dusk (subtle warm)
+		{ 21.f, 0.88f,0.91f,1.00f, -0.20f,-0.22f,0.95f, 0.88f,0.12f },   // night falls
+		{ 24.f, 0.86f,0.90f,1.00f,  0.00f,-0.25f,0.97f, 0.88f,0.12f },   // wrap == 0h
 	};
 	int n = sizeof K / sizeof K[0], i = 0;
 	while (i < n - 1 && hf >= K[i + 1][0]) i++;
@@ -1378,8 +1386,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 
 		// top screen (sharp-bilinear two-pass when applicable). render_game leaves `top` bound.
 		float slider3d = osGet3DSliderState();
-		bool pop3d = slider3d > 0.03f && depth3d.overworld && topG->core;
-		bool uipop = slider3d > 0.03f && depth3d.nui > 0 && topG->core;   // BG0 panels pop in ANY context
+		bool s3dOn = slider3d > 0.03f;   // 3D slider engaged; OFF => plain 2D (gates every 3D effect below)
+		bool pop3d = s3dOn && depth3d.overworld && topG->core;
+		bool uipop = s3dOn && depth3d.nui > 0 && topG->core;   // BG0 panels pop in ANY context
 		// Text-aware DoF: kill a band's blur the moment text/UI shows under it (BG0 scan + RAM
 		// signals), ease back in afterwards (fast-out ~3 frames, slow-in ~12 -> no flicker).
 		dofLvlTop += (depth3d.overworld && !depth3d.textTop) ? 0.08f : -0.34f;
@@ -1388,10 +1397,10 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		if (dofLvlBot > 1.0f) dofLvlBot = 1.0f; else if (dofLvlBot < 0.0f) dofLvlBot = 0.0f;
 		bloomLvl += (depth3d.overworld && !depth3d.textTop && !depth3d.textBot) ? 0.08f : -0.34f;
 		if (bloomLvl > 1.0f) bloomLvl = 1.0f; else if (bloomLvl < 0.0f) bloomLvl = 0.0f;
-		bool dofPass = dofOn && dofTgtA && depth3d.overworld && topG->core && (dofLvlTop > 0.01f || dofLvlBot > 0.01f);
-		bool bloomPass = bloomOn && bloomTgt && dofTgtA && depth3d.overworld && topG->core
+		bool dofPass = s3dOn && dofOn && dofTgtA && depth3d.overworld && topG->core && (dofLvlTop > 0.01f || dofLvlBot > 0.01f);
+		bool bloomPass = s3dOn && bloomOn && bloomTgt && dofTgtA && depth3d.overworld && topG->core
 		              && focScreen == 0 && bloomLvl > 0.01f;   // focused top only (study budget rule)
-		bool litPass = lightOn && depth3d.overworld && topG->core;   // time-of-day grade (slider-independent)
+		bool litPass = s3dOn && lightOn && depth3d.overworld && topG->core;   // time-of-day grade (3D-slider-gated)
 		LightEnv lenv; if (litPass) { time_t _tt = time(NULL); struct tm* _lt = localtime(&_tt);
 			lenv = light_for_hour(_lt ? _lt->tm_hour + _lt->tm_min / 60.0f : 12.0f); }
 		if (dofPass || bloomPass) dof_prepare(&topG->tex, dofTgtA);   // shared half-res copy (DoF + bloom source)
