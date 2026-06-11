@@ -9,7 +9,7 @@
 
 - **Repo / branch:** `/Users/guyshtainer/VSCodeProjects/3ds-toolkit/projects/dual-gba` / `main` — pushed: no (local only; this sub-tool is its own git repo; the toolkit git-ignores `projects/`).
 - **Goal:** A New-3DS homebrew that runs **two Gen-3 Pokémon GBA games at once** (one per screen) on embedded mGBA (`libmgba`, two `mCore`s), joined by an **emulated GBA link cable** (trades/battles — already works on real New 3DS). On top of that: a **touchscreen "smart pointer"** that drives the real in-game UI, **stereoscopic 3D depth**, and (researched, not built) **wireless multi-3DS link**, **PokéMMO-style shared overworld**, and an **Octopath HD-2D** look.
-- **State right now:** All committed at `1545cd2`, working tree clean. The current `.cia` (build it with the commands below) contains: the full touch suite, **stereoscopic 3D depth M2–M4** (characters + scenery pop OUT, slider-gated), and **5 touch fixes**. Four big features are **researched with saved, source-verified milestone plans** but not yet built (HD-2D, co-op overworld, wireless link). Awaiting the user's **hardware test feedback** on the current build.
+- **State right now:** **HD-2D M1 (subtle, text-aware DoF) + M2 (vertex-grid scenery warp) + M3 (LDR bloom) implemented and building** (`.3dsx` + `.cia` clean) but **UNCOMMITTED** — modified: `main.c`, `gamestate.{c,h}`, `Makefile`; new file `source/warp.v.pica` (last commit `94a5775`). M3 (2026-06-11): bright-pass `clamp(half-res − 0xC8)×2` via TEV `GPU_SUBTRACT`+`GPU_TEVSCALE_2` into a 60×40 glow map, composited additively (`GPU_ONE/GPU_ONE`, gain 0x90) over both eyes after the DoF bands; reuses the M1 half-res copy + the M2 shader; **focused-top + overworld only, eased off whenever any text is up** (a white textbox must never halo its own text); "Bloom" menu toggle (index 13, grid now a full 2×8), `Settings.bloom` appended (size-tolerant load now accepts all 3 historical sizes). Hardware feedback round 2 ("blur STILL too much, overrides so much text") drove a rework: blur is now ONE half-res bounce (gentle ~2×2 soften, was quarter-res mush), alpha ceiling 47% (was 67%), sharp band widened to rows 48–112, and text-awareness became a **game-agnostic BG0 text-layer tilemap scan** (`band_text_scan` in `main.c`: gen-3 draws ALL textboxes/banners/menus on BG0 — verified, the standard textbox window sits at tile rows 15–18 on bg 0; any non-filler entries under a band kill that band's blur per-band, RAM signals kept as precise backups). Awaiting **hardware test round 3**. Remaining researched-not-built: HD-2D M3 bloom, co-op overworld, wireless link.
 - **Done (this arc, newest first):**
   - `1545cd2` docs: **co-op shared-overworld** feasibility + plan (`docs/kb/coop-shared-overworld.md`).
   - `949a6b7` docs: **Octopath HD-2D** feasibility + plan (`docs/kb/hd2d-octopath-3d.md`).
@@ -24,14 +24,14 @@
   - `7fb6f53` **hybrid walk** (quick-tap=BFS route, hold=directional steer).
   - `10d768f`/`6381e7c`/`a661b80`/`0be70b7`/`21d26cf` touch detection made **task-based & fail-safe** (fixed recurring Emerald walk breaks + party-in-battle); directional walk; field-menu/bag/party/popup touch.
   - `d8bf725` initial slider-gated per-eye 3D (the dual-game variant — now superseded by single-game depth).
-- **In progress:** **HD-2D M1 (tilt-shift depth-of-field)** was the agreed next build (user picked it) but **NOT started** — the implementation hand-off to the `pica-gpu` agent was halted by the user before any change. Nothing uncommitted.
-- **Blocked / needs the user:** (1) **Hardware test feedback** on the current build — 3D depth quality (ghosting at foreground edges, scenery tuning), and the 5 touch fixes (post-battle walk, NPC routing, double-tap START, title taps, FireRed menu). (2) Co-op M0 needs **Ruby/Sapphire (`AXVE`/`AXPE`) byte-matched symbol maps** to add profiles. Azahar can't validate 3D/link/timing — those are **hardware-final**.
+- **In progress:** **HD-2D M1 (text-aware DoF) + M2 (grid warp)** — code complete, builds clean, **uncommitted and not yet hardware-verified**. M1 gate: text always readable (dialog + map-name banner kill the blur instantly), bands blur softly, `worstMs` ≤16.7 ms, toggle persists. M2 gate: foreground edges **stretch** instead of tearing/ghosting with the slider up, player still pops, `worstMs` unchanged vs the quad warp.
+- **Blocked / needs the user:** (1) **Hardware test round 2** — the text-aware/softened DoF, the M2 grid warp (watch `worstMs`: the C2D↔C3D state churn is M2's known risk), plus the prior 5 touch fixes. (2) Co-op M0 needs **Ruby/Sapphire (`AXVE`/`AXPE`) byte-matched symbol maps** to add profiles. Azahar can't validate 3D/link/timing — those are **hardware-final**.
 
 ## Next steps (resume here)
 
-1. **HD-2D M1 — tilt-shift depth-of-field** (highest-impact visual; user-chosen). Follow `docs/kb/hd2d-octopath-3d.md` §3 recipe + §4 "M1": sharp focal band, blurred top/bottom bands, on the **focused top screen only**, 60fps with both games. PICA200 has **no fragment shader** — blur via an offscreen target + LINEAR down/up-sample + composite (scissor-bands or a per-vertex-alpha gradient; mind the rotated 240×400 top framebuffer for scissor). Add a "DoF" menu toggle (or a session-only `bool`). This is GPU-render work — the `pica-gpu` agent is the right specialist.
-2. **Fold in hardware feedback** once it arrives. Likely follow-ups: 3D **M2 vertex-grid depth warp** (replaces the per-tile quad shift → kills the scenery edge-ghosting); tune `POP3D_PX`/`ENV3D_*` in `main.c`.
-3. **Then pick among the other ready tracks** (each has a saved plan): co-op overworld **M0/M1** (`coop-shared-overworld.md`), **HD-2D M3 bloom**, **wireless link M1** lobby+seats (`wireless-link-architecture.md`).
+1. **Hardware-test round 3** (install the fresh `dual-gba.cia`): (a) ANY text — NPC dialog, signs, map-name banner, item pickups, match-call popups — must be **fully readable**: the affected band's blur dies the same frame (BG0 scan), the other band keeps its soft look; (b) the blur itself should now read as a subtle tilt-shift soften (~2×2 box at ≤47%), not mush; (c) slider up: scenery edges **stretch smoothly** (M2 grid warp) instead of doubled/torn tiles; (d) **M3 bloom**: bright spots (water glints, lamps, windows, white flowers) get a soft glow on the focused top screen; glow fades out with any text and with focus on the bottom game; "Bloom" toggle works + persists; (e) `worstMs` HUD ≤16 ms with both games + 3D + DoF + bloom — if breached, drop bloom FIRST (the study calls it the most expendable), then suspect M2's per-eye raw-C3D switch (fallback: quad warp). Tuning knobs: `DOF_ALPHA` (0x78), `DOF_SHARP_Y0/Y1` (48/112), `BLOOM_THRESH` (0xC8), `BLOOM_GAIN` (0x90).
+2. **Commit** the round (suggested split: text-aware DoF fix; M2 grid warp; or one combined HD-2D commit) once the user okays it.
+3. **Fold in feedback**, then pick the next ready track: **HD-2D M3 bloom** (`hd2d-octopath-3d.md`), co-op overworld **M0/M1** (`coop-shared-overworld.md`), **wireless link M1** (`wireless-link-architecture.md`). Tuning knobs if asked: `DOF_ALPHA`/`DOF_SHARP_Y0/Y1`/`DOF_FADE`, `POP3D_PX`/`ENV3D_*`, the dofLevel ramp rates in the frame loop.
 4. **Still-pending touch RE** (`docs/kb/touch-issues-todo.md`): bag **pocket-tap** (needs per-game pocket-indicator rects), Pokémon **summary page** switch, naming **keyboard**.
 
 ## How to build / test / run
@@ -85,6 +85,40 @@ Iterate in **Azahar** (Citra successor). **Sign off only on real New 3DS** — 3
 ---
 
 ## Session log
+
+### Session — 2026-06-11 — HD-2D M3: LDR bloom
+
+- **Intent:** User: "go to phase M3 now" → the study's M3 (LDR bloom), built on the M1/M2 infra.
+- **Did (uncommitted, `main.c` only):**
+  - `bloom_bright` — bright-pass from the **M1 half-res copy** (`dofTexA`, so `dof_prepare` now runs when `dofPass || bloomPass`) into a new 64×64 RGB565 VRAM target (`bloomTex/bloomTgt`, 60×40 content): TEV `GPU_SUBTRACT` (threshold `BLOOM_THRESH` 0xC8 ≈ only >78% channels glow) + `GPU_TEVSCALE_2`, raw C3D quad with plain `Mtx_Ortho` (offscreen targets are unrotated).
+  - `bloom_add` — glow map composited **additively** (`C3D_AlphaBlend` ONE/ONE, then restore citro2d's standard blend + `C2D_Prepare`) over each eye AFTER `dof_bands`, modulated by `BLOOM_GAIN` 0x90 × `bloomLvl`; per-eye vbo slabs in a new 12-vert `bloomVbo` (allocated in `warp_grid_init`, reuses the warp passthrough shader + `warpProjLoc`).
+  - **Gates:** overworld + **focused top screen only** (study budget rule) + `bloomLvl` eased to 0 whenever `textTop||textBot` (glowing white textboxes would halo their own text — the round-2/3 lesson applied preemptively).
+  - **Menu/settings:** "Bloom" item `MENU_BLOOM_IDX` 13 (grid now a full 2×8; Change games→14, Quit→15), `Settings.bloom` appended; `settings_load` now tolerates all 3 historical file sizes (pre-DoF / DoF-era / current).
+  - `.3dsx` + `.cia` build clean.
+- **Verify on hardware:** glints/lamps/white-bright spots glow softly (most visible at night/in caves); glow dies with any text and when focus moves to the bottom game; toggle persists; `worstMs` ≤16 ms — **bloom is the first thing to drop** if the budget breaks (study's call).
+- **Left off:** rounds 1–3 feedback all folded in; M1+M2+M3 in one uncommitted tree awaiting the combined hardware verdict.
+
+### Session — 2026-06-10 (round 3) — DoF made subtle + universally text-aware; M2 grid warp
+
+- **Hardware feedback:** round 1 "blur way too aggressive, top/bottom text unreadable" → round 2 (RAM-signal text gating + 67% alpha) STILL "way too much and overrides so much text".
+- **Did (uncommitted):**
+  - **Subtle blur rework** (`main.c`): one half-res `GPU_LINEAR` bounce (was two → quarter-res), `DOF_ALPHA` 0xAA→0x78 (~47%), sharp band widened 56–104→**48–112**; `dofTexB`/second pass deleted (saves a render-target pass/frame).
+  - **Universal text-awareness:** `band_text_scan` + `band_rows_busy` (`main.c`) read DISPCNT/BG0CNT/VRAM at the parked handshake — **BG0 is gen-3's text/window layer** (verified in both decomps; standard textbox = bg0 window at tile rows 15–18). Non-filler tilemap entries under a band (top rows 0–6 / bottom rows 13–19, filler = dominant sampled entry, threshold 8 tiles) kill that band's blur. **Per-band**: `DepthSnap.textTop/.textBot`, `dofLvlTop/dofLvlBot` easing (fast-out ~3f, slow-in ~12f). Catches dialogs, banners, match-call, item popups — anything — with zero per-game addresses. RAM signals (`textDlg`/`textBanner` in `gamestate.c`, EM `sFieldMessageBoxMode` 0x020375BC / `Task_MapNamePopUpWindow` 0x080D487C, FR `sMessageBoxType` 0x0203709C / `Task_MapNamePopup` 0x080981AC, LG FR-derived) kept as precise per-band backups.
+  - **M2 vertex-grid scenery warp** (earlier this session): `source/warp.v.pica` passthrough shader (+ Makefile picasso/bin2o rules), `warp_grid_init/fini/_eye` — 16×11 vert mesh per eye, corner depth = avg of adjacent `tdepth` cells, raw C3D draw (own attr/buf/texenv, `Mtx_OrthoTilt`, `GPU_CONSTANT` modulate = dim-tint analog, `C2D_Flush`→draw→`C2D_Prepare`), samples the sharp-bilinear prescale when active (UVs coincide: 2/512=1/256); replaces `warp_scenery_eye` tile tearing with smooth stretch; quad-warp fallback if shader init fails. Pops now drawn inside the `if (pop3d)` block AFTER the grid.
+- **Verify on hardware (round 3):** all text readable everywhere; blur reads subtle; M2 stretch vs tear; `worstMs` ≤16 ms (M2's C2D↔C3D churn is the suspect if not).
+- **Left off:** awaiting round-3 hardware verdict; commit pending user OK.
+
+### Session — 2026-06-10 (later) — HD-2D M1 built
+
+- **Intent:** User: "yes focus on the HD-2D research to really improve the 3D effect" → build **M1 tilt-shift depth-of-field** from `docs/kb/hd2d-octopath-3d.md` §3/§4.
+- **Did (all in `source/main.c`, uncommitted):**
+  - **DoF pipeline** — `dof_prepare` (two `GPU_LINEAR` down-bounces 240×160→120×80→60×40 into new RGB565 VRAM targets `dofTexA/dofTgtA` + `dofTexB/dofTgtB`; half-texel edge insets stop cleared/stride texels bleeding into the blur), `dof_band` (quarter-res copy upscaled 4× through the screen transform with a per-corner alpha ramp — `C2D_SetImageTint` blend 0 leaves RGB and uses tint alpha as transparency), `dof_bands` (solid blur rows 0–32 / ramp 32–56 / **sharp 56–104** / ramp 104–128 / solid 128–160).
+  - **Integration** — one `dof_prepare` per frame after `C3D_FrameBegin`, `dof_bands` on BOTH eye targets after the pops (blur covers out-of-focus pop edges → less ghosting); gated `dofOn && dofTgtB && depth3d.overworld` — battles/menus/unsupported games stay sharp; slider-independent.
+  - **Menu + settings** — new "DoF" item (`MENU_DOF_IDX` 12), grid 2×7→**2×8** (pitch 32→28 px, buttons 29→27 px, D-pad down now reaches the last odd item), `Settings.dof` appended with a size-tolerant load (old settings.bin keeps defaults, no reset).
+  - **Study-recommended tune** — `POP3D_PX` 4.0→3.0 (the 2–3 px disparity ceiling vs edge ghosting).
+  - Verified `.3dsx` + `.cia` both build; only pre-existing mGBA/upload_frame warnings remain.
+- **Why these choices:** PICA200 has no fragment shader → bilinear bounce blur is the §3 recipe; both eyes share one blurred copy (+2 render-target passes total, inside the §3 budget); default **ON** so the next hardware boot shows the effect immediately.
+- **Left off:** Awaiting hardware verdict (M1 gate) — commit pending user OK.
 
 ### Session — 2026-06-10
 
