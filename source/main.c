@@ -242,6 +242,7 @@ typedef struct {
 	bool textTop, textBot;          // text/UI under the top/bottom blur band -> suppress that band
 	struct { unsigned char x0, y0, x1, y1; } uiRect[6];   // BG0 window panels (tile coords, incl.)
 	int  nui;                       // panel count (panels pop in ANY context, not just overworld)
+	int  nfg;                       // foreground/solid tiles in view (HUD diagnostic)
 } DepthSnap;
 #define POP3D_PLAYER_GX 112   // player tile (7,5) -> sprite rect (16x32, head 16px above the tile)
 #define POP3D_PLAYER_GY 64
@@ -252,7 +253,7 @@ typedef struct {
 // window panels (dialogs/menus) popping hardest of all as clean shifted copies.
 #define POP3D_RAMP_PX 3.6f    // ground ramp: bottom-edge pop (px @ full slider); top edge = 0 (moderate for comfort)
 #define POP3D_STANDUP 3.0f    // a sprite's head pops this far out beyond its grounded feet (standee lean)
-#define ENV3D_NORMAL  2.5f    // foreground layer-type extra (trees/roofs/walls)
+#define ENV3D_NORMAL  4.0f    // solid/foreground tile pop (poles/trees/walls) -- strong stand-up
 #define ENV3D_SPLIT   1.2f    // ledge / low fence mid extra
 #define ENV3D_RAISED  2.6f    // a "raised" elevation tier (engine priority 1) pops this far above ground
 #define ENV3D_FRONT   3.6f    // a "frontmost" tier (engine priority 0) pops this far
@@ -382,11 +383,19 @@ static void build_depth_grid(GbaCore* core, const GameProfile* p, int px, int py
 		if (gx >= 0 && gx < w && gy >= 0 && gy < h) {
 			uint16_t e = gbacore_read16(core, ptr + 2u * (uint32_t)(gx + w * gy));
 			uint8_t layer = metatile_layer(core, p, e & 0x03FF);
-			feat[r][c] = (layer == 0) ? ENV3D_NORMAL : (layer == 2) ? ENV3D_SPLIT : 0.0f;
+			float f = (layer == 0) ? ENV3D_NORMAL : (layer == 2) ? ENV3D_SPLIT : 0.0f;
+			// A solid (impassable) tile is a stand-up object: pole/tree/wall/sign/fence. This is the
+			// game-agnostic foreground signal (the very collision bits the touch BFS walks on), so
+			// objects pop EVERYWHERE -- not just Emerald foreground tiles or the player's sprite rect.
+			// (Skip elevation 1 = surf water, which is impassable but flat.)
+			if ((e & 0x0C00) && (e >> 12) != 1 && f < ENV3D_NORMAL) f = ENV3D_NORMAL;
+			feat[r][c] = f;
 			float pl = ELEV_PLANE[e >> 12];
 			if (pl >= 0.0f) { ed[r][c] = pl; has[r][c] = true; }
 		}
 	}
+	int nfg = 0; for (int r = 0; r < 10; r++) for (int c = 0; c < 15; c++) if (feat[r][c] > 0.0f) nfg++;
+	d->nfg = nfg;   // HUD diagnostic
 	// Fill stairs/ledges/bridges by relaxing from known neighbours, so depth RAMPS across them
 	// instead of dropping to ground (Gauss-Seidel; cap spans the 10x15 grid, early-exits when stable).
 	for (int pass = 0; pass < 16; pass++) {
@@ -1113,7 +1122,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					GameState ts; depth3d.overworld = game_read(topCore, tprof, &ts) && ts.ctx == GCTX_OVERWORLD;
 					depth3d.textTop = ts.textBanner;   // map-name banner lives in the top band
 					depth3d.textBot = ts.textDlg;      // dialog textbox lives in the bottom band
-					depth3d.nspr = 0; depth3d.nui = 0; memset(depth3d.tdepth, 0, sizeof depth3d.tdepth);
+					depth3d.nspr = 0; depth3d.nui = 0; depth3d.nfg = 0; memset(depth3d.tdepth, 0, sizeof depth3d.tdepth);
 					if (topCore) bg0_scan(topCore, tprof, depth3d.overworld, &depth3d);   // text flags + gen-3 UI panel rects
 					if (depth3d.overworld && topCore) {
 						static const unsigned char SW[3][4] = {{8,16,32,64},{16,32,32,64},{8,8,16,32}};
@@ -1325,12 +1334,12 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		C2D_Text tHudTop, tHudBot, tHudStat;
 		const char* topName = swapped ? nameB : nameA;
 		const char* botName = swapped ? nameA : nameB;
-		char hudStat[40];
+		char hudStat[48];
 		if (hudMode) {
 			time_t tt = time(NULL);
 			struct tm* lt = localtime(&tt);
-			snprintf(hudStat, sizeof hudStat, "%s  %dfps %dms  %02d:%02d  %d/5",
-			         linkOn ? "LINK" : AUDIO_NAMES[audioMode], fps, showMs, lt ? lt->tm_hour : 0, lt ? lt->tm_min : 0, batLvl);
+			snprintf(hudStat, sizeof hudStat, "%s  %dfps %dms  %02d:%02d  %d/5 f%d",
+			         linkOn ? "LINK" : AUDIO_NAMES[audioMode], fps, showMs, lt ? lt->tm_hour : 0, lt ? lt->tm_min : 0, batLvl, depth3d.nfg);
 			C2D_TextParse(&tHudTop,  txtBuf, topName);  C2D_TextOptimize(&tHudTop);
 			C2D_TextParse(&tHudBot,  txtBuf, botName);  C2D_TextOptimize(&tHudBot);
 			C2D_TextParse(&tHudStat, txtBuf, hudStat);  C2D_TextOptimize(&tHudStat);
