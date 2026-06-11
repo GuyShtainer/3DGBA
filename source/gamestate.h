@@ -84,7 +84,8 @@ typedef struct {
 	uint8_t battlerPos[4];   // gBattlerPositions[0..3]
 	// bag (live list-task base, computed in game_read; 0 if N/A)
 	uint32_t bagListTaskBase; // gTasks + 40*listTaskId + 8 (+24 scroll, +26 row)
-	bool     textUp;          // overworld only: field textbox / map-name banner on screen (DoF suppression)
+	bool     textDlg;         // overworld: a field textbox is up (sFieldMessageBoxMode != 0)
+	bool     textBanner;      // overworld: the map-name banner task is live
 } GameState;
 
 // Profile for a core's ROM (by header game code), or NULL if unknown.

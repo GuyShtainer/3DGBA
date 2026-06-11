@@ -209,16 +209,16 @@ static bool touch_to_gba(int px, int py, int mode, int* gx, int* gy) {
 #define PRE_H    (GBA_H * PRESCALE)   // 320
 #define PRE_TEX  512
 
-// HD-2D M1 (tilt-shift DoF): no fragment shader on the PICA200, so "blur" = two GPU_LINEAR
-// down-bounces (240x160 -> 120x80 -> 60x40); the quarter-res copy bilinear-upscaled back to
-// the screen is a ~4x4 box blur. Composited as top/bottom bands over the TOP screen only
-// (overworld only; both eyes share the one blurred copy) -> sharp focal band = "diorama" read.
+// HD-2D M1 (tilt-shift DoF): no fragment shader on the PICA200, so "blur" = one GPU_LINEAR
+// half-res bounce (240x160 -> 120x80) bilinear-upscaled back -> a gentle ~2x2 box soften.
+// Composited as subtle top/bottom bands over the TOP screen only (overworld; both eyes share
+// the one blurred copy) -> sharp focal band = "diorama" read. TEXT-AWARE: any BG0 text-layer
+// content under a band kills that band's blur (band_text_scan), so text stays readable.
 #define DOF_TEXA      128   // POT texture backing the 120x80 half-res bounce
-#define DOF_TEXB      64    // POT texture backing the 60x40 quarter-res bounce
-#define DOF_SHARP_Y0  56    // sharp focal band (GBA rows Y0..Y1; player sits ~64..96)
-#define DOF_SHARP_Y1  104
+#define DOF_SHARP_Y0  48    // sharp focal band (GBA rows Y0..Y1; player sits ~64..96)
+#define DOF_SHARP_Y1  112
 #define DOF_FADE      24    // blur alpha-ramps in over this many rows outside the band
-#define DOF_ALPHA     0xAA  // max band alpha (~67%): diorama blur that never fully erases detail
+#define DOF_ALPHA     0x78  // max band alpha (~47%): a subtle soften, never a wall of mush
 
 // Stereoscopic single-game depth: pop elements forward per eye on the ALREADY-composited frame
 // (no extra emulation pass). depth3d.overworld is snapshotted in the race-safe window. M2 = player.
@@ -228,7 +228,7 @@ typedef struct {
 	int  nspr;
 	struct { short x, y; unsigned char w, h; } spr[DEPTH_MAX_SPR];   // on-screen OAM rects to pop
 	unsigned char tdepth[10][15];   // M4: smoothed per-visible-tile scenery pop px (0 = ground plane)
-	bool textUp;                    // field textbox / map-name banner on screen -> suppress DoF
+	bool textTop, textBot;          // text/UI under the top/bottom blur band -> suppress that band
 } DepthSnap;
 #define POP3D_PLAYER_GX 112   // player tile (7,5) -> sprite rect (16x32, head 16px above the tile)
 #define POP3D_PLAYER_GY 64
@@ -419,10 +419,10 @@ static void warp_grid_eye(C3D_RenderTarget* tgt, EmuInstance* g, const DepthSnap
 	C2D_Prepare();                      // hand the GPU back to citro2d (rebinds its shader/state)
 }
 
-// HD-2D M1: build the blurred copy of the top game's frame (two LINEAR down-bounces). Runs
-// once per frame before the per-eye composites; both eyes sample texB. Half-texel insets on
+// HD-2D M1: build the blurred copy of the top game's frame (one LINEAR half-res bounce). Runs
+// once per frame before the per-eye composites; both eyes sample texA. Half-texel insets on
 // the outer sample edges keep the cleared/stride texels from bleeding into the blur.
-static void dof_prepare(C3D_Tex* src, C3D_RenderTarget* tgtA, C3D_Tex* texA, C3D_RenderTarget* tgtB) {
+static void dof_prepare(C3D_Tex* src, C3D_RenderTarget* tgtA) {
 	Tex3DS_SubTexture s0 = { GBA_W, GBA_H, 0.0f, 1.0f,
 	                         ((float)GBA_W - 0.5f) / 256.0f, 1.0f - ((float)GBA_H - 0.5f) / 256.0f };
 	C2D_Image i0 = { src, &s0 };
@@ -430,43 +430,76 @@ static void dof_prepare(C3D_Tex* src, C3D_RenderTarget* tgtA, C3D_Tex* texA, C3D
 	C2D_TargetClear(tgtA, C2D_Color32(0, 0, 0, 0xFF));
 	C2D_SceneBegin(tgtA);
 	C2D_DrawImageAt(i0, 0.0f, 0.0f, 0.0f, NULL, 0.5f, 0.5f);
-	Tex3DS_SubTexture s1 = { GBA_W / 2, GBA_H / 2, 0.0f, 1.0f,
-	                         ((float)(GBA_W / 2) - 0.5f) / DOF_TEXA, 1.0f - ((float)(GBA_H / 2) - 0.5f) / DOF_TEXA };
-	C2D_Image i1 = { texA, &s1 };
-	C2D_TargetClear(tgtB, C2D_Color32(0, 0, 0, 0xFF));
-	C2D_SceneBegin(tgtB);
-	C2D_DrawImageAt(i1, 0.0f, 0.0f, 0.0f, NULL, 0.5f, 0.5f);
 }
 
-// One blurred horizontal band: GBA rows gy0..gy1 (multiples of 4) of the quarter-res copy,
+// One blurred horizontal band: GBA rows gy0..gy1 (multiples of 2) of the half-res copy,
 // bilinear-upscaled through the same screen transform, vertical alpha ramp a0(top)->a1(bottom).
 // Tint blend 0 leaves RGB untouched; the tint color's alpha is per-corner transparency.
-static void dof_band(C3D_Tex* texB, int gy0, int gy1, float ox, float oy, float sx, float sy, u8 a0, u8 a1) {
+static void dof_band(C3D_Tex* texA, int gy0, int gy1, float ox, float oy, float sx, float sy, u8 a0, u8 a1) {
 	if (gy1 <= gy0) return;
-	float u1 = ((float)(GBA_W / 4) - 0.5f) / DOF_TEXB;
-	float v1 = 1.0f - ((float)(gy1 / 4) - (gy1 == GBA_H ? 0.5f : 0.0f)) / DOF_TEXB;
-	Tex3DS_SubTexture st = { (u16)(GBA_W / 4), (u16)((gy1 - gy0) / 4),
-	                        0.0f, 1.0f - (float)(gy0 / 4) / DOF_TEXB, u1, v1 };
-	C2D_Image img = { texB, &st };
+	float u1 = ((float)(GBA_W / 2) - 0.5f) / DOF_TEXA;
+	float v1 = 1.0f - ((float)(gy1 / 2) - (gy1 == GBA_H ? 0.5f : 0.0f)) / DOF_TEXA;
+	Tex3DS_SubTexture st = { (u16)(GBA_W / 2), (u16)((gy1 - gy0) / 2),
+	                        0.0f, 1.0f - (float)(gy0 / 2) / DOF_TEXA, u1, v1 };
+	C2D_Image img = { texA, &st };
 	C2D_ImageTint t;
 	C2D_SetImageTint(&t, C2D_TopLeft,  C2D_Color32(0, 0, 0, a0), 0.0f);
 	C2D_SetImageTint(&t, C2D_TopRight, C2D_Color32(0, 0, 0, a0), 0.0f);
 	C2D_SetImageTint(&t, C2D_BotLeft,  C2D_Color32(0, 0, 0, a1), 0.0f);
 	C2D_SetImageTint(&t, C2D_BotRight, C2D_Color32(0, 0, 0, a1), 0.0f);
-	C2D_DrawImageAt(img, ox, oy + gy0 * sy, 0.0f, &t, 4.0f * sx, 4.0f * sy);
+	C2D_DrawImageAt(img, ox, oy + gy0 * sy, 0.0f, &t, 2.0f * sx, 2.0f * sy);
 }
 
 // Tilt-shift composite on one eye target: solid blur at the frame edges, alpha ramp into the
 // sharp focal band. Drawn AFTER the pops, so out-of-focus pop edges blur away with the band.
-static void dof_bands(C3D_RenderTarget* tgt, C3D_Tex* texB, int mode, float lvl) {
-	u8 aMax = (u8)(DOF_ALPHA * lvl + 0.5f);
-	if (!aMax) return;
+// Each band has its own engagement level: text under a band kills just that band's blur.
+static void dof_bands(C3D_RenderTarget* tgt, C3D_Tex* texA, int mode, float lvlTop, float lvlBot) {
+	u8 aT = (u8)(DOF_ALPHA * lvlTop + 0.5f), aB = (u8)(DOF_ALPHA * lvlBot + 0.5f);
+	if (!aT && !aB) return;
 	float ox, oy, sx, sy; calc_xform(mode, 400.0f, 240.0f, &ox, &oy, &sx, &sy);
 	C2D_SceneBegin(tgt);
-	dof_band(texB, 0,                       DOF_SHARP_Y0 - DOF_FADE, ox, oy, sx, sy, aMax, aMax);
-	dof_band(texB, DOF_SHARP_Y0 - DOF_FADE, DOF_SHARP_Y0,            ox, oy, sx, sy, aMax, 0x00);
-	dof_band(texB, DOF_SHARP_Y1,            DOF_SHARP_Y1 + DOF_FADE, ox, oy, sx, sy, 0x00, aMax);
-	dof_band(texB, DOF_SHARP_Y1 + DOF_FADE, GBA_H,                   ox, oy, sx, sy, aMax, aMax);
+	if (aT) {
+		dof_band(texA, 0,                       DOF_SHARP_Y0 - DOF_FADE, ox, oy, sx, sy, aT, aT);
+		dof_band(texA, DOF_SHARP_Y0 - DOF_FADE, DOF_SHARP_Y0,            ox, oy, sx, sy, aT, 0x00);
+	}
+	if (aB) {
+		dof_band(texA, DOF_SHARP_Y1,            DOF_SHARP_Y1 + DOF_FADE, ox, oy, sx, sy, 0x00, aB);
+		dof_band(texA, DOF_SHARP_Y1 + DOF_FADE, GBA_H,                   ox, oy, sx, sy, aB, aB);
+	}
+}
+
+// Text-aware bands (game-agnostic catch-all): gen-3 draws every textbox/banner/menu on BG0,
+// the overworld's text/window layer (verified: both decomps template bg0; the standard textbox
+// window sits at tile rows 15-18). Any band tile-rows holding non-filler BG0 entries get that
+// band's blur suppressed, so ALL text stays readable without per-game addresses. Filler = the
+// dominant entry of the visible grid (not assumed 0). Runs at the parked handshake.
+static bool band_rows_busy(GbaCore* c, uint32_t map, int r0, int r1, uint16_t filler) {
+	int n = 0;
+	for (int r = r0; r <= r1; r++)
+		for (int col = 0; col < 30; col++)   // 240px wide -> 30 visible tile columns
+			if (gbacore_read16(c, map + 2u * (uint32_t)(r * 32 + col)) != filler && ++n >= 8)
+				return true;                     // ~a window border's worth of tiles
+	return false;
+}
+static void band_text_scan(GbaCore* c, bool* top, bool* bot) {
+	uint16_t disp = gbacore_read16(c, 0x04000000);
+	if (!(disp & 0x0100)) return;                       // BG0 disabled -> no text layer
+	uint16_t cnt = gbacore_read16(c, 0x04000008);
+	if ((disp & 0x0007) != 0 || (cnt >> 14) != 0) {     // not mode 0 / text BG not 32x32:
+		*top = *bot = true;                              // can't reason -> fail toward readable
+		return;
+	}
+	uint32_t map = 0x06000000u + (uint32_t)((cnt >> 8) & 0x1F) * 0x800u;
+	uint16_t smp[40];                                   // dominant entry of the visible 32x20 grid
+	for (int i = 0; i < 40; i++) smp[i] = gbacore_read16(c, map + 2u * (uint32_t)(i * 16));
+	uint16_t filler = smp[0]; int best = 0;
+	for (int i = 0; i < 40; i++) {
+		int n = 0;
+		for (int j = 0; j < 40; j++) n += (smp[j] == smp[i]);
+		if (n > best) { best = n; filler = smp[i]; }
+	}
+	if (band_rows_busy(c, map, 0, 6, filler))   *top = true;   // tile rows 0..6  ~ GBA y 0..55
+	if (band_rows_busy(c, map, 13, 19, filler)) *bot = true;   // tile rows 13..19 ~ GBA y 104..159
 }
 
 // Draw one game to `screen` at the current scale + filter, leaving `screen` bound so the
@@ -609,18 +642,13 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		preTgt = C3D_RenderTargetCreateFromTex(&preTex, GPU_TEXFACE_2D, 0, -1);
 	}
 
-	// HD-2D M1: the two DoF bounce targets (RGB565, VRAM). DoF silently disables if either fails.
-	C3D_Tex dofTexA, dofTexB;
-	C3D_RenderTarget *dofTgtA = NULL, *dofTgtB = NULL;
+	// HD-2D M1: the DoF bounce target (RGB565, VRAM). DoF silently disables if it fails.
+	C3D_Tex dofTexA;
+	C3D_RenderTarget *dofTgtA = NULL;
 	if (C3D_TexInitVRAM(&dofTexA, DOF_TEXA, DOF_TEXA, GPU_RGB565)) {
 		C3D_TexSetFilter(&dofTexA, GPU_LINEAR, GPU_LINEAR);
 		C3D_TexSetWrap(&dofTexA, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
 		dofTgtA = C3D_RenderTargetCreateFromTex(&dofTexA, GPU_TEXFACE_2D, 0, -1);
-	}
-	if (dofTgtA && C3D_TexInitVRAM(&dofTexB, DOF_TEXB, DOF_TEXB, GPU_RGB565)) {
-		C3D_TexSetFilter(&dofTexB, GPU_LINEAR, GPU_LINEAR);
-		C3D_TexSetWrap(&dofTexB, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
-		dofTgtB = C3D_RenderTargetCreateFromTex(&dofTexB, GPU_TEXFACE_2D, 0, -1);
 	}
 
 	// Audio: both cores share one rate (pitch-matched to the 3DS refresh); start clean.
@@ -633,7 +661,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	int  touchMode = TOUCH_OFF;   // 0 off / 1 gamepad / 2 smart (touch drives the bottom game)
 	bool fsOn = false;      // frameskip the unfocused game to free heavy-scene budget
 	bool dofOn = true;      // HD-2D M1: tilt-shift depth-of-field on the top screen (overworld only)
-	float dofLevel = 1.0f;  // text-aware DoF engagement 0..1 (fast-out when text shows, slow-in after)
+	float dofLvlTop = 1.0f, dofLvlBot = 1.0f;   // per-band engagement 0..1 (text kills its band's blur)
 	bool muted = false;     // HARD mute (stops audio rendering, saves CPU)
 
 	int focused = 0;
@@ -766,7 +794,8 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					GbaCore* topCore = swapped ? emuB.core : emuA.core;
 					const GameProfile* tprof = profile_for(topCore);
 					GameState ts; depth3d.overworld = game_read(topCore, tprof, &ts) && ts.ctx == GCTX_OVERWORLD;
-					depth3d.textUp = ts.textUp;   // field textbox / map-name banner -> keep the text sharp
+					depth3d.textTop = ts.textBanner;   // map-name banner lives in the top band
+					depth3d.textBot = ts.textDlg;      // dialog textbox lives in the bottom band
 					depth3d.nspr = 0; memset(depth3d.tdepth, 0, sizeof depth3d.tdepth);
 					if (depth3d.overworld && topCore) {
 						static const unsigned char SW[3][4] = {{8,16,32,64},{16,32,32,64},{8,8,16,32}};
@@ -788,6 +817,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 							depth3d.nspr++;
 						}
 						build_depth_grid(topCore, tprof, ts.px, ts.py, &depth3d);   // M4 scenery depth
+						band_text_scan(topCore, &depth3d.textTop, &depth3d.textBot);   // BG0 catch-all: any text kills its band
 					}
 				}
 				emuA.keys = ((focused == 0) ? g : 0) | (swapped ? tk : 0);
@@ -1007,12 +1037,14 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		// top screen (sharp-bilinear two-pass when applicable). render_game leaves `top` bound.
 		float slider3d = osGet3DSliderState();
 		bool pop3d = slider3d > 0.03f && depth3d.overworld && topG->core;
-		// Text-aware DoF: drop the blur fast when a field textbox / map-name banner is up, ease it
-		// back in afterwards (fast-out ~3 frames, slow-in ~12 -> no flicker between dialog boxes).
-		dofLevel += (depth3d.overworld && !depth3d.textUp) ? 0.08f : -0.34f;
-		if (dofLevel > 1.0f) dofLevel = 1.0f; else if (dofLevel < 0.0f) dofLevel = 0.0f;
-		bool dofPass = dofOn && dofTgtB && depth3d.overworld && topG->core && dofLevel > 0.01f;
-		if (dofPass) dof_prepare(&topG->tex, dofTgtA, &dofTexA, dofTgtB);     // one blurred copy, shared by both eyes
+		// Text-aware DoF: kill a band's blur the moment text/UI shows under it (BG0 scan + RAM
+		// signals), ease back in afterwards (fast-out ~3 frames, slow-in ~12 -> no flicker).
+		dofLvlTop += (depth3d.overworld && !depth3d.textTop) ? 0.08f : -0.34f;
+		dofLvlBot += (depth3d.overworld && !depth3d.textBot) ? 0.08f : -0.34f;
+		if (dofLvlTop > 1.0f) dofLvlTop = 1.0f; else if (dofLvlTop < 0.0f) dofLvlTop = 0.0f;
+		if (dofLvlBot > 1.0f) dofLvlBot = 1.0f; else if (dofLvlBot < 0.0f) dofLvlBot = 0.0f;
+		bool dofPass = dofOn && dofTgtA && depth3d.overworld && topG->core && (dofLvlTop > 0.01f || dofLvlBot > 0.01f);
+		if (dofPass) dof_prepare(&topG->tex, dofTgtA);   // one blurred half-res copy, shared by both eyes
 		bool sharpTop = !smooth[0] && scaleMode[0] != SCALE_1X && preTgt;     // matches render_game's two-pass choice
 		u32 topMod = (focScreen == 0) ? 0xFFFFFFFFu : C2D_Color32(0x80, 0x80, 0x80, 0xFF);   // grid analog of dimTint
 		render_game(topG, top, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], topTint, clrBg);
@@ -1021,7 +1053,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			else        warp_scenery_eye(top, topG, &depth3d, scaleMode[0], +slider3d);
 			pop_eye(top, topG, &depth3d, scaleMode[0], +POP3D_PX * slider3d);   // LEFT eye shifts RIGHT -> pops OUT
 		}
-		if (dofPass) dof_bands(top, &dofTexB, scaleMode[0], dofLevel);   // blur bands OVER the pops: edge ghosts blur away too
+		if (dofPass) dof_bands(top, &dofTexA, scaleMode[0], dofLvlTop, dofLvlBot);   // bands OVER the pops: edge ghosts blur too
 		if (!menuOpen) {
 			if (hudMode & 1) {
 				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 400.0f, 14.0f, THEME_HUD_BAR);
@@ -1043,7 +1075,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			else        warp_scenery_eye(topR, topG, &depth3d, scaleMode[0], -slider3d);
 			pop_eye(topR, topG, &depth3d, scaleMode[0], -POP3D_PX * slider3d);   // RIGHT eye shifts LEFT
 		}
-		if (dofPass) dof_bands(topR, &dofTexB, scaleMode[0], dofLevel);
+		if (dofPass) dof_bands(topR, &dofTexA, scaleMode[0], dofLvlTop, dofLvlBot);
 
 		// bottom screen (+ menu overlay when open). render_game leaves `bot` bound.
 		render_game(botG, bot, preTgt, &preTex, 320.0f, 240.0f, scaleMode[1], smooth[1], botTint, clrBg);
@@ -1125,7 +1157,6 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	teardown_core(&emuB);
 	gbalink_destroy(link);
 	if (preTgt) { C3D_RenderTargetDelete(preTgt); C3D_TexDelete(&preTex); }
-	if (dofTgtB) { C3D_RenderTargetDelete(dofTgtB); C3D_TexDelete(&dofTexB); }
 	if (dofTgtA) { C3D_RenderTargetDelete(dofTgtA); C3D_TexDelete(&dofTexA); }
 	g_quit = false;
 	gfxSet3D(false);   // back to flat for the ROM picker / splash between sessions

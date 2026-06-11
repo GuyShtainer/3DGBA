@@ -109,10 +109,11 @@ bool game_read(GbaCore* c, const GameProfile* p, GameState* out) {
 		// so once you opened START, the overworld read as a menu forever -> walk stuck on A (Emerald).
 		if (task_active(c, p, p->startMenuTask)) { out->ctx = GCTX_FIELDMENU; return true; }
 		out->ctx = GCTX_OVERWORLD;
-		// On-screen field text (dialog/sign textbox, map-name banner) — lets the renderer keep the
-		// text readable (DoF off) while it's up. Fail-safe: unknown address -> false (just blurs).
-		out->textUp = (p->fieldMsgMode && gbacore_read8(c, p->fieldMsgMode) != 0)
-		           || task_active(c, p, p->mapNameTask);
+		// On-screen field text — precise per-band kill signals for the renderer's DoF. The BG0
+		// text-layer scan in main.c is the game-agnostic catch-all; these are exact backups.
+		// Fail-safe: unknown address -> false (the BG0 scan still covers it).
+		out->textDlg    = p->fieldMsgMode && gbacore_read8(c, p->fieldMsgMode) != 0;
+		out->textBanner = task_active(c, p, p->mapNameTask);
 		return true;
 	}
 
