@@ -243,6 +243,7 @@ typedef struct {
 	struct { unsigned char x0, y0, x1, y1; } uiRect[6];   // BG0 window panels (tile coords, incl.)
 	int  nui;                       // panel count (panels pop in ANY context, not just overworld)
 	int  nfg;                       // foreground/solid tiles in view (HUD diagnostic)
+	float maxd;                     // strongest tdepth in view (HUD diagnostic)
 } DepthSnap;
 #define POP3D_PLAYER_GX 112   // player tile (7,5) -> sprite rect (16x32, head 16px above the tile)
 #define POP3D_PLAYER_GY 64
@@ -412,17 +413,18 @@ static void build_depth_grid(GbaCore* core, const GameProfile* p, int px, int py
 		}
 		if (!changed) break;
 	}
-	// Smooth ONLY the feature term (3x3) for soft tree/arch tops; keep the elevation planes crisp
-	// (the vertex-grid warp turns a plateau edge into a clean stretch, not a tear). Clamp the sum.
+	// Combine elevation plane + feature depth per tile. NO blur: a 3x3 average diluted an isolated
+	// object (a lone pole 4.0 -> ~0.44 -> invisible), which is why scenery read flat while the
+	// un-blurred sprite standee popped. The vertex grid already interpolates between tiles for
+	// smoothness, so crisp per-tile depth is fine. maxd = the strongest pop in view (HUD diagnostic).
+	float maxd = 0.0f;
 	for (int r = 0; r < 10; r++) for (int c = 0; c < 15; c++) {
-		float sum = 0.0f; int n = 0;
-		for (int dr = -1; dr <= 1; dr++) for (int dc = -1; dc <= 1; dc++) {
-			int rr = r + dr, cc = c + dc;
-			if (rr >= 0 && rr < 10 && cc >= 0 && cc < 15) { sum += feat[rr][cc]; n++; }
-		}
-		float t = ed[r][c] + sum / (float)n;
-		d->tdepth[r][c] = (t > TDEPTH_MAX) ? TDEPTH_MAX : t;
+		float t = ed[r][c] + feat[r][c];
+		if (t > TDEPTH_MAX) t = TDEPTH_MAX;
+		d->tdepth[r][c] = t;
+		if (t > maxd) maxd = t;
 	}
+	d->maxd = maxd;
 }
 
 // M4: pop the foreground scenery tiles forward on one eye (shifted 16x16 sub-rect overdraws).
@@ -1124,7 +1126,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					GameState ts; depth3d.overworld = game_read(topCore, tprof, &ts) && ts.ctx == GCTX_OVERWORLD;
 					depth3d.textTop = ts.textBanner;   // map-name banner lives in the top band
 					depth3d.textBot = ts.textDlg;      // dialog textbox lives in the bottom band
-					depth3d.nspr = 0; depth3d.nui = 0; depth3d.nfg = 0; memset(depth3d.tdepth, 0, sizeof depth3d.tdepth);
+					depth3d.nspr = 0; depth3d.nui = 0; depth3d.nfg = 0; depth3d.maxd = 0.0f; memset(depth3d.tdepth, 0, sizeof depth3d.tdepth);
 					if (topCore) bg0_scan(topCore, tprof, depth3d.overworld, &depth3d);   // text flags + gen-3 UI panel rects
 					if (depth3d.overworld && topCore) {
 						static const unsigned char SW[3][4] = {{8,16,32,64},{16,32,32,64},{8,8,16,32}};
@@ -1340,8 +1342,8 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		if (hudMode) {
 			time_t tt = time(NULL);
 			struct tm* lt = localtime(&tt);
-			snprintf(hudStat, sizeof hudStat, "%s  %dfps %dms  %02d:%02d  %d/5 f%d",
-			         linkOn ? "LINK" : AUDIO_NAMES[audioMode], fps, showMs, lt ? lt->tm_hour : 0, lt ? lt->tm_min : 0, batLvl, depth3d.nfg);
+			snprintf(hudStat, sizeof hudStat, "%s %dfps %dms %02d:%02d %d/5 f%d d%.1f",
+			         linkOn ? "LINK" : AUDIO_NAMES[audioMode], fps, showMs, lt ? lt->tm_hour : 0, lt ? lt->tm_min : 0, batLvl, depth3d.nfg, depth3d.maxd);
 			C2D_TextParse(&tHudTop,  txtBuf, topName);  C2D_TextOptimize(&tHudTop);
 			C2D_TextParse(&tHudBot,  txtBuf, botName);  C2D_TextOptimize(&tHudBot);
 			C2D_TextParse(&tHudStat, txtBuf, hudStat);  C2D_TextOptimize(&tHudStat);
