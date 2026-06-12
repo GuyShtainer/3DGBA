@@ -244,6 +244,7 @@ typedef struct {
 	int  nui;                       // panel count (panels pop in ANY context, not just overworld)
 	int  nfg;                       // foreground/solid tiles in view (HUD diagnostic)
 	float maxd;                     // strongest tdepth in view (HUD diagnostic)
+	int  camX, camY;                // gFieldCamera sub-tile scroll (px, -15..15) -> depth scroll-align
 } DepthSnap;
 #define POP3D_PLAYER_GX 112   // player tile (7,5) -> sprite rect (16x32, head 16px above the tile)
 #define POP3D_PLAYER_GY 64
@@ -369,7 +370,11 @@ static uint8_t metatile_layer(GbaCore* c, const GameProfile* p, uint16_t id) {
 // M4: build the smoothed scenery-depth grid for the visible 15x10 tiles (cores parked; safe reads).
 static void build_depth_grid(GbaCore* core, const GameProfile* p, int px, int py, DepthSnap* d) {
 	memset(d->tdepth, 0, sizeof d->tdepth);
-	if (!core || !p || !p->mapHeader || px < 0 || py < 0) return;
+	if (!core || !p || px < 0 || py < 0) return;   // metatile_layer handles mapHeader==0 (FR/LG collision depth)
+	d->camX = p->fieldCamera ? (int)(int32_t)gbacore_read32(core, p->fieldCamera + 0x10) : 0;
+	d->camY = p->fieldCamera ? (int)(int32_t)gbacore_read32(core, p->fieldCamera + 0x14) : 0;
+	if (d->camX < -15 || d->camX > 15) d->camX = 0;   // guard garbage
+	if (d->camY < -15 || d->camY > 15) d->camY = 0;
 	int w = (int32_t)gbacore_read32(core, p->mapLayout + 0);
 	int h = (int32_t)gbacore_read32(core, p->mapLayout + 4);
 	uint32_t ptr = gbacore_read32(core, p->mapLayout + 8);
@@ -568,14 +573,27 @@ static float warp_vert_depth(const DepthSnap* d, int vr, int vc) {
 	return dep;
 }
 
+// Sample the standee field at a FRACTIONAL grid position (bilinear), so a vertex's depth can be
+// shifted by the camera's sub-tile scroll -> object pops track the smoothly scrolling map instead
+// of snapping per whole tile (the walk "wobble").
+static float warp_depth_at(const DepthSnap* d, float fr, float fc) {
+	int r0 = (int)floorf(fr), c0 = (int)floorf(fc);
+	float fy = fr - (float)r0, fx = fc - (float)c0;
+	float d00 = warp_vert_depth(d, r0,     c0), d01 = warp_vert_depth(d, r0,     c0 + 1);
+	float d10 = warp_vert_depth(d, r0 + 1, c0), d11 = warp_vert_depth(d, r0 + 1, c0 + 1);
+	return (d00 * (1.0f - fx) + d01 * fx) * (1.0f - fy) + (d10 * (1.0f - fx) + d11 * fx) * fy;
+}
+
 static void warp_grid_eye(C3D_RenderTarget* tgt, EmuInstance* g, const DepthSnap* d, int mode,
                           float dispUnit, bool sharpPre, C3D_Tex* pre, u32 mod, int eye) {
 	float ox, oy, sx, sy; calc_xform(mode, 400.0f, 240.0f, &ox, &oy, &sx, &sy);
 	WarpVert* v = warpVbo + (eye ? WARP_VERTS : 0);
+	float cxf = (float)d->camX / 16.0f, cyf = (float)d->camY / 16.0f;   // sub-tile scroll
 	for (int r = 0; r <= WARP_ROWS; r++) for (int c = 0; c <= WARP_COLS; c++) {
 		WarpVert* w = &v[r * (WARP_COLS + 1) + c];
 		float gx = (float)(c * 16), gy = (float)(r * 16);
-		w->x = ox + gx * sx + dispUnit * clamp_disp(RAMP_AT(gy) + warp_vert_depth(d, r, c));   // ramp + scenery depth, comfort-clamped
+		float dep = warp_depth_at(d, (float)r + cyf, (float)c + cxf);   // depth tracks the sub-tile scroll
+		w->x = ox + gx * sx + dispUnit * clamp_disp(RAMP_AT(gy) + dep);   // ramp (screen-anchored) + scrolled depth
 		w->y = oy + gy * sy;
 		w->u = gx / 256.0f;             // preTex UVs coincide: PRESCALE/PRE_TEX == 1/256
 		w->v = 1.0f - gy / 256.0f;
@@ -1126,7 +1144,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					GameState ts; depth3d.overworld = game_read(topCore, tprof, &ts) && ts.ctx == GCTX_OVERWORLD;
 					depth3d.textTop = ts.textBanner;   // map-name banner lives in the top band
 					depth3d.textBot = ts.textDlg;      // dialog textbox lives in the bottom band
-					depth3d.nspr = 0; depth3d.nui = 0; depth3d.nfg = 0; depth3d.maxd = 0.0f; memset(depth3d.tdepth, 0, sizeof depth3d.tdepth);
+					depth3d.nspr = 0; depth3d.nui = 0; depth3d.nfg = 0; depth3d.maxd = 0.0f; depth3d.camX = depth3d.camY = 0; memset(depth3d.tdepth, 0, sizeof depth3d.tdepth);
 					if (topCore) bg0_scan(topCore, tprof, depth3d.overworld, &depth3d);   // text flags + gen-3 UI panel rects
 					if (depth3d.overworld && topCore) {
 						static const unsigned char SW[3][4] = {{8,16,32,64},{16,32,32,64},{8,8,16,32}};
@@ -1338,12 +1356,12 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		C2D_Text tHudTop, tHudBot, tHudStat;
 		const char* topName = swapped ? nameB : nameA;
 		const char* botName = swapped ? nameA : nameB;
-		char hudStat[48];
+		char hudStat[56];
 		if (hudMode) {
 			time_t tt = time(NULL);
 			struct tm* lt = localtime(&tt);
-			snprintf(hudStat, sizeof hudStat, "%s %dfps %dms %02d:%02d %d/5 f%d d%.1f",
-			         linkOn ? "LINK" : AUDIO_NAMES[audioMode], fps, showMs, lt ? lt->tm_hour : 0, lt ? lt->tm_min : 0, batLvl, depth3d.nfg, depth3d.maxd);
+			snprintf(hudStat, sizeof hudStat, "%s %dfps %dms %02d:%02d %d/5 f%d d%.1f c%d,%d",
+			         linkOn ? "LINK" : AUDIO_NAMES[audioMode], fps, showMs, lt ? lt->tm_hour : 0, lt ? lt->tm_min : 0, batLvl, depth3d.nfg, depth3d.maxd, depth3d.camX, depth3d.camY);
 			C2D_TextParse(&tHudTop,  txtBuf, topName);  C2D_TextOptimize(&tHudTop);
 			C2D_TextParse(&tHudBot,  txtBuf, botName);  C2D_TextOptimize(&tHudBot);
 			C2D_TextParse(&tHudStat, txtBuf, hudStat);  C2D_TextOptimize(&tHudStat);

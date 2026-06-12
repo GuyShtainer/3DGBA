@@ -65,6 +65,7 @@ typedef struct {
 	uint32_t mapObjects;    // gObjectEvents[16] (stride 0x24; +0 active:1, +0x10/+0x12 currentCoords x/y) -> NPC collision
 	uint32_t fieldMsgMode;  // sFieldMessageBoxMode (EM) / sMessageBoxType (FRLG): u8, != 0 while a field textbox is up
 	uint32_t mapNameTask;   // Task_MapNamePopUpWindow (EM) / Task_MapNamePopup (FRLG) — map-name banner task (ROM)
+	uint32_t fieldCamera;   // gFieldCamera (+0x10 x, +0x14 y = sub-tile scroll, %%16) -> 3D depth scroll-align
 } GameProfile;
 
 // One-pass snapshot of the live game.
