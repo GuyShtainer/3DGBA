@@ -568,8 +568,8 @@ static void warp_grid_fini(void) {
 static float warp_vert_depth(const DepthSnap* d, int vr, int vc) {
 	if (vr < 0 || vr >= WARP_ROWS) return 0.0f;                       // bottom screen edge -> grounded
 	float dep = 0.0f;
-	if (vc - 1 >= 0       && d->tdepth[vr][vc - 1] > dep) dep = d->tdepth[vr][vc - 1];
-	if (vc < WARP_COLS    && d->tdepth[vr][vc]     > dep) dep = d->tdepth[vr][vc];
+	if (vc - 1 >= 0 && vc - 1 < WARP_COLS && d->tdepth[vr][vc - 1] > dep) dep = d->tdepth[vr][vc - 1];
+	if (vc >= 0     && vc     < WARP_COLS && d->tdepth[vr][vc]     > dep) dep = d->tdepth[vr][vc];
 	return dep;
 }
 
