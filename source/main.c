@@ -311,7 +311,7 @@ static void draw_pop(C3D_Tex* tex, int gx, int gy, int gw, int gh,
 // Smoothed floor depth (px) under a screen pixel, so a character can pop ABOVE the very floor
 // (ground ramp already separate; this adds the scenery/elevation extra) it stands on.
 static float floor_at(const DepthSnap* d, int gx_px, int gy_px) {
-	int c = (gx_px + d->camX) / 16, r = (gy_px + d->camY) / 16;   // +camera = the tile rendered there (track scroll, like the warp)
+	int c = gx_px / 16, r = gy_px / 16;   // sprite floor = its own grid cell (do NOT scroll-shift: the player sits at a fixed cell)
 	if (c < 0) c = 0; else if (c > 14) c = 14;
 	if (r < 0) r = 0; else if (r > 9) r = 9;
 	return d->tdepth[r][c];
