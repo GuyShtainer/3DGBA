@@ -44,5 +44,7 @@ void net_session_close(void);                    // leave/destroy, back to stand
 bool net_lobby_status(DgbaConn* out);            // poll connection status + usernames
 
 // M2 latency probe: call once per frame while connected. Echoes peers' pings, times our pongs,
-// fires a fresh ping. *rttMs = last round-trip (ms, -1 = none yet); *drops = cumulative lost pings.
-void net_ping_update(int* rttMs, int* drops);
+// fires a fresh ping (throttled, unicast to the lone peer). *rttMs = last round-trip (ms, -1 = none
+// yet); *drops = cumulative lost pings; *sendFails = cumulative local TX-busy refusals (not air loss).
+// Any out-param may be NULL.
+void net_ping_update(int* rttMs, int* drops, int* sendFails);

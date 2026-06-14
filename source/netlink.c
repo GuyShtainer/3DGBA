@@ -44,10 +44,14 @@ typedef struct __attribute__((packed)) {
 #define PK_PONG 6
 
 #define PING_RING 32
+#define PING_EVERY_N 10   // send one ping every 10 frames (~6 Hz @60fps): ample for a latency HUD,
+                          // and light enough that the UDS TX buffer never saturates (no "busy" sends).
 static u32 s_pingSeq   = 0;
+static u32 s_pingFrame = 0;         // frame tick for the ping cadence
 static u64 s_pingTick[PING_RING];   // svcGetSystemTick when seq was sent; 0 = free/acked
 static int s_pingRtt   = -1;        // last measured round-trip (ms), -1 = none yet
 static int s_pingDrops = 0;         // pings whose pong never came back before the slot recycled
+static int s_pingSendFails = 0;     // local udsSendTo refusals (TX buffer busy) — NOT an air-loss drop
 
 bool netlink_available(void) { return s_inited; }
 
@@ -129,12 +133,13 @@ void net_session_close(void) {
 	if (s_host) udsDestroyNetwork(); else udsDisconnectNetwork();
 	udsUnbind(&s_bind);
 	s_up = false; s_host = false;
-	s_pingSeq = 0; s_pingRtt = -1; s_pingDrops = 0; memset(s_pingTick, 0, sizeof s_pingTick);
+	s_pingSeq = 0; s_pingFrame = 0; s_pingRtt = -1; s_pingDrops = 0; s_pingSendFails = 0; memset(s_pingTick, 0, sizeof s_pingTick);
 }
 
 // M2: call once per frame while connected. Echoes peers' pings, times our returned pongs, and
-// fires a fresh ping. Reports the latest RTT (ms, -1 if none) and the cumulative drop count.
-void net_ping_update(int* rttMs, int* drops) {
+// (every PING_EVERY_N frames) fires a fresh ping — unicast to the lone peer when there is one.
+// Reports the latest RTT (ms, -1 if none), the cumulative drop count, and local TX-busy refusals.
+void net_ping_update(int* rttMs, int* drops, int* sendFails) {
 	if (s_inited && s_up) {
 		u8 buf[64]; size_t got = 0; u16 src = 0;
 		while (R_SUCCEEDED(udsPullPacket(&s_bind, buf, sizeof buf, &got, &src)) && got >= sizeof(DgbaLinkPkt)) {
@@ -143,7 +148,8 @@ void net_ping_update(int* rttMs, int* drops) {
 			if (pk->type == PK_PING) {                       // a peer pinged us -> unicast a pong straight back
 				DgbaLinkPkt pong; memset(&pong, 0, sizeof pong);
 				pong.magic = 'G'; pong.type = PK_PONG; pong.round = pk->round;
-				udsSendTo(src, DGBA_DATACHAN, UDS_SENDFLAG_Default, &pong, sizeof pong);
+				Result pr = udsSendTo(src, DGBA_DATACHAN, UDS_SENDFLAG_Default, &pong, sizeof pong);
+				if (UDS_CHECK_SENDTO_FATALERROR(pr)) s_pingSendFails++;   // benign "TX busy" (0xC86113F0) ignored
 			} else if (pk->type == PK_PONG) {                // our ping returned -> measure RTT
 				u64 sent = s_pingTick[pk->round % PING_RING];
 				if (sent) {
@@ -152,16 +158,38 @@ void net_ping_update(int* rttMs, int* drops) {
 				}
 			}
 		}
-		u32 seq = ++s_pingSeq;                               // fire a fresh ping (broadcast to all peers)
-		int slot = (int)(seq % PING_RING);
-		if (s_pingTick[slot]) s_pingDrops++;                 // recycling a still-pending slot = a lost ping
-		s_pingTick[slot] = svcGetSystemTick();
-		DgbaLinkPkt ping; memset(&ping, 0, sizeof ping);
-		ping.magic = 'G'; ping.type = PK_PING; ping.round = seq;
-		udsSendTo(UDS_BROADCAST_NETWORKNODEID, DGBA_DATACHAN, UDS_SENDFLAG_Default | UDS_SENDFLAG_Broadcast, &ping, sizeof ping);
+		// Throttle to ~6 Hz (every PING_EVERY_N frames): keeps the UDS TX buffer unpressured (so
+		// udsSendTo stops returning "busy") and a ping's pong always returns long before the 32-slot
+		// ring recycles it.
+		if (++s_pingFrame % PING_EVERY_N == 0) {
+			// Prefer UNICAST to the lone peer: unicast frames are MAC-ACKed + auto-retransmitted, so they
+			// survive transient RF loss; UDS broadcast frames are never ACKed (best-effort, lossy) and a
+			// client's broadcast double-hops via the host (the host/joined drop asymmetry we measured).
+			u16 dst = UDS_BROADCAST_NETWORKNODEID;
+			u32 flags = UDS_SENDFLAG_Default | UDS_SENDFLAG_Broadcast;
+			udsConnectionStatus st;
+			if (R_SUCCEEDED(udsGetConnectionStatus(&st)) && st.total_nodes == 2) {
+				for (int node = 1; node <= st.max_nodes; node++)
+					if ((st.node_bitmask & (1u << (node - 1))) && node != st.cur_NetworkNodeID) {
+						dst = (u16)node; flags = UDS_SENDFLAG_Default; break;   // unicast to the single peer
+					}
+			}
+			u32 seq = ++s_pingSeq;
+			int slot = (int)(seq % PING_RING);
+			DgbaLinkPkt ping; memset(&ping, 0, sizeof ping);
+			ping.magic = 'G'; ping.type = PK_PING; ping.round = seq;
+			Result rc = udsSendTo(dst, DGBA_DATACHAN, flags, &ping, sizeof ping);
+			if (R_SUCCEEDED(rc)) {
+				if (s_pingTick[slot]) s_pingDrops++;             // reusing a still-pending slot = a real lost ping
+				s_pingTick[slot] = svcGetSystemTick();           // arm the slot only AFTER the send actually left
+			} else {
+				s_pingSendFails++;                               // TX busy/refused: nothing sent, don't arm a phantom drop
+			}
+		}
 	}
 	if (rttMs) *rttMs = s_pingRtt;
 	if (drops) *drops = s_pingDrops;
+	if (sendFails) *sendFails = s_pingSendFails;
 }
 
 bool net_lobby_status(DgbaConn* out) {
