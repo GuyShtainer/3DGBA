@@ -16,6 +16,7 @@
 #include <time.h>
 #include <math.h>
 #include <stdlib.h>
+#include <sys/stat.h>
 
 #include "gbacore.h"
 #include "rompicker.h"
@@ -1692,6 +1693,7 @@ int main(int argc, char** argv) {
 		         "Running SLOW (no 804MHz / L2).\nInstall + run the .CIA for full speed.");
 
 	gfxInitDefault();
+	mkdir("sdmc:/dual-gba", 0777);   // first-run: make the data folder so a fresh console finds ROMs/saves/settings
 	C3D_Init(C3D_DEFAULT_CMDBUF_SIZE);
 	C2D_Init(C2D_DEFAULT_MAX_OBJECTS);
 	C2D_Prepare();

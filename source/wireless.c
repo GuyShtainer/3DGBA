@@ -86,6 +86,7 @@ void wireless_lobby_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBu
 		if (phase == 1 || phase == 3) haveConn = net_lobby_status(&conn);
 
 		C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
+		C2D_TextBufClear(txtBuf);   // reuse the shared text buffer every frame, else it fills and text vanishes
 
 		// ---- top screen: title + seat map ----
 		C2D_TargetClear(top, THEME_BG); C2D_SceneBegin(top);
