@@ -62,8 +62,19 @@ static volatile bool g_appActive = true;   // false while suspended (HOME/sleep)
 static aptHookCookie s_aptCookie;
 static void apt_hook(APT_HookType t, void* p) {
 	(void)p;
-	if (t == APTHOOK_ONSUSPEND || t == APTHOOK_ONSLEEP) g_appActive = false;
-	else if (t == APTHOOK_ONRESTORE || t == APTHOOK_ONWAKEUP) g_appActive = true;
+	if (t == APTHOOK_ONSUSPEND || t == APTHOOK_ONSLEEP) {
+		g_appActive = false;
+		// FULLY shut UDS down NOW — the session AND udsExit. ONSUSPEND fires inside aptMainLoop while we
+		// are still foreground enough for nwm to service every IPC. ANY UDS call left for after the system
+		// reclaims the radio (HOME->Close, or launching another app and confirming "Close 3DGBA?") blocks
+		// on nwm and hangs the close forever — and udsExit, not just net_session_close, is on that path.
+		netlink_exit();   // net_session_close() + udsExit(); re-init on resume below
+	} else if (t == APTHOOK_ONEXIT) {
+		netlink_exit();   // idempotent (s_inited guard); covers any close path that skipped ONSUSPEND
+	} else if (t == APTHOOK_ONRESTORE || t == APTHOOK_ONWAKEUP) {
+		g_appActive = true;
+		netlink_init();   // bring UDS back up after a HOME/sleep resume so wireless still works this session
+	}
 }
 
 // Link callbacks (invoked by mGBA's lockstep). onSleep runs on this core's worker thread

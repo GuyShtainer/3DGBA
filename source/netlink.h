@@ -35,6 +35,7 @@ typedef struct {
 bool netlink_init(void);
 void netlink_exit(void);
 bool netlink_available(void);   // true once udsInit succeeded
+bool net_session_active(void);  // true while a network is hosted/joined (false after a HOME-suspend drop)
 
 // Session (M1). gameCode/romCrc identify this host's ROM in the advertisement; seatsTotal 2..4.
 bool net_session_host(const char* gameCode, u32 romCrc, int seatsTotal);

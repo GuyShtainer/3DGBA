@@ -68,6 +68,8 @@ void netlink_exit(void) {
 	s_inited = false;
 }
 
+bool net_session_active(void) { return s_up; }
+
 bool net_session_host(const char* gameCode, u32 romCrc, int seatsTotal) {
 	if (!s_inited || s_up) return false;
 	if (seatsTotal < 2) seatsTotal = 2; else if (seatsTotal > DGBA_MAX_SEATS) seatsTotal = DGBA_MAX_SEATS;

@@ -88,6 +88,12 @@ void wireless_lobby_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBu
 			haveConn = net_lobby_status(&conn);
 			if (haveConn && conn.totalNodes >= 2) net_ping_update(&rtt, &drops, &busy);   // M2: measure the link RTT
 		}
+		// The APT suspend hook drops the UDS session on any HOME press; if it did, fall back to the menu so
+		// a resumed lobby doesn't show a phantom HOSTING/JOINED for a dead link.
+		if ((phase == 1 || phase == 3) && !net_session_active()) {
+			phase = 0; sel = 0;
+			snprintf(status, sizeof status, "Link closed (left for HOME). Re-host or re-join.");
+		}
 
 		C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
 		C2D_TextBufClear(txtBuf);   // reuse the shared text buffer every frame, else it fills and text vanishes
