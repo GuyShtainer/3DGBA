@@ -1,145 +1,93 @@
 # Dual GBA
 
-Play **two Game Boy Advance games at once on a single 3DS** — one game on the top
-screen, one on the bottom. Each game runs in its own emulator core, pinned to its
-own CPU core, so they advance in genuine parallel rather than time-slicing.
+**Play two Game Boy Advance games at once on a single New 3DS — one per screen — and
+link them with an emulated GBA link cable.** Trade and battle between the two games on
+one handheld. Each game runs in its own [mGBA](https://mgba.io/) core pinned to its own
+ARM11 CPU core, so they advance in *genuine parallel* rather than time-slicing.
 
-This repo starts from the `3ds-tool-template` skeleton, which already implements
-the hard part of the architecture (dual-core threading, per-frame sync, dual-screen
-rendering, input focus). What remains is dropping a real GBA core into `emu_step()`.
-See **Roadmap** below.
+This was **hardware-impossible on the Nintendo DS** (a documented wall, not an effort
+wall) — the New 3DS's quad-core ARM11 at 804 MHz is what finally makes hosting two
+software GBA cores plus an emulated link cable feasible on one device.
 
-## Status
+> ⚠️ A hobby project, and a work in progress. The core (two games + the link cable)
+> runs on real New 3DS hardware; the stereoscopic-3D and wireless features are
+> experimental and being tuned on-device.
 
-🟡 **Skeleton.** Boots both screens, spawns two worker threads (one per core), and
-toggles input focus with **X / Y** — but `emu_step()` currently just animates a
-placeholder box. No GBA core is wired in yet.
+## What it does
 
-## 1. Install the toolchain
+- **Two GBA games simultaneously** — game A on the top screen, game B on the bottom,
+  each a full mGBA core on its own CPU core. Confirmed full-speed on a real New 3DS.
+- **Emulated link cable between the two games** — do a Pokémon trade or link battle
+  between the game on top and the game on the bottom, no second console required.
+- **Touchscreen "smart pointer"** — instead of an on-screen gamepad, the touch screen
+  drives the *real in-game UI*: tap a tile to pathfind-walk there, tap menu entries,
+  bag/party/battle targets, double-tap for START. (Gen-3 Pokémon.)
+- **Experimental stereoscopic 3D depth** — uses the 3DS 3D slider to pop the overworld
+  into a 2.5D diorama: characters and scenery stand up off a ground plane, with
+  elevation/tile-collision-aware depth. (Actively being tuned.)
+- **HD-2D-style post effects** — optional tilt-shift depth-of-field, LDR bloom, and a
+  time-of-day color grade, all toggleable in the pause menu.
+- **Wireless multi-console lobby** *(in progress)* — host/scan/join over local wireless
+  (UDS) with a live seat map; the emulation-over-the-air link is a later milestone.
+- Save states, per-game `.sav` loading, scaling/filter options, audio mix modes, and a
+  ROM picker.
 
-Install devkitPro: https://devkitpro.org/wiki/Getting_Started
+## Requirements
 
-Then pull the 3DS dev group (gives you devkitARM, libctru, citro2d/citro3d, and the
-`3dsxtool` / `3dslink` / `makerom` tools):
+- A **New 3DS / New 2DS XL** (the two cores need core 2 at 804 MHz + L2 cache). Old 3DS
+  is best-effort only and will run slow.
+- Installed as a **`.cia`** — the exheader flags that grant core 2 / 804 MHz / L2 /
+  `nwm::UDS` can't be claimed reliably by a `.3dsx` from the Homebrew Launcher.
+- Your own legally-obtained GBA ROMs, placed in `sdmc:/dual-gba/`.
 
-```
-sudo dkp-pacman -S 3ds-dev      # macOS/Linux; on some setups it's just 'pacman'
-```
+## Building
 
-Make sure these are exported (the installer normally adds them to your shell
-profile — on macOS the default is `/opt/devkitpro`):
+Builds with **[devkitPro](https://devkitpro.org/wiki/Getting_Started)** (devkitARM +
+libctru + citro2d/citro3d) and a vendored **mGBA** core.
 
-```
+```bash
+# 1. devkitPro toolchain (one-time)
+sudo dkp-pacman -S 3ds-dev
 export DEVKITPRO=/opt/devkitpro
 export DEVKITARM=$DEVKITPRO/devkitARM
+
+# 2. mGBA core — built into external/mgba/ (see docs/kb/mgba-integration.md).
+#    Not vendored in git (MPL-2.0, large); the Makefile links libmgba.a from there.
+
+# 3. build
+make            # -> dual-gba.3dsx  (quick netload testing via 3dslink)
+make cia        # -> dual-gba.cia   (the real install target; grants core 2 / 804 MHz)
+make clean
 ```
 
-> If VS Code's IntelliSense can't find headers, it's almost always because VS Code
-> was launched from the GUI and didn't inherit these vars. Launch it from a terminal
-> with `code .`, or hardcode the paths in `.vscode/c_cpp_properties.json`.
+`makerom` + `bannertool` (for the `.cia`) aren't part of devkitPro; the Makefile
+auto-discovers them and falls back to `PATH`. Iterate in
+**[Azahar](https://github.com/azahar-emu/azahar)** (the maintained Citra successor), but
+**sign off on real hardware** — emulators don't model core-2 contention, the 804 MHz
+budget, or UDS latency.
 
-Install the **C/C++** extension (`ms-vscode.cpptools`) in VS Code.
+## How it works
 
-## 2. Build
+- **One render thread owns the GPU.** Two emulator worker threads (core 0 + core 2)
+  produce 240×160 framebuffers on their own cores; *all* citro3d/GPU calls happen on the
+  main thread between `C3D_FrameBegin/End`. A per-frame `LightEvent` handshake parks the
+  workers at a safe point each frame for state reads.
+- **The link cable** is mGBA's own `GBASIOLockstep` driving the two in-process cores,
+  with fine-grained `runLoop` slicing so trades/battles stay in sync.
+- **Pure-C cores stay header-free** so parse/algorithm logic can dual-compile on a PC
+  test harness.
+- The **3D depth** is sprite/scenery "pop" overdrawn per-eye on the single composited
+  frame (no second emulation pass — the cores are saturated), aligned to the field
+  camera's sub-tile scroll.
 
-`Cmd/Ctrl + Shift + B`, or run `make`. Output is `dual-gba.3dsx` plus a `.smdh`.
-`make clean` wipes the build.
+See [`docs/`](docs/) for the architecture deep-dives, the design studies (stereoscopic
+3D, HD-2D, wireless link, co-op overworld), and the milestone roadmap.
 
-## 3. Run
+## License & credits
 
-- **On hardware (Luma3DS):** open the Homebrew Launcher, press **Y** to enter
-  netloader/receive mode, then run the *"run on 3DS (3dslink)"* task. The 3DS must be
-  on the same network. (Or copy the `.3dsx` to `/3ds/` on the SD and launch from HBL.)
-- **In an emulator:** open the `.3dsx` in Azahar (the maintained successor to Citra).
-
-## 4. What the skeleton does
-
-- Enables the New 3DS 804 MHz + L2 boost (`osSetSpeedupEnable`) and claims syscore
-  time (`APT_SetAppCpuTimeLimit`).
-- Creates two worker threads via `threadCreate(..., core_id, ...)`: worker A shares
-  core 0 with the light coordinator; worker B takes core 2 on a New 3DS (falls back
-  gracefully otherwise).
-- Runs a per-frame `LightEvent` handshake: the coordinator signals both workers,
-  waits for both, then does all GPU work on the main thread.
-- Renders worker A to the top screen, worker B to the bottom, with a highlight bar on
-  whichever has input focus. **X/Y** flips focus; **Start** quits.
-
-## 5. Build a CIA (installable; guaranteed core 2 on New 3DS)
-
-A `.3dsx` launched from the Homebrew Launcher can't reliably claim core 2. For
-guaranteed full dual-core access on a New 3DS, build a `.cia` instead — the included
-`app.rsf` already sets `CanAccessCore2: true`, `CpuSpeed: 804MHz`, and
-`EnableL2Cache: true`.
-
-Two external tools are needed (not part of devkitPro — install separately, put on PATH):
-
-- **makerom** — https://github.com/3DSGuy/Project_CTR
-- **bannertool** — https://github.com/Steveice10/bannertool (or a current fork)
-
-```
-make            # builds the .elf + .smdh first
-make cia        # wraps them into dual-gba.cia
-```
-
-Install the resulting `.cia` with a title manager (e.g. FBI) on a CFW console.
-
-If makerom/bannertool live off-PATH, override per build:
-`make cia MAKEROM=/path/to/makerom BANNERTOOL=/path/to/bannertool`.
-
-## Roadmap — wiring in a real GBA core
-
-The skeleton's `emu_step()` is where a GBA core plugs in. The plan:
-
-1. **Pick a core.** [mGBA](https://github.com/mgba-emu/mgba) (accurate, has a
-   maintained 3DS port; build `libmgba` and call the `mCore` API:
-   `core->setKeys`, `mCoreRunFrame`, `core->getVideoBuffer`) vs.
-   **gpSP** (dynarec, much faster but lower compatibility). Start with mGBA for
-   correctness; keep gpSP as the fallback if two cores can't hit full speed.
-2. **One `mCore` per `EmuInstance`.** Load a ROM per instance; run one frame per
-   worker tick. Two cores ≈ 2× the GBA CPU cost — realistic only on a **New 3DS /
-   New 2DS XL** (804 MHz, core 2). Old 3DS almost certainly can't do two at full speed.
-3. **Video.** GBA is 240×160; PICA200 wants tiled, power-of-two textures — back each
-   frame with a 256×256 texture and run a linear→tiled `GX_DisplayTransfer` each frame,
-   then draw it to that instance's screen (top is 400×240, bottom 320×240).
-4. **Audio.** There is one stereo output for two games. Options: mix both, **pan game
-   A left / game B right**, or follow input focus. Needs a design decision.
-5. **Input.** One physical control set, two games — the core UX problem:
-   - *Focus toggle* (what the skeleton does): only the focused game gets input.
-   - *Link-cable play*: emulate a GBA link cable **between the two in-process cores**
-     so you can run a 2-player link game solo, or trade between two carts of the same
-     game. This is the most compelling use of "two games at once."
-   - *Split controls*: map one set of buttons to each game.
-6. **ROM/BIOS/saves.** User-supplied GBA ROMs (and optionally the GBA BIOS for
-   accuracy); per-game `.sav` files. A small file picker on boot.
-
-> **Feasibility note:** the hard *systems* work (dual-core, sync, dual-screen) is
-> done. The risk is purely performance — fitting two software GBA cores in one 60 fps
-> budget on a New 3DS. Frameskip and gpSP are the escape hatches if mGBA×2 is too heavy.
-
-## Specialist agents
-
-This project carries its own Claude Code subagents in `.claude/agents/` (discovered when
-working inside the project):
-
-| Task | Agent |
-|---|---|
-| Embed `libmgba`; drive the two `mCore` instances (ROM/save/run-frame/video/audio/keys) | `mgba-core` |
-| Wire the emulated link cable (mGBA in-process lockstep SIO) between the two cores | `gba-link-lockstep` |
-| Combine the two cores' audio — solo/mixed/split + per-game volume | `gba-audio-mixer` |
-
-The toolkit's hardware agents — `n3ds-systems`, `pica-gpu`, `devkitarm-3ds-build`,
-`ctr-audio`, `n3ds-hardware-testing` — also apply (see `../../CLAUDE.md`).
-
-## Layout
-
-```
-.
-├── Makefile                  devkitPro 3DS build (.3dsx + .cia targets)
-├── app.rsf                   exheader spec; New 3DS / core-2 flags live here
-├── icon.png                  48x48 home-menu icon
-├── banner.png / banner.wav   home-menu banner (image + audio)
-├── source/main.c             coordinator + two emulator workers
-├── include/                  your headers
-├── .vscode/                  IntelliSense + build/run tasks
-└── README.md
-```
+- Built on **[mGBA](https://mgba.io/)** by endrift — **MPL-2.0** (file-level copyleft:
+  the mGBA sources stay open + source-available; this project's own files carry their own
+  terms). Built with **devkitPro** / **libctru** / **citro2d/citro3d**.
+- Gen-3 RAM/symbol maps reverse-engineered against the
+  **[pret](https://github.com/pret)** decompilations (read-only, for addresses only).
+- Not affiliated with or endorsed by Nintendo. Bring your own ROMs.
