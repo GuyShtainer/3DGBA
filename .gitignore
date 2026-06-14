@@ -7,3 +7,9 @@ build/
 banner.bnr
 external/
 crash_dump_*.dmp
+
+# NEVER commit copyrighted ROMs / saves / save-states (bring your own)
+temp/
+*.gba
+*.sav
+*.ss*
