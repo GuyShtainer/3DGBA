@@ -1,4 +1,4 @@
-# Dual GBA
+# 3DGBA
 
 **Play two Game Boy Advance games at once on a single New 3DS — one per screen — and
 link them with an emulated GBA link cable.** Trade and battle between the two games on
@@ -38,7 +38,7 @@ software GBA cores plus an emulated link cable feasible on one device.
   is best-effort only and will run slow.
 - Installed as a **`.cia`** — the exheader flags that grant core 2 / 804 MHz / L2 /
   `nwm::UDS` can't be claimed reliably by a `.3dsx` from the Homebrew Launcher.
-- Your own legally-obtained GBA ROMs, placed in `sdmc:/dual-gba/`.
+- Your own legally-obtained GBA ROMs, placed in `sdmc:/3DGBA/`.
 
 ## Building
 
@@ -55,8 +55,8 @@ export DEVKITARM=$DEVKITPRO/devkitARM
 #    Not vendored in git (MPL-2.0, large); the Makefile links libmgba.a from there.
 
 # 3. build
-make            # -> dual-gba.3dsx  (quick netload testing via 3dslink)
-make cia        # -> dual-gba.cia   (the real install target; grants core 2 / 804 MHz)
+make            # -> 3DGBA.3dsx  (quick netload testing via 3dslink)
+make cia        # -> 3DGBA.cia   (the real install target; grants core 2 / 804 MHz)
 make clean
 ```
 

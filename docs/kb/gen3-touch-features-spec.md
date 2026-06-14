@@ -403,9 +403,9 @@ if (sm && sm->valid && sm->ctx == GCTX_BATTLE_TARGET) {
 9. **rev0/v1.0 US only.** rev1 data symbols are essentially identical; add a rev1 profile only if a v1.1 cart misreads (per gen3-ram-touch.md).
 
 ## 5. FILES TO TOUCH
-- `/Users/guyshtainer/VSCodeProjects/3ds-toolkit/projects/dual-gba/source/gamestate.h` — extend `GameCtx`, `GameProfile`, `GameState` (§0.1, §0.2, §0.4).
-- `/Users/guyshtainer/VSCodeProjects/3ds-toolkit/projects/dual-gba/source/gamestate.c` — replace `PROFILES[]` (§0.3); extend `game_read()` detection + new field reads (§0.5, §1.1, §3.1).
-- `/Users/guyshtainer/VSCodeProjects/3ds-toolkit/projects/dual-gba/source/touch.h` — add `const GameProfile* prof;` (and the new GameState-derived fields if not passed via prof) to `TouchSmart`.
-- `/Users/guyshtainer/VSCodeProjects/3ds-toolkit/projects/dual-gba/source/touch.c` — add `hit_party`/`party_select`, BFS `plan_bfs` + rewrite of `walk_update`'s routing, `hit_battler`/`battler_index_for_pos`/`target_select`, and the three new dispatch branches in `touch_update` (+ resets).
-- `/Users/guyshtainer/VSCodeProjects/3ds-toolkit/projects/dual-gba/source/main.c` — fill the new `TouchSmart`/`GameState` fields each frame from `game_read()`.
-- `/Users/guyshtainer/VSCodeProjects/3ds-toolkit/projects/dual-gba/docs/kb/gen3-ram-touch.md` — append the new address tables (party / target / map-layout) with the same sym-branch sourcing note.
+- `/Users/guyshtainer/VSCodeProjects/3ds-toolkit/projects/3DGBA/source/gamestate.h` — extend `GameCtx`, `GameProfile`, `GameState` (§0.1, §0.2, §0.4).
+- `/Users/guyshtainer/VSCodeProjects/3ds-toolkit/projects/3DGBA/source/gamestate.c` — replace `PROFILES[]` (§0.3); extend `game_read()` detection + new field reads (§0.5, §1.1, §3.1).
+- `/Users/guyshtainer/VSCodeProjects/3ds-toolkit/projects/3DGBA/source/touch.h` — add `const GameProfile* prof;` (and the new GameState-derived fields if not passed via prof) to `TouchSmart`.
+- `/Users/guyshtainer/VSCodeProjects/3ds-toolkit/projects/3DGBA/source/touch.c` — add `hit_party`/`party_select`, BFS `plan_bfs` + rewrite of `walk_update`'s routing, `hit_battler`/`battler_index_for_pos`/`target_select`, and the three new dispatch branches in `touch_update` (+ resets).
+- `/Users/guyshtainer/VSCodeProjects/3ds-toolkit/projects/3DGBA/source/main.c` — fill the new `TouchSmart`/`GameState` fields each frame from `game_read()`.
+- `/Users/guyshtainer/VSCodeProjects/3ds-toolkit/projects/3DGBA/docs/kb/gen3-ram-touch.md` — append the new address tables (party / target / map-layout) with the same sym-branch sourcing note.

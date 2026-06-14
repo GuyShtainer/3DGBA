@@ -324,9 +324,9 @@ and add `fmenu_reset()`/`bag_reset()` to `all_reset()`.
 ---
 
 ## 5. Files to edit
-- `/Users/guyshtainer/VSCodeProjects/3ds-toolkit/projects/dual-gba/source/gamestate.h` — `GameCtx` enum, `GameProfile` fields, `GameState` fields.
-- `/Users/guyshtainer/VSCodeProjects/3ds-toolkit/projects/dual-gba/source/gamestate.c` — `PROFILES[]` rows (new per-game hex), `game_read` field-menu + bag detection branches.
-- `/Users/guyshtainer/VSCodeProjects/3ds-toolkit/projects/dual-gba/source/touch.h` — `TouchSmart` mirror fields.
-- `/Users/guyshtainer/VSCodeProjects/3ds-toolkit/projects/dual-gba/source/touch.c` — `hit_fieldmenu`/`hit_bag`, `fmenu_reset`/`bag_reset`, the two dispatch cases, `all_reset`.
-- `/Users/guyshtainer/VSCodeProjects/3ds-toolkit/projects/dual-gba/source/main.c` — extend the `gsr → sm` copy block (~L468–477).
-- `/Users/guyshtainer/VSCodeProjects/3ds-toolkit/projects/dual-gba/source/gbacore.h` + `gbacore.c` — add `gbacore_write16` (§0 Option A) unless using the two-write8 fallback.
+- `/Users/guyshtainer/VSCodeProjects/3ds-toolkit/projects/3DGBA/source/gamestate.h` — `GameCtx` enum, `GameProfile` fields, `GameState` fields.
+- `/Users/guyshtainer/VSCodeProjects/3ds-toolkit/projects/3DGBA/source/gamestate.c` — `PROFILES[]` rows (new per-game hex), `game_read` field-menu + bag detection branches.
+- `/Users/guyshtainer/VSCodeProjects/3ds-toolkit/projects/3DGBA/source/touch.h` — `TouchSmart` mirror fields.
+- `/Users/guyshtainer/VSCodeProjects/3ds-toolkit/projects/3DGBA/source/touch.c` — `hit_fieldmenu`/`hit_bag`, `fmenu_reset`/`bag_reset`, the two dispatch cases, `all_reset`.
+- `/Users/guyshtainer/VSCodeProjects/3ds-toolkit/projects/3DGBA/source/main.c` — extend the `gsr → sm` copy block (~L468–477).
+- `/Users/guyshtainer/VSCodeProjects/3ds-toolkit/projects/3DGBA/source/gbacore.h` + `gbacore.c` — add `gbacore_write16` (§0 Option A) unless using the two-write8 fallback.

@@ -1,4 +1,4 @@
-; warp.v.pica — passthrough vertex shader for the M2 grid scenery warp (dual-gba).
+; warp.v.pica — passthrough vertex shader for the M2 grid scenery warp (3DGBA).
 ; Positions arrive already warped (CPU-computed, screen space); this only projects them
 ; and forwards the texture coordinate.
 

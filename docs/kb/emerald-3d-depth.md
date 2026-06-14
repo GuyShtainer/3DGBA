@@ -6,9 +6,9 @@ I now have full ground-truth. All three studies are mutually consistent and adve
 
 ---
 
-# Stereoscopic 3D depth for Pokémon Emerald (dual-gba) — architecture verdict
+# Stereoscopic 3D depth for Pokémon Emerald (3DGBA) — architecture verdict
 
-Author: dual-gba architect. Grounded in the three verified studies (layer-model, tile-semantics, render-approach) and confirmed against live source: `main.c:214-258` (`render_game`), `main.c:704-709` (per-eye hook), `touch.c:131-144` (`map_read`/`walkable`), `gamestate.c:10-30` (the `GameProfile` table) and `gamestate.h:23-63` (the struct), `gbacore.h:72-74` (bus reads).
+Author: 3DGBA architect. Grounded in the three verified studies (layer-model, tile-semantics, render-approach) and confirmed against live source: `main.c:214-258` (`render_game`), `main.c:704-709` (per-eye hook), `touch.c:131-144` (`map_read`/`walkable`), `gamestate.c:10-30` (the `GameProfile` table) and `gamestate.h:23-63` (the struct), `gbacore.h:72-74` (bus reads).
 
 ---
 
@@ -138,4 +138,4 @@ Keep `POP`/`ENV` small (2-4 px); CLAMP_TO_EDGE hides gap smears; depth data capt
 
 - **The honest bottom line.** The *convincing volumetric* version — real foreground/ground/background separation with correct parallax and no gaps — is **IMPRACTICAL** on the dual-GBA flagship: it requires per-layer images, which require re-emulation, which the two saturated cores can't afford. The **realistic win** is the cheaper subtle version: **character pop (C) as the hero, optional gentle layer-type warp (B) underneath**, both on the single composited frame, slider-scaled, captured at the handshake. It reads as genuine 3DS depth without ever paying for a second emulation pass — and it degrades safely to flat on bad data, unknown games, or the Old 3DS.
 
-**Key files to touch:** `projects/dual-gba/source/main.c` (`render_game` 214-258 → split out `render_game_base`; per-eye block 704-709 → the depth render); `projects/dual-gba/source/gamestate.h:23-63` + `gamestate.c:15` (add `mapHeader` for M4); a new `depth.c`/`depth.h` for `depth_oam_snap()` (M3) and `depth_tile_snap()` (M4), reusing the `touch.c:131-143` grid pattern and `gbacore_read16/32` (`gbacore.h:72-74`); `main.c:263-273` `Settings` (M0 toggle). No mGBA/MPL files are modified — `enableVideoLayer` is deliberately *not* used (it would force the rejected re-emulation path).
+**Key files to touch:** `projects/3DGBA/source/main.c` (`render_game` 214-258 → split out `render_game_base`; per-eye block 704-709 → the depth render); `projects/3DGBA/source/gamestate.h:23-63` + `gamestate.c:15` (add `mapHeader` for M4); a new `depth.c`/`depth.h` for `depth_oam_snap()` (M3) and `depth_tile_snap()` (M4), reusing the `touch.c:131-143` grid pattern and `gbacore_read16/32` (`gbacore.h:72-74`); `main.c:263-273` `Settings` (M0 toggle). No mGBA/MPL files are modified — `enableVideoLayer` is deliberately *not* used (it would force the rejected re-emulation path).

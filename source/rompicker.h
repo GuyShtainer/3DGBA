@@ -1,5 +1,5 @@
 // rompicker.h — boot-time ROM picker.
-// Lists *.gba in sdmc:/dual-gba and lets the user choose two games (A = top screen,
+// Lists *.gba in sdmc:/3DGBA and lets the user choose two games (A = top screen,
 // B = bottom). Writes full sdmc paths into pathA/pathB (each >= cap bytes). Returns
 // false if cancelled (START) or no ROMs found, so the caller can fall back to defaults.
 // Requires gfx + citro2d already initialized; renders on the passed targets.
@@ -10,7 +10,7 @@
 #include <citro2d.h>
 #include <citro3d.h>
 
-#define ROM_DIR "sdmc:/dual-gba"
+#define ROM_DIR "sdmc:/3DGBA"
 
 bool rompicker_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txtBuf,
                    char* pathA, char* pathB, size_t cap);
@@ -23,7 +23,7 @@ void rom_display_name(const char* path, char* out, size_t cap);
 // Remember the last A+B pairing so the picker can offer a one-button resume next boot.
 void rompicker_save_recent(const char* pathA, const char* pathB);
 
-// Pick a .sav file from sdmc:/dual-gba to load into a running game. Writes the full path to
+// Pick a .sav file from sdmc:/3DGBA to load into a running game. Writes the full path to
 // `out`; returns false if cancelled or none found.
 bool savpicker_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txtBuf,
                    char* out, size_t cap);

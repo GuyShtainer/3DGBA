@@ -1,4 +1,4 @@
-# dual-gba knowledge base — overview / map
+# 3DGBA knowledge base — overview / map
 
 Project-specific subsystem docs for the dual-screen, link-cabled dual-GBA emulator.
 **General 3DS knowledge (hardware, GPU, ndsp output, build/toolchain, licensing) lives in

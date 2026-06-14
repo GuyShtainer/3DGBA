@@ -1,6 +1,6 @@
 # Audio — mixer policy (solo / mixed / split)
 
-**Verified against mGBA + libctru source (2026-06-03).** This is the dual-gba *policy*
+**Verified against mGBA + libctru source (2026-06-03).** This is the 3DGBA *policy*
 for combining two cores' audio. The ndsp hardware output path (channels, wave buffers,
 rates) is the toolkit's concern — the `ctr-audio` agent owns it; this doc owns *which
 samples get sent and how they're combined*.

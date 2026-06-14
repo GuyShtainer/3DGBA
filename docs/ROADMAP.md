@@ -2,7 +2,7 @@
 
 ## Context
 
-dual-gba is a New-3DS homebrew app that runs **two GBA games at once, one per screen,
+3DGBA is a New-3DS homebrew app that runs **two GBA games at once, one per screen,
 joined by an emulated link cable**. The dual-core scaffold already exists (two worker
 threads pinned to separate CPUs, per-frame `LightEvent` handshake, dual-screen citro2d
 render, X/Y focus toggle, `emu_step()` stub). The technical approach is verified against
@@ -87,7 +87,7 @@ high-level M0–M4 note (`../../docs/ROADMAP.md`), which stays as the toolkit-le
   the 3DS refresh) — *plus* the exheader fix (`app.rsf` was missing `dsp::DSP`, so `ndspInit` failed →
   silence); **toggleable HUD** (per-screen game label + FPS/clock/battery); **auto-named ROM picker**
   (GBA header → Gen-3 names/title); **recent pairings** (one-button resume of the last A+B at boot);
-  **settings persistence** (`sdmc:/dual-gba/settings.bin`). A temporary on-screen audio readout
+  **settings persistence** (`sdmc:/3DGBA/settings.bin`). A temporary on-screen audio readout
   (snd/rate/av/add/s0) is in to diagnose the reported silence; remove once audio is confirmed.
 - **Open: audio still silent in Azahar** as of last test — diag build pending the user's read of the
   on-screen numbers to localize (ndspInit vs core-produces-samples vs ndsp-output).

@@ -1,4 +1,4 @@
-// dual-gba (3DS) — two real mGBA cores, one per screen, with a ROM picker and an
+// 3DGBA (3DS) — two real mGBA cores, one per screen, with a ROM picker and an
 // in-game pause menu.
 // -----------------------------------------------------------------------------
 // Worker A hosts game A (top screen), worker B hosts game B (bottom), each a
@@ -878,8 +878,8 @@ static void render_game(EmuInstance* e, C3D_RenderTarget* screen, C3D_RenderTarg
 	}
 }
 
-// ---- Settings persistence (sdmc:/dual-gba/settings.bin) --------------------
-#define SETTINGS_PATH  "sdmc:/dual-gba/settings.bin"
+// ---- Settings persistence (sdmc:/3DGBA/settings.bin) --------------------
+#define SETTINGS_PATH  "sdmc:/3DGBA/settings.bin"
 #define SETTINGS_MAGIC 0x33424744u   // 'DGB3'
 typedef struct {
 	u32 magic;
@@ -1693,7 +1693,7 @@ int main(int argc, char** argv) {
 		         "Running SLOW (no 804MHz / L2).\nInstall + run the .CIA for full speed.");
 
 	gfxInitDefault();
-	mkdir("sdmc:/dual-gba", 0777);   // first-run: make the data folder so a fresh console finds ROMs/saves/settings
+	mkdir("sdmc:/3DGBA", 0777);   // first-run: make the data folder so a fresh console finds ROMs/saves/settings
 	C3D_Init(C3D_DEFAULT_CMDBUF_SIZE);
 	C2D_Init(C2D_DEFAULT_MAX_OBJECTS);
 	C2D_Prepare();
@@ -1715,8 +1715,8 @@ int main(int argc, char** argv) {
 	while (aptMainLoop()) {
 		char pathA[256], pathB[256];
 		if (!rompicker_run(top, bot, txtBuf, pathA, pathB, sizeof pathA)) {
-			strcpy(pathA, "sdmc:/dual-gba/gameA.gba");
-			strcpy(pathB, "sdmc:/dual-gba/gameB.gba");
+			strcpy(pathA, "sdmc:/3DGBA/gameA.gba");
+			strcpy(pathB, "sdmc:/3DGBA/gameB.gba");
 		} else {
 			rompicker_save_recent(pathA, pathB);   // remember for next boot's resume prompt
 		}

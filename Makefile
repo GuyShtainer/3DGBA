@@ -22,7 +22,7 @@ SOURCES		:=	source
 DATA		:=	data
 INCLUDES	:=	include
 
-APP_TITLE       := Dual GBA
+APP_TITLE       := 3DGBA
 APP_DESCRIPTION := Two GBA games at once, one per screen
 APP_AUTHOR      := Guy Shtainer
 

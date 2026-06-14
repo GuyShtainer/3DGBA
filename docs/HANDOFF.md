@@ -1,4 +1,4 @@
-# dual-gba — Handoff
+# 3DGBA — Handoff
 
 > Living resume doc maintained by the `handoff` skill. The **Current status** and **Next steps**
 > sections are always kept current — start there to resume. The **Session log** grows downward,
@@ -7,7 +7,7 @@
 
 ## Current status
 
-- **Repo / branch:** `/Users/guyshtainer/VSCodeProjects/3ds-toolkit/projects/dual-gba` / `main` — pushed: no (local only; this sub-tool is its own git repo; the toolkit git-ignores `projects/`).
+- **Repo / branch:** `/Users/guyshtainer/VSCodeProjects/3ds-toolkit/projects/3DGBA` / `main` — pushed: no (local only; this sub-tool is its own git repo; the toolkit git-ignores `projects/`).
 - **Goal:** A New-3DS homebrew that runs **two Gen-3 Pokémon GBA games at once** (one per screen) on embedded mGBA (`libmgba`, two `mCore`s), joined by an **emulated GBA link cable** (trades/battles — already works on real New 3DS). On top of that: a **touchscreen "smart pointer"** that drives the real in-game UI, **stereoscopic 3D depth**, and (researched, not built) **wireless multi-3DS link**, **PokéMMO-style shared overworld**, and an **Octopath HD-2D** look.
 - **State right now:** **Everything committed through depth round 7** (`657b6e1`→`8b8cd9d` for round 6; round 7 just committed on top). `.3dsx`+`.cia` build clean. Recent rounds: **R5** elevation A+B+C (priority planes + per-object pop); **netlink M1** UDS transport foundation; **R6** bright lighting / no centre rectangle / slider-off⇒2D / per-sprite standees; **R7** (this session): (1) **route-sign no longer a bright patch** — `light_pass` moved to run AFTER `ui_pop_eye`, so the UI panels get the same tint as the scene (consistent); (2) **"Vivid" menu toggle** (`MENU_VIVID_IDX 15`, `Settings.vivid`, default off) — when on, forces DoF+bloom+lighting off → the bright+sharp "sign look" everywhere, for easy A/B compare; (3) **opening the pause menu drops the top game to flat 2D** (`s3dOn` now also requires `!menuOpen`). **R8** (this session): tree/rock *tiles* now **stand up all over the map** — `warp_vert_depth` changed from a 4-tile AVERAGE (which diluted an isolated pole to near-ground → flat unless it overlapped the player's sprite-standee rect) to a **standee field**: each grid vertex takes the depth of the tile BELOW it, so a foreground tile's top pops and its bottom anchors to ground. Fixes the user's "3D only in a rectangle around the player; pole goes flat one step away." **Still open:** evaluate the standee-field look on hardware (the ground tile just above an object leans forward to fill behind it — that's the intended "fill behind the tree" stretch; watch for objects looking slightly fat from the horizontal `max`). And the **wireless M1 lobby UI** (netlink transport is in; UI not built).
 - **Done (this arc, newest first):**
@@ -29,7 +29,7 @@
 
 ## Next steps (resume here)
 
-1. **Commit M4** (after the user OKs; one `feat` commit, `main.c` only), then **hardware-test the whole HD-2D stack** (install the fresh `dual-gba.cia`): **M4 lighting** — walk the overworld at different in-game/real clock times: dawn warm + low-angle, noon bright/neutral, dusk orange, night dim-blue; hillsides should shade brighter on the lit side (directional); toggle "Light" in the menu (persists). Plus the round-4 depth checks (3D slider up): (a) hill/stairs pop ABOVE the grass; (b) floor never pops over the character; (c) bottom-of-screen pops a touch more than top; (d) dialog/menu/bag/party panels pop toward you (`UIPOP3D_PX` 5px) with crisp text; (e) no side-strip artifact / full-frame flat pop. `worstMs` HUD ≤16 ms with everything on — **if the budget breaks, drop bloom first, then M4 lighting** (both are cheap but expendable).
+1. **Commit M4** (after the user OKs; one `feat` commit, `main.c` only), then **hardware-test the whole HD-2D stack** (install the fresh `3DGBA.cia`): **M4 lighting** — walk the overworld at different in-game/real clock times: dawn warm + low-angle, noon bright/neutral, dusk orange, night dim-blue; hillsides should shade brighter on the lit side (directional); toggle "Light" in the menu (persists). Plus the round-4 depth checks (3D slider up): (a) hill/stairs pop ABOVE the grass; (b) floor never pops over the character; (c) bottom-of-screen pops a touch more than top; (d) dialog/menu/bag/party panels pop toward you (`UIPOP3D_PX` 5px) with crisp text; (e) no side-strip artifact / full-frame flat pop. `worstMs` HUD ≤16 ms with everything on — **if the budget breaks, drop bloom first, then M4 lighting** (both are cheap but expendable).
 2. **Known limitations (mention if asked):** (a) battle text panels don't pop — gen-3 battle BG0 is 32×64, so `bg0_scan` bails at its size guard (which also protects the full-screen-pop case); (b) M4 is the **analytic** lighting, not the study's AI-baked-normal atlas (deferred — needs offline bake + per-game tile RE).
 3. Tuning knobs: lighting — edit the `light_for_hour` keyframe table + `kSlope` (0.18) in `main.c`; depth — `POP3D_RAMP_PX` (2.4), `POP3D_CHAR_PX` (2.0), `ENV3D_ELEV` (0.8/level), `UIPOP3D_PX` (5.0); DoF/bloom — `DOF_ALPHA` (0x78), `DOF_SHARP_Y0/Y1` (48/112), `BLOOM_THRESH` (0xC8), `BLOOM_GAIN` (0x90).
 2. **Commit** the round (suggested split: text-aware DoF fix; M2 grid warp; or one combined HD-2D commit) once the user okays it.
@@ -39,11 +39,11 @@
 ## How to build / test / run
 
 ```
-cd /Users/guyshtainer/VSCodeProjects/3ds-toolkit/projects/dual-gba
+cd /Users/guyshtainer/VSCodeProjects/3ds-toolkit/projects/3DGBA
 export DEVKITPRO=/opt/devkitpro DEVKITARM=$DEVKITPRO/devkitARM
 export PATH="$HOME/3ds-tools/bin:$PATH"      # makerom/bannertool also auto-discovered from toolkit tools/bin
-make        # -> dual-gba.3dsx
-make cia    # -> dual-gba.cia  (installable; app.rsf grants CanAccessCore2 / 804MHz / L2 / nwm::UDS)
+make        # -> 3DGBA.3dsx
+make cia    # -> 3DGBA.cia  (installable; app.rsf grants CanAccessCore2 / 804MHz / L2 / nwm::UDS)
 make clean
 ```
 Iterate in **Azahar** (Citra successor). **Sign off only on real New 3DS** — 3D fusion, core-2 contention, the 804MHz/L2 budget, ndsp latency and any uds latency are NOT modeled by the emulator (CLAUDE.md rule #6). On-device touch debug: SMART mode draws a bottom-left line `ctx p=x,y key=U/D/L/R/A` — ask the user to read it when a touch bug repro's.
@@ -66,7 +66,7 @@ Iterate in **Azahar** (Citra successor). **Sign off only on real New 3DS** — 3
 - `source/rompicker.c` : `rompicker_run` (touch launcher — tap a game, drag to scroll).
 - `source/gbacore.{c,h}` : mCore wrapper, `gbacore_read/write8/16/32`, the in-process link (`gbalink_*`, `GBASIOLockstep`). `source/audio.{c,h}` : ndsp offload (core-1 thread + per-core SPSC rings).
 - `docs/kb/` : **the saved design studies** — `wireless-link-architecture.md`, `emerald-3d-depth.md`, `hd2d-octopath-3d.md`, `coop-shared-overworld.md`; plus `gen3-ram-touch.md`, `gen3-menu-bag-touch-spec.md`, `gen3-touch-features-spec.md`, `n3ds-audio-offload-plan.md`, `touch-issues-todo.md`. `docs/ROADMAP.md`.
-- **Toolkit (separate repo)** `/Users/guyshtainer/VSCodeProjects/3ds-toolkit` : `CLAUDE.md` (conventions + the specialist subagents `n3ds-systems`/`pica-gpu`/`devkitarm-3ds-build`/`ctr-audio`/`n3ds-hardware-testing`), `tools/bin/` (makerom+bannertool). Embedded mGBA at `projects/dual-gba/external/mgba`.
+- **Toolkit (separate repo)** `/Users/guyshtainer/VSCodeProjects/3ds-toolkit` : `CLAUDE.md` (conventions + the specialist subagents `n3ds-systems`/`pica-gpu`/`devkitarm-3ds-build`/`ctr-audio`/`n3ds-hardware-testing`), `tools/bin/` (makerom+bannertool). Embedded mGBA at `projects/3DGBA/external/mgba`.
 - **Decomps for RE** (read-only, on this machine): `/tmp/pret/pokeemerald`, `/tmp/pret/pokefirered`; symbol maps `/tmp/EMERALD.sym`, `/tmp/FIRERED.sym` (col1 = absolute GBA bus address).
 
 ## Gotchas / constraints

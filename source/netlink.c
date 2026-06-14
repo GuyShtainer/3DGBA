@@ -6,7 +6,7 @@
 #include <stdio.h>
 #include "netlink.h"
 
-// Our app's UDS identity — the scan filter, so we only ever see other dual-gba lobbies.
+// Our app's UDS identity — the scan filter, so we only ever see other 3DGBA lobbies.
 #define DGBA_WLANCOMMID 0x44474241u   // 'DGBA'
 #define DGBA_ID8        0x00
 #define DGBA_DATACHAN   0x01          // must be non-zero

@@ -1,4 +1,4 @@
-// rompicker.c — scan sdmc:/dual-gba for .gba files and pick two (A then B).
+// rompicker.c — scan sdmc:/3DGBA for .gba files and pick two (A then B).
 // A small scrolling list picker in citro2d (the first piece of the v0.5 UI layer).
 
 #include <3ds.h>
@@ -77,7 +77,7 @@ static int scan_roms(char names[][NAME_LEN], char disp[][NAME_LEN]) {
 	return n;
 }
 
-#define RECENT_PATH "sdmc:/dual-gba/recent.bin"
+#define RECENT_PATH "sdmc:/3DGBA/recent.bin"
 typedef struct { char a[256]; char b[256]; } RecentPair;
 
 void rompicker_save_recent(const char* pathA, const char* pathB) {
