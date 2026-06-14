@@ -24,6 +24,7 @@
 #include "touch.h"
 #include "audio.h"
 #include "netlink.h"
+#include "wireless.h"
 #include "warp_shbin.h"   // M2 grid-warp vertex shader (generated from source/warp.v.pica)
 
 #define WORKER_STACKSIZE (512 * 1024)   // mGBA runFrame has deep call chains; 32KB overflows
@@ -936,9 +937,9 @@ enum { SESSION_CHANGE, SESSION_QUIT };
 static const char* MENU_ITEMS[] = {
 	"Resume", "Link", "Audio", "Touch", "Frameskip", "Toggle HUD", "Swap screens",
 	"Save state", "Load state", "Load .sav (focused)", "Mute", "Pause", "DoF",
-	"Bloom", "Light", "Vivid", "Change games", "Quit"
+	"Bloom", "Light", "Vivid", "Wireless", "Change games", "Quit"
 };
-#define MENU_N 18
+#define MENU_N 19
 #define MENU_LINK_IDX  1   // dynamic label ("Link: off/on")
 #define MENU_AUDIO_IDX 2   // dynamic label ("Audio: <mode>")
 #define MENU_TOUCH_IDX 3   // dynamic label ("Touch: on/off")
@@ -950,6 +951,7 @@ static const char* MENU_ITEMS[] = {
 #define MENU_BLOOM_IDX 13  // dynamic label ("Bloom: on/off")
 #define MENU_LIGHT_IDX 14  // dynamic label ("Light: on/off")
 #define MENU_VIVID_IDX 15  // dynamic label ("Vivid: on/off")
+#define MENU_WIRELESS_IDX 16  // opens the wireless lobby
 static const char* const HUD_NAMES[4] = { "off", "top", "bottom", "both" };
 
 // Run one play session with the two chosen ROMs. Returns SESSION_CHANGE (re-pick) or
@@ -1228,8 +1230,8 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			if (kDown & KEY_TOUCH) {   // tap a button to select it
 				touchPosition mtp; hidTouchRead(&mtp);
 				for (int i = 0; i < MENU_N; i++) {
-					float bx = 4.0f + (i & 1) * 160.0f, by = 2.0f + (i >> 1) * 25.0f;
-					if (mtp.px >= bx && mtp.px < bx + 152 && mtp.py >= by && mtp.py < by + 23) {
+					float bx = 4.0f + (i & 1) * 160.0f, by = 2.0f + (i >> 1) * 22.0f;
+					if (mtp.px >= bx && mtp.px < bx + 152 && mtp.py >= by && mtp.py < by + 20) {
 						menuSel = i;
 						if (i == MENU_AUDIO_IDX) {   // 3 sub-buttons: A vol | B vol | mode (no full-cell activate)
 							int j = (int)((mtp.px - bx) / 50.5f); if (j < 0) j = 0; if (j > 2) j = 2;
@@ -1343,7 +1345,13 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					snprintf(status, sizeof status, "Vivid %s", vividOn ? "on" : "off");
 					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
 				}
-				else if (menuSel == 16) { result = SESSION_CHANGE; break; }
+				else if (menuSel == MENU_WIRELESS_IDX) {        // wireless multi-console lobby (M1)
+					EmuInstance* fg = (focused == 0) ? &emuA : &emuB;
+					char gcode[5] = { 0 };
+					if (fg->core) gbacore_game_code(fg->core, gcode);
+					wireless_lobby_run(top, bot, txtBuf, gcode);
+				}
+				else if (menuSel == 17) { result = SESSION_CHANGE; break; }
 				else                    { result = SESSION_QUIT;   break; }
 			}
 		}
@@ -1525,8 +1533,8 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		}
 		if (menuOpen) {
 			C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 240.0f, clrDim);
-			for (int i = 0; i < MENU_N; i++) {   // 2x9 grid of buttons (D-pad or tap to select)
-				float bx = 4.0f + (i & 1) * 160.0f, by = 2.0f + (i >> 1) * 25.0f;
+			for (int i = 0; i < MENU_N; i++) {   // 2x10 grid of buttons (D-pad or tap to select)
+				float bx = 4.0f + (i & 1) * 160.0f, by = 2.0f + (i >> 1) * 22.0f;
 				bool s = (i == menuSel);
 				if (i == MENU_AUDIO_IDX) {   // split cell: A vol | B vol | mode
 					char vlab[3][12];
@@ -1535,13 +1543,13 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					snprintf(vlab[2], 12, "%s", AUDIO_NAMES[audioMode]);
 					for (int j = 0; j < 3; j++) {
 						float sx = bx + j * 50.5f;
-						C2D_DrawRectSolid(sx, by, 0.0f, 49.0f, 23.0f, s ? clrHi : clrPanel);
+						C2D_DrawRectSolid(sx, by, 0.0f, 49.0f, 20.0f, s ? clrHi : clrPanel);
 						C2D_Text st; C2D_TextParse(&st, txtBuf, vlab[j]); C2D_TextOptimize(&st);
 						C2D_DrawText(&st, C2D_WithColor, sx + 4.0f, by + 5.0f, 0.0f, 0.36f, 0.36f, s ? clrSelTxt : clrTxt);
 					}
 					continue;
 				}
-				C2D_DrawRectSolid(bx, by, 0.0f, 152.0f, 23.0f, s ? clrHi : clrPanel);
+				C2D_DrawRectSolid(bx, by, 0.0f, 152.0f, 20.0f, s ? clrHi : clrPanel);
 				C2D_DrawText(&items[i], C2D_WithColor, bx + 6.0f, by + 5.0f, 0.0f, 0.4f, 0.4f, s ? clrSelTxt : clrTxt);
 			}
 			C2D_DrawText(&tStatus, C2D_WithColor, 4.0f, 228.0f, 0.0f, 0.35f, 0.35f, clrTxt);
