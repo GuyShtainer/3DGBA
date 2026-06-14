@@ -36,6 +36,18 @@ Pokémon, but the emulator itself plays anything. It ships no games or other con
 - Save states, per-game `.sav` loading, scaling/filter options, audio mix modes, and a
   ROM picker.
 
+## Status & roadmap
+
+A hobby project under active development — see **[STATUS.md](STATUS.md)** for the honest,
+up-to-date breakdown. Short version:
+
+- ✅ **Working on real hardware:** two GBA games at once, general GBA emulation, the local
+  emulated link cable (Pokémon trades), saves/states, and the wireless lobby + link probe.
+- 🟡 **Experimental, being tuned on-device:** the touchscreen smart-pointer, stereoscopic
+  3D depth, and the HD-2D post effects.
+- 🔜 **Planned:** wireless trades/battles between two consoles (the net link, M2.5 → M3),
+  and a pokeMMO-style co-op **shared overworld** where you see other players in the field.
+
 ## Requirements
 
 - A **New 3DS / New 2DS XL** (the two cores need core 2 at 804 MHz + L2 cache). Old 3DS
