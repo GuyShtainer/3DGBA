@@ -1,3 +1,7 @@
+// 3DGBA — two Game Boy Advance games at once on a New 3DS, with an emulated link cable.
+// Copyright (C) 2026 Guy Shtainer.  Free software under the GNU GPL v3 — see the LICENSE file.
+// Distributed WITHOUT ANY WARRANTY. Bundles mGBA (MPL-2.0); ships no games or Nintendo content.
+// -----------------------------------------------------------------------------
 // 3DGBA (3DS) — two real mGBA cores, one per screen, with a ROM picker and an
 // in-game pause menu.
 // -----------------------------------------------------------------------------

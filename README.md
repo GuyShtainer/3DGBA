@@ -9,6 +9,10 @@ This was **hardware-impossible on the Nintendo DS** (a documented wall, not an e
 wall) — the New 3DS's quad-core ARM11 at 804 MHz is what finally makes hosting two
 software GBA cores plus an emulated link cable feasible on one device.
 
+**3DGBA is a general Game Boy Advance emulator — it runs any GBA game you supply.** The
+touch "smart pointer" and the stereoscopic-3D depth are extras currently tuned for Gen-3
+Pokémon, but the emulator itself plays anything. It ships no games or other content.
+
 > ⚠️ A hobby project, and a work in progress. The core (two games + the link cable)
 > runs on real New 3DS hardware; the stereoscopic-3D and wireless features are
 > experimental and being tuned on-device.
@@ -83,11 +87,26 @@ budget, or UDS latency.
 See [`docs/`](docs/) for the architecture deep-dives, the design studies (stereoscopic
 3D, HD-2D, wireless link, co-op overworld), and the milestone roadmap.
 
-## License & credits
+## License
 
-- Built on **[mGBA](https://mgba.io/)** by endrift — **MPL-2.0** (file-level copyleft:
-  the mGBA sources stay open + source-available; this project's own files carry their own
-  terms). Built with **devkitPro** / **libctru** / **citro2d/citro3d**.
-- Gen-3 RAM/symbol maps reverse-engineered against the
-  **[pret](https://github.com/pret)** decompilations (read-only, for addresses only).
-- Not affiliated with or endorsed by Nintendo. Bring your own ROMs.
+**3DGBA is free software under the [GNU GPLv3](LICENSE)** — always free, always open. Any
+distributed version or fork must also remain open-source under the GPL.
+
+## Credits & third-party
+
+- **[mGBA](https://mgba.io/)** by endrift powers the emulation — licensed **MPL-2.0**. 3DGBA
+  links mGBA built from upstream commit `92621ea` with one local change to
+  `src/gba/CMakeLists.txt` (so the link-cable code links); per MPL-2.0 that file stays MPL-2.0
+  and its source is available (the change is documented in `docs/kb/mgba-integration.md`).
+  MPL-2.0 is GPL-compatible.
+- Built with **devkitPro** / **libctru** / **citro2d / citro3d**.
+- Gen-3 RAM addresses + struct offsets were found by referencing the
+  **[pret](https://github.com/pret)** decompilations (addresses/facts only — no game code is
+  included or distributed).
+
+## Legal
+
+3DGBA is a **general Game Boy Advance emulator**. It ships **no games, BIOS, or other Nintendo
+content** — you supply your own legally-obtained ROMs. Not affiliated with, authorized by, or
+endorsed by Nintendo. "Game Boy Advance" and "Pokémon" are trademarks of their respective
+owners, used here only descriptively.
