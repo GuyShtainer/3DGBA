@@ -42,3 +42,7 @@ int  net_lobby_scan(DgbaLobby* out, int max);    // returns lobby count found (c
 bool net_session_join(int sel);                  // connect to the sel'th scanned lobby
 void net_session_close(void);                    // leave/destroy, back to standalone
 bool net_lobby_status(DgbaConn* out);            // poll connection status + usernames
+
+// M2 latency probe: call once per frame while connected. Echoes peers' pings, times our pongs,
+// fires a fresh ping. *rttMs = last round-trip (ms, -1 = none yet); *drops = cumulative lost pings.
+void net_ping_update(int* rttMs, int* drops);

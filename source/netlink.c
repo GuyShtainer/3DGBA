@@ -30,6 +30,25 @@ static udsBindContext s_bind;
 static udsNetworkStruct s_scanNet[8];   // cached scanned networks (for net_session_join)
 static int  s_scanN = 0;
 
+// --- M2 transfer/ping plane ----------------------------------------------------------------
+// The on-wire packet (the emulation link reuses types 0-4 later; M2 uses PING/PONG to measure RTT).
+typedef struct __attribute__((packed)) {
+	u8  magic;   // 'G'
+	u8  type;    // 5 = PING, 6 = PONG
+	u8  seat;
+	u8  mode;
+	u32 round;   // ping sequence
+	union { u16 word[4]; u32 normal; u16 send; } d;
+} DgbaLinkPkt;   // 16 bytes
+#define PK_PING 5
+#define PK_PONG 6
+
+#define PING_RING 32
+static u32 s_pingSeq   = 0;
+static u64 s_pingTick[PING_RING];   // svcGetSystemTick when seq was sent; 0 = free/acked
+static int s_pingRtt   = -1;        // last measured round-trip (ms), -1 = none yet
+static int s_pingDrops = 0;         // pings whose pong never came back before the slot recycled
+
 bool netlink_available(void) { return s_inited; }
 
 bool netlink_init(void) {
@@ -110,6 +129,39 @@ void net_session_close(void) {
 	if (s_host) udsDestroyNetwork(); else udsDisconnectNetwork();
 	udsUnbind(&s_bind);
 	s_up = false; s_host = false;
+	s_pingSeq = 0; s_pingRtt = -1; s_pingDrops = 0; memset(s_pingTick, 0, sizeof s_pingTick);
+}
+
+// M2: call once per frame while connected. Echoes peers' pings, times our returned pongs, and
+// fires a fresh ping. Reports the latest RTT (ms, -1 if none) and the cumulative drop count.
+void net_ping_update(int* rttMs, int* drops) {
+	if (s_inited && s_up) {
+		u8 buf[64]; size_t got = 0; u16 src = 0;
+		while (R_SUCCEEDED(udsPullPacket(&s_bind, buf, sizeof buf, &got, &src)) && got >= sizeof(DgbaLinkPkt)) {
+			const DgbaLinkPkt* pk = (const DgbaLinkPkt*)buf;
+			if (pk->magic != 'G') continue;
+			if (pk->type == PK_PING) {                       // a peer pinged us -> unicast a pong straight back
+				DgbaLinkPkt pong; memset(&pong, 0, sizeof pong);
+				pong.magic = 'G'; pong.type = PK_PONG; pong.round = pk->round;
+				udsSendTo(src, DGBA_DATACHAN, UDS_SENDFLAG_Default, &pong, sizeof pong);
+			} else if (pk->type == PK_PONG) {                // our ping returned -> measure RTT
+				u64 sent = s_pingTick[pk->round % PING_RING];
+				if (sent) {
+					s_pingRtt = (int)((svcGetSystemTick() - sent) * 1000ull / SYSCLOCK_ARM11);
+					s_pingTick[pk->round % PING_RING] = 0;
+				}
+			}
+		}
+		u32 seq = ++s_pingSeq;                               // fire a fresh ping (broadcast to all peers)
+		int slot = (int)(seq % PING_RING);
+		if (s_pingTick[slot]) s_pingDrops++;                 // recycling a still-pending slot = a lost ping
+		s_pingTick[slot] = svcGetSystemTick();
+		DgbaLinkPkt ping; memset(&ping, 0, sizeof ping);
+		ping.magic = 'G'; ping.type = PK_PING; ping.round = seq;
+		udsSendTo(UDS_BROADCAST_NETWORKNODEID, DGBA_DATACHAN, UDS_SENDFLAG_Default | UDS_SENDFLAG_Broadcast, &ping, sizeof ping);
+	}
+	if (rttMs) *rttMs = s_pingRtt;
+	if (drops) *drops = s_pingDrops;
 }
 
 bool net_lobby_status(DgbaConn* out) {

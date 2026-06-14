@@ -83,7 +83,11 @@ void wireless_lobby_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBu
 		}
 
 		DgbaConn conn; bool haveConn = false;
-		if (phase == 1 || phase == 3) haveConn = net_lobby_status(&conn);
+		int rtt = -1, drops = 0;
+		if (phase == 1 || phase == 3) {
+			haveConn = net_lobby_status(&conn);
+			if (haveConn && conn.totalNodes >= 2) net_ping_update(&rtt, &drops);   // M2: measure the link RTT
+		}
 
 		C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
 		C2D_TextBufClear(txtBuf);   // reuse the shared text buffer every frame, else it fills and text vanishes
@@ -107,6 +111,12 @@ void wireless_lobby_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBu
 				snprintf(line, sizeof line, "P%d  %s%s", i + 1, occ ? conn.names[i] : "(open)",
 				         me ? "  <- you" : (i == 0 ? "  (host)" : ""));
 				draw_text(txtBuf, line, 28.0f, 80.0f + i * 26.0f, 0.5f, occ ? THEME_TEXT : THEME_DIM);
+			}
+			if (haveConn && conn.totalNodes >= 2) {
+				snprintf(line, sizeof line, "RTT: %d ms    loss: %d", rtt, drops);
+				draw_text(txtBuf, line, 16.0f, 190.0f, 0.6f, THEME_GOLD);
+			} else {
+				draw_text(txtBuf, "Waiting for a peer to measure the link...", 16.0f, 190.0f, 0.46f, THEME_DIM);
 			}
 		} else {
 			draw_text(txtBuf, game_name(myCode), 16.0f, 48.0f, 0.55f, THEME_DIM);
