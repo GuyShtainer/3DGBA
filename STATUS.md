@@ -4,6 +4,11 @@ An honest snapshot of what's solid, what's half-baked, and what's still a dream.
 solo hobby project built and tested on a real New 3DS, so the bar for "done" is *runs on
 hardware* — not *compiles* or *works in an emulator*.
 
+**What this project is:** a general GBA emulator whose *heart* is the **Pokémon**
+experience. The emulator and the emulated link cable work with **any** GBA game; the
+**touch** and **3D** enhancements are **Gen-3-Pokémon-specific** and do nothing in other
+games (Sonic, Kirby, etc.).
+
 **Legend:** ✅ works on real hardware · 🟡 built & experimental, actively being tuned on-device
 · 🔜 in progress / next up · 🔮 planned / aspirational (designed, not built)
 
@@ -12,11 +17,13 @@ hardware* — not *compiles* or *works in an emulator*.
 ## ✅ Working — verified on a real New 3DS
 
 - **Two GBA games at once**, one per screen — each a full [mGBA](https://mgba.io/) core
-  pinned to its own ARM11 CPU core, running in genuine parallel. Full speed on a New 3DS.
+  pinned to its own ARM11 CPU core, running in genuine parallel. (It runs — but *not*
+  always at full speed; see the performance note under Limitations.)
 - **General GBA emulation** — it runs any GBA ROM you supply (it's a real emulator, not a
   Pokémon-only app).
-- **Emulated link cable between the two local games** — a full Gen-3 Pokémon **trade**
-  completes and persists across the two screens, no second console.
+- **Emulated link cable between the two local games** — works with **any** GBA game's link
+  features (it's general); a full Gen-3 Pokémon **trade** completes and persists across the
+  two screens (the tested case), no second console.
 - **Wireless lobby** — host / scan / join over local wireless (UDS), with a live seat map,
   per-seat game-match check, and a live **RTT / packet-loss** link probe. Verified across
   two consoles (~1-frame RTT, near-zero loss).
@@ -68,8 +75,11 @@ is only the lobby + a latency probe). Milestones, each independently testable:
 
 ## Honest limitations
 
-- **New 3DS / New 2DS XL only** in practice — two software GBA cores need core 2 at
-  804 MHz + L2 cache. Old 3DS is best-effort and will run slow.
+- **Performance isn't always full speed — even on a New 3DS.** Two interpreted mGBA cores
+  plus audio is a heavy load for the ARM11, so it **often dips below 60fps** in busy scenes
+  (audio is the single biggest cost). It's genuinely playable, but smoothing this out is
+  active, ongoing work. (Old 3DS is best-effort and runs slow — the two cores need core 2
+  at 804 MHz + L2 cache, so a New 3DS / New 2DS XL is required in practice.)
 - **The touch & 3D layers are Gen-3-Pokémon-specific.** The *emulator* plays any GBA game;
   those extra layers read Pokémon RAM and won't do anything in other games.
 - **Wireless latency** over UDS is ~1 frame RTT — fine for poll-based trades/battles;

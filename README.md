@@ -9,9 +9,12 @@ This was **hardware-impossible on the Nintendo DS** (a documented wall, not an e
 wall) — the New 3DS's quad-core ARM11 at 804 MHz is what finally makes hosting two
 software GBA cores plus an emulated link cable feasible on one device.
 
-**3DGBA is a general Game Boy Advance emulator — it runs any GBA game you supply.** The
-touch "smart pointer" and the stereoscopic-3D depth are extras currently tuned for Gen-3
-Pokémon, but the emulator itself plays anything. It ships no games or other content.
+**3DGBA is a general Game Boy Advance emulator — it runs any GBA game you supply, and the
+emulated link cable works with any game's link features.** But the project's *heart* is
+making the **Pokémon** experience better: the touch "smart pointer" and the stereoscopic-3D
+depth are **Gen-3-Pokémon-specific** enhancements — they do nothing in, say, Sonic or
+Kirby. The emulator and the link are general; the special sauce is for Pokémon. It ships no
+games or other content.
 
 > ⚠️ A hobby project, and a work in progress. The core (two games + the link cable)
 > runs on real New 3DS hardware; the stereoscopic-3D and wireless features are
@@ -20,7 +23,9 @@ Pokémon, but the emulator itself plays anything. It ships no games or other con
 ## What it does
 
 - **Two GBA games simultaneously** — game A on the top screen, game B on the bottom,
-  each a full mGBA core on its own CPU core. Confirmed full-speed on a real New 3DS.
+  each a full mGBA core on its own CPU core, running in genuine parallel. Two interpreted
+  cores plus audio is heavy, so it **doesn't always hold full speed** — framerate dips in
+  busy scenes, and performance work is ongoing.
 - **Emulated link cable between the two games** — do a Pokémon trade or link battle
   between the game on top and the game on the bottom, no second console required.
 - **Touchscreen "smart pointer"** — instead of an on-screen gamepad, the touch screen
