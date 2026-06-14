@@ -49,3 +49,12 @@ bool net_lobby_status(DgbaConn* out);            // poll connection status + use
 // yet); *drops = cumulative lost pings; *sendFails = cumulative local TX-busy refusals (not air loss).
 // Any out-param may be NULL.
 void net_ping_update(int* rttMs, int* drops, int* sendFails);
+
+// --- M2.5 transfer plane: the net SIO driver (gbacore.c) exchanges one SIO word per "round" with
+// the other seat(s) through these. In LOOPBACK mode the two LOCAL cores rendezvous in-memory (no
+// radio) for the one-console M2.5 test; M3 swaps in real UDS. NEVER call inline from a worker that
+// runs a core — collect() blocks. seat = GBA playerId 0..3; needMask = bitmask of seats required.
+void net_link_set_loopback(bool on);
+void net_transfer_reset(void);
+void net_transfer_send_word(int seat, int mode, u32 round, u16 send);
+bool net_transfer_collect(u32 round, int mode, u16 out[4], u32 needMask, u64 deadline_ms);

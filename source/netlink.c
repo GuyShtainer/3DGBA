@@ -194,6 +194,96 @@ void net_ping_update(int* rttMs, int* drops, int* sendFails) {
 	if (sendFails) *sendFails = s_pingSendFails;
 }
 
+// ---------------------------------------------------------------------------------------------
+// M2.5 transfer plane. The net SIO driver (gbacore.c) calls these to exchange one SIO word per
+// "round" with the other seat(s). A small ring of rounds each gathers every seat's word; a waiter
+// blocks (off the worker's run path) until the needed seats arrive. In LOOPBACK mode the two LOCAL
+// cores rendezvous here in-memory with no radio (the one-console M2.5 test); M3 swaps in real UDS.
+// ---------------------------------------------------------------------------------------------
+#define NET_ROUNDS 8
+typedef struct {
+	LightLock  lock;
+	LightEvent ev;                       // RESET_STICKY: stays signaled so every waiter wakes
+	u32  round;
+	u32  arrivedMask;
+	u16  words[DGBA_MAX_SEATS];
+	bool used;
+} NetRound;
+static NetRound s_rounds[NET_ROUNDS];
+static bool s_roundsInit = false;
+static bool s_loopback   = false;
+
+static void net_rounds_init(void) {
+	if (s_roundsInit) return;
+	for (int i = 0; i < NET_ROUNDS; i++) {
+		LightLock_Init(&s_rounds[i].lock);
+		LightEvent_Init(&s_rounds[i].ev, RESET_STICKY);
+		s_rounds[i].used = false;
+	}
+	s_roundsInit = true;
+}
+
+void net_link_set_loopback(bool on) { net_rounds_init(); s_loopback = on; }
+
+void net_transfer_reset(void) {
+	net_rounds_init();
+	for (int i = 0; i < NET_ROUNDS; i++) {
+		LightLock_Lock(&s_rounds[i].lock);
+		s_rounds[i].used = false;
+		s_rounds[i].arrivedMask = 0;
+		LightEvent_Clear(&s_rounds[i].ev);
+		LightLock_Unlock(&s_rounds[i].lock);
+	}
+}
+
+// Merge one seat's word into its round slot and wake any waiter. Shared by the local send path and
+// (in M3) the UDS RX path.
+static void net_round_merge(int seat, u32 round, u16 word) {
+	if (seat < 0 || seat >= DGBA_MAX_SEATS) return;
+	NetRound* r = &s_rounds[round % NET_ROUNDS];
+	LightLock_Lock(&r->lock);
+	if (!r->used || r->round != round) {             // (re)claim the slot for this round
+		r->round = round;
+		r->arrivedMask = 0;
+		r->used = true;
+		memset(r->words, 0, sizeof r->words);
+		LightEvent_Clear(&r->ev);
+	}
+	r->words[seat] = word;
+	r->arrivedMask |= (1u << seat);
+	LightEvent_Signal(&r->ev);
+	LightLock_Unlock(&r->lock);
+}
+
+void net_transfer_send_word(int seat, int mode, u32 round, u16 send) {
+	(void)mode;
+	net_rounds_init();
+	net_round_merge(seat, round, send);              // loopback: the peer core merges its own word
+	if (!s_loopback) {
+		// M3: also udsSendTo the WORD packet to the peer(s) over the radio here.
+	}
+}
+
+bool net_transfer_collect(u32 round, int mode, u16 out[4], u32 needMask, u64 deadline_ms) {
+	(void)mode;
+	net_rounds_init();
+	NetRound* r = &s_rounds[round % NET_ROUNDS];
+	u64 deadlineTick = svcGetSystemTick() + (u64)deadline_ms * (SYSCLOCK_ARM11 / 1000ull);
+	for (;;) {
+		bool done = false;
+		LightLock_Lock(&r->lock);
+		if (r->round == round && (r->arrivedMask & needMask) == needMask) {
+			for (int s = 0; s < 4; s++) out[s] = r->words[s];
+			done = true;
+		}
+		LightLock_Unlock(&r->lock);
+		if (done) return true;
+		s64 remain = (s64)deadlineTick - (s64)svcGetSystemTick();
+		if (remain <= 0) return false;
+		LightEvent_WaitTimeout(&r->ev, remain * 1000000000ll / (s64)SYSCLOCK_ARM11);
+	}
+}
+
 bool net_lobby_status(DgbaConn* out) {
 	if (!out) return false;
 	memset(out, 0, sizeof *out);
