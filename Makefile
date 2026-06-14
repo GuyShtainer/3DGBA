@@ -11,12 +11,12 @@ TOPDIR ?= $(CURDIR)
 include $(DEVKITARM)/3ds_rules
 
 #---------------------------------------------------------------------------------
-# TARGET   : name of the output (defaults to the project folder name)
+# TARGET   : name of the output (the project brand; folder name is incidental)
 # BUILD    : intermediate object directory
 # SOURCES  : directories with .c/.cpp/.s source
 # INCLUDES : directories with headers
 #---------------------------------------------------------------------------------
-TARGET		:=	$(notdir $(CURDIR))
+TARGET		:=	3DGBA
 BUILD		:=	build
 SOURCES		:=	source
 DATA		:=	data
