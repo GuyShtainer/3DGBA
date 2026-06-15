@@ -330,18 +330,14 @@ static bool net_start(struct GBASIODriver* d) {
 	uint32_t round = s_netRound;
 	net_transfer_send_word(0, GBA_SIO_MULTI, round, w);
 	nd->pendingRound = round;
-	// Re-sync the cores at the transfer START — the analog of lockstep's WaitOnPlayers (lockstep.c:571).
-	// BLOCK here until the child has injected its word for THIS round, so the parent never runs its
-	// transfer timeline ahead of the peer. Without this the parent retried on stale ring data (the s>i
-	// gap) and the trade failed its confirm-step validation. (Loopback: the child's worker is independent,
-	// so it polls + injects while we wait; NET_DEADLINE_MS bounds a genuinely-absent peer.)
-	uint16_t sync[4];
-	if (net_transfer_collect(round, GBA_SIO_MULTI, sync, nd->needMask, NET_DEADLINE_MS))
-		s_netRound = round + 1;                      // advance the round HERE (per successful start), NOT in
-		                                             // finishMultiplayer: while blocked above the parent's timing
-		                                             // wheel is frozen, so a finish-time advance can't fire ->
-		                                             // s_netRound sticks and re-Busies re-read the child's STALE
-		                                             // word (the 240-burst gap + corrupt trade). Fresh round/start.
+	s_netRound = round + 1;                          // advance per start: each (re-)Busy gets a FRESH round (keeps
+	                                                 // the 240-burst fix). DO NOT block here for the child's word —
+	                                                 // the word-exchange RENDEZVOUS lives in net_finishMulti's
+	                                                 // collect (both seats). Blocking at start would force the child
+	                                                 // to send a STALE word early just to unblock us; instead the
+	                                                 // parent reaches finish and stalls there for the child's FRESH
+	                                                 // word (mirrors VBA-M: master sends word+start_time at once,
+	                                                 // waits for the slave words only at completion).
 	s_netStartN++;
 	return true;
 }
@@ -349,12 +345,12 @@ static bool net_start(struct GBASIODriver* d) {
 // Both seats: _sioFinish calls this to GET the agreed words; mGBA then writes SIOMULTI + raises IRQ.
 static void net_finishMulti(struct GBASIODriver* d, uint16_t data[4]) {
 	struct NetDriver* nd = (struct NetDriver*)d;
-	// CHILD only: re-latch our outgoing word HERE, at the transfer-finish event, and re-merge it. mGBA
-	// latches the secondary's SIOMLT_SEND AT the transfer event (lockstep.c:831/965) — after its CPU has
-	// run forward to that point — whereas our inject-time latch (gbacore_net_poll) fires a beat too early,
-	// before the game wrote the value it intends as this transfer's RESPONSE, so it can be STALE. The
-	// inject-time send stays (it unblocks the parent + advances the round); this overwrites the slot with
-	// the fresh word the game actually produced. (Parent's word is correct from its busy-write latch.)
+	// CHILD: this is the SOLE place the child latches + sends its word — the analog of mGBA's _setData
+	// (lockstep.c:831/965) and VBA-M's "latch when linktime >= start_time": both read the secondary's word
+	// only AFTER its CPU has run forward through the prior finish-IRQ that armed the value. gbacore_net_poll
+	// only NOTICES + schedules this completeEvent (no read), so by the time it fires the CPU has advanced and
+	// io[SIOMLT_SEND] holds the FRESH word the game intends. (Round 0's word is the game's pre-seeded value;
+	// every later word is armed by the prior transfer's finish-IRQ. Parent's word is correct from net_start.)
 	if (nd->seat != 0) {
 		struct GBASIO* sio = nd->d.p;
 		uint16_t w = sio->p->memory.io[IO_SIOMLT_SEND];
@@ -407,25 +403,27 @@ void gbacore_net_diag(int* startN, int* injectN, int* okN, int* toN, unsigned* r
 	if (cWord)   *cWord   = s_netCWord;
 }
 
-// CHILD-side per-slice hook (no-op for the parent). MUST run on this core's OWN worker thread: it
-// reads the core's io and schedules an event on the core's timing. Mirrors lockstep.c:964-970 —
-// notice a parent-initiated round, latch our word, set Busy, self-schedule our completeEvent.
+// CHILD-side per-slice hook (no-op for the parent). MUST run on this core's OWN worker thread (it
+// schedules an event on the core's timing). Mirrors lockstep.c's SIO_EV_TRANSFER_START *notice*: see a
+// parent-initiated round, set Busy, self-schedule our completeEvent — but read NOTHING here. The word is
+// latched + sent later, in net_finishMulti, after the CPU advances through the prior finish-IRQ.
 void gbacore_net_poll(GbaCore* g) {
 	if (!g || !g->core) return;
 	struct NetDriver* nd = &g->netDriver;
 	if (nd->seat == 0) return;                       // the parent self-schedules in net_start
-	uint32_t round = nd->lastInjectedRound + 1;      // inject rounds IN ORDER, no skips (sentinel+1 = round 0)
-	if ((int32_t)(round - s_netRound) > 0) return;   // caught up — nothing new to inject yet
+	uint32_t round = nd->lastInjectedRound + 1;      // handle rounds IN ORDER, no skips (sentinel+1 = round 0)
+	if ((int32_t)(round - s_netRound) > 0) return;   // caught up — nothing new to handle yet
 	if (!net_round_ready(round, 1u << 0)) return;    // parent's word for this round not in yet
+	// NOTICE only: set Busy + schedule; DO NOT read/send our word here. net_poll runs BEFORE gbacore_run_loop,
+	// so the CPU hasn't yet run the prior transfer's finish-IRQ that arms the FRESH SIOMLT_SEND — reading now
+	// is one transfer stale. The scheduled completeEvent gives the CPU GBASIOTransferCycles to run forward;
+	// net_finishMulti then latches + sends the fresh word, and both seats rendezvous on its collect.
 	struct GBASIO* sio = nd->d.p;
 	struct GBA*    gba = sio->p;
-	uint16_t w = gba->memory.io[IO_SIOMLT_SEND];     // latch our outgoing word
-	s_netCWord = w;                                  // diag: last word the child sent
-	net_transfer_send_word(nd->seat, GBA_SIO_MULTI, round, w);
 	sio->siocnt |= 0x80;                             // Busy: transfer in progress (lockstep.c:967)
 	nd->pendingRound = round;
 	nd->lastInjectedRound = round;
-	s_netInjectN++;                                  // diag: the child injected a parent-initiated round
+	s_netInjectN++;                                  // diag: the child noticed + armed a parent-initiated round
 	int32_t cyc = GBASIOTransferCycles(GBA_SIO_MULTI, sio->siocnt, nd->peers);
 	mTimingDeschedule(&gba->timing, &sio->completeEvent);
 	mTimingSchedule(&gba->timing, &sio->completeEvent, cyc);
