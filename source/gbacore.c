@@ -349,6 +349,18 @@ static bool net_start(struct GBASIODriver* d) {
 // Both seats: _sioFinish calls this to GET the agreed words; mGBA then writes SIOMULTI + raises IRQ.
 static void net_finishMulti(struct GBASIODriver* d, uint16_t data[4]) {
 	struct NetDriver* nd = (struct NetDriver*)d;
+	// CHILD only: re-latch our outgoing word HERE, at the transfer-finish event, and re-merge it. mGBA
+	// latches the secondary's SIOMLT_SEND AT the transfer event (lockstep.c:831/965) — after its CPU has
+	// run forward to that point — whereas our inject-time latch (gbacore_net_poll) fires a beat too early,
+	// before the game wrote the value it intends as this transfer's RESPONSE, so it can be STALE. The
+	// inject-time send stays (it unblocks the parent + advances the round); this overwrites the slot with
+	// the fresh word the game actually produced. (Parent's word is correct from its busy-write latch.)
+	if (nd->seat != 0) {
+		struct GBASIO* sio = nd->d.p;
+		uint16_t w = sio->p->memory.io[IO_SIOMLT_SEND];
+		s_netCWord = w;                             // diag: the FINAL word the child sent (what 'c' shows)
+		net_transfer_send_word(nd->seat, GBA_SIO_MULTI, nd->pendingRound, w);
+	}
 	if (net_transfer_collect(nd->pendingRound, GBA_SIO_MULTI, data, nd->needMask, NET_DEADLINE_MS)) {
 		s_netOkN++;                                 // diag: words converged (the round advance is in net_start now)
 	} else {
