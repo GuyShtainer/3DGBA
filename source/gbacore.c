@@ -334,8 +334,13 @@ static bool net_start(struct GBASIODriver* d) {
 	// gap) and the trade failed its confirm-step validation. (Loopback: the child's worker is independent,
 	// so it polls + injects while we wait; NET_DEADLINE_MS bounds a genuinely-absent peer.)
 	uint16_t sync[4];
-	net_transfer_collect(round, GBA_SIO_MULTI, sync, nd->needMask, NET_DEADLINE_MS);
-	s_netStartN++;                                   // diag: a parent transfer was initiated
+	if (net_transfer_collect(round, GBA_SIO_MULTI, sync, nd->needMask, NET_DEADLINE_MS))
+		s_netRound = round + 1;                      // advance the round HERE (per successful start), NOT in
+		                                             // finishMultiplayer: while blocked above the parent's timing
+		                                             // wheel is frozen, so a finish-time advance can't fire ->
+		                                             // s_netRound sticks and re-Busies re-read the child's STALE
+		                                             // word (the 240-burst gap + corrupt trade). Fresh round/start.
+	s_netStartN++;
 	return true;
 }
 
@@ -343,9 +348,7 @@ static bool net_start(struct GBASIODriver* d) {
 static void net_finishMulti(struct GBASIODriver* d, uint16_t data[4]) {
 	struct NetDriver* nd = (struct NetDriver*)d;
 	if (net_transfer_collect(nd->pendingRound, GBA_SIO_MULTI, data, nd->needMask, NET_DEADLINE_MS)) {
-		s_netOkN++;                                 // diag: a transfer's words converged
-		if (nd->seat == 0) ++s_netRound;            // advance ONLY on a real, complete transfer — the parent
-		                                            // is the sole advancer; a timeout must NOT skip the round
+		s_netOkN++;                                 // diag: words converged (the round advance is in net_start now)
 	} else {
 		s_netToN++;                                 // diag: collect timed out (words never converged)
 		memset(data, 0xFF, sizeof(uint16_t) * 4);   // timeout/link-lost: fail the transfer, keep the round
