@@ -287,6 +287,7 @@ bool net_round_ready(uint32_t round, uint32_t needMask);
 
 static volatile uint32_t s_netRound = 0;   // shared per-link round; single writer = the parent seat
 static int s_netStartN = 0, s_netInjectN = 0, s_netOkN = 0, s_netToN = 0;   // M2.5 on-device diagnostics
+static uint16_t s_netPWord = 0, s_netCWord = 0;   // last word the parent / child actually sent (word-dump diag)
 
 static bool     net_init   (struct GBASIODriver* d) { (void)d; return true; }
 static void     net_deinit (struct GBASIODriver* d) { (void)d; }
@@ -325,6 +326,7 @@ static bool net_start(struct GBASIODriver* d) {
 	if (nd->seat != 0) return false;
 	struct GBA* gba = d->p->p;
 	uint16_t w = gba->memory.io[IO_SIOMLT_SEND];
+	s_netPWord = w;                                  // diag: last word the parent sent
 	uint32_t round = s_netRound;
 	net_transfer_send_word(0, GBA_SIO_MULTI, round, w);
 	nd->pendingRound = round;
@@ -383,12 +385,14 @@ void gbacore_net_detach(GbaCore* g) {
 }
 
 // M2.5 on-device diagnostics: parent transfers started, child injects, collect ok/timeout, round.
-void gbacore_net_diag(int* startN, int* injectN, int* okN, int* toN, unsigned* round) {
+void gbacore_net_diag(int* startN, int* injectN, int* okN, int* toN, unsigned* round, unsigned* pWord, unsigned* cWord) {
 	if (startN)  *startN  = s_netStartN;
 	if (injectN) *injectN = s_netInjectN;
 	if (okN)     *okN     = s_netOkN;
 	if (toN)     *toN     = s_netToN;
 	if (round)   *round   = (unsigned)s_netRound;
+	if (pWord)   *pWord   = s_netPWord;
+	if (cWord)   *cWord   = s_netCWord;
 }
 
 // CHILD-side per-slice hook (no-op for the parent). MUST run on this core's OWN worker thread: it
@@ -404,6 +408,7 @@ void gbacore_net_poll(GbaCore* g) {
 	struct GBASIO* sio = nd->d.p;
 	struct GBA*    gba = sio->p;
 	uint16_t w = gba->memory.io[IO_SIOMLT_SEND];     // latch our outgoing word
+	s_netCWord = w;                                  // diag: last word the child sent
 	net_transfer_send_word(nd->seat, GBA_SIO_MULTI, round, w);
 	sio->siocnt |= 0x80;                             // Busy: transfer in progress (lockstep.c:967)
 	nd->pendingRound = round;

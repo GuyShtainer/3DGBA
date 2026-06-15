@@ -1441,10 +1441,10 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		if (hudMode) {
 			time_t tt = time(NULL);
 			struct tm* lt = localtime(&tt);
-			if (netOn) {   // M2.5 net-link diag: parent starts / child injects / collect ok / timeouts / round
-				int ns, ni, no, nt; unsigned nr;
-				gbacore_net_diag(&ns, &ni, &no, &nt, &nr);
-				snprintf(hudStat, sizeof hudStat, "NET s%d i%d ok%d to%d r%u %dfps", ns, ni, no, nt, nr, fps);
+			if (netOn) {   // M2.5 net-link diag: starts / injects / timeouts + the last words exchanged
+				int ns, ni, no, nt; unsigned nr, pw, cw;
+				gbacore_net_diag(&ns, &ni, &no, &nt, &nr, &pw, &cw);
+				snprintf(hudStat, sizeof hudStat, "NET s%d i%d to%d p%04X c%04X", ns, ni, nt, pw, cw);
 			} else
 			snprintf(hudStat, sizeof hudStat, "%s %dfps %dms %02d:%02d %d/5 f%d d%.1f c%d,%d",
 			         linkOn ? "LINK" : AUDIO_NAMES[audioMode], fps, showMs, lt ? lt->tm_hour : 0, lt ? lt->tm_min : 0, batLvl, depth3d.nfg, depth3d.maxd, depth3d.camX, depth3d.camY);

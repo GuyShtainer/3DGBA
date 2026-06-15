@@ -72,7 +72,7 @@ void     gbacore_link_detach(GbaCore* c);
 void     gbacore_net_attach(GbaCore* c, int seat, int peers);
 void     gbacore_net_detach(GbaCore* c);
 void     gbacore_net_poll(GbaCore* c);        // child-side per-slice hook; call ONLY from the core's worker
-void     gbacore_net_diag(int* startN, int* injectN, int* okN, int* toN, unsigned* round);   // M2.5 HUD diag
+void     gbacore_net_diag(int* startN, int* injectN, int* okN, int* toN, unsigned* round, unsigned* pWord, unsigned* cWord);   // M2.5 HUD diag
 
 uint32_t gbacore_frame_counter(GbaCore* c);   // bumps once per produced video frame
 
