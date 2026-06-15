@@ -123,6 +123,11 @@ distributed version or fork must also remain open-source under the GPL.
 - Gen-3 RAM addresses + struct offsets were found by referencing the
   **[pret](https://github.com/pret)** decompilations (addresses/facts only — no game code is
   included or distributed).
+- The wireless link's GBA-MULTI word timing — a one-transfer-latency *"send the word your last
+  SIO IRQ armed"* model — was **learned by studying [VBA-M](https://github.com/visualboyadvance-m/visualboyadvance-m)**'s
+  networked link-cable code (`gbaLink.cpp`), the GBA core the **Delta** emulator uses. We
+  reimplemented the technique from that understanding; **no VBA-M code is copied or included**.
+  (The mGBA in-process lockstep + GBATEK + pret decomps supplied the rest of the link details.)
 
 ## Legal
 
