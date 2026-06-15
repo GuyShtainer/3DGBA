@@ -328,6 +328,13 @@ static bool net_start(struct GBASIODriver* d) {
 	uint32_t round = s_netRound;
 	net_transfer_send_word(0, GBA_SIO_MULTI, round, w);
 	nd->pendingRound = round;
+	// Re-sync the cores at the transfer START — the analog of lockstep's WaitOnPlayers (lockstep.c:571).
+	// BLOCK here until the child has injected its word for THIS round, so the parent never runs its
+	// transfer timeline ahead of the peer. Without this the parent retried on stale ring data (the s>i
+	// gap) and the trade failed its confirm-step validation. (Loopback: the child's worker is independent,
+	// so it polls + injects while we wait; NET_DEADLINE_MS bounds a genuinely-absent peer.)
+	uint16_t sync[4];
+	net_transfer_collect(round, GBA_SIO_MULTI, sync, nd->needMask, NET_DEADLINE_MS);
 	s_netStartN++;                                   // diag: a parent transfer was initiated
 	return true;
 }
@@ -388,9 +395,9 @@ void gbacore_net_poll(GbaCore* g) {
 	if (!g || !g->core) return;
 	struct NetDriver* nd = &g->netDriver;
 	if (nd->seat == 0) return;                       // the parent self-schedules in net_start
-	uint32_t round = s_netRound;
-	if (round == nd->lastInjectedRound) return;      // already handled this round
-	if (!net_round_ready(round, 1u << 0)) return;    // wait until the parent's word for this round is in
+	uint32_t round = nd->lastInjectedRound + 1;      // inject rounds IN ORDER, no skips (sentinel+1 = round 0)
+	if ((int32_t)(round - s_netRound) > 0) return;   // caught up — nothing new to inject yet
+	if (!net_round_ready(round, 1u << 0)) return;    // parent's word for this round not in yet
 	struct GBASIO* sio = nd->d.p;
 	struct GBA*    gba = sio->p;
 	uint16_t w = gba->memory.io[IO_SIOMLT_SEND];     // latch our outgoing word
