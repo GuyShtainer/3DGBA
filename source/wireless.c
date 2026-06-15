@@ -22,8 +22,8 @@ static void draw_text(C2D_TextBuf buf, const char* s, float x, float y, float sz
 	C2D_DrawText(&t, C2D_WithColor, x, y, 0.0f, sz, sz, col);
 }
 
-void wireless_lobby_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txtBuf,
-                        const char* myGameCode) {
+int wireless_lobby_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txtBuf,
+                       const char* myGameCode) {
 	char myCode[5] = { 0 };
 	if (myGameCode) memcpy(myCode, myGameCode, 4);
 
@@ -33,6 +33,8 @@ void wireless_lobby_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBu
 	int sel = 0;
 	DgbaLobby lobbies[8]; int nLob = 0; int rescan = 0;
 	char status[64] = "";
+	int  startLink = 0;     // 0 = none yet; 1 = start as host (seat 0); 2 = start as joiner (seat 1)
+	bool canStart = false;  // true while phase 1/3 has 2 connected nodes (set from net_lobby_status below)
 
 	while (aptMainLoop()) {
 		hidScanInput();
@@ -61,6 +63,7 @@ void wireless_lobby_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBu
 			} else if (act == 2) break;                      // Back
 		} else if (phase == 1) {                            // ---- hosting ----
 			if (kd & KEY_B) { net_session_close(); phase = 0; sel = 0; }
+			else if ((kd & KEY_X) && canStart) { startLink = 1; break; }   // host = seat 0; leave session UP
 		} else if (phase == 2) {                            // ---- scan list ----
 			if (--rescan <= 0) { nLob = net_lobby_scan(lobbies, 8); rescan = 60; if (sel >= nLob) sel = nLob ? nLob - 1 : 0; }
 			if (nLob > 0) {
@@ -80,13 +83,15 @@ void wireless_lobby_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBu
 			}
 		} else {                                            // ---- joined ----
 			if (kd & KEY_B) { net_session_close(); phase = 0; sel = 1; }
+			else if ((kd & KEY_X) && canStart) { startLink = 2; break; }   // joiner = seat 1; leave session UP
 		}
 
 		DgbaConn conn; bool haveConn = false;
 		int rtt = -1, drops = 0, busy = 0;
+		canStart = false;
 		if (phase == 1 || phase == 3) {
 			haveConn = net_lobby_status(&conn);
-			if (haveConn && conn.totalNodes >= 2) net_ping_update(&rtt, &drops, &busy);   // M2: measure the link RTT
+			if (haveConn && conn.totalNodes >= 2) { net_ping_update(&rtt, &drops, &busy); canStart = true; }   // M2 RTT + arm Start-link
 		}
 		// The APT suspend hook drops the UDS session on any HOME press; if it did, fall back to the menu so
 		// a resumed lobby doesn't show a phantom HOSTING/JOINED for a dead link.
@@ -155,14 +160,16 @@ void wireless_lobby_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBu
 			draw_text(txtBuf, "A join   B back", 8.0f, 224.0f, 0.42f, THEME_DIM);
 		} else {   // hosting / joined
 			draw_text(txtBuf, phase == 1 ? "Waiting for players..." : "Connected.", 8.0f, 8.0f, 0.5f, THEME_GOLD);
-			draw_text(txtBuf, "Emulation link comes in a later step;", 8.0f, 44.0f, 0.44f, THEME_DIM);
-			draw_text(txtBuf, "this proves the lobby + seats.", 8.0f, 66.0f, 0.44f, THEME_DIM);
-			draw_text(txtBuf, "B leave", 8.0f, 224.0f, 0.42f, THEME_DIM);
+			draw_text(txtBuf, canStart ? "Both in. Press X to start the link" : "Waiting for the other console...",
+			          8.0f, 44.0f, 0.44f, canStart ? THEME_GOLD : THEME_DIM);
+			draw_text(txtBuf, "Then open the in-game Cable Club to trade.", 8.0f, 66.0f, 0.44f, THEME_DIM);
+			draw_text(txtBuf, canStart ? "X start link   B leave" : "B leave", 8.0f, 224.0f, 0.42f, THEME_DIM);
 		}
 
 		C3D_FrameEnd(0);
 	}
 
-	net_session_close();
+	if (!startLink) net_session_close();   // Start-link leaves the session UP for gameplay
 	gfxSet3D(true);   // restore stereo for the game screens
+	return startLink;
 }

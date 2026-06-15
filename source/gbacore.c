@@ -286,6 +286,7 @@ void gbacore_link_detach(GbaCore* g) {
 void net_transfer_send_word(int seat, int mode, uint32_t round, uint16_t send);
 bool net_transfer_collect(uint32_t round, int mode, uint16_t out[4], uint32_t needMask, uint64_t deadline_ms);
 bool net_round_ready(uint32_t round, uint32_t needMask);
+bool net_round_next_parent(uint32_t afterRound, uint32_t* outRound);   // M3: child adopts the parent's wire round
 
 #define IO_SIOMLT_SEND  0x95          // gba->memory.io[] halfword index for SIOMLT_SEND (0x0400012A)
 #define IO_IF           0x101         // GBA_REG_IF (0x0400_0202) >> 1 — interrupt-flag latch
@@ -441,9 +442,14 @@ void gbacore_net_poll(GbaCore* g) {
 	struct GBASIO* sio = nd->d.p;
 	struct GBA*    gba = sio->p;
 
-	uint32_t round = nd->lastInjectedRound + 1;      // handle rounds IN ORDER, no skips (sentinel+1 = round 0)
-	if ((int32_t)(round - __atomic_load_n(&s_netRound, __ATOMIC_ACQUIRE)) > 0) return;   // caught up — nothing new yet
-	if (!net_round_ready(round, 1u << 0)) return;    // parent's word for this round not in yet
+	// M3: adopt the PARENT's wire round, never a private counter. net_round_next_parent returns the
+	// lowest parent-stamped round we haven't injected yet — in loopback the parent's local merge in
+	// net_start fills the same slot, so this is transport-agnostic. A dropped/extra parent round is
+	// skipped cleanly (we jump to the next round the parent actually stamped) instead of gating
+	// forever on a private counter the parent never matches (the joiner has no shared s_netRound).
+	uint32_t round;
+	uint32_t after = nd->lastInjectedRound;          // 0xFFFFFFFF sentinel = nothing injected yet
+	if (!net_round_next_parent(after, &round)) return;   // no new parent-stamped round present yet
 
 	// --- ISR-PROOF GATE: do not capture round R's reply until round (R-1)'s SIO ISR has run+acked. ---
 	// All three signals are LOCAL (no peer access, no shared clock):

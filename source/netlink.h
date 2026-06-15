@@ -59,3 +59,20 @@ void net_transfer_reset(void);
 void net_transfer_send_word(int seat, int mode, u32 round, u16 send);
 bool net_transfer_collect(u32 round, int mode, u16 out[4], u32 needMask, u64 deadline_ms);
 bool net_round_ready(u32 round, u32 needMask);   // non-blocking: is `round` present with needMask seats in?
+
+// --- M3 wireless transport (real UDS) -------------------------------------------------------
+// net_link_start: arm wireless gameplay AFTER the lobby session is up. loopback=false, reset the
+// ring, resolve the lone peer (REFUSING if it can't get a unicast node id), and spin the one RX
+// thread that owns every udsPullPacket. Returns false if the session/peer isn't ready.
+bool net_link_start(int seat);
+// net_link_stop: stop+join the RX thread and release any worker blocked in collect. Idempotent.
+void net_link_stop(void);
+// net_transfer_abort: signal every round slot so a blocked net_transfer_collect returns at once
+// (collect then reports timeout -> the worker's net free-run loop checks netLinked and exits).
+void net_transfer_abort(void);
+// net_link_get_rtt: the RX thread writes RTT(ms,-1=none)/cumulative drops; the HUD reads them.
+void net_link_get_rtt(int* rttMs, int* drops);
+// CHILD round-from-wire: the lowest parent-stamped round in the ring that is > afterRound and has
+// the parent's word present. Returns true + *round when one exists (the child injects THAT exact
+// wire round). Transport-agnostic: loopback's local parent-merge satisfies it the same way.
+bool net_round_next_parent(u32 afterRound, u32* outRound);

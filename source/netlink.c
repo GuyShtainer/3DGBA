@@ -42,6 +42,7 @@ typedef struct __attribute__((packed)) {
 } DgbaLinkPkt;   // 16 bytes
 #define PK_PING 5
 #define PK_PONG 6
+#define PK_WORD 7   // M3: one seat's SIO word for a round (pk->seat / pk->round / pk->d.send)
 
 #define PING_RING 32
 #define PING_EVERY_N 10   // send one ping every 10 frames (~6 Hz @60fps): ample for a latency HUD,
@@ -53,6 +54,67 @@ static int s_pingRtt   = -1;        // last measured round-trip (ms), -1 = none 
 static int s_pingDrops = 0;         // pings whose pong never came back before the slot recycled
 static int s_pingSendFails = 0;     // local udsSendTo refusals (TX buffer busy) — NOT an air-loss drop
 
+// --- M3 wireless transport state ------------------------------------------------------------
+static LightLock     s_txLock;             // serializes EVERY udsSendTo across main/RX/worker threads
+static LightLock     s_rxLock;             // serializes the RX dispatch (one logical pull owner)
+static bool          s_locksInit = false;  // one-time init guard (never re-init a held lock)
+static Thread        s_rxThread = NULL;
+static volatile bool s_rxRun     = false;
+static u16           s_peerNode  = UDS_BROADCAST_NETWORKNODEID;   // resolved lone-peer node id
+static bool          s_peerResolved = false;                     // false => no unicast target yet
+static int           s_wordSendFails = 0;                        // WORD packets that failed to send
+#define NET_RX_STACK (16 * 1024)
+
+// Transfer-plane ring state (declared here so net_session_close, above the transfer-plane functions,
+// can reference it). The ring of rounds each gathers every seat's word; a waiter blocks until the
+// needed seats arrive. LOOPBACK = two local cores rendezvous in-memory; M3 = real UDS via the RX thread.
+#define NET_ROUNDS 8
+typedef struct {
+	LightLock  lock;
+	LightEvent ev;                       // RESET_STICKY: stays signaled so every waiter wakes
+	u32  round;
+	u32  arrivedMask;
+	u16  words[DGBA_MAX_SEATS];
+	bool used;
+} NetRound;
+static NetRound s_rounds[NET_ROUNDS];
+static bool s_roundsInit = false;
+static bool s_loopback   = false;
+
+static void net_locks_init(void) {        // call from net_rounds_init so locks are ALWAYS valid
+	if (s_locksInit) return;
+	LightLock_Init(&s_txLock);
+	LightLock_Init(&s_rxLock);
+	s_locksInit = true;
+}
+
+// The ONLY caller of udsSendTo anywhere. Serializes the three send sites (main ping, RX pong,
+// worker WORD). Returns a non-success sentinel when the link is down so a skipped send is never
+// counted as delivered.
+static Result net_send_locked(u16 dst, u32 flags, const void* p, size_t n) {
+	if (!s_inited || !s_up) return (Result)0xD8E007FA;   // "not sent" sentinel (link down)
+	LightLock_Lock(&s_txLock);
+	Result r = udsSendTo(dst, DGBA_DATACHAN, (u8)flags, p, n);
+	LightLock_Unlock(&s_txLock);
+	return r;
+}
+
+// Resolve the lone peer's unicast node id. Sets s_peerResolved only when a real (non-broadcast)
+// peer node is found — WORD packets MUST go unicast (MAC-ACKed); a broadcast fallback is a hard
+// "not ready", never a silent lossy degrade.
+static bool net_resolve_peer(void) {
+	s_peerNode = UDS_BROADCAST_NETWORKNODEID;
+	s_peerResolved = false;
+	udsConnectionStatus st;
+	if (R_SUCCEEDED(udsGetConnectionStatus(&st)) && st.total_nodes == 2) {
+		for (int node = 1; node <= st.max_nodes; node++)
+			if ((st.node_bitmask & (1u << (node - 1))) && node != st.cur_NetworkNodeID) {
+				s_peerNode = (u16)node; s_peerResolved = true; break;
+			}
+	}
+	return s_peerResolved;
+}
+
 bool netlink_available(void) { return s_inited; }
 
 bool netlink_init(void) {
@@ -63,7 +125,8 @@ bool netlink_init(void) {
 
 void netlink_exit(void) {
 	if (!s_inited) return;
-	net_session_close();
+	net_link_stop();        // join RX thread + abort pending rounds: NO thread is in a UDS call now
+	net_session_close();    // udsUnbind (s_up flips false first)
 	udsExit();
 	s_inited = false;
 }
@@ -132,55 +195,55 @@ bool net_session_join(int sel) {
 
 void net_session_close(void) {
 	if (!s_up) return;
+	s_up = false;                         // flip FIRST: net_send_locked + the RX pump now early-return
 	if (s_host) udsDestroyNetwork(); else udsDisconnectNetwork();
 	udsUnbind(&s_bind);
-	s_up = false; s_host = false;
-	s_pingSeq = 0; s_pingFrame = 0; s_pingRtt = -1; s_pingDrops = 0; s_pingSendFails = 0; memset(s_pingTick, 0, sizeof s_pingTick);
+	s_host = false;
+	s_peerNode = UDS_BROADCAST_NETWORKNODEID; s_peerResolved = false;
+	s_loopback = false;                   // restore a known transport state for the next link
+	if (s_roundsInit)                     // unblock any worker still parked in collect (belt-and-suspenders)
+		for (int i = 0; i < NET_ROUNDS; i++) LightEvent_Signal(&s_rounds[i].ev);
+	s_pingSeq = 0; s_pingFrame = 0; s_pingRtt = -1; s_pingDrops = 0; s_pingSendFails = 0; s_wordSendFails = 0;
+	memset(s_pingTick, 0, sizeof s_pingTick);
 }
 
-// M2: call once per frame while connected. Echoes peers' pings, times our returned pongs, and
-// (every PING_EVERY_N frames) fires a fresh ping — unicast to the lone peer when there is one.
-// Reports the latest RTT (ms, -1 if none), the cumulative drop count, and local TX-busy refusals.
+// Call once per frame while connected. In the LOBBY (no RX thread yet) this owns the pull/echo/RTT
+// exactly as M2 did. IN-GAME the RX thread owns the pull, so here we only SEND the throttled ping
+// (gated on s_rxRun => no double-pull). All sends go through net_send_locked (s_txLock) so they're
+// safe against the RX-thread pong and the worker-thread WORD sends.
 void net_ping_update(int* rttMs, int* drops, int* sendFails) {
 	if (s_inited && s_up) {
-		u8 buf[64]; size_t got = 0; u16 src = 0;
-		while (R_SUCCEEDED(udsPullPacket(&s_bind, buf, sizeof buf, &got, &src)) && got >= sizeof(DgbaLinkPkt)) {
-			const DgbaLinkPkt* pk = (const DgbaLinkPkt*)buf;
-			if (pk->magic != 'G') continue;
-			if (pk->type == PK_PING) {                       // a peer pinged us -> unicast a pong straight back
-				DgbaLinkPkt pong; memset(&pong, 0, sizeof pong);
-				pong.magic = 'G'; pong.type = PK_PONG; pong.round = pk->round;
-				Result pr = udsSendTo(src, DGBA_DATACHAN, UDS_SENDFLAG_Default, &pong, sizeof pong);
-				if (UDS_CHECK_SENDTO_FATALERROR(pr)) s_pingSendFails++;   // benign "TX busy" (0xC86113F0) ignored
-			} else if (pk->type == PK_PONG) {                // our ping returned -> measure RTT
-				u64 sent = s_pingTick[pk->round % PING_RING];
-				if (sent) {
-					s_pingRtt = (int)((svcGetSystemTick() - sent) * 1000ull / SYSCLOCK_ARM11);
-					s_pingTick[pk->round % PING_RING] = 0;
+		if (!s_rxRun) {   // LOBBY only: the RX thread isn't pulling, so we do (sole UDS user here)
+			u8 buf[64]; size_t got = 0; u16 src = 0;
+			while (R_SUCCEEDED(udsPullPacket(&s_bind, buf, sizeof buf, &got, &src)) && got >= sizeof(DgbaLinkPkt)) {
+				const DgbaLinkPkt* pk = (const DgbaLinkPkt*)buf;
+				if (pk->magic != 'G') continue;
+				if (pk->type == PK_PING) {                       // a peer pinged us -> unicast a pong straight back
+					DgbaLinkPkt pong; memset(&pong, 0, sizeof pong);
+					pong.magic = 'G'; pong.type = PK_PONG; pong.round = pk->round;
+					Result pr = net_send_locked(src, UDS_SENDFLAG_Default, &pong, sizeof pong);
+					if (UDS_CHECK_SENDTO_FATALERROR(pr)) s_pingSendFails++;   // benign "TX busy" (0xC86113F0) ignored
+				} else if (pk->type == PK_PONG) {                // our ping returned -> measure RTT
+					u64 sent = s_pingTick[pk->round % PING_RING];
+					if (sent) {
+						s_pingRtt = (int)((svcGetSystemTick() - sent) * 1000ull / SYSCLOCK_ARM11);
+						s_pingTick[pk->round % PING_RING] = 0;
+					}
 				}
 			}
+			net_resolve_peer();   // keep M2's unicast-once-2-nodes lobby behavior (cheap; lobby has no workers)
 		}
-		// Throttle to ~6 Hz (every PING_EVERY_N frames): keeps the UDS TX buffer unpressured (so
-		// udsSendTo stops returning "busy") and a ping's pong always returns long before the 32-slot
-		// ring recycles it.
+		// Throttle to ~6 Hz: keeps the UDS TX buffer unpressured. Unicast to the resolved peer (MAC-ACKed)
+		// once known; broadcast (lossy, best-effort) only before the peer is resolved.
 		if (++s_pingFrame % PING_EVERY_N == 0) {
-			// Prefer UNICAST to the lone peer: unicast frames are MAC-ACKed + auto-retransmitted, so they
-			// survive transient RF loss; UDS broadcast frames are never ACKed (best-effort, lossy) and a
-			// client's broadcast double-hops via the host (the host/joined drop asymmetry we measured).
-			u16 dst = UDS_BROADCAST_NETWORKNODEID;
-			u32 flags = UDS_SENDFLAG_Default | UDS_SENDFLAG_Broadcast;
-			udsConnectionStatus st;
-			if (R_SUCCEEDED(udsGetConnectionStatus(&st)) && st.total_nodes == 2) {
-				for (int node = 1; node <= st.max_nodes; node++)
-					if ((st.node_bitmask & (1u << (node - 1))) && node != st.cur_NetworkNodeID) {
-						dst = (u16)node; flags = UDS_SENDFLAG_Default; break;   // unicast to the single peer
-					}
-			}
+			u16 dst   = s_peerResolved ? s_peerNode : UDS_BROADCAST_NETWORKNODEID;
+			u32 flags = s_peerResolved ? UDS_SENDFLAG_Default
+			                           : (UDS_SENDFLAG_Default | UDS_SENDFLAG_Broadcast);
 			u32 seq = ++s_pingSeq;
 			int slot = (int)(seq % PING_RING);
 			DgbaLinkPkt ping; memset(&ping, 0, sizeof ping);
 			ping.magic = 'G'; ping.type = PK_PING; ping.round = seq;
-			Result rc = udsSendTo(dst, DGBA_DATACHAN, flags, &ping, sizeof ping);
+			Result rc = net_send_locked(dst, flags, &ping, sizeof ping);
 			if (R_SUCCEEDED(rc)) {
 				if (s_pingTick[slot]) s_pingDrops++;             // reusing a still-pending slot = a real lost ping
 				s_pingTick[slot] = svcGetSystemTick();           // arm the slot only AFTER the send actually left
@@ -200,20 +263,10 @@ void net_ping_update(int* rttMs, int* drops, int* sendFails) {
 // blocks (off the worker's run path) until the needed seats arrive. In LOOPBACK mode the two LOCAL
 // cores rendezvous here in-memory with no radio (the one-console M2.5 test); M3 swaps in real UDS.
 // ---------------------------------------------------------------------------------------------
-#define NET_ROUNDS 8
-typedef struct {
-	LightLock  lock;
-	LightEvent ev;                       // RESET_STICKY: stays signaled so every waiter wakes
-	u32  round;
-	u32  arrivedMask;
-	u16  words[DGBA_MAX_SEATS];
-	bool used;
-} NetRound;
-static NetRound s_rounds[NET_ROUNDS];
-static bool s_roundsInit = false;
-static bool s_loopback   = false;
+// (The NetRound ring state is declared up top — before net_session_close, which references it.)
 
 static void net_rounds_init(void) {
+	net_locks_init();              // M3: locks valid on EVERY entry path (loopback never sends, but harmless)
 	if (s_roundsInit) return;
 	for (int i = 0; i < NET_ROUNDS; i++) {
 		LightLock_Init(&s_rounds[i].lock);
@@ -258,9 +311,13 @@ static void net_round_merge(int seat, u32 round, u16 word) {
 void net_transfer_send_word(int seat, int mode, u32 round, u16 send) {
 	(void)mode;
 	net_rounds_init();
-	net_round_merge(seat, round, send);              // loopback: the peer core merges its own word
-	if (!s_loopback) {
-		// M3: also udsSendTo the WORD packet to the peer(s) over the radio here.
+	net_round_merge(seat, round, send);              // OUR seat in the ring first (radio-ordering-independent)
+	if (!s_loopback && s_up && s_peerResolved) {
+		DgbaLinkPkt pk; memset(&pk, 0, sizeof pk);
+		pk.magic = 'G'; pk.type = PK_WORD; pk.seat = (u8)seat; pk.mode = (u8)mode;
+		pk.round = round; pk.d.send = send;          // the u16 word for THIS wire round
+		Result rc = net_send_locked(s_peerNode, UDS_SENDFLAG_Default, &pk, sizeof pk);  // unicast, MAC-ACKed
+		if (UDS_CHECK_SENDTO_FATALERROR(rc)) s_wordSendFails++;
 	}
 }
 
@@ -293,6 +350,105 @@ bool net_round_ready(u32 round, u32 needMask) {
 	bool ready = (r->used && r->round == round) && ((r->arrivedMask & needMask) == needMask);
 	LightLock_Unlock(&r->lock);
 	return ready;
+}
+
+// CHILD round-from-wire: scan the ring for the lowest parent-stamped (bit0 set) round strictly
+// greater than afterRound. The child injects exactly the round the PARENT stamped, so "round N" is
+// one wire-defined identity on both consoles; a dropped/extra parent round is skipped cleanly
+// instead of gating forever on a private counter the parent never matches. (afterRound==UINT32_MAX
+// sentinel: nothing injected yet -> any round whose signed delta is > 0 qualifies.)
+bool net_round_next_parent(u32 afterRound, u32* outRound) {
+	net_rounds_init();
+	bool found = false; u32 best = 0;
+	for (int i = 0; i < NET_ROUNDS; i++) {
+		NetRound* r = &s_rounds[i];
+		LightLock_Lock(&r->lock);
+		if (r->used && (r->arrivedMask & (1u << 0)) &&
+		    (s32)(r->round - afterRound) > 0 &&
+		    (!found || (s32)(r->round - best) < 0)) {
+			best = r->round; found = true;
+		}
+		LightLock_Unlock(&r->lock);
+	}
+	if (found && outRound) *outRound = best;
+	return found;
+}
+
+// --- M3 RX thread: the ONE udsPullPacket owner. Drains to empty, dispatches every packet, THEN
+// waits on the bind event (drain-first => a missed edge is harmless; the next pass re-drains). No
+// svcClearEvent (it would drop a frame signal). net_link_stop wakes it via svcSignalEvent. --------
+static void net_rx_thread(void* arg) {
+	(void)arg;
+	u8 buf[64]; size_t got; u16 src;
+	while (__atomic_load_n(&s_rxRun, __ATOMIC_ACQUIRE)) {
+		LightLock_Lock(&s_rxLock);
+		while (s_up && R_SUCCEEDED(udsPullPacket(&s_bind, buf, sizeof buf, &got, &src)) && got) {
+			if (got < sizeof(DgbaLinkPkt)) continue;
+			const DgbaLinkPkt* pk = (const DgbaLinkPkt*)buf;
+			if (pk->magic != 'G') continue;
+			if (pk->type == PK_PING) {                       // echo a pong straight back (unicast to sender)
+				DgbaLinkPkt pong; memset(&pong, 0, sizeof pong);
+				pong.magic = 'G'; pong.type = PK_PONG; pong.round = pk->round;
+				Result pr = net_send_locked(src, UDS_SENDFLAG_Default, &pong, sizeof pong);
+				if (UDS_CHECK_SENDTO_FATALERROR(pr)) s_pingSendFails++;
+			} else if (pk->type == PK_PONG) {                // our ping returned -> RTT
+				u64 sent = s_pingTick[pk->round % PING_RING];
+				if (sent) { s_pingRtt = (int)((svcGetSystemTick() - sent) * 1000ull / SYSCLOCK_ARM11);
+				            s_pingTick[pk->round % PING_RING] = 0; }
+			} else if (pk->type == PK_WORD) {                // peer's SIO word -> merge + wake any collect
+				net_round_merge(pk->seat, pk->round, pk->d.send);
+			}
+		}
+		LightLock_Unlock(&s_rxLock);
+		if (!__atomic_load_n(&s_rxRun, __ATOMIC_ACQUIRE)) break;
+		// Poll the radio at ~2 kHz instead of blocking on the bind event: re-drains promptly AND notices
+		// s_rxRun==false within ~0.5ms on teardown — no event-wait means no lost-wake hang (the close-hang
+		// we're fixing) and no sticky-event busy-spin. 0.5ms added latency per received word is negligible
+		// vs the ~16-32ms RF RTT that paces each MULTI round. Runs on core 2 (freed when emuB pauses).
+		svcSleepThread(500 * 1000LL);   // 0.5 ms
+	}
+}
+
+bool net_link_start(int seat) {
+	(void)seat;                            // role is decided in gbacore_net_attach(seat)
+	if (!s_inited || !s_up) return false;
+	net_rounds_init();                     // (also arms s_txLock/s_rxLock)
+	net_transfer_reset();
+	s_loopback = false;
+	if (!net_resolve_peer()) return false; // REFUSE to start without a unicast peer (no lossy broadcast WORDs)
+	if (!s_rxThread) {
+		__atomic_store_n(&s_rxRun, true, __ATOMIC_RELEASE);
+		s32 prio = 0x30; svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
+		// Core 2 (freed when emuB pauses) so the RX poll never contends with emuA's trade worker on core 0.
+		// Fall back to the default core if core 2 is unavailable (Old 3DS / no grant).
+		s_rxThread = threadCreate(net_rx_thread, NULL, NET_RX_STACK, prio - 1, 2, false);
+		if (!s_rxThread) s_rxThread = threadCreate(net_rx_thread, NULL, NET_RX_STACK, prio - 1, -2, false);
+		if (!s_rxThread) { __atomic_store_n(&s_rxRun, false, __ATOMIC_RELEASE); return false; }
+	}
+	return true;
+}
+
+void net_transfer_abort(void) {
+	if (!s_roundsInit) return;
+	for (int i = 0; i < NET_ROUNDS; i++) {
+		LightLock_Lock(&s_rounds[i].lock);
+		LightEvent_Signal(&s_rounds[i].ev);   // every blocked collect returns (reports timeout)
+		LightLock_Unlock(&s_rounds[i].lock);
+	}
+}
+
+void net_link_stop(void) {
+	if (s_rxThread) {
+		__atomic_store_n(&s_rxRun, false, __ATOMIC_RELEASE);   // the RX poll notices this within ~0.5ms
+		threadJoin(s_rxThread, U64_MAX);                       // never held under s_txLock/s_rxLock -> no inversion
+		threadFree(s_rxThread); s_rxThread = NULL;
+	}
+	net_transfer_abort();   // release any worker still parked in collect
+}
+
+void net_link_get_rtt(int* rttMs, int* drops) {
+	if (rttMs) *rttMs = s_pingRtt;
+	if (drops) *drops = s_pingDrops;
 }
 
 bool net_lobby_status(DgbaConn* out) {

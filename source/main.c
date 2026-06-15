@@ -61,16 +61,22 @@ static volatile bool g_quit = false;
 static bool s_hasPtm = false;   // ptm:u for battery level (HUD)
 static volatile bool g_appActive = true;   // false while suspended (HOME/sleep) -> idle, free the cores
 static aptHookCookie s_aptCookie;
+static EmuInstance* volatile g_netWorker = NULL;   // the lone wireless worker (emuA); set at link start, cleared on teardown
 static void apt_hook(APT_HookType t, void* p) {
 	(void)p;
 	if (t == APTHOOK_ONSUSPEND || t == APTHOOK_ONSLEEP) {
 		g_appActive = false;
-		// FULLY shut UDS down NOW — the session AND udsExit. ONSUSPEND fires inside aptMainLoop while we
-		// are still foreground enough for nwm to service every IPC. ANY UDS call left for after the system
-		// reclaims the radio (HOME->Close, or launching another app and confirming "Close 3DGBA?") blocks
-		// on nwm and hangs the close forever — and udsExit, not just net_session_close, is on that path.
-		netlink_exit();   // net_session_close() + udsExit(); re-init on resume below
+		// Pull the wireless worker OUT of its net free-run FIRST: clearing netLinked makes the loop exit
+		// once its in-flight collect returns. netlink_exit() then joins the RX thread + aborts every round
+		// (so a worker parked in collect returns at once) BEFORE udsUnbind/udsExit — no thread is mid-UDS
+		// when the radio is reclaimed (the documented nwm wedge / known close-hang). ONSUSPEND fires inside
+		// aptMainLoop while we are still foreground enough for nwm to service every IPC.
+		EmuInstance* w = g_netWorker;
+		if (w) w->netLinked = false;
+		netlink_exit();   // net_link_stop() (joins RX, aborts rounds) + net_session_close() + udsExit()
 	} else if (t == APTHOOK_ONEXIT) {
+		EmuInstance* w = g_netWorker;
+		if (w) w->netLinked = false;
 		netlink_exit();   // idempotent (s_inited guard); covers any close path that skipped ONSUSPEND
 	} else if (t == APTHOOK_ONRESTORE || t == APTHOOK_ONWAKEUP) {
 		g_appActive = true;
@@ -1038,6 +1044,8 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	GbaLink* link = gbalink_create();   // shared lockstep coordinator; cores attach on demand
 	bool linkOn = false;
 	bool netOn  = false;   // M2.5 net link (loopback) active — mutually exclusive with linkOn
+	bool wlOn   = false;   // M3 WIRELESS link active (one core + real radio); mutually exclusive with linkOn/netOn
+	int  wlRtt  = -1, wlDrops = 0;   // RX-thread-measured link RTT/drops for the HUD
 	int  touchMode = TOUCH_OFF;   // 0 off / 1 gamepad / 2 smart (touch drives the bottom game)
 	bool fsOn = false;      // frameskip the unfocused game to free heavy-scene budget
 	bool dofOn = true;      // HD-2D M1: tilt-shift depth-of-field on the top screen (overworld only)
@@ -1105,7 +1113,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			// only via the combo; otherwise a tap opens the menu (the original behaviour).
 			if ((touchMode == TOUCH_OFF && (kDown & KEY_TOUCH)) || combo) {
 				menuOpen = true; menuSel = 0; status[0] = '\0';
-				if (!linkOn && !netOn && workersRunning) {   // finish the in-flight frame before pausing into the menu
+				if (!linkOn && !netOn && !wlOn && workersRunning) {   // finish the in-flight frame before pausing into the menu
 					LightEvent_Wait(&emuA.done); LightEvent_Wait(&emuB.done);
 					if (emuA.core) upload_frame(&emuA); if (emuB.core) upload_frame(&emuB);
 					workersRunning = false;
@@ -1114,7 +1122,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 				// PIPELINE: finish the PREVIOUS frame (started last iteration, ran during the render) and
 				// snapshot it. We render N-1 while N computes -> render isn't chained to the slower core,
 				// so non-link is as smooth as the link path. Workers are parked here -> touch RAM access safe.
-				if (!linkOn && !netOn && workersRunning) {
+				if (!linkOn && !netOn && !wlOn && workersRunning) {
 					LightEvent_Wait(&emuA.done); LightEvent_Wait(&emuB.done);
 					if (emuA.core) upload_frame(&emuA); if (emuB.core) upload_frame(&emuB);
 					workersRunning = false;
@@ -1233,11 +1241,21 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 				}
 				emuA.keys = ((focused == 0) ? g : 0) | (swapped ? tk : 0);
 				emuB.keys = ((focused == 1) ? g : 0) | (swapped ? 0 : tk);
-				if (linkOn || netOn) {
+				if (linkOn || netOn || wlOn) {
 					// Workers free-run + pump their own audio rings; main just samples the latest frames
 					// and stays responsive. Audio keeps playing during a link (rings are worker-private).
+					if (wlOn) {
+						net_ping_update(NULL, NULL, NULL);       // send-only outbound ping; the RX thread echoes + times it
+						net_link_get_rtt(&wlRtt, &wlDrops);      // RX-thread-measured RTT for the HUD
+						if (!net_session_active()) {             // peer/session dropped (e.g. resumed after HOME) -> tear down
+							emuA.netLinked = false; LightEvent_Wait(&emuA.done);
+							gbacore_net_detach(emuA.core); net_link_stop();
+							g_netWorker = NULL; emuB.paused = false; wlOn = false;
+							snprintf(status, sizeof status, "Wireless link closed");
+						}
+					}
 					if (emuA.core) upload_frame(&emuA);
-					if (emuB.core) upload_frame(&emuB);
+					if (emuB.core) upload_frame(&emuB);          // emuB shows its last (paused) frame under wlOn
 				} else {
 					LightEvent_Signal(&emuA.go);   // start THIS frame; it is waited at the top of next iter
 					LightEvent_Signal(&emuB.go);   // (render below overlaps this emulation)
@@ -1285,8 +1303,8 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 				else if (menuSel == 1) {                         // Link cable (experimental)
 					if (!emuA.core || !emuB.core || !link) {
 						snprintf(status, sizeof status, "Link needs 2 games");
-					} else if (netOn) {
-						snprintf(status, sizeof status, "Turn Net link off first");
+					} else if (netOn || wlOn) {
+						snprintf(status, sizeof status, "Stop net/WL link first");
 					} else if (!linkOn) {
 						gbacore_link_attach(emuA.core, link, 0, link_cb_sleep, link_cb_wake, &emuA);
 						gbacore_link_attach(emuB.core, link, 1, link_cb_sleep, link_cb_wake, &emuB);
@@ -1336,7 +1354,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					toastTimer = 90;
 					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
 				}
-				else if ((menuSel == 7 || menuSel == 8 || menuSel == 9) && (linkOn || netOn)) {
+				else if ((menuSel == 7 || menuSel == 8 || menuSel == 9) && (linkOn || netOn || wlOn)) {
 					snprintf(status, sizeof status, "Stop the link first");   // save/load/.sav would race a live core
 				}
 				else if (menuSel == 7) {                         // Save state (focused game)
@@ -1384,17 +1402,45 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					snprintf(status, sizeof status, "Vivid %s", vividOn ? "on" : "off");
 					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
 				}
-				else if (menuSel == MENU_WIRELESS_IDX) {        // wireless multi-console lobby (M1)
-					EmuInstance* fg = (focused == 0) ? &emuA : &emuB;
-					char gcode[5] = { 0 };
-					if (fg->core) gbacore_game_code(fg->core, gcode);
-					wireless_lobby_run(top, bot, txtBuf, gcode);
+				else if (menuSel == MENU_WIRELESS_IDX) {        // wireless multi-console lobby (M1) -> M3 link
+					if (wlOn) {                                  // already linked -> stop the wireless link
+						emuA.netLinked = false; LightEvent_Wait(&emuA.done);
+						gbacore_net_detach(emuA.core); net_link_stop(); net_session_close();
+						g_netWorker = NULL; emuB.paused = false; wlOn = false;
+						snprintf(status, sizeof status, "Wireless: off");
+					} else {
+						EmuInstance* fg = (focused == 0) ? &emuA : &emuB;
+						char gcode[5] = { 0 };
+						if (fg->core) gbacore_game_code(fg->core, gcode);
+						int lr = wireless_lobby_run(top, bot, txtBuf, gcode);   // 0 closed, 1 host, 2 joiner
+						if ((lr == 1 || lr == 2) && emuA.core && !linkOn && !netOn) {
+							int seat = (lr == 1) ? 0 : 1;          // host = seat 0 (parent/master), joiner = seat 1 (child)
+							if (workersRunning) { LightEvent_Wait(&emuA.done); LightEvent_Wait(&emuB.done); workersRunning = false; }
+							emuB.paused = true;                    // FREE emuB's core for emuA + the radio (NOT netLinked)
+							if (net_link_start(seat)) {            // loopback=false; resolves the peer; spins the RX thread
+								gbacore_net_attach(emuA.core, seat, 1);   // ONE participating core; peers=1; needMask=0x3
+								emuA.netLinked = true;             // emuB.netLinked stays FALSE (parked, core freed)
+								g_netWorker = &emuA;               // the apt hook can now stop this worker on HOME/suspend
+								wlOn = true;
+								LightEvent_Signal(&emuA.go);       // kick ONLY emuA into the net free-run
+								menuOpen = false;
+								snprintf(status, sizeof status, "Wireless: ON (%s)", seat == 0 ? "host" : "join");
+							} else {
+								emuB.paused = false;               // couldn't arm (no unicast peer / RX thread) -> undo
+								net_session_close();
+								snprintf(status, sizeof status, "WL link failed: no peer");
+							}
+						} else if (lr == 1 || lr == 2) {
+							net_session_close();                   // lobby left it up but we can't link here -> drop it
+							snprintf(status, sizeof status, "Stop cable/net first");
+						}
+					}
 				}
 				else if (menuSel == MENU_NETLINK_IDX) {         // M2.5 net link (loopback) — beta
 					if (!emuA.core || !emuB.core) {
 						snprintf(status, sizeof status, "Net link needs 2 games");
-					} else if (linkOn) {
-						snprintf(status, sizeof status, "Turn Link off first");
+					} else if (linkOn || wlOn) {
+						snprintf(status, sizeof status, "Stop cable/WL link 1st");
 					} else if (!netOn) {
 						if (workersRunning) { LightEvent_Wait(&emuA.done); LightEvent_Wait(&emuB.done); workersRunning = false; }
 						net_link_set_loopback(true);
@@ -1433,11 +1479,14 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		if (hudMode) {
 			time_t tt = time(NULL);
 			struct tm* lt = localtime(&tt);
-			if (netOn) {   // M2.5 net-link diag: injects / timeouts / forced-captures + the last words exchanged
+			if (netOn || wlOn) {   // net-link diag: injects / timeouts / forced-captures (+ RTT) + last words
 				int ns, ni, no, nt, ne, nf; unsigned nr, pw, cw;
 				gbacore_net_diag(&ns, &ni, &no, &nt, &nr, &pw, &cw, &ne, &nf);
-				(void)ns; (void)no; (void)ne; (void)nr;
-				snprintf(hudStat, sizeof hudStat, "NET i%d to%d F%d p%04X c%04X", ni, nt, nf, pw, cw);
+				(void)ns; (void)no; (void)ne; (void)nr; (void)wlDrops;
+				if (wlOn)
+					snprintf(hudStat, sizeof hudStat, "NET i%d to%d F%d p%04X c%04X rtt%d", ni, nt, nf, pw, cw, wlRtt);
+				else
+					snprintf(hudStat, sizeof hudStat, "NET i%d to%d F%d p%04X c%04X", ni, nt, nf, pw, cw);
 			} else
 			snprintf(hudStat, sizeof hudStat, "%s %dfps %dms %02d:%02d %d/5 f%d d%.1f c%d,%d",
 			         linkOn ? "LINK" : AUDIO_NAMES[audioMode], fps, showMs, lt ? lt->tm_hour : 0, lt ? lt->tm_min : 0, batLvl, depth3d.nfg, depth3d.maxd, depth3d.camX, depth3d.camY);
@@ -1640,12 +1689,22 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	}
 
 	// teardown this session's workers + cores; reset g_quit for the next session
+	if (wlOn) {                               // Quit/Change-games straight out of a live WIRELESS link
+		emuA.netLinked = false;               // the worker leaves the net free-run once its collect returns
+		net_link_stop();                      // join the RX thread + abort rounds (any blocked collect returns now)
+		LightEvent_Wait(&emuA.done);          // wait for emuA's worker to actually exit the net loop before detaching
+		gbacore_net_detach(emuA.core);
+		net_session_close();
+		g_netWorker = NULL;
+		emuB.paused = false;
+		wlOn = false;
+	}
 	emuA.linked = emuB.linked = false;        // stop the free-run loop
 	emuA.netLinked = emuB.netLinked = false;  // ...and the net free-run loop (symmetric teardown)
 	g_quit = true;
 	LightEvent_Signal(&emuA.waitEv);          // release any worker parked on a link wait
 	LightEvent_Signal(&emuB.waitEv);
-	LightEvent_Signal(&emuA.go);
+	LightEvent_Signal(&emuA.go);              // un-park emuA + a paused/parked emuB
 	LightEvent_Signal(&emuB.go);
 	if (emuA.thread) { threadJoin(emuA.thread, U64_MAX); threadFree(emuA.thread); }
 	if (emuB.thread) { threadJoin(emuB.thread, U64_MAX); threadFree(emuB.thread); }
