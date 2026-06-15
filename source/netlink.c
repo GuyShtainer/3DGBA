@@ -284,6 +284,17 @@ bool net_transfer_collect(u32 round, int mode, u16 out[4], u32 needMask, u64 dea
 	}
 }
 
+// Non-blocking readiness peek (the child poll uses this so it never blocks): true if the slot
+// currently holds `round` and every needMask seat has arrived.
+bool net_round_ready(u32 round, u32 needMask) {
+	net_rounds_init();
+	NetRound* r = &s_rounds[round % NET_ROUNDS];
+	LightLock_Lock(&r->lock);
+	bool ready = (r->used && r->round == round) && ((r->arrivedMask & needMask) == needMask);
+	LightLock_Unlock(&r->lock);
+	return ready;
+}
+
 bool net_lobby_status(DgbaConn* out) {
 	if (!out) return false;
 	memset(out, 0, sizeof *out);

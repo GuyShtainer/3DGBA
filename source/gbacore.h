@@ -65,6 +65,14 @@ void     gbalink_destroy(GbaLink* link);
 void     gbacore_link_attach(GbaCore* c, GbaLink* link, int requestedId,
                              void (*onSleep)(void*), void (*onWake)(void*), void* ctx);
 void     gbacore_link_detach(GbaCore* c);
+
+// Net link (M2.5): an ALTERNATIVE to gbalink_* — routes a GBA-MULTI transfer over the wireless
+// transfer plane (netlink.c) instead of the in-process lockstep coordinator. seat = GBA playerId
+// (0 = parent/clock-owner), peers = number of other GBAs. NEVER attach this AND gbalink to one core.
+void     gbacore_net_attach(GbaCore* c, int seat, int peers);
+void     gbacore_net_detach(GbaCore* c);
+void     gbacore_net_poll(GbaCore* c);        // child-side per-slice hook; call ONLY from the core's worker
+
 uint32_t gbacore_frame_counter(GbaCore* c);   // bumps once per produced video frame
 
 // --- Live RAM access + game id (v1.1 game-aware touch) ---

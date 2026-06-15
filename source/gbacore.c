@@ -12,10 +12,16 @@
 #include <mgba/core/serialize.h>   // mCoreSaveStateNamed / SAVESTATE_ALL
 #include <mgba/core/lockstep.h>            // mLockstepUser
 #include <mgba/internal/gba/sio/lockstep.h> // GBASIOLockstepCoordinator / Driver
+#include <mgba/internal/gba/sio.h>         // GBASIO, GBASIOTransferCycles, GBASIOMode (net link driver)
+#include <mgba/internal/gba/gba.h>         // struct GBA (memory.io, timing)
+#include <mgba/core/timing.h>              // mTimingSchedule / mTimingDeschedule
 #include <mgba/gba/interface.h>            // mPERIPH_GBA_LINK_PORT
 #include <mgba-util/vfs.h>
 #include <mgba-util/audio-buffer.h>
 
+#undef GBA_H   // mGBA's gba.h uses GBA_H as its include guard; gbacore.h reuses the name for the GBA
+               // screen height (160). gba.h is already fully included above, so drop the guard macro
+               // here to avoid a redefinition warning when gbacore.h defines GBA_H = 160.
 #include "gbacore.h"
 
 // FIXED_ROM_BUFFER: libmgba's 3DS build (ctru-heap.c, compiled into libmgba.a) DEFINES these
@@ -42,6 +48,17 @@ struct GbaLink {
 	struct GBASIOLockstepCoordinator coord;
 };
 
+// M2.5 net-link SIO driver state (one per core, alongside the lockstep linkDriver). The driver
+// proper is in the "Net link" section below; see docs/kb/wireless-link-architecture.md.
+struct NetDriver {
+	struct GBASIODriver d;       // MUST be first — mGBA holds &d; we cast it back to NetDriver
+	int      seat;               // our GBA playerId (0 = parent / clock owner)
+	int      peers;              // number of OTHER GBAs (1 for a 2-seat trade)
+	uint32_t needMask;           // bitmask of the seats required for a complete round
+	uint32_t pendingRound;       // the round finishMultiplayer() must collect
+	uint32_t lastInjectedRound;  // child: last round it self-scheduled (sentinel 0xFFFFFFFF = none)
+};
+
 struct GbaCore {
 	struct mCore* core;
 	void*         rom;            // dedicated buffer if we malloc'd one; NULL if using the boot buffer
@@ -50,6 +67,7 @@ struct GbaCore {
 	struct GbaLink*             link;        // non-NULL while attached to a coordinator
 	struct GBASIOLockstepDriver linkDriver;
 	struct LinkUser             linkUser;
+	struct NetDriver            netDriver;   // M2.5 net link (alternative to linkDriver; never both)
 };
 
 // Replace the ROM's final extension with ".sav" (e.g. ".../gameA.gba" -> ".../gameA.sav").
@@ -250,6 +268,107 @@ void gbacore_link_detach(GbaCore* g) {
 	g->core->setPeripheral(g->core, mPERIPH_GBA_LINK_PORT, NULL);
 	GBASIOLockstepCoordinatorDetach(&g->link->coord, &g->linkDriver);
 	g->link = NULL;
+}
+
+// ---- Net link (M2.5: GBASIONetDriver) ---------------------------------------
+// A from-scratch SIO driver that routes a GBA-MULTI transfer over netlink's transfer plane instead
+// of mGBA's in-process lockstep coordinator — loopback-testable on one console (two local cores, no
+// radio). mGBA's stock _sioFinish still does the SIOMULTI write + IRQ; we only feed it the words
+// (Option A — never call GBASIOMultiplayerFinishTransfer directly off the core's timing wheel).
+//
+// netlink transfer plane (defined in netlink.c). Declared here with stdint types — ABI-identical to
+// netlink.h's u16/u32/u64 — so this mGBA translation unit needn't pull in libctru's <3ds.h>.
+void net_transfer_send_word(int seat, int mode, uint32_t round, uint16_t send);
+bool net_transfer_collect(uint32_t round, int mode, uint16_t out[4], uint32_t needMask, uint64_t deadline_ms);
+bool net_round_ready(uint32_t round, uint32_t needMask);
+
+#define IO_SIOMLT_SEND  0x95          // gba->memory.io[] halfword index for SIOMLT_SEND (0x0400012A)
+#define NET_DEADLINE_MS 50            // per-transfer link-lost timeout (loopback returns far sooner)
+
+static volatile uint32_t s_netRound = 0;   // shared per-link round; single writer = the parent seat
+
+static bool     net_init   (struct GBASIODriver* d) { (void)d; return true; }
+static void     net_deinit (struct GBASIODriver* d) { (void)d; }
+static void     net_reset  (struct GBASIODriver* d) { ((struct NetDriver*)d)->pendingRound = 0; }
+static uint32_t net_id     (const struct GBASIODriver* d) { (void)d; return 0x54454E47u; /* 'GNET' */ }
+static bool     net_load   (struct GBASIODriver* d, const void* s, size_t n) { (void)d;(void)s;(void)n; return true; }
+static void     net_save   (struct GBASIODriver* d, void** s, size_t* n) { (void)d; if (s) *s = NULL; if (n) *n = 0; }
+static void     net_setMode(struct GBASIODriver* d, enum GBASIOMode m) { (void)d;(void)m; }
+static bool     net_handles(struct GBASIODriver* d, enum GBASIOMode m) { (void)d; return m == GBA_SIO_MULTI; }
+static int      net_devices(struct GBASIODriver* d) { return ((struct NetDriver*)d)->peers; }
+static int      net_devId  (struct GBASIODriver* d) { return ((struct NetDriver*)d)->seat; }
+static uint16_t net_wSIOCNT(struct GBASIODriver* d, uint16_t v) { (void)d; return v; }
+static uint16_t net_wRCNT  (struct GBASIODriver* d, uint16_t v) { (void)d; return v; }
+
+// PARENT (seat 0) only: push our word and let sio.c schedule our completeEvent (return true).
+// A secondary must never self-start a MULTI it isn't the clock-owner of (return false).
+static bool net_start(struct GBASIODriver* d) {
+	struct NetDriver* nd = (struct NetDriver*)d;
+	if (nd->seat != 0) return false;
+	struct GBA* gba = d->p->p;
+	uint16_t w = gba->memory.io[IO_SIOMLT_SEND];
+	uint32_t round = s_netRound;
+	net_transfer_send_word(0, GBA_SIO_MULTI, round, w);
+	nd->pendingRound = round;
+	return true;
+}
+
+// Both seats: _sioFinish calls this to GET the agreed words; mGBA then writes SIOMULTI + raises IRQ.
+static void net_finishMulti(struct GBASIODriver* d, uint16_t data[4]) {
+	struct NetDriver* nd = (struct NetDriver*)d;
+	if (!net_transfer_collect(nd->pendingRound, GBA_SIO_MULTI, data, nd->needMask, NET_DEADLINE_MS)) {
+		memset(data, 0xFF, sizeof(uint16_t) * 4);   // timeout: a failed transfer, not stale data
+	}
+	if (nd->seat == 0) ++s_netRound;                // the parent is the sole round advancer
+}
+
+static uint8_t  net_finishN8 (struct GBASIODriver* d) { (void)d; return 0xFF; }
+static uint32_t net_finishN32(struct GBASIODriver* d) { (void)d; return 0xFFFFFFFFu; }
+
+void gbacore_net_attach(GbaCore* g, int seat, int peers) {
+	if (!g || !g->core || g->link) return;          // never co-attach with the lockstep driver
+	struct NetDriver* nd = &g->netDriver;
+	memset(nd, 0, sizeof *nd);
+	nd->seat  = seat;
+	nd->peers = peers;
+	nd->needMask = (1u << (peers + 1)) - 1u;         // seats 0..peers all required (0x3 for a 2-seat trade)
+	nd->lastInjectedRound = 0xFFFFFFFFu;             // sentinel: nothing injected yet
+	nd->d.init = net_init;       nd->d.deinit = net_deinit;     nd->d.reset = net_reset;
+	nd->d.driverId = net_id;     nd->d.loadState = net_load;    nd->d.saveState = net_save;
+	nd->d.setMode = net_setMode; nd->d.handlesMode = net_handles;
+	nd->d.connectedDevices = net_devices; nd->d.deviceId = net_devId;
+	nd->d.writeSIOCNT = net_wSIOCNT;      nd->d.writeRCNT = net_wRCNT;
+	nd->d.start = net_start;     nd->d.finishMultiplayer = net_finishMulti;
+	nd->d.finishNormal8 = net_finishN8;   nd->d.finishNormal32 = net_finishN32;
+	if (seat == 0) s_netRound = 0;                   // the parent resets the shared round on (re)attach
+	g->core->setPeripheral(g->core, mPERIPH_GBA_LINK_PORT, &nd->d);
+}
+
+void gbacore_net_detach(GbaCore* g) {
+	if (!g || !g->core) return;
+	g->core->setPeripheral(g->core, mPERIPH_GBA_LINK_PORT, NULL);
+}
+
+// CHILD-side per-slice hook (no-op for the parent). MUST run on this core's OWN worker thread: it
+// reads the core's io and schedules an event on the core's timing. Mirrors lockstep.c:964-970 —
+// notice a parent-initiated round, latch our word, set Busy, self-schedule our completeEvent.
+void gbacore_net_poll(GbaCore* g) {
+	if (!g || !g->core) return;
+	struct NetDriver* nd = &g->netDriver;
+	if (nd->seat == 0) return;                       // the parent self-schedules in net_start
+	uint32_t round = s_netRound;
+	if (round == nd->lastInjectedRound) return;      // already handled this round
+	if (!net_round_ready(round, 1u << 0)) return;    // wait until the parent's word for this round is in
+	struct GBASIO* sio = nd->d.p;
+	struct GBA*    gba = sio->p;
+	uint16_t w = gba->memory.io[IO_SIOMLT_SEND];     // latch our outgoing word
+	net_transfer_send_word(nd->seat, GBA_SIO_MULTI, round, w);
+	sio->siocnt |= 0x80;                             // Busy: transfer in progress (lockstep.c:967)
+	nd->pendingRound = round;
+	nd->lastInjectedRound = round;
+	int32_t cyc = GBASIOTransferCycles(GBA_SIO_MULTI, sio->siocnt, nd->peers);
+	mTimingDeschedule(&gba->timing, &sio->completeEvent);
+	mTimingSchedule(&gba->timing, &sio->completeEvent, cyc);
 }
 
 uint32_t gbacore_frame_counter(GbaCore* g) {

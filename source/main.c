@@ -51,6 +51,7 @@ typedef struct {
 	bool       has_tex;
 
 	bool          linked;     // free-run under lockstep when true
+	volatile bool netLinked;  // free-run under the M2.5 net SIO driver (mutually exclusive with linked)
 	volatile bool wantWait;   // lockstep asked this core to park (set in onSleep)
 	LightEvent    waitEv;     // peer signals this to un-park us (onWake)
 	volatile bool paused;     // X freezes the focused game (unlinked play only)
@@ -130,6 +131,29 @@ static void worker_main(void* arg) {
 					u64 now = svcGetSystemTick();
 					if (now > paceDl) paceDl = now;   // behind schedule: don't accumulate debt
 					else while (e->linked && !g_quit && svcGetSystemTick() < paceDl) svcSleepThread(400000);
+				}
+			}
+		} else if (e->netLinked && e->core) {
+			// M2.5 net link: like the lockstep free-run, but the per-transfer STALL is
+			// net_transfer_collect() inside the driver's finishMultiplayer (which runs in
+			// gbacore_run_loop on THIS core's thread) — so there's no waitEv park here.
+			// gbacore_net_poll lets a passive child notice a parent-initiated round and
+			// self-schedule its completeEvent; it's a no-op on the parent (seat 0).
+			u64 paceDl = svcGetSystemTick();
+			u32 lastVf = gbacore_frame_counter(e->core);
+			while (e->netLinked && !g_quit) {
+				gbacore_set_keys(e->core, (u16)e->keys);
+				gbacore_net_poll(e->core);
+				gbacore_run_loop(e->core);
+				e->frame++;
+				audio_pump_core(e->id, e->core);
+				u32 vf = gbacore_frame_counter(e->core);
+				if (vf != lastVf) {
+					lastVf = vf;
+					paceDl += FRAME_TICKS;
+					u64 now = svcGetSystemTick();
+					if (now > paceDl) paceDl = now;
+					else while (e->netLinked && !g_quit && svcGetSystemTick() < paceDl) svcSleepThread(400000);
 				}
 			}
 		} else if (!e->skip && !e->paused) {
@@ -953,9 +977,9 @@ enum { SESSION_CHANGE, SESSION_QUIT };
 static const char* MENU_ITEMS[] = {
 	"Resume", "Link", "Audio", "Touch", "Frameskip", "Toggle HUD", "Swap screens",
 	"Save state", "Load state", "Load .sav (focused)", "Mute", "Pause", "DoF",
-	"Bloom", "Light", "Vivid", "Wireless", "Change games", "Quit"
+	"Bloom", "Light", "Vivid", "Wireless", "Change games", "Quit", "Net link"
 };
-#define MENU_N 19
+#define MENU_N 20
 #define MENU_LINK_IDX  1   // dynamic label ("Link: off/on")
 #define MENU_AUDIO_IDX 2   // dynamic label ("Audio: <mode>")
 #define MENU_TOUCH_IDX 3   // dynamic label ("Touch: on/off")
@@ -968,6 +992,7 @@ static const char* MENU_ITEMS[] = {
 #define MENU_LIGHT_IDX 14  // dynamic label ("Light: on/off")
 #define MENU_VIVID_IDX 15  // dynamic label ("Vivid: on/off")
 #define MENU_WIRELESS_IDX 16  // opens the wireless lobby
+#define MENU_NETLINK_IDX  19  // M2.5 net link (loopback) toggle — dynamic label
 static const char* const HUD_NAMES[4] = { "off", "top", "bottom", "both" };
 
 // Run one play session with the two chosen ROMs. Returns SESSION_CHANGE (re-pick) or
@@ -1020,6 +1045,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 
 	GbaLink* link = gbalink_create();   // shared lockstep coordinator; cores attach on demand
 	bool linkOn = false;
+	bool netOn  = false;   // M2.5 net link (loopback) active — mutually exclusive with linkOn
 	int  touchMode = TOUCH_OFF;   // 0 off / 1 gamepad / 2 smart (touch drives the bottom game)
 	bool fsOn = false;      // frameskip the unfocused game to free heavy-scene budget
 	bool dofOn = true;      // HD-2D M1: tilt-shift depth-of-field on the top screen (overworld only)
@@ -1087,7 +1113,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			// only via the combo; otherwise a tap opens the menu (the original behaviour).
 			if ((touchMode == TOUCH_OFF && (kDown & KEY_TOUCH)) || combo) {
 				menuOpen = true; menuSel = 0; status[0] = '\0';
-				if (!linkOn && workersRunning) {   // finish the in-flight frame before pausing into the menu
+				if (!linkOn && !netOn && workersRunning) {   // finish the in-flight frame before pausing into the menu
 					LightEvent_Wait(&emuA.done); LightEvent_Wait(&emuB.done);
 					if (emuA.core) upload_frame(&emuA); if (emuB.core) upload_frame(&emuB);
 					workersRunning = false;
@@ -1096,7 +1122,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 				// PIPELINE: finish the PREVIOUS frame (started last iteration, ran during the render) and
 				// snapshot it. We render N-1 while N computes -> render isn't chained to the slower core,
 				// so non-link is as smooth as the link path. Workers are parked here -> touch RAM access safe.
-				if (!linkOn && workersRunning) {
+				if (!linkOn && !netOn && workersRunning) {
 					LightEvent_Wait(&emuA.done); LightEvent_Wait(&emuB.done);
 					if (emuA.core) upload_frame(&emuA); if (emuB.core) upload_frame(&emuB);
 					workersRunning = false;
@@ -1215,7 +1241,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 				}
 				emuA.keys = ((focused == 0) ? g : 0) | (swapped ? tk : 0);
 				emuB.keys = ((focused == 1) ? g : 0) | (swapped ? 0 : tk);
-				if (linkOn) {
+				if (linkOn || netOn) {
 					// Workers free-run + pump their own audio rings; main just samples the latest frames
 					// and stays responsive. Audio keeps playing during a link (rings are worker-private).
 					if (emuA.core) upload_frame(&emuA);
@@ -1367,6 +1393,32 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					if (fg->core) gbacore_game_code(fg->core, gcode);
 					wireless_lobby_run(top, bot, txtBuf, gcode);
 				}
+				else if (menuSel == MENU_NETLINK_IDX) {         // M2.5 net link (loopback) — beta
+					if (!emuA.core || !emuB.core) {
+						snprintf(status, sizeof status, "Net link needs 2 games");
+					} else if (linkOn) {
+						snprintf(status, sizeof status, "Turn Link off first");
+					} else if (!netOn) {
+						if (workersRunning) { LightEvent_Wait(&emuA.done); LightEvent_Wait(&emuB.done); workersRunning = false; }
+						net_link_set_loopback(true);
+						net_transfer_reset();
+						gbacore_net_attach(emuA.core, 0, 1);    // seat 0 = parent
+						gbacore_net_attach(emuB.core, 1, 1);    // seat 1 = child
+						emuA.netLinked = emuB.netLinked = true;
+						netOn = true;
+						LightEvent_Signal(&emuA.go);            // kick both workers into the net free-run
+						LightEvent_Signal(&emuB.go);
+						snprintf(status, sizeof status, "Net link: ON (loopback)");
+					} else {
+						emuA.netLinked = emuB.netLinked = false;  // net loops exit (collect times out <=50ms)
+						LightEvent_Wait(&emuA.done);
+						LightEvent_Wait(&emuB.done);
+						gbacore_net_detach(emuA.core);
+						gbacore_net_detach(emuB.core);
+						netOn = false;
+						snprintf(status, sizeof status, "Net link: off");
+					}
+				}
 				else if (menuSel == 17) { result = SESSION_CHANGE; break; }
 				else                    { result = SESSION_QUIT;   break; }
 			}
@@ -1400,6 +1452,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					label = alabel;
 				} else if (i == MENU_LINK_IDX) {   // dynamic: "Link: off/ON (beta)"
 					snprintf(llabel, sizeof llabel, "Link: %s", linkOn ? "ON (beta)" : "off");
+					label = llabel;
+				} else if (i == MENU_NETLINK_IDX) {   // dynamic: "Net link: off/ON"
+					snprintf(llabel, sizeof llabel, "Net link: %s", netOn ? "ON" : "off");
 					label = llabel;
 				
 				} else if (i == MENU_TOUCH_IDX) {
@@ -1592,6 +1647,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	if (emuB.thread) { threadJoin(emuB.thread, U64_MAX); threadFree(emuB.thread); }
 	audio_thread_stop();   // workers joined -> nothing pumps the rings; safe to stop audio + free them
 	if (linkOn) { gbacore_link_detach(emuA.core); gbacore_link_detach(emuB.core); }
+	if (netOn)  { gbacore_net_detach(emuA.core);  gbacore_net_detach(emuB.core);  }
 	teardown_core(&emuA);
 	teardown_core(&emuB);
 	gbalink_destroy(link);

@@ -58,3 +58,4 @@ void net_link_set_loopback(bool on);
 void net_transfer_reset(void);
 void net_transfer_send_word(int seat, int mode, u32 round, u16 send);
 bool net_transfer_collect(u32 round, int mode, u16 out[4], u32 needMask, u64 deadline_ms);
+bool net_round_ready(u32 round, u32 needMask);   // non-blocking: is `round` present with needMask seats in?
