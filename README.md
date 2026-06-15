@@ -53,6 +53,8 @@ up-to-date breakdown. Short version:
 - 🔜 **Planned:** wireless trades/battles between two consoles (the net link, M2.5 → M3),
   and a pokeMMO-style co-op **shared overworld** where you see other players in the field.
 
+See **[ROADMAP.md](ROADMAP.md)** for the full backlog and the current known-issues list.
+
 ## Requirements
 
 - A **New 3DS / New 2DS XL** (the two cores need core 2 at 804 MHz + L2 cache). Old 3DS
@@ -114,8 +116,9 @@ distributed version or fork must also remain open-source under the GPL.
 - **[mGBA](https://mgba.io/)** by endrift powers the emulation — licensed **MPL-2.0**. 3DGBA
   links mGBA built from upstream commit `92621ea` with one local change to
   `src/gba/CMakeLists.txt` (so the link-cable code links); per MPL-2.0 that file stays MPL-2.0
-  and its source is available (the change is documented in `docs/kb/mgba-integration.md`).
-  MPL-2.0 is GPL-compatible.
+  and its source is available — the exact change is the committed patch
+  [`patches/mgba-92621ea-cmakelists.patch`](patches/mgba-92621ea-cmakelists.patch) (also described
+  in `docs/kb/mgba-integration.md`). MPL-2.0 is GPL-compatible.
 - Built with **devkitPro** / **libctru** / **citro2d / citro3d**.
 - Gen-3 RAM addresses + struct offsets were found by referencing the
   **[pret](https://github.com/pret)** decompilations (addresses/facts only — no game code is

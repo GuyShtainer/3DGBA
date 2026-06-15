@@ -1,0 +1,19 @@
+diff --git a/src/gba/CMakeLists.txt b/src/gba/CMakeLists.txt
+index 71ab7bb..ecb012c 100644
+--- a/src/gba/CMakeLists.txt
++++ b/src/gba/CMakeLists.txt
+@@ -32,12 +32,12 @@ set(SOURCE_FILES
+ 	sharkport.c
+ 	sio.c
+ 	sio/gbp.c
++	sio/lockstep.c
+ 	timer.c
+ 	video.c)
+ 
+ set(SIO_FILES
+-	sio/dolphin.c
+-	sio/lockstep.c)
++	sio/dolphin.c)
+ 
+ set(EXTRA_FILES
+ 	extra/battlechip.c
