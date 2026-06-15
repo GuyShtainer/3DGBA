@@ -286,6 +286,7 @@ bool net_round_ready(uint32_t round, uint32_t needMask);
 #define NET_DEADLINE_MS 50            // per-transfer link-lost timeout (loopback returns far sooner)
 
 static volatile uint32_t s_netRound = 0;   // shared per-link round; single writer = the parent seat
+static int s_netStartN = 0, s_netInjectN = 0, s_netOkN = 0, s_netToN = 0;   // M2.5 on-device diagnostics
 
 static bool     net_init   (struct GBASIODriver* d) { (void)d; return true; }
 static void     net_deinit (struct GBASIODriver* d) { (void)d; }
@@ -293,12 +294,29 @@ static void     net_reset  (struct GBASIODriver* d) { ((struct NetDriver*)d)->pe
 static uint32_t net_id     (const struct GBASIODriver* d) { (void)d; return 0x54454E47u; /* 'GNET' */ }
 static bool     net_load   (struct GBASIODriver* d, const void* s, size_t n) { (void)d;(void)s;(void)n; return true; }
 static void     net_save   (struct GBASIODriver* d, void** s, size_t* n) { (void)d; if (s) *s = NULL; if (n) *n = 0; }
-static void     net_setMode(struct GBASIODriver* d, enum GBASIOMode m) { (void)d;(void)m; }
+static void     net_setMode(struct GBASIODriver* d, enum GBASIOMode m) {
+	// Seed the MULTI "ready" handshake the instant the game enters MULTI (before its next SIOCNT read),
+	// mirroring lockstep's _setReady at the mode transition — else the game polls SIOCNT in MULTI, sees
+	// Ready==0, and never starts a transfer.
+	if (m == GBA_SIO_MULTI) {
+		struct GBASIO* sio = d->p;
+		sio->siocnt = GBASIOMultiplayerSetReady(sio->siocnt, 1);
+		sio->rcnt   = GBASIORegisterRCNTSetSd(sio->rcnt, 1);
+	}
+}
 static bool     net_handles(struct GBASIODriver* d, enum GBASIOMode m) { (void)d; return m == GBA_SIO_MULTI; }
 static int      net_devices(struct GBASIODriver* d) { return ((struct NetDriver*)d)->peers; }
 static int      net_devId  (struct GBASIODriver* d) { return ((struct NetDriver*)d)->seat; }
-static uint16_t net_wSIOCNT(struct GBASIODriver* d, uint16_t v) { (void)d; return v; }
-static uint16_t net_wRCNT  (struct GBASIODriver* d, uint16_t v) { (void)d; return v; }
+// Assert the MULTI "all players ready" bit — the game polls it before writing Busy to start a transfer.
+// In a 2-seat loopback both seats are always present + agree on MULTI, so Ready is unconditional. sio.c
+// routes every SIOCNT write through here when we handle the mode, SKIPPING mGBA's own FillReady fallback,
+// so WE must supply Ready (else the game waits forever — the cause of "no response").
+static uint16_t net_wSIOCNT(struct GBASIODriver* d, uint16_t v) {
+	return (d->p->mode == GBA_SIO_MULTI) ? GBASIOMultiplayerSetReady(v, 1) : v;
+}
+static uint16_t net_wRCNT(struct GBASIODriver* d, uint16_t v) {
+	return (d->p->mode == GBA_SIO_MULTI) ? GBASIORegisterRCNTSetSd(v, 1) : v;   // assert the SD connected line
+}
 
 // PARENT (seat 0) only: push our word and let sio.c schedule our completeEvent (return true).
 // A secondary must never self-start a MULTI it isn't the clock-owner of (return false).
@@ -310,6 +328,7 @@ static bool net_start(struct GBASIODriver* d) {
 	uint32_t round = s_netRound;
 	net_transfer_send_word(0, GBA_SIO_MULTI, round, w);
 	nd->pendingRound = round;
+	s_netStartN++;                                   // diag: a parent transfer was initiated
 	return true;
 }
 
@@ -317,9 +336,11 @@ static bool net_start(struct GBASIODriver* d) {
 static void net_finishMulti(struct GBASIODriver* d, uint16_t data[4]) {
 	struct NetDriver* nd = (struct NetDriver*)d;
 	if (net_transfer_collect(nd->pendingRound, GBA_SIO_MULTI, data, nd->needMask, NET_DEADLINE_MS)) {
+		s_netOkN++;                                 // diag: a transfer's words converged
 		if (nd->seat == 0) ++s_netRound;            // advance ONLY on a real, complete transfer — the parent
 		                                            // is the sole advancer; a timeout must NOT skip the round
 	} else {
+		s_netToN++;                                 // diag: collect timed out (words never converged)
 		memset(data, 0xFF, sizeof(uint16_t) * 4);   // timeout/link-lost: fail the transfer, keep the round
 	}
 }
@@ -342,13 +363,22 @@ void gbacore_net_attach(GbaCore* g, int seat, int peers) {
 	nd->d.writeSIOCNT = net_wSIOCNT;      nd->d.writeRCNT = net_wRCNT;
 	nd->d.start = net_start;     nd->d.finishMultiplayer = net_finishMulti;
 	nd->d.finishNormal8 = net_finishN8;   nd->d.finishNormal32 = net_finishN32;
-	if (seat == 0) s_netRound = 0;                   // the parent resets the shared round on (re)attach
+	if (seat == 0) { s_netRound = 0; s_netStartN = s_netInjectN = s_netOkN = s_netToN = 0; }   // parent resets shared state
 	g->core->setPeripheral(g->core, mPERIPH_GBA_LINK_PORT, &nd->d);
 }
 
 void gbacore_net_detach(GbaCore* g) {
 	if (!g || !g->core) return;
 	g->core->setPeripheral(g->core, mPERIPH_GBA_LINK_PORT, NULL);
+}
+
+// M2.5 on-device diagnostics: parent transfers started, child injects, collect ok/timeout, round.
+void gbacore_net_diag(int* startN, int* injectN, int* okN, int* toN, unsigned* round) {
+	if (startN)  *startN  = s_netStartN;
+	if (injectN) *injectN = s_netInjectN;
+	if (okN)     *okN     = s_netOkN;
+	if (toN)     *toN     = s_netToN;
+	if (round)   *round   = (unsigned)s_netRound;
 }
 
 // CHILD-side per-slice hook (no-op for the parent). MUST run on this core's OWN worker thread: it
@@ -368,6 +398,7 @@ void gbacore_net_poll(GbaCore* g) {
 	sio->siocnt |= 0x80;                             // Busy: transfer in progress (lockstep.c:967)
 	nd->pendingRound = round;
 	nd->lastInjectedRound = round;
+	s_netInjectN++;                                  // diag: the child injected a parent-initiated round
 	int32_t cyc = GBASIOTransferCycles(GBA_SIO_MULTI, sio->siocnt, nd->peers);
 	mTimingDeschedule(&gba->timing, &sio->completeEvent);
 	mTimingSchedule(&gba->timing, &sio->completeEvent, cyc);
