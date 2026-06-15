@@ -50,6 +50,7 @@ struct GbaLink {
 
 // M2.5 net-link SIO driver state (one per core, alongside the lockstep linkDriver). The driver
 // proper is in the "Net link" section below; see docs/kb/wireless-link-architecture.md.
+enum NetChildPhase { NET_IDLE = 0, NET_SENDING, NET_RECEIVING };   // child driver phase (one-round-latency split)
 struct NetDriver {
 	struct GBASIODriver d;       // MUST be first — mGBA holds &d; we cast it back to NetDriver
 	int      seat;               // our GBA playerId (0 = parent / clock owner)
@@ -57,6 +58,10 @@ struct NetDriver {
 	uint32_t needMask;           // bitmask of the seats required for a complete round
 	uint32_t pendingRound;       // the round finishMultiplayer() must collect
 	uint32_t lastInjectedRound;  // child: last round it self-scheduled (sentinel 0xFFFFFFFF = none)
+	// --- M2.5 child phase split (VBA-M-faithful one-round latency) ---
+	enum NetChildPhase phase;    // child only; NET_IDLE on the parent
+	uint32_t isrWaitRound;       // round whose SIO ISR must finish before we capture next; 0xFFFFFFFF = none
+	uint32_t irqArmTime;         // local cycle stamp when that round's RECEIVING-end armed the IRQ
 };
 
 struct GbaCore {
@@ -283,15 +288,26 @@ bool net_transfer_collect(uint32_t round, int mode, uint16_t out[4], uint32_t ne
 bool net_round_ready(uint32_t round, uint32_t needMask);
 
 #define IO_SIOMLT_SEND  0x95          // gba->memory.io[] halfword index for SIOMLT_SEND (0x0400012A)
+#define IO_IF           0x101         // GBA_REG_IF (0x0400_0202) >> 1 — interrupt-flag latch
+#define SIO_IRQ_BIT     (1u << 7)     // GBA_IRQ_SIO == 7 (gba.h:32)
 #define NET_DEADLINE_MS 50            // per-transfer link-lost timeout (loopback returns far sooner)
+#define NET_ISR_GUARD_CYCLES 3000u    // local-clock floor before capture: > IRQ_DELAY(7)+ISR+DoSend; ~1 MULTI xfer
+#define NET_ISR_GUARD_CEIL   (NET_ISR_GUARD_CYCLES * 4u)  // hard ceiling: capture on time alone (pure-poll game can't wedge)
 
 static volatile uint32_t s_netRound = 0;   // shared per-link round; single writer = the parent seat
 static int s_netStartN = 0, s_netInjectN = 0, s_netOkN = 0, s_netToN = 0;   // M2.5 on-device diagnostics
+static int s_netEdgeN = 0, s_netForceN = 0;   // M2.5: captures via the ISR-ran edge vs via the time-ceiling
 static uint16_t s_netPWord = 0, s_netCWord = 0;   // last word the parent / child actually sent (word-dump diag)
 
 static bool     net_init   (struct GBASIODriver* d) { (void)d; return true; }
 static void     net_deinit (struct GBASIODriver* d) { (void)d; }
-static void     net_reset  (struct GBASIODriver* d) { ((struct NetDriver*)d)->pendingRound = 0; }
+static void     net_reset  (struct GBASIODriver* d) {
+	struct NetDriver* nd = (struct NetDriver*)d;
+	nd->pendingRound = 0;
+	nd->phase = NET_IDLE;
+	nd->isrWaitRound = 0xFFFFFFFFu;
+	nd->irqArmTime = 0;
+}
 static uint32_t net_id     (const struct GBASIODriver* d) { (void)d; return 0x54454E47u; /* 'GNET' */ }
 static bool     net_load   (struct GBASIODriver* d, const void* s, size_t n) { (void)d;(void)s;(void)n; return true; }
 static void     net_save   (struct GBASIODriver* d, void** s, size_t* n) { (void)d; if (s) *s = NULL; if (n) *n = 0; }
@@ -343,25 +359,27 @@ static bool net_start(struct GBASIODriver* d) {
 }
 
 // Both seats: _sioFinish calls this to GET the agreed words; mGBA then writes SIOMULTI + raises IRQ.
+// The CHILD's word for this round was ALREADY captured+sent at the START of the round in gbacore_net_poll,
+// AFTER its prior-round SIO ISR was PROVEN to have run (post-ISR-armed; the VBA-M one-transfer latency).
+// We must NOT re-read io[SIOMLT_SEND] here: _sioFinish calls us (sio.c:419) BEFORE this round's
+// GBASIOMultiplayerFinishTransfer (sio.c:421) writes SIOMULTI / GBARaiseIRQ, so a read here is the
+// one-transfer-stale word — exactly the bug. Both seats only RENDEZVOUS on collect (full needMask).
 static void net_finishMulti(struct GBASIODriver* d, uint16_t data[4]) {
 	struct NetDriver* nd = (struct NetDriver*)d;
-	// CHILD: this is the SOLE place the child latches + sends its word — the analog of mGBA's _setData
-	// (lockstep.c:831/965) and VBA-M's "latch when linktime >= start_time": both read the secondary's word
-	// only AFTER its CPU has run forward through the prior finish-IRQ that armed the value. gbacore_net_poll
-	// only NOTICES + schedules this completeEvent (no read), so by the time it fires the CPU has advanced and
-	// io[SIOMLT_SEND] holds the FRESH word the game intends. (Round 0's word is the game's pre-seeded value;
-	// every later word is armed by the prior transfer's finish-IRQ. Parent's word is correct from net_start.)
-	if (nd->seat != 0) {
-		struct GBASIO* sio = nd->d.p;
-		uint16_t w = sio->p->memory.io[IO_SIOMLT_SEND];
-		s_netCWord = w;                             // diag: the FINAL word the child sent (what 'c' shows)
-		net_transfer_send_word(nd->seat, GBA_SIO_MULTI, nd->pendingRound, w);
-	}
 	if (net_transfer_collect(nd->pendingRound, GBA_SIO_MULTI, data, nd->needMask, NET_DEADLINE_MS)) {
-		s_netOkN++;                                 // diag: words converged (the round advance is in net_start now)
+		s_netOkN++;                                 // diag: words converged
 	} else {
 		s_netToN++;                                 // diag: collect timed out (words never converged)
-		memset(data, 0xFF, sizeof(uint16_t) * 4);   // timeout/link-lost: fail the transfer, keep the round
+		memset(data, 0xFF, sizeof(uint16_t) * 4);   // timeout/link-lost: 0xFFFF filler (never 0x0000), keep the round
+	}
+	// RECEIVING-end bookkeeping (child only). GBASIOMultiplayerFinishTransfer (the very next _sioFinish call)
+	// writes SIOMULTI, clears Busy, and GBARaiseIRQ schedules irqEvent at +7. Stamp the LOCAL clock now and
+	// record that THIS round's ISR must complete before the next capture. Flip toward IDLE.
+	if (nd->seat != 0) {
+		struct GBA* gba = nd->d.p->p;
+		nd->isrWaitRound = nd->pendingRound;        // the ISR about to be armed
+		nd->irqArmTime   = (uint32_t)mTimingCurrentTime(&gba->timing);
+		nd->phase        = NET_IDLE;                // ready to notice the next parent round
 	}
 }
 
@@ -376,6 +394,9 @@ void gbacore_net_attach(GbaCore* g, int seat, int peers) {
 	nd->peers = peers;
 	nd->needMask = (1u << (peers + 1)) - 1u;         // seats 0..peers all required (0x3 for a 2-seat trade)
 	nd->lastInjectedRound = 0xFFFFFFFFu;             // sentinel: nothing injected yet
+	nd->phase = NET_IDLE;
+	nd->isrWaitRound = 0xFFFFFFFFu;
+	nd->irqArmTime = 0;
 	nd->d.init = net_init;       nd->d.deinit = net_deinit;     nd->d.reset = net_reset;
 	nd->d.driverId = net_id;     nd->d.loadState = net_load;    nd->d.saveState = net_save;
 	nd->d.setMode = net_setMode; nd->d.handlesMode = net_handles;
@@ -383,7 +404,7 @@ void gbacore_net_attach(GbaCore* g, int seat, int peers) {
 	nd->d.writeSIOCNT = net_wSIOCNT;      nd->d.writeRCNT = net_wRCNT;
 	nd->d.start = net_start;     nd->d.finishMultiplayer = net_finishMulti;
 	nd->d.finishNormal8 = net_finishN8;   nd->d.finishNormal32 = net_finishN32;
-	if (seat == 0) { s_netRound = 0; s_netStartN = s_netInjectN = s_netOkN = s_netToN = 0; }   // parent resets shared state
+	if (seat == 0) { s_netRound = 0; s_netStartN = s_netInjectN = s_netOkN = s_netToN = 0; s_netEdgeN = s_netForceN = 0; }   // parent resets shared state
 	g->core->setPeripheral(g->core, mPERIPH_GBA_LINK_PORT, &nd->d);
 }
 
@@ -392,8 +413,10 @@ void gbacore_net_detach(GbaCore* g) {
 	g->core->setPeripheral(g->core, mPERIPH_GBA_LINK_PORT, NULL);
 }
 
-// M2.5 on-device diagnostics: parent transfers started, child injects, collect ok/timeout, round.
-void gbacore_net_diag(int* startN, int* injectN, int* okN, int* toN, unsigned* round, unsigned* pWord, unsigned* cWord) {
+// M2.5 on-device diagnostics: parent transfers started, child injects, collect ok/timeout, round,
+// last words, and ISR-edge vs forced-by-ceiling captures (the mechanism-health surface).
+void gbacore_net_diag(int* startN, int* injectN, int* okN, int* toN, unsigned* round,
+                      unsigned* pWord, unsigned* cWord, int* edgeN, int* forceN) {
 	if (startN)  *startN  = s_netStartN;
 	if (injectN) *injectN = s_netInjectN;
 	if (okN)     *okN     = s_netOkN;
@@ -401,29 +424,61 @@ void gbacore_net_diag(int* startN, int* injectN, int* okN, int* toN, unsigned* r
 	if (round)   *round   = (unsigned)s_netRound;
 	if (pWord)   *pWord   = s_netPWord;
 	if (cWord)   *cWord   = s_netCWord;
+	if (edgeN)   *edgeN   = s_netEdgeN;
+	if (forceN)  *forceN  = s_netForceN;
 }
 
 // CHILD-side per-slice hook (no-op for the parent). MUST run on this core's OWN worker thread (it
-// schedules an event on the core's timing). Mirrors lockstep.c's SIO_EV_TRANSFER_START *notice*: see a
-// parent-initiated round, set Busy, self-schedule our completeEvent — but read NOTHING here. The word is
-// latched + sent later, in net_finishMulti, after the CPU advances through the prior finish-IRQ.
+// schedules an event on the core's timing and reads ONLY this core's io[]/timing — never the peer, so
+// it transplants to two consoles over UDS). Mirrors VBA-M gbaLink.cpp UpdateCableSocket's SENDING phase,
+// reached only AFTER the prior round's RECEIVING-end IRQ fired AND the local clock advanced: we capture
+// the FRESH (post-ISR-armed) reply for round R and ship it, then arm completion. This is the proven
+// one-transfer latency (round R's reply is the value the ISR armed in response to round R-1).
 void gbacore_net_poll(GbaCore* g) {
 	if (!g || !g->core) return;
 	struct NetDriver* nd = &g->netDriver;
-	if (nd->seat == 0) return;                       // the parent self-schedules in net_start
-	uint32_t round = nd->lastInjectedRound + 1;      // handle rounds IN ORDER, no skips (sentinel+1 = round 0)
-	if ((int32_t)(round - __atomic_load_n(&s_netRound, __ATOMIC_ACQUIRE)) > 0) return;   // caught up — nothing new yet (acquire: see the parent's latest round across cores)
-	if (!net_round_ready(round, 1u << 0)) return;    // parent's word for this round not in yet
-	// NOTICE only: set Busy + schedule; DO NOT read/send our word here. net_poll runs BEFORE gbacore_run_loop,
-	// so the CPU hasn't yet run the prior transfer's finish-IRQ that arms the FRESH SIOMLT_SEND — reading now
-	// is one transfer stale. The scheduled completeEvent gives the CPU GBASIOTransferCycles to run forward;
-	// net_finishMulti then latches + sends the fresh word, and both seats rendezvous on its collect.
+	if (nd->seat == 0) return;                       // the parent captures+sends in net_start
 	struct GBASIO* sio = nd->d.p;
 	struct GBA*    gba = sio->p;
+
+	uint32_t round = nd->lastInjectedRound + 1;      // handle rounds IN ORDER, no skips (sentinel+1 = round 0)
+	if ((int32_t)(round - __atomic_load_n(&s_netRound, __ATOMIC_ACQUIRE)) > 0) return;   // caught up — nothing new yet
+	if (!net_round_ready(round, 1u << 0)) return;    // parent's word for this round not in yet
+
+	// --- ISR-PROOF GATE: do not capture round R's reply until round (R-1)'s SIO ISR has run+acked. ---
+	// All three signals are LOCAL (no peer access, no shared clock):
+	//   acked  = the handler write-1-to-cleared IF.SIO (io.c:518-520) after GBARaiseIRQ set it (gba.c:585)
+	//   fired  = irqEvent is no longer scheduled => the +7 IRQ was taken (gba.c:596-597)
+	//   guarded= a local-clock floor so DoSend (which arms SIOMLT_SEND a few hundred cycles into the handler)
+	//            has completed; this is VBA-M's "give the CPU a time window then read" on the LOCAL clock.
+	// The (acked && fired) edge is value-agnostic — it fires even when the reply equals the prior word
+	// (the identical-idle/handshake rounds that dominate a trade), which is why a value-change detector fails.
+	// A hard ceiling (NET_ISR_GUARD_CEIL) captures on time alone so a pure-poll SIO game cannot wedge us.
+	if (nd->isrWaitRound != 0xFFFFFFFFu) {
+		uint32_t now     = (uint32_t)mTimingCurrentTime(&gba->timing);
+		uint32_t elapsed = now - nd->irqArmTime;
+		bool acked   = (gba->memory.io[IO_IF] & SIO_IRQ_BIT) == 0;
+		bool fired   = !mTimingIsScheduled(&gba->timing, &gba->irqEvent);
+		bool guarded = elapsed >= NET_ISR_GUARD_CYCLES;
+		bool ceiling = elapsed >= NET_ISR_GUARD_CEIL;
+		if (!ceiling && !((acked && fired) && guarded)) return;   // not yet — re-poll next slice (CPU advances)
+		if (ceiling && !(acked && fired)) s_netForceN++;          // captured on the time floor, not a proven edge
+		else                              s_netEdgeN++;           // captured behind the proven ISR-ran edge (good)
+		nd->isrWaitRound = 0xFFFFFFFFu;                           // satisfied for this round
+	} else {
+		s_netEdgeN++;   // round 0 (no prior ISR): the pre-seeded io[SIOMLT_SEND] is the correct first word
+	}
+
+	// --- SENDING: capture the POST-ISR-armed reply and ship it for THIS round, then arm completion. ---
+	uint16_t w = gba->memory.io[IO_SIOMLT_SEND];     // armed by the ISR we just proved ran (or round-0 pre-seed)
+	s_netCWord = w;                                  // diag: the FRESH word the child sends (what 'c' shows)
+	net_transfer_send_word(nd->seat, GBA_SIO_MULTI, round, w);
+
 	sio->siocnt |= 0x80;                             // Busy: transfer in progress (lockstep.c:967)
 	nd->pendingRound = round;
 	nd->lastInjectedRound = round;
-	s_netInjectN++;                                  // diag: the child noticed + armed a parent-initiated round
+	nd->phase = NET_RECEIVING;                       // completion delivers+IRQs, then net_finishMulti flips to IDLE
+	s_netInjectN++;                                  // diag: the child captured+armed a parent-initiated round
 	int32_t cyc = GBASIOTransferCycles(GBA_SIO_MULTI, sio->siocnt, nd->peers);
 	mTimingDeschedule(&gba->timing, &sio->completeEvent);
 	mTimingSchedule(&gba->timing, &sio->completeEvent, cyc);
