@@ -134,27 +134,19 @@ static void worker_main(void* arg) {
 				}
 			}
 		} else if (e->netLinked && e->core) {
-			// M2.5 net link: like the lockstep free-run, but the per-transfer STALL is
-			// net_transfer_collect() inside the driver's finishMultiplayer (which runs in
-			// gbacore_run_loop on THIS core's thread) — so there's no waitEv park here.
-			// gbacore_net_poll lets a passive child notice a parent-initiated round and
-			// self-schedule its completeEvent; it's a no-op on the parent (seat 0).
-			u64 paceDl = svcGetSystemTick();
-			u32 lastVf = gbacore_frame_counter(e->core);
+			// M2.5 net link: the per-transfer STALL is net_transfer_collect() inside the driver's
+			// finishMultiplayer (runs in gbacore_run_loop on THIS core's thread); gbacore_net_poll lets a
+			// passive child notice a parent-initiated round (no-op on the parent, seat 0).
+			// NO real-time frame cap here: a Gen-3 trade demands >=9 completed MULTI transfers per VBlank or
+			// the master raises "Communication error". The per-transfer cross-core rendezvous already paces
+			// the pair; capping to ~60fps (FRAME_TICKS) collapsed throughput to ~1 transfer/frame and starved
+			// the trade's block burst. Let the link burst — the collect blocking is the only pacing it needs.
 			while (e->netLinked && !g_quit) {
 				gbacore_set_keys(e->core, (u16)e->keys);
 				gbacore_net_poll(e->core);
 				gbacore_run_loop(e->core);
 				e->frame++;
 				audio_pump_core(e->id, e->core);
-				u32 vf = gbacore_frame_counter(e->core);
-				if (vf != lastVf) {
-					lastVf = vf;
-					paceDl += FRAME_TICKS;
-					u64 now = svcGetSystemTick();
-					if (now > paceDl) paceDl = now;
-					else while (e->netLinked && !g_quit && svcGetSystemTick() < paceDl) svcSleepThread(400000);
-				}
 			}
 		} else if (!e->skip && !e->paused) {
 			emu_step(e);

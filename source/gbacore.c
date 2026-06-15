@@ -330,7 +330,7 @@ static bool net_start(struct GBASIODriver* d) {
 	uint32_t round = s_netRound;
 	net_transfer_send_word(0, GBA_SIO_MULTI, round, w);
 	nd->pendingRound = round;
-	s_netRound = round + 1;                          // advance per start: each (re-)Busy gets a FRESH round (keeps
+	__atomic_store_n(&s_netRound, round + 1, __ATOMIC_RELEASE);   // advance per start: each (re-)Busy gets a FRESH round (keeps
 	                                                 // the 240-burst fix). DO NOT block here for the child's word —
 	                                                 // the word-exchange RENDEZVOUS lives in net_finishMulti's
 	                                                 // collect (both seats). Blocking at start would force the child
@@ -412,7 +412,7 @@ void gbacore_net_poll(GbaCore* g) {
 	struct NetDriver* nd = &g->netDriver;
 	if (nd->seat == 0) return;                       // the parent self-schedules in net_start
 	uint32_t round = nd->lastInjectedRound + 1;      // handle rounds IN ORDER, no skips (sentinel+1 = round 0)
-	if ((int32_t)(round - s_netRound) > 0) return;   // caught up — nothing new to handle yet
+	if ((int32_t)(round - __atomic_load_n(&s_netRound, __ATOMIC_ACQUIRE)) > 0) return;   // caught up — nothing new yet (acquire: see the parent's latest round across cores)
 	if (!net_round_ready(round, 1u << 0)) return;    // parent's word for this round not in yet
 	// NOTICE only: set Busy + schedule; DO NOT read/send our word here. net_poll runs BEFORE gbacore_run_loop,
 	// so the CPU hasn't yet run the prior transfer's finish-IRQ that arms the FRESH SIOMLT_SEND — reading now
