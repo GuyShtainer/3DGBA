@@ -75,6 +75,8 @@ void     gbacore_net_poll(GbaCore* c);        // child-side per-slice hook; call
 void     gbacore_net_diag(int* startN, int* injectN, int* okN, int* toN, unsigned* round,
                           unsigned* pWord, unsigned* cWord, int* edgeN, int* forceN,
                           unsigned* rxP, unsigned* rxC);   // M2.5/M3 HUD diag (+ received peer words)
+void     gbacore_net_peak(unsigned* peakSentP, unsigned* peakSentC,
+                          unsigned* peakRxP, unsigned* peakRxC, int* stallO);   // M3 peak-word watch
 
 uint32_t gbacore_frame_counter(GbaCore* c);   // bumps once per produced video frame
 
