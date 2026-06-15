@@ -291,7 +291,10 @@ bool net_round_next_parent(uint32_t afterRound, uint32_t* outRound);   // M3: ch
 #define IO_SIOMLT_SEND  0x95          // gba->memory.io[] halfword index for SIOMLT_SEND (0x0400012A)
 #define IO_IF           0x101         // GBA_REG_IF (0x0400_0202) >> 1 — interrupt-flag latch
 #define SIO_IRQ_BIT     (1u << 7)     // GBA_IRQ_SIO == 7 (gba.h:32)
-#define NET_DEADLINE_MS 50            // per-transfer link-lost timeout (loopback returns far sooner)
+#define NET_DEADLINE_MS 250           // per-transfer link-lost timeout (loopback returns far sooner). The
+                                      // Gen-3 handshake is infrequent + latency-tolerant (the master just
+                                      // re-clocks); a longer collect rides out RF jitter + the busy-retry
+                                      // spin so a slow slot is RE-WAITED, not faked into a count-breaking word.
 #define NET_ISR_GUARD_CYCLES 3000u    // local-clock floor before capture: > IRQ_DELAY(7)+ISR+DoSend; ~1 MULTI xfer
 #define NET_ISR_GUARD_CEIL   (NET_ISR_GUARD_CYCLES * 4u)  // hard ceiling: capture on time alone (pure-poll game can't wedge)
 
@@ -299,6 +302,13 @@ static volatile uint32_t s_netRound = 0;   // shared per-link round; single writ
 static int s_netStartN = 0, s_netInjectN = 0, s_netOkN = 0, s_netToN = 0;   // M2.5 on-device diagnostics
 static int s_netEdgeN = 0, s_netForceN = 0;   // M2.5: captures via the ISR-ran edge vs via the time-ceiling
 static uint16_t s_netPWord = 0, s_netCWord = 0;   // last word the parent / child actually sent (word-dump diag)
+// M3: last word each seat CONVERGED with (a collect success). On a miss we re-serve these instead of a
+// fresh 0xFFFF, so a dropped handshake slot stays a valid handshake value (idempotent to Gen-3 DoHandshake)
+// rather than a count-breaking 0xFFFF terminator. Seeded 0xFFFF = "never converged" (genuine absent seat).
+static uint16_t s_lastGoodWord[4] = { 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF };
+// M3: RECEIVED peer words from the most recent collect (the missing diagnostic). rxP = slot 0 (the
+// seat-0/parent word THIS console received — watch it flip B9A0->8FFF), rxC = slot 1.
+static uint16_t s_netRxP = 0, s_netRxC = 0;
 
 static bool     net_init   (struct GBASIODriver* d) { (void)d; return true; }
 static void     net_deinit (struct GBASIODriver* d) { (void)d; }
@@ -369,10 +379,17 @@ static void net_finishMulti(struct GBASIODriver* d, uint16_t data[4]) {
 	struct NetDriver* nd = (struct NetDriver*)d;
 	if (net_transfer_collect(nd->pendingRound, GBA_SIO_MULTI, data, nd->needMask, NET_DEADLINE_MS)) {
 		s_netOkN++;                                 // diag: words converged
+		for (int s = 0; s < 4; s++) s_lastGoodWord[s] = data[s];   // cache the converged words
 	} else {
 		s_netToN++;                                 // diag: collect timed out (words never converged)
-		memset(data, 0xFF, sizeof(uint16_t) * 4);   // timeout/link-lost: 0xFFFF filler (never 0x0000), keep the round
+		// Re-serve the LAST GOOD word per seat instead of a fresh 0xFFFF. A repeated handshake value is
+		// idempotent to Gen-3 DoHandshake (same SLAVE/MASTER word, same playerCount); a 0xFFFF is a count
+		// terminator that drops the host below playerCount>1 and breaks the master latch. A seat that never
+		// converged stays 0xFFFF (a genuinely absent player, which Gen-3 tolerates).
+		for (int s = 0; s < 4; s++) data[s] = s_lastGoodWord[s];
 	}
+	s_netRxP = data[0];                            // diag: the seat-0 word THIS console received this round
+	s_netRxC = data[1];                            // diag: the seat-1 word received
 	// RECEIVING-end bookkeeping (child only). GBASIOMultiplayerFinishTransfer (the very next _sioFinish call)
 	// writes SIOMULTI, clears Busy, and GBARaiseIRQ schedules irqEvent at +7. Stamp the LOCAL clock now and
 	// record that THIS round's ISR must complete before the next capture. Flip toward IDLE.
@@ -405,7 +422,8 @@ void gbacore_net_attach(GbaCore* g, int seat, int peers) {
 	nd->d.writeSIOCNT = net_wSIOCNT;      nd->d.writeRCNT = net_wRCNT;
 	nd->d.start = net_start;     nd->d.finishMultiplayer = net_finishMulti;
 	nd->d.finishNormal8 = net_finishN8;   nd->d.finishNormal32 = net_finishN32;
-	if (seat == 0) { s_netRound = 0; s_netStartN = s_netInjectN = s_netOkN = s_netToN = 0; s_netEdgeN = s_netForceN = 0; }   // parent resets shared state
+	if (seat == 0) { s_netRound = 0; s_netStartN = s_netInjectN = s_netOkN = s_netToN = 0; s_netEdgeN = s_netForceN = 0;
+	                 s_netRxP = s_netRxC = 0; for (int s = 0; s < 4; s++) s_lastGoodWord[s] = 0xFFFF; }   // parent resets shared state
 	g->core->setPeripheral(g->core, mPERIPH_GBA_LINK_PORT, &nd->d);
 }
 
@@ -417,7 +435,8 @@ void gbacore_net_detach(GbaCore* g) {
 // M2.5 on-device diagnostics: parent transfers started, child injects, collect ok/timeout, round,
 // last words, and ISR-edge vs forced-by-ceiling captures (the mechanism-health surface).
 void gbacore_net_diag(int* startN, int* injectN, int* okN, int* toN, unsigned* round,
-                      unsigned* pWord, unsigned* cWord, int* edgeN, int* forceN) {
+                      unsigned* pWord, unsigned* cWord, int* edgeN, int* forceN,
+                      unsigned* rxP, unsigned* rxC) {
 	if (startN)  *startN  = s_netStartN;
 	if (injectN) *injectN = s_netInjectN;
 	if (okN)     *okN     = s_netOkN;
@@ -427,6 +446,8 @@ void gbacore_net_diag(int* startN, int* injectN, int* okN, int* toN, unsigned* r
 	if (cWord)   *cWord   = s_netCWord;
 	if (edgeN)   *edgeN   = s_netEdgeN;
 	if (forceN)  *forceN  = s_netForceN;
+	if (rxP)     *rxP     = s_netRxP;   // seat-0 word THIS console RECEIVED (the master-handshake watch)
+	if (rxC)     *rxC     = s_netRxC;   // seat-1 word received
 }
 
 // CHILD-side per-slice hook (no-op for the parent). MUST run on this core's OWN worker thread (it

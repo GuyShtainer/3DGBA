@@ -62,13 +62,16 @@ static Thread        s_rxThread = NULL;
 static volatile bool s_rxRun     = false;
 static u16           s_peerNode  = UDS_BROADCAST_NETWORKNODEID;   // resolved lone-peer node id
 static bool          s_peerResolved = false;                     // false => no unicast target yet
-static int           s_wordSendFails = 0;                        // WORD packets that failed to send
+static int           s_wordSendFails = 0;                        // WORD packets that failed to send (counts BUSY too)
+static int           s_netBusyN      = 0;                        // cumulative TX-busy retries observed (diag)
 #define NET_RX_STACK (16 * 1024)
 
 // Transfer-plane ring state (declared here so net_session_close, above the transfer-plane functions,
 // can reference it). The ring of rounds each gathers every seat's word; a waiter blocks until the
 // needed seats arrive. LOOPBACK = two local cores rendezvous in-memory; M3 = real UDS via the RX thread.
-#define NET_ROUNDS 8
+#define NET_ROUNDS 32   // an uncapped WORD burst can lead the slowest collect by several rounds; 8 let
+                        // round R+8 evict round R's still-awaited slot (forced 50ms timeout). 32 covers
+                        // the worst observed burst lead. NetRound is small, so this is cheap.
 typedef struct {
 	LightLock  lock;
 	LightEvent ev;                       // RESET_STICKY: stays signaled so every waiter wakes
@@ -96,6 +99,25 @@ static Result net_send_locked(u16 dst, u32 flags, const void* p, size_t n) {
 	LightLock_Lock(&s_txLock);
 	Result r = udsSendTo(dst, DGBA_DATACHAN, (u8)flags, p, n);
 	LightLock_Unlock(&s_txLock);
+	return r;
+}
+
+// WORD-path send: a TX-busy (0xC86113F0) means the frame did NOT leave the radio. For the SIO WORD
+// path that IS link loss (it 0xFFFF-poisons the peer's Gen-3 handshake), so retry the busy a bounded
+// number of times, releasing s_txLock between tries so the RX-thread PONG and the other seat's WORD
+// are never starved. Bounded well under NET_DEADLINE_MS. s_netBusyN counts every busy waited out; the
+// return is the LAST udsSendTo result (success, a fatal error, or busy if all retries were exhausted).
+static Result net_send_word_retry(u16 dst, const void* p, size_t n) {
+	if (!s_inited || !s_up) return (Result)0xD8E007FA;
+	Result r = (Result)0xC86113F0;
+	for (int t = 0; t < 64; t++) {                 // <=64 * 125us = ~8ms worst case, << 250ms deadline
+		LightLock_Lock(&s_txLock);
+		r = udsSendTo(dst, DGBA_DATACHAN, (u8)UDS_SENDFLAG_Default, p, n);
+		LightLock_Unlock(&s_txLock);
+		if (r != (Result)0xC86113F0) break;        // sent, or a real (fatal) error -> stop
+		s_netBusyN++;                              // diag: a TX-busy we had to wait out
+		svcSleepThread(125000LL);                  // 0.125ms: let nwm drain its TX ring
+	}
 	return r;
 }
 
@@ -203,7 +225,7 @@ void net_session_close(void) {
 	s_loopback = false;                   // restore a known transport state for the next link
 	if (s_roundsInit)                     // unblock any worker still parked in collect (belt-and-suspenders)
 		for (int i = 0; i < NET_ROUNDS; i++) LightEvent_Signal(&s_rounds[i].ev);
-	s_pingSeq = 0; s_pingFrame = 0; s_pingRtt = -1; s_pingDrops = 0; s_pingSendFails = 0; s_wordSendFails = 0;
+	s_pingSeq = 0; s_pingFrame = 0; s_pingRtt = -1; s_pingDrops = 0; s_pingSendFails = 0; s_wordSendFails = 0; s_netBusyN = 0;
 	memset(s_pingTick, 0, sizeof s_pingTick);
 }
 
@@ -316,8 +338,8 @@ void net_transfer_send_word(int seat, int mode, u32 round, u16 send) {
 		DgbaLinkPkt pk; memset(&pk, 0, sizeof pk);
 		pk.magic = 'G'; pk.type = PK_WORD; pk.seat = (u8)seat; pk.mode = (u8)mode;
 		pk.round = round; pk.d.send = send;          // the u16 word for THIS wire round
-		Result rc = net_send_locked(s_peerNode, UDS_SENDFLAG_Default, &pk, sizeof pk);  // unicast, MAC-ACKed
-		if (UDS_CHECK_SENDTO_FATALERROR(rc)) s_wordSendFails++;
+		Result rc = net_send_word_retry(s_peerNode, &pk, sizeof pk);   // unicast, MAC-ACKed, busy-retried
+		if (R_FAILED(rc)) s_wordSendFails++;         // a WORD that never left IS link loss — count BUSY too
 	}
 }
 
@@ -449,6 +471,12 @@ void net_link_stop(void) {
 void net_link_get_rtt(int* rttMs, int* drops) {
 	if (rttMs) *rttMs = s_pingRtt;
 	if (drops) *drops = s_pingDrops;
+}
+
+// M3 loss diag: cumulative WORD send failures (incl. busy that exhausted retries) and TX-busy retries seen.
+void net_link_get_loss(int* wordSendFails, int* busyN) {
+	if (wordSendFails) *wordSendFails = s_wordSendFails;
+	if (busyN)         *busyN         = s_netBusyN;
 }
 
 bool net_lobby_status(DgbaConn* out) {

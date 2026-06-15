@@ -1479,14 +1479,21 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		if (hudMode) {
 			time_t tt = time(NULL);
 			struct tm* lt = localtime(&tt);
-			if (netOn || wlOn) {   // net-link diag: injects / timeouts / forced-captures (+ RTT) + last words
-				int ns, ni, no, nt, ne, nf; unsigned nr, pw, cw;
-				gbacore_net_diag(&ns, &ni, &no, &nt, &nr, &pw, &cw, &ne, &nf);
-				(void)ns; (void)no; (void)ne; (void)nr; (void)wlDrops;
+			if (netOn || wlOn) {   // net-link diag: RECEIVED slot-0 word + sent word + start/ok/timeout/loss
+				int ns, ni, no, nt, ne, nf; unsigned nr, pw, cw, rxp, rxc;
+				int wf = 0, busy = 0;
+				gbacore_net_diag(&ns, &ni, &no, &nt, &nr, &pw, &cw, &ne, &nf, &rxp, &rxc);
+				net_link_get_loss(&wf, &busy);
+				(void)ni; (void)ne; (void)nr; (void)cw; (void)rxc; (void)wlDrops;
+				// r = seat-0 word WE received (watch B9A0->8FFF on the JOINER); p = seat-0 word WE sent
+				// (watch B9A0->8FFF on the HOST); s/o = starts/oks; to = collect timeouts; wf = word-send
+				// failures incl. exhausted-busy; b = TX-busy retries. Fits char[56].
 				if (wlOn)
-					snprintf(hudStat, sizeof hudStat, "NET i%d to%d F%d p%04X c%04X rtt%d", ni, nt, nf, pw, cw, wlRtt);
+					snprintf(hudStat, sizeof hudStat, "N r%04X p%04X s%d o%d to%d wf%d b%d rtt%d",
+					         rxp, pw, ns, no, nt, wf, busy, wlRtt);
 				else
-					snprintf(hudStat, sizeof hudStat, "NET i%d to%d F%d p%04X c%04X", ni, nt, nf, pw, cw);
+					snprintf(hudStat, sizeof hudStat, "N r%04X p%04X s%d o%d to%d wf%d b%d",
+					         rxp, pw, ns, no, nt, wf, busy);
 			} else
 			snprintf(hudStat, sizeof hudStat, "%s %dfps %dms %02d:%02d %d/5 f%d d%.1f c%d,%d",
 			         linkOn ? "LINK" : AUDIO_NAMES[audioMode], fps, showMs, lt ? lt->tm_hour : 0, lt ? lt->tm_min : 0, batLvl, depth3d.nfg, depth3d.maxd, depth3d.camX, depth3d.camY);

@@ -72,6 +72,8 @@ void net_link_stop(void);
 void net_transfer_abort(void);
 // net_link_get_rtt: the RX thread writes RTT(ms,-1=none)/cumulative drops; the HUD reads them.
 void net_link_get_rtt(int* rttMs, int* drops);
+// net_link_get_loss: cumulative WORD send failures (incl. busy that exhausted retries) + TX-busy retries (HUD).
+void net_link_get_loss(int* wordSendFails, int* busyN);
 // CHILD round-from-wire: the lowest parent-stamped round in the ring that is > afterRound and has
 // the parent's word present. Returns true + *round when one exists (the child injects THAT exact
 // wire round). Transport-agnostic: loopback's local parent-merge satisfies it the same way.
