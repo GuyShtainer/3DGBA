@@ -246,7 +246,7 @@ static void net_round_merge(int seat, u32 round, u16 word) {
 		r->round = round;
 		r->arrivedMask = 0;
 		r->used = true;
-		memset(r->words, 0, sizeof r->words);
+		memset(r->words, 0xFF, sizeof r->words);   // absent seats must read 0xFFFF (matches mGBA lockstep)
 		LightEvent_Clear(&r->ev);
 	}
 	r->words[seat] = word;

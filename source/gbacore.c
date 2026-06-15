@@ -316,10 +316,12 @@ static bool net_start(struct GBASIODriver* d) {
 // Both seats: _sioFinish calls this to GET the agreed words; mGBA then writes SIOMULTI + raises IRQ.
 static void net_finishMulti(struct GBASIODriver* d, uint16_t data[4]) {
 	struct NetDriver* nd = (struct NetDriver*)d;
-	if (!net_transfer_collect(nd->pendingRound, GBA_SIO_MULTI, data, nd->needMask, NET_DEADLINE_MS)) {
-		memset(data, 0xFF, sizeof(uint16_t) * 4);   // timeout: a failed transfer, not stale data
+	if (net_transfer_collect(nd->pendingRound, GBA_SIO_MULTI, data, nd->needMask, NET_DEADLINE_MS)) {
+		if (nd->seat == 0) ++s_netRound;            // advance ONLY on a real, complete transfer — the parent
+		                                            // is the sole advancer; a timeout must NOT skip the round
+	} else {
+		memset(data, 0xFF, sizeof(uint16_t) * 4);   // timeout/link-lost: fail the transfer, keep the round
 	}
-	if (nd->seat == 0) ++s_netRound;                // the parent is the sole round advancer
 }
 
 static uint8_t  net_finishN8 (struct GBASIODriver* d) { (void)d; return 0xFF; }

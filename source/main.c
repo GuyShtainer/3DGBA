@@ -1293,6 +1293,8 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 				else if (menuSel == 1) {                         // Link cable (experimental)
 					if (!emuA.core || !emuB.core || !link) {
 						snprintf(status, sizeof status, "Link needs 2 games");
+					} else if (netOn) {
+						snprintf(status, sizeof status, "Turn Net link off first");
 					} else if (!linkOn) {
 						gbacore_link_attach(emuA.core, link, 0, link_cb_sleep, link_cb_wake, &emuA);
 						gbacore_link_attach(emuB.core, link, 1, link_cb_sleep, link_cb_wake, &emuB);
@@ -1341,6 +1343,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					snprintf(toast, sizeof toast, "Layout: %s", swapped ? "B top / A bottom" : "A top / B bottom");
 					toastTimer = 90;
 					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
+				}
+				else if ((menuSel == 7 || menuSel == 8 || menuSel == 9) && (linkOn || netOn)) {
+					snprintf(status, sizeof status, "Stop the link first");   // save/load/.sav would race a live core
 				}
 				else if (menuSel == 7) {                         // Save state (focused game)
 					EmuInstance* fg = (focused == 0) ? &emuA : &emuB;
@@ -1638,6 +1643,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 
 	// teardown this session's workers + cores; reset g_quit for the next session
 	emuA.linked = emuB.linked = false;        // stop the free-run loop
+	emuA.netLinked = emuB.netLinked = false;  // ...and the net free-run loop (symmetric teardown)
 	g_quit = true;
 	LightEvent_Signal(&emuA.waitEv);          // release any worker parked on a link wait
 	LightEvent_Signal(&emuB.waitEv);
