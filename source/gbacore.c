@@ -319,12 +319,8 @@ bool net_round_next_parent(uint32_t afterRound, uint32_t* outRound);   // M3: ch
 // at most one bounded wait then ages out to free-run (no hang).
 #define NET_ACTIVE_MS     250u   // pace only if a round injected within this many ms of wall-clock
 #define NET_PACE_WAIT_MS  500    // max paced wait for the parent's word during an active burst (else free-run)
-// LINK-RATE THROTTLE: force the MULTI baud so the game clocks fewer transfers/frame -> fewer UDS round-trips
-// (each ~25ms) -> usable speed. mGBA GBASIOCyclesPerTransfer[baud][connected=1]: baud0=63427(~4/frame, BELOW
-// the master watchdog's ~9 floor -> would trip LAG_MASTER), baud1=16241(~17/frame, SAFE), baud3=5755(~49/frame,
-// the game's typical). baud 1 is the slowest safe rate = ~3x fewer round-trips than baud 3. Both consoles route
-// SIOCNT writes through net_wSIOCNT so they share this baud and stay timing-consistent.
-#define NET_LINK_BAUD     1u     // 38400 -> 16241 cyc -> ~17 MULTI transfers per emulated VBlank (> ~9 floor)
+// (LINK-RATE THROTTLE removed: forcing the MULTI baud cut round-trips ~3x but the Gen-3 game reads SIOCNT back
+// during connection-verify and rejects a baud mismatch — it broke the link right after save. See net_wSIOCNT.)
 
 static volatile uint32_t s_netRound = 0;   // shared per-link round; single writer = the parent seat
 static int s_netStartN = 0, s_netInjectN = 0, s_netOkN = 0, s_netToN = 0;   // M2.5 on-device diagnostics
@@ -381,10 +377,7 @@ static void     net_setMode(struct GBASIODriver* d, enum GBASIOMode m) {
 	// Ready==0, and never starts a transfer.
 	if (m == GBA_SIO_MULTI) {
 		struct GBASIO* sio = d->p;
-		// Commit the throttled baud (NET_LINK_BAUD) at MULTI entry too, not only on the game's SIOCNT writes,
-		// so even the very FIRST transfer the host schedules (which reads siocnt before net_wSIOCNT runs) is
-		// already throttled — closes the one-transfer stale-baud window the review flagged.
-		sio->siocnt = GBASIOMultiplayerSetBaud(GBASIOMultiplayerSetReady(sio->siocnt, 1), NET_LINK_BAUD);
+		sio->siocnt = GBASIOMultiplayerSetReady(sio->siocnt, 1);   // (baud-throttle reverted — see net_wSIOCNT)
 		sio->rcnt   = GBASIORegisterRCNTSetSd(sio->rcnt, 1);
 		// PACING: baseline the child's VBlank-cap clock at MULTI ENTRY (not at attach). The walk to the
 		// trade room advances frameCounter by hundreds of VBlanks while lastActiveFrame still holds the
@@ -404,11 +397,11 @@ static int      net_devId  (struct GBASIODriver* d) { return ((struct NetDriver*
 // so WE must supply Ready (else the game waits forever — the cause of "no response").
 static uint16_t net_wSIOCNT(struct GBASIODriver* d, uint16_t v) {
 	if (d->p->mode != GBA_SIO_MULTI) return v;
-	// THROTTLE the link rate (see NET_LINK_BAUD): force the MULTI baud so the game clocks ~17 transfers/VBlank
-	// instead of ~49, cutting UDS round-trips ~3x for usable speed while staying above the master watchdog floor.
-	// Both consoles route SIOCNT writes here, so they share the baud and stay timing-consistent (lockstep).
-	s_netBaudSeen = (int)GBASIOMultiplayerGetBaud(v);   // diag: the game's intended baud (pre-throttle)
-	v = GBASIOMultiplayerSetBaud(v, NET_LINK_BAUD);
+	// Do NOT modify the baud bits. Forcing the baud to throttle the link rate (commits 0407491/431a63e) BROKE
+	// the Gen-3 connection-verify-after-save step: the game writes its baud then reads SIOCNT back, and a
+	// mismatch makes it reject the link (2x Emerald stuck right after save, very laggy; 0616 23:47, okN=1 then
+	// timeouts). REVERTED. We only CAPTURE the game's baud for diagnostics and assert Ready (as before).
+	s_netBaudSeen = (int)GBASIOMultiplayerGetBaud(v);   // diag only (no longer forced)
 	return GBASIOMultiplayerSetReady(v, 1);
 }
 static uint16_t net_wRCNT(struct GBASIODriver* d, uint16_t v) {
@@ -606,9 +599,9 @@ void gbacore_net_log_dump(const char* path, int seat) {
 	// PACING (active-gated, JOIN only): vblMax = peak emulated VBlanks the joiner ran between serial IRQs (must
 	// stay < ~10 or the Gen-3 SLAVE watchdog trips mid-trade); paceN = paced waits during active transfers.
 	// dvbl col below = emulated VBlanks since prev round (per-round watchdog measure); dt_us = wall-clock us.
-	fprintf(f, "# established=%d vblMax=%lu paceN=%d activeMs=%u baudGame=%d baudForced=%u\n",
+	fprintf(f, "# established=%d vblMax=%lu paceN=%d activeMs=%u baudGame=%d\n",
 	        s_netEstablished ? 1 : 0, (unsigned long)s_netVblMax, s_netPaceBlkN, (unsigned)NET_ACTIVE_MS,
-	        s_netBaudSeen, (unsigned)NET_LINK_BAUD);
+	        s_netBaudSeen);
 	// TRANSPORT/ESTABLISHMENT diag: when round 0 never completes (okN=0, no rows below), THIS line says why.
 	// JOIN: rxWords=0 => peer WORDs never arrived (host not TXing / peer unresolved); maxSeat0Round vs the HOST's
 	// hostRound => round-number DESYNC (host raced past round 0 on timeout while we still wait on it). HOST:
