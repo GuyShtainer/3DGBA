@@ -455,9 +455,11 @@ void gbacore_net_attach(GbaCore* g, int seat, int peers) {
 	nd->d.writeSIOCNT = net_wSIOCNT;      nd->d.writeRCNT = net_wRCNT;
 	nd->d.start = net_start;     nd->d.finishMultiplayer = net_finishMulti;
 	nd->d.finishNormal8 = net_finishN8;   nd->d.finishNormal32 = net_finishN32;
-	if (seat == 0) { s_netRound = 0; s_netStartN = s_netInjectN = s_netOkN = s_netToN = 0; s_netEdgeN = s_netForceN = 0;
-	                 s_netRxP = s_netRxC = 0; s_peakSentP = s_peakSentC = s_peakRxP = s_peakRxC = 0; s_netStallO = -1;
-	                 s_netLogN = 0; }   // parent resets shared state + the link log
+	// Reset the on-device diag counters + link log on EVERY fresh attach (both consoles). A seat-0-only
+	// reset left the JOINER (seat 1) showing stale counters/log from a prior session (e.g. startN=720).
+	s_netStartN = s_netInjectN = s_netOkN = s_netToN = 0; s_netEdgeN = s_netForceN = 0;
+	s_netRxP = s_netRxC = 0; s_peakSentP = s_peakSentC = s_peakRxP = s_peakRxC = 0; s_netStallO = -1; s_netLogN = 0;
+	if (seat == 0) s_netRound = 0;   // only the parent owns the shared per-link round counter
 	g->core->setPeripheral(g->core, mPERIPH_GBA_LINK_PORT, &nd->d);
 }
 
