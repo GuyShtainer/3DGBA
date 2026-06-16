@@ -629,6 +629,14 @@ void gbacore_net_poll(GbaCore* g) {
 	struct GBASIO* sio = nd->d.p;
 	struct GBA*    gba = sio->p;
 
+	// STRICTLY ONE round in flight. If a round was injected but net_finishMulti hasn't processed its completion
+	// yet (phase != IDLE), RETURN so this worker's run_loop can fire that round's completeEvent + SIO IRQ before
+	// we touch the next round. CRITICAL with pacing: the pace-block below sleeps ON THIS WORKER THREAD, so if we
+	// reached it while a round were still in flight it would starve run_loop and the in-flight round's completion
+	// would never fire — okN stalls and the joiner sticks at the handshake (0616 18:40: edge=529 injects but
+	// okN=3 completed). Also prevents injecting round N+1 before round N completes. net_finishMulti -> phase=IDLE.
+	if (nd->phase != NET_IDLE) return;
+
 	// M3 RELIABLE: process rounds STRICTLY in order (next == lastInjected+1) — NEVER skip a gap. UDS reorders
 	// and drops, so a not-yet-arrived round must be WAITED for (the parent re-sends it via the collect loop),
 	// not skipped: the Gen-3 trade is a checksummed lockstep where a skipped/duplicated/reordered round
