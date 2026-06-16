@@ -381,7 +381,10 @@ static void     net_setMode(struct GBASIODriver* d, enum GBASIOMode m) {
 	// Ready==0, and never starts a transfer.
 	if (m == GBA_SIO_MULTI) {
 		struct GBASIO* sio = d->p;
-		sio->siocnt = GBASIOMultiplayerSetReady(sio->siocnt, 1);
+		// Commit the throttled baud (NET_LINK_BAUD) at MULTI entry too, not only on the game's SIOCNT writes,
+		// so even the very FIRST transfer the host schedules (which reads siocnt before net_wSIOCNT runs) is
+		// already throttled — closes the one-transfer stale-baud window the review flagged.
+		sio->siocnt = GBASIOMultiplayerSetBaud(GBASIOMultiplayerSetReady(sio->siocnt, 1), NET_LINK_BAUD);
 		sio->rcnt   = GBASIORegisterRCNTSetSd(sio->rcnt, 1);
 		// PACING: baseline the child's VBlank-cap clock at MULTI ENTRY (not at attach). The walk to the
 		// trade room advances frameCounter by hundreds of VBlanks while lastActiveFrame still holds the
