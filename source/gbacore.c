@@ -306,11 +306,18 @@ bool net_round_next_parent(uint32_t afterRound, uint32_t* outRound);   // M3: ch
                                       // wall-clock freeze ("host stuck") while the joiner navigates to the cable club.
 #define NET_ISR_GUARD_CYCLES 3000u    // local-clock floor before capture: > IRQ_DELAY(7)+ISR+DoSend; ~1 MULTI xfer
 #define NET_ISR_GUARD_CEIL   (NET_ISR_GUARD_CYCLES * 4u)  // hard ceiling: capture on time alone (pure-poll game can't wedge)
-// JOINER PACING CAP: max emulated VBlanks the child may free-run past its last completed round before it
-// BLOCKS for the parent's next word. Keeps the child's emulated clock within K VBlanks of the parent so the
-// Gen-3 SLAVE watchdog (LinkVSync trips at >10 emulated VBlanks without a serial IRQ) can never fire; K well
-// under 10 leaves margin for UDS RTT jitter. A small K free-run absorbs jitter without stuttering every xfer.
-#define NET_PACE_CAP_VBL  4u
+// JOINER PACING (v2, active-gated on WALL-CLOCK). The UDS round-trip rate-limits the link far below the GBA's
+// ~9 transfers/VBlank, so a FREE-running joiner outruns it and starves the Gen-3 SLAVE VBlank watchdog (link
+// error mid-trade; 2x Emerald okN=261, dvbl 2-11). Fix: while ACTIVELY transferring, briefly BLOCK for the
+// parent's next word — blocking freezes our emulated clock so few VBlanks pass without a serial IRQ (no trip),
+// both sides run slow-but-synced. "Actively transferring" = a round was injected within the last NET_ACTIVE_MS
+// of WALL-CLOCK time. CRITICAL: the gate MUST be wall-clock, NOT emulated frames — blocking freezes the
+// emulated clock, so an emulated-frame gate would never age out and would re-freeze the joiner (the cable-club
+// freeze bug). With no recent inject (navigation / pre-establishment / mid-trade pause) we FREE-RUN, so we
+// never block waiting for a host that isn't clocking. NET_PACE_WAIT_MS > NET_ACTIVE_MS so a stalled link does
+// at most one bounded wait then ages out to free-run (no hang).
+#define NET_ACTIVE_MS     250u   // pace only if a round injected within this many ms of wall-clock
+#define NET_PACE_WAIT_MS  500    // max paced wait for the parent's word during an active burst (else free-run)
 
 static volatile uint32_t s_netRound = 0;   // shared per-link round; single writer = the parent seat
 static int s_netStartN = 0, s_netInjectN = 0, s_netOkN = 0, s_netToN = 0;   // M2.5 on-device diagnostics
@@ -345,6 +352,7 @@ static NetLogEntry s_netLog[NETLOG_N];
 static uint32_t    s_netLogN = 0;   // total appended (ring index = % NETLOG_N)
 static uint32_t    s_netLastLogRound = 0; static bool s_netHaveLastLog = false;  // dedup repeated same-round timeout rows
 static bool        s_netEstablished = false;   // a real exchange has happened -> use the long loss-recovery deadline
+static uint64_t    s_netLastInjectTick = 0;    // wall-clock tick of the joiner's last inject (0 = none) -> pacing gate
 
 static bool     net_init   (struct GBASIODriver* d) { (void)d; return true; }
 static void     net_deinit (struct GBASIODriver* d) { (void)d; }
@@ -514,7 +522,7 @@ void gbacore_net_attach(GbaCore* g, int seat, int peers) {
 	s_netStartN = s_netInjectN = s_netOkN = s_netToN = 0; s_netEdgeN = s_netForceN = 0;
 	s_netRxP = s_netRxC = 0; s_peakSentP = s_peakSentC = s_peakRxP = s_peakRxC = 0; s_netStallO = -1; s_netLogN = 0;
 	s_netVblMax = 0; s_netPaceBlkN = 0;   // PACING diag (barrier reverted -> these stay 0; kept harmless)
-	s_netHaveLastLog = false; s_netLastLogRound = 0; s_netEstablished = false;   // fresh link: not yet established
+	s_netHaveLastLog = false; s_netLastLogRound = 0; s_netEstablished = false; s_netLastInjectTick = 0;   // fresh link
 	if (seat == 0) s_netRound = 0;   // only the parent owns the shared per-link round counter
 	g->core->setPeripheral(g->core, mPERIPH_GBA_LINK_PORT, &nd->d);
 }
@@ -561,7 +569,7 @@ void gbacore_net_peak(unsigned* peakSentP, unsigned* peakSentC,
 void gbacore_net_pace(unsigned* vblMax, int* blkN, unsigned* capK) {
 	if (vblMax) *vblMax = s_netVblMax;
 	if (blkN)   *blkN   = s_netPaceBlkN;
-	if (capK)   *capK   = NET_PACE_CAP_VBL;
+	if (capK)   *capK   = NET_ACTIVE_MS;
 }
 
 // Dump the M3 link log (the ring of completed transfers) to an SD text file. Called on wireless link
@@ -577,10 +585,12 @@ void gbacore_net_log_dump(const char* path, int seat) {
 	        seat == 0 ? "HOST" : "JOIN", seat, s_netStartN, s_netOkN, s_netToN, s_netEdgeN, s_netForceN, s_netStallO);
 	fprintf(f, "# peakSentP=%04X peakSentC=%04X peakRxP=%04X peakRxC=%04X\n",
 	        s_peakSentP, s_peakSentC, s_peakRxP, s_peakRxC);
-	// Joiner pacing barrier is REVERTED (the joiner free-runs again), so vblMax/paceBlkN are no longer measured.
-	// established=1 means at least one real word-exchange happened (round 0 crossed); established=0 with okN=0 is
-	// the round-0-never-crosses establishment failure. dvbl col = emulated VBlanks since prev round; dt_us = wall-clock us.
-	fprintf(f, "# established=%d  (joiner pacing barrier reverted -> free-run)\n", s_netEstablished ? 1 : 0);
+	// established=1 = round 0 crossed (past the handshake wall); established=0 + okN=0 = round-0-never-crosses.
+	// PACING (active-gated, JOIN only): vblMax = peak emulated VBlanks the joiner ran between serial IRQs (must
+	// stay < ~10 or the Gen-3 SLAVE watchdog trips mid-trade); paceN = paced waits during active transfers.
+	// dvbl col below = emulated VBlanks since prev round (per-round watchdog measure); dt_us = wall-clock us.
+	fprintf(f, "# established=%d vblMax=%lu paceN=%d activeMs=%u\n",
+	        s_netEstablished ? 1 : 0, (unsigned long)s_netVblMax, s_netPaceBlkN, (unsigned)NET_ACTIVE_MS);
 	// TRANSPORT/ESTABLISHMENT diag: when round 0 never completes (okN=0, no rows below), THIS line says why.
 	// JOIN: rxWords=0 => peer WORDs never arrived (host not TXing / peer unresolved); maxSeat0Round vs the HOST's
 	// hostRound => round-number DESYNC (host raced past round 0 on timeout while we still wait on it). HOST:
@@ -624,14 +634,22 @@ void gbacore_net_poll(GbaCore* g) {
 	// corrupts the stream. The parent (FIX B) stamps exactly one sequential round per COMPLETED transfer, so
 	// lastInjected+1 is always the next wire round. (sentinel 0xFFFFFFFF + 1 = round 0.)
 	uint32_t round = nd->lastInjectedRound + 1;
-	// The joiner FREE-RUNS when the parent's word for this round isn't in yet (the original baseline behavior).
-	// A blocking "pacing barrier" was tried here (commits 0e51302/972f745) to fix the late-trade SLAVE-watchdog
-	// divergence, but the Gen-3 game asserts GBA_SIO_MULTI as soon as it enters the cable club — long before any
-	// real trade — so the barrier FROZE the joiner during navigation (hardware logs 0616 18:00: rxWords=0,
-	// paceBlkN climbing, joiner stuck). REVERTED: free-run here; the worker loop steps the CPU and the RX thread
-	// keeps merging, so the round is adopted the instant the parent's word arrives. (s_netVblMax/paceBlkN now
-	// stay 0 — kept only as harmless diag fields.)
-	if (!net_round_ready(round, 1u << 0)) return;
+	if (!net_round_ready(round, 1u << 0)) {
+		// ACTIVE-GATED PACING (see NET_ACTIVE_MS note). Pace (briefly block for the parent's word) ONLY while
+		// actively transferring — a round was injected within the last NET_ACTIVE_MS of WALL-CLOCK time. Blocking
+		// freezes our emulated clock between rounds so the SLAVE watchdog's VBlanks-without-serial-IRQ stays low
+		// (fixes the 2x-Emerald mid-trade "link error", okN=261, dvbl 2-11). When NOT actively transferring
+		// (navigation / pre-establishment / a mid-trade pause) FREE-RUN — never freeze waiting for a host that
+		// isn't clocking (that was the cable-club freeze). Wall-clock gate (not emulated frames): a block freezes
+		// emulated time, so a frame gate would never age out and would re-freeze us.
+		if (s_netLastInjectTick == 0 ||
+		    net_ticks_to_us(net_mono_ticks() - s_netLastInjectTick) > NET_ACTIVE_MS * 1000u) return;  // not active -> free-run
+		uint32_t vbl = (uint32_t)(g->core->frameCounter(g->core) - nd->lastActiveFrame);
+		if (vbl > s_netVblMax) s_netVblMax = vbl;                         // diag: peak emulated VBlanks between serial IRQs
+		s_netPaceBlkN++;                                                  // diag: paced waits during active transfers
+		if (!net_round_wait(round, 1u << 0, NET_PACE_WAIT_MS)) return;    // bounded wait; stalled link -> free-run, no hang
+		// word arrived -> fall through and inject, paced to the link rate (slow-but-synced)
+	}
 
 	// --- ISR-PROOF GATE: do not capture round R's reply until round (R-1)'s SIO ISR has run+acked. ---
 	// All three signals are LOCAL (no peer access, no shared clock):
@@ -667,7 +685,8 @@ void gbacore_net_poll(GbaCore* g) {
 	nd->pendingRound = round;
 	nd->lastInjectedRound = round;
 	nd->phase = NET_RECEIVING;                       // completion delivers+IRQs, then net_finishMulti flips to IDLE
-	nd->lastActiveFrame = g->core->frameCounter(g->core);  // PACING: reset the VBlank-cap baseline at each completed round
+	nd->lastActiveFrame = g->core->frameCounter(g->core);  // emulated-VBlank baseline for the dvbl/vblMax diag
+	s_netLastInjectTick = net_mono_ticks();          // wall-clock of this inject -> the active-transfer pacing gate
 	s_netInjectN++;                                  // diag: the child captured+armed a parent-initiated round
 	int32_t cyc = GBASIOTransferCycles(GBA_SIO_MULTI, sio->siocnt, nd->peers);
 	mTimingDeschedule(&gba->timing, &sio->completeEvent);
