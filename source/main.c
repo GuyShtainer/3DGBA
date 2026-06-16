@@ -1250,7 +1250,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 						net_link_get_rtt(&wlRtt, &wlDrops);      // RX-thread-measured RTT for the HUD
 						if (!net_session_active()) {             // peer/session dropped (e.g. resumed after HOME) -> tear down
 							emuA.netLinked = false; LightEvent_Wait(&emuA.done);
-							{ char lp[48]; snprintf(lp, sizeof lp, "sdmc:/3DGBA_net_%s.txt", wlSeat == 0 ? "HOST" : "JOIN");
+							{ char lp[48]; snprintf(lp, sizeof lp, "sdmc:/cias/3DGBA_net_%s.txt", wlSeat == 0 ? "HOST" : "JOIN");
 							  gbacore_net_log_dump(lp, wlSeat); }   // dump the link log to SD before detaching
 							gbacore_net_detach(emuA.core); net_link_stop();
 							g_netWorker = NULL; emuB.paused = false; wlOn = false;
@@ -1408,7 +1408,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 				else if (menuSel == MENU_WIRELESS_IDX) {        // wireless multi-console lobby (M1) -> M3 link
 					if (wlOn) {                                  // already linked -> stop the wireless link
 						emuA.netLinked = false; LightEvent_Wait(&emuA.done);
-						{ char lp[48]; snprintf(lp, sizeof lp, "sdmc:/3DGBA_net_%s.txt", wlSeat == 0 ? "HOST" : "JOIN");
+						{ char lp[48]; snprintf(lp, sizeof lp, "sdmc:/cias/3DGBA_net_%s.txt", wlSeat == 0 ? "HOST" : "JOIN");
 						  gbacore_net_log_dump(lp, wlSeat); }   // dump the per-round link log to SD before detaching
 						gbacore_net_detach(emuA.core); net_link_stop(); net_session_close();
 						g_netWorker = NULL; emuB.paused = false; wlOn = false;
@@ -1706,7 +1706,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		emuA.netLinked = false;               // the worker leaves the net free-run once its collect returns
 		net_link_stop();                      // join the RX thread + abort rounds (any blocked collect returns now)
 		LightEvent_Wait(&emuA.done);          // wait for emuA's worker to actually exit the net loop before detaching
-		{ char lp[48]; snprintf(lp, sizeof lp, "sdmc:/3DGBA_net_%s.txt", wlSeat == 0 ? "HOST" : "JOIN");
+		{ char lp[48]; snprintf(lp, sizeof lp, "sdmc:/cias/3DGBA_net_%s.txt", wlSeat == 0 ? "HOST" : "JOIN");
 		  gbacore_net_log_dump(lp, wlSeat); }   // dump the per-round link log to SD before detaching
 		gbacore_net_detach(emuA.core);
 		net_session_close();

@@ -6,6 +6,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <fcntl.h>   // O_RDONLY / O_WRONLY / O_CREAT
+#include <sys/stat.h>   // mkdir (ensure the netlog dir exists)
 
 #include <mgba/core/core.h>
 #include <mgba/core/config.h>
@@ -292,10 +293,10 @@ bool net_round_next_parent(uint32_t afterRound, uint32_t* outRound);   // M3: ch
 #define IO_SIOMLT_SEND  0x95          // gba->memory.io[] halfword index for SIOMLT_SEND (0x0400012A)
 #define IO_IF           0x101         // GBA_REG_IF (0x0400_0202) >> 1 — interrupt-flag latch
 #define SIO_IRQ_BIT     (1u << 7)     // GBA_IRQ_SIO == 7 (gba.h:32)
-#define NET_DEADLINE_MS 250           // per-transfer link-lost timeout (loopback returns far sooner). The
-                                      // Gen-3 handshake is infrequent + latency-tolerant (the master just
-                                      // re-clocks); a longer collect rides out RF jitter + the busy-retry
-                                      // spin so a slow slot is RE-WAITED, not faked into a count-breaking word.
+#define NET_DEADLINE_MS 2000          // LINK-LOST timeout, not a per-word timeout. net_transfer_collect now
+                                      // re-sends our word every ~4ms and blocks for the GENUINE peer word, so
+                                      // routine UDS loss/reorder is recovered within ms; this deadline only
+                                      // fires if the peer is truly gone (then the game errors cleanly).
 #define NET_ISR_GUARD_CYCLES 3000u    // local-clock floor before capture: > IRQ_DELAY(7)+ISR+DoSend; ~1 MULTI xfer
 #define NET_ISR_GUARD_CEIL   (NET_ISR_GUARD_CYCLES * 4u)  // hard ceiling: capture on time alone (pure-poll game can't wedge)
 
@@ -397,20 +398,19 @@ static void net_finishMulti(struct GBASIODriver* d, uint16_t data[4]) {
 	struct NetDriver* nd = (struct NetDriver*)d;
 	bool ok = net_transfer_collect(nd->pendingRound, GBA_SIO_MULTI, data, nd->needMask, NET_DEADLINE_MS);
 	if (ok) {
-		s_netOkN++;                                 // diag: words converged
-		if (nd->seat == 0) {                        // FIX B: parent retires the round EXACTLY here, once per
-			__atomic_store_n(&s_netRound, nd->pendingRound + 1, __ATOMIC_RELEASE);  // completion -> no churn
-			nd->roundOpen = false;                  // next Busy edge now mints the next fresh round
-		}
+		s_netOkN++;                                 // diag: words converged (the reliable rendezvous resolved)
 	} else {
-		s_netToN++;                                 // diag: collect timed out -> GENUINE link loss (peer gone)
+		s_netToN++;                                 // diag: collect gave up -> GENUINE link loss (peer truly gone)
 		if (s_netStallO < 0) s_netStallO = s_netOkN;   // PEAK diag: latch the o-value where progress first stalled
-		// TRUE zero-loss data phase: there is NO safe filler in CONN_ESTABLISHED — a stale word AND a 0xFFFF
-		// both poison the Gen-3 checksum (gLink.checksum += recv[i], compared at the next command's index 0).
-		// FIX B removes the churn that manufactured misses, so a miss now means GENUINE link loss; we fill a
-		// deterministic 0xFFFF (the real "no data" value) so the game errors cleanly (link is genuinely gone)
-		// rather than fabricating a wrong word that silently corrupts a live trade.
+		// The collect re-sends our word + blocks to a long link-lost deadline, so a miss is NOT routine word
+		// loss anymore — it means the peer is genuinely gone. Fill 0xFFFF so the game errors cleanly. We do
+		// NOT retry the round (that delivered a SECOND, phantom transfer for the same round and poisoned the
+		// Gen-3 checksum); the round is retired below exactly once, just like a success.
 		memset(data, 0xFF, sizeof(uint16_t) * 4);
+	}
+	if (nd->seat == 0) {                            // parent retires the round (advance s_netRound) EXACTLY once
+		__atomic_store_n(&s_netRound, nd->pendingRound + 1, __ATOMIC_RELEASE);  // per transfer -> sequential
+		nd->roundOpen = false;                      // wire rounds, no churn, no retry-phantom. Next Busy mints next.
 	}
 	s_netRxP = data[0];                            // diag: the seat-0 word THIS console received this round
 	s_netRxC = data[1];                            // diag: the seat-1 word received
@@ -502,6 +502,7 @@ void gbacore_net_peak(unsigned* peakSentP, unsigned* peakSentC,
 // are then diffed by round to find where the two word streams diverge (the checksum break). w0 = the
 // seat-0/parent word, w1 = the seat-1/child word — identical on both consoles for a correct round.
 void gbacore_net_log_dump(const char* path, int seat) {
+	mkdir("sdmc:/cias", 0777);   // ensure the log dir exists (ignored if already present)
 	FILE* f = fopen(path, "w");
 	if (!f) return;
 	fprintf(f, "# 3DGBA netlog role=%s seat=%d startN=%d okN=%d toN=%d edge=%d force=%d stallO=%d\n",
@@ -532,14 +533,13 @@ void gbacore_net_poll(GbaCore* g) {
 	struct GBASIO* sio = nd->d.p;
 	struct GBA*    gba = sio->p;
 
-	// M3: adopt the PARENT's wire round, never a private counter. net_round_next_parent returns the
-	// lowest parent-stamped round we haven't injected yet — in loopback the parent's local merge in
-	// net_start fills the same slot, so this is transport-agnostic. A dropped/extra parent round is
-	// skipped cleanly (we jump to the next round the parent actually stamped) instead of gating
-	// forever on a private counter the parent never matches (the joiner has no shared s_netRound).
-	uint32_t round;
-	uint32_t after = nd->lastInjectedRound;          // 0xFFFFFFFF sentinel = nothing injected yet
-	if (!net_round_next_parent(after, &round)) return;   // no new parent-stamped round present yet
+	// M3 RELIABLE: process rounds STRICTLY in order (next == lastInjected+1) — NEVER skip a gap. UDS reorders
+	// and drops, so a not-yet-arrived round must be WAITED for (the parent re-sends it via the collect loop),
+	// not skipped: the Gen-3 trade is a checksummed lockstep where a skipped/duplicated/reordered round
+	// corrupts the stream. The parent (FIX B) stamps exactly one sequential round per COMPLETED transfer, so
+	// lastInjected+1 is always the next wire round. (sentinel 0xFFFFFFFF + 1 = round 0.)
+	uint32_t round = nd->lastInjectedRound + 1;
+	if (!net_round_ready(round, 1u << 0)) return;    // parent's word for THIS exact round not in yet -> wait
 
 	// --- ISR-PROOF GATE: do not capture round R's reply until round (R-1)'s SIO ISR has run+acked. ---
 	// All three signals are LOCAL (no peer access, no shared clock):

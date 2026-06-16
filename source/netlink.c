@@ -64,6 +64,14 @@ static u16           s_peerNode  = UDS_BROADCAST_NETWORKNODEID;   // resolved lo
 static bool          s_peerResolved = false;                     // false => no unicast target yet
 static int           s_wordSendFails = 0;                        // WORD packets that failed to send (counts BUSY too)
 static int           s_netBusyN      = 0;                        // cumulative TX-busy retries observed (diag)
+// Reliable lockstep: THIS console's current outgoing word (the last one net_transfer_send_word sent),
+// atomically packed so the RX thread can RE-SEND it every few ms until the peer responds — a dropped or
+// reordered word (UDS is best-effort + out-of-order) thus always eventually arrives. The RX thread is the
+// re-sender (NOT the collect loop): the side that completes a round locally isn't in collect, yet must keep
+// re-sending its reply until the peer advances. The peer merges duplicates idempotently.
+static volatile u64  s_curPacked = 0;   // 0 = none. bit63=valid | seat(bits48-50) | round(bits16-47) | word(bits0-15)
+static volatile bool s_collectAbort = false;   // net_transfer_abort sets this so a polling collect returns at once
+#define CUR_PACK(seat,round,word) ((1ull<<63) | ((u64)((seat)&7)<<48) | ((u64)(u32)(round)<<16) | (u16)(word))
 #define NET_RX_STACK (16 * 1024)
 
 // Transfer-plane ring state (declared here so net_session_close, above the transfer-plane functions,
@@ -309,6 +317,7 @@ void net_transfer_reset(void) {
 		LightEvent_Clear(&s_rounds[i].ev);
 		LightLock_Unlock(&s_rounds[i].lock);
 	}
+	s_curPacked = 0; s_collectAbort = false;   // fresh link: no pending re-send, not aborting
 }
 
 // Merge one seat's word into its round slot and wake any waiter. Shared by the local send path and
@@ -317,7 +326,10 @@ static void net_round_merge(int seat, u32 round, u16 word) {
 	if (seat < 0 || seat >= DGBA_MAX_SEATS) return;
 	NetRound* r = &s_rounds[round % NET_ROUNDS];
 	LightLock_Lock(&r->lock);
-	if (!r->used || r->round != round) {             // (re)claim the slot for this round
+	if (r->used && (s32)(round - r->round) < 0) {    // a late/reordered word for an OLDER round than the
+		LightLock_Unlock(&r->lock); return;          // slot already holds -> ignore (don't clobber a newer round)
+	}
+	if (!r->used || r->round != round) {             // (re)claim the slot for this round (same or newer)
 		r->round = round;
 		r->arrivedMask = 0;
 		r->used = true;
@@ -330,19 +342,36 @@ static void net_round_merge(int seat, u32 round, u16 word) {
 	LightLock_Unlock(&r->lock);
 }
 
-void net_transfer_send_word(int seat, int mode, u32 round, u16 send) {
-	(void)mode;
-	net_rounds_init();
-	net_round_merge(seat, round, send);              // OUR seat in the ring first (radio-ordering-independent)
-	if (!s_loopback && s_up && s_peerResolved) {
-		DgbaLinkPkt pk; memset(&pk, 0, sizeof pk);
-		pk.magic = 'G'; pk.type = PK_WORD; pk.seat = (u8)seat; pk.mode = (u8)mode;
-		pk.round = round; pk.d.send = send;          // the u16 word for THIS wire round
-		Result rc = net_send_word_retry(s_peerNode, &pk, sizeof pk);   // unicast, MAC-ACKed, busy-retried
-		if (R_FAILED(rc)) s_wordSendFails++;         // a WORD that never left IS link loss — count BUSY too
-	}
+// Put one WORD packet on the wire (unicast to the peer, MAC-ACKed, busy-retried). Used by the primary
+// send AND the reliable re-send. Idempotent on the peer (net_round_merge overwrites the same slot).
+static void net_word_tx(int seat, int mode, u32 round, u16 word) {
+	if (s_loopback || !s_up || !s_peerResolved) return;
+	DgbaLinkPkt pk; memset(&pk, 0, sizeof pk);
+	pk.magic = 'G'; pk.type = PK_WORD; pk.seat = (u8)seat; pk.mode = (u8)mode;
+	pk.round = round; pk.d.send = word;
+	Result rc = net_send_word_retry(s_peerNode, &pk, sizeof pk);
+	if (R_FAILED(rc)) s_wordSendFails++;             // a WORD that never left IS link loss — count BUSY too
 }
 
+void net_transfer_send_word(int seat, int mode, u32 round, u16 send) {
+	net_rounds_init();
+	net_round_merge(seat, round, send);              // OUR seat in the ring first (radio-ordering-independent)
+	__atomic_store_n(&s_curPacked, CUR_PACK(seat, round, send), __ATOMIC_RELEASE);  // current word for RX re-send
+	net_word_tx(seat, mode, round, send);
+}
+
+// Re-send THIS console's current outgoing word (called periodically by the RX thread) so a dropped/reordered
+// word eventually reaches the peer. Reliable lockstep via repetition; idempotent on the peer. mode is cosmetic.
+static void net_resend_current(void) {
+	u64 p = __atomic_load_n(&s_curPacked, __ATOMIC_ACQUIRE);
+	if (p >> 63) net_word_tx((int)((p >> 48) & 7), 0, (u32)((p >> 16) & 0xFFFFFFFFull), (u16)(p & 0xFFFF));
+}
+
+// RELIABLE rendezvous: poll the ring for this exact round's words, RE-SENDING our own word every ~4ms so a
+// dropped/reordered peer word eventually arrives (UDS is best-effort + out-of-order). Never fabricates a
+// word — it blocks (to a long link-lost deadline) for the GENUINE peer word so the lockstep stays exact and
+// the Gen-3 checksum is never poisoned. Poll (not the sticky LightEvent) because our own merge keeps that
+// signaled. Abortable via s_collectAbort (teardown). Returns false only on a real link-lost / abort.
 bool net_transfer_collect(u32 round, int mode, u16 out[4], u32 needMask, u64 deadline_ms) {
 	(void)mode;
 	net_rounds_init();
@@ -357,9 +386,9 @@ bool net_transfer_collect(u32 round, int mode, u16 out[4], u32 needMask, u64 dea
 		}
 		LightLock_Unlock(&r->lock);
 		if (done) return true;
-		s64 remain = (s64)deadlineTick - (s64)svcGetSystemTick();
-		if (remain <= 0) return false;
-		LightEvent_WaitTimeout(&r->ev, remain * 1000000000ll / (s64)SYSCLOCK_ARM11);
+		if (s_collectAbort || !s_up) return false;                         // teardown / link down
+		if ((s64)deadlineTick - (s64)svcGetSystemTick() <= 0) return false; // genuine link-lost
+		svcSleepThread(1000000ll);                                         // 1ms poll (the RX thread re-sends our word)
 	}
 }
 
@@ -402,6 +431,7 @@ bool net_round_next_parent(u32 afterRound, u32* outRound) {
 static void net_rx_thread(void* arg) {
 	(void)arg;
 	u8 buf[64]; size_t got; u16 src;
+	int resendTick = 0;
 	while (__atomic_load_n(&s_rxRun, __ATOMIC_ACQUIRE)) {
 		LightLock_Lock(&s_rxLock);
 		while (s_up && R_SUCCEEDED(udsPullPacket(&s_bind, buf, sizeof buf, &got, &src)) && got) {
@@ -423,10 +453,13 @@ static void net_rx_thread(void* arg) {
 		}
 		LightLock_Unlock(&s_rxLock);
 		if (!__atomic_load_n(&s_rxRun, __ATOMIC_ACQUIRE)) break;
+		// RELIABLE re-send: every ~4ms re-transmit our current outgoing word so a dropped/reordered word
+		// reaches the peer even when neither side is blocked in collect (the side that completed its round
+		// locally still must keep re-sending its reply until the peer advances).
+		if (++resendTick >= 8) { resendTick = 0; net_resend_current(); }
 		// Poll the radio at ~2 kHz instead of blocking on the bind event: re-drains promptly AND notices
 		// s_rxRun==false within ~0.5ms on teardown — no event-wait means no lost-wake hang (the close-hang
-		// we're fixing) and no sticky-event busy-spin. 0.5ms added latency per received word is negligible
-		// vs the ~16-32ms RF RTT that paces each MULTI round. Runs on core 2 (freed when emuB pauses).
+		// we're fixing) and no sticky-event busy-spin. Runs on core 2 (freed when emuB pauses).
 		svcSleepThread(500 * 1000LL);   // 0.5 ms
 	}
 }
@@ -451,10 +484,11 @@ bool net_link_start(int seat) {
 }
 
 void net_transfer_abort(void) {
+	s_collectAbort = true;        // a polling collect checks this and returns at once
 	if (!s_roundsInit) return;
 	for (int i = 0; i < NET_ROUNDS; i++) {
 		LightLock_Lock(&s_rounds[i].lock);
-		LightEvent_Signal(&s_rounds[i].ev);   // every blocked collect returns (reports timeout)
+		LightEvent_Signal(&s_rounds[i].ev);   // (also wake any LightEvent waiter, belt-and-suspenders)
 		LightLock_Unlock(&s_rounds[i].lock);
 	}
 }

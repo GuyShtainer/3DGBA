@@ -13,3 +13,7 @@ temp/
 *.gba
 *.sav
 *.ss*
+
+# on-device link logs pulled off the SD for debugging (not source)
+netlogs/
+3DGBA_net_*.txt
