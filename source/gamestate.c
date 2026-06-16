@@ -1,6 +1,8 @@
 // gamestate.c — see gamestate.h. Addresses verified vs pret's byte-matched sym maps (symbols branch),
 // US v1.0/rev0. FRLG share one RAM map; LeafGreen's NEW symbols are FireRed-derived (see spec Risks).
 #include <string.h>
+#include <stdio.h>      // FILE / fprintf (the SD log dump)
+#include <sys/stat.h>   // mkdir (ensure the netlogs dir exists)
 #include "gamestate.h"
 
 #define BMON_MOVES_OFF 0x0C   // BattlePokemon.moves[] offset (4x u16)
@@ -71,18 +73,39 @@ bool game_read(GbaCore* c, const GameProfile* p, GameState* out) {
 	memset(out, 0, sizeof *out);
 	out->px = out->py = -1; out->actionCursor = out->moveCursor = -1; out->ctx = GCTX_NONE;
 	out->partyCount = out->partyLayout = out->battlersCount = -1;
+	out->mapGroup = out->mapNum = out->objX = out->objY = out->facing = -1;
 	if (!c || !p) return false;
 	out->valid = true;
 
 	uint32_t sb1 = gbacore_read32(c, p->sb1ptr);
-	if ((sb1 >> 24) == 0x02) {
+	out->sb1Valid = (sb1 >> 24) == 0x02;
+	if (out->sb1Valid) {
 		out->px = (int16_t)gbacore_read16(c, sb1);
 		out->py = (int16_t)gbacore_read16(c, sb1 + 2);
+		out->mapGroup = gbacore_read8(c, sb1 + 0x04);   // SaveBlock1.location.mapGroup (WarpData)
+		out->mapNum   = gbacore_read8(c, sb1 + 0x05);   // SaveBlock1.location.mapNum
 	}
+
+	// --- instrumentation (LOGGING ONLY): raw callbacks, player-avatar geo, active-task fingerprint.
+	// All read-only; NOTHING below gates touch/3D/gameplay on these — they only feed the SD log. ---
+	out->cb2 = gbacore_read32(c, p->mainCb2) & ~1u;            // raw gMain.callback2 = the screen fingerprint
+	out->cb1 = gbacore_read32(c, p->mainCb2 - 4u) & ~1u;       // gMain.callback1 (gMain+0 = mainCb2-4)
+	out->ctxResolved = true;                                   // default; cleared in the overworld fall-through
+	for (int t = 0; t < 16 && out->nTask < 8; t++) {           // up to 8 active gTasks func ptrs (screen ID)
+		uint32_t task = p->gTasksBase + 40u * (uint32_t)t;
+		if (gbacore_read8(c, task + 4) == 0) continue;         // isActive
+		out->taskFp[out->nTask++] = gbacore_read32(c, task + 0) & ~1u;
+	}
+	if (p->mapObjects && (gbacore_read32(c, p->mapObjects) & 1u)) {     // gObjectEvents[0] active (slot 0 = player)
+		out->objX   = (int16_t)gbacore_read16(c, p->mapObjects + 0x10); // currentCoords.x (grid, +7)
+		out->objY   = (int16_t)gbacore_read16(c, p->mapObjects + 0x12); // currentCoords.y
+		out->facing = gbacore_read8 (c, p->mapObjects + 0x18) & 0x0F;   // facingDirection — offset verify-on-hw (FR/LG base also suspect)
+	}
+
 	// 'In battle' = the battle main loop is the active callback2. (gBattleTypeFlags is zeroed at battle
 	// SETUP, not end, so it lingers into the overworld -> the old battleFlags test made the whole
 	// post-battle field read as a battle dialog = tap-anywhere-A. callback2 returns to the field cleanly.)
-	bool inBattle = p->battleMainCb && (gbacore_read32(c, p->mainCb2) & ~1u) == p->battleMainCb;
+	bool inBattle = p->battleMainCb && out->cb2 == p->battleMainCb;
 
 	// Menu detection is TASK-BASED (scan gTasks for the menu's active input handler): robust and
 	// FAIL-SAFE — a wrong/absent address just means "not detected" (the overworld still WALKS), never a
@@ -109,6 +132,7 @@ bool game_read(GbaCore* c, const GameProfile* p, GameState* out) {
 		// so once you opened START, the overworld read as a menu forever -> walk stuck on A (Emerald).
 		if (task_active(c, p, p->startMenuTask)) { out->ctx = GCTX_FIELDMENU; return true; }
 		out->ctx = GCTX_OVERWORLD;
+		out->ctxResolved = false;   // overworld OR an undetected screen that fell through here -> inspect cb2 in the log
 		// On-screen field text — precise per-band kill signals for the renderer's DoF. The BG0
 		// text-layer scan in main.c is the game-agnostic catch-all; these are exact backups.
 		// Fail-safe: unknown address -> false (the BG0 scan still covers it).
@@ -142,4 +166,104 @@ bool game_read(GbaCore* c, const GameProfile* p, GameState* out) {
 		out->ctx = GCTX_BATTLE_OTHER;
 	}
 	return true;
+}
+
+// ============================ game-state instrumentation logger ============================
+// LOGGING ONLY — reads the snapshot game_read already produced and records it; never writes game RAM,
+// never changes touch/3D/gameplay. Edge-triggered ring + one-shot SD dump (the netlog pattern, verbatim).
+
+static const char* const GS_CTXN[] = {   // index = GameCtx; matches main.c's teal-line names
+	"none", "field", "b.act", "b.move", "b.tgt", "party", "fmenu", "bag", "b.oth"
+};
+const char* gamestate_ctx_name(int ctx) {
+	return (ctx >= 0 && ctx < (int)(sizeof GS_CTXN / sizeof GS_CTXN[0])) ? GS_CTXN[ctx] : "?";
+}
+
+#define GSLOG_N 1024
+#define GS_HEARTBEAT_FRAMES 600u   // ~10s @ 60fps: a liveness/drift row even when nothing changed
+typedef struct {
+	uint32_t frame; uint32_t cb1, cb2;
+	uint16_t inj;
+	int16_t  px, py, objX, objY;
+	int8_t   mapG, mapN, face;
+	uint8_t  scr, ctx, sb1V, resolved, nTask;
+	uint32_t taskFp[8];
+	uint8_t  dValid, dOw, dTT, dTB;            // 3D-effect health (top game only)
+	int16_t  dNspr, dNui, dNfg, dCamX, dCamY;
+	float    dMaxd;
+} GsLogEntry;
+static GsLogEntry s_gsLog[GSLOG_N];
+static uint32_t   s_gsLogN = 0;
+// per screen-slot (0=top,1=bottom) edge cache: log only when ctx or raw cb2 changes, or the heartbeat fires.
+static uint8_t  s_lastCtx[2]   = { 0xFF, 0xFF };
+static uint32_t s_lastCb2[2]   = { 0, 0 };
+static uint32_t s_lastFrame[2] = { 0, 0 };
+
+void gs_log_reset(void) {
+	s_gsLogN = 0;
+	s_lastCtx[0] = s_lastCtx[1] = 0xFF;
+	s_lastCb2[0] = s_lastCb2[1] = 0;
+	s_lastFrame[0] = s_lastFrame[1] = 0;
+}
+
+void gs_log_sample(GbaCore* c, const GameProfile* p, const GameState* gs,
+                   int screen, uint16_t injKeys, const GsDepth* depth) {
+	if (!c || !p || !gs || !gs->valid || screen < 0 || screen > 1) return;
+	uint32_t frame = gbacore_frame_counter(c);
+	bool edge = (gs->ctx != s_lastCtx[screen]) || (gs->cb2 != s_lastCb2[screen])
+	            || (frame - s_lastFrame[screen] >= GS_HEARTBEAT_FRAMES);
+	if (!edge) return;                                 // cheap no-op on the common (unchanged) frame
+	s_lastCtx[screen] = (uint8_t)gs->ctx; s_lastCb2[screen] = gs->cb2; s_lastFrame[screen] = frame;
+
+	GsLogEntry* e = &s_gsLog[s_gsLogN % GSLOG_N];
+	memset(e, 0, sizeof *e);
+	e->frame = frame; e->scr = (uint8_t)screen; e->ctx = (uint8_t)gs->ctx;
+	e->sb1V = gs->sb1Valid ? 1 : 0; e->resolved = gs->ctxResolved ? 1 : 0; e->nTask = gs->nTask;
+	e->cb1 = gs->cb1; e->cb2 = gs->cb2; e->inj = injKeys;
+	e->px = (int16_t)gs->px; e->py = (int16_t)gs->py;
+	e->objX = (int16_t)gs->objX; e->objY = (int16_t)gs->objY;
+	e->mapG = (int8_t)gs->mapGroup; e->mapN = (int8_t)gs->mapNum; e->face = (int8_t)gs->facing;
+	for (int i = 0; i < 8; i++) e->taskFp[i] = gs->taskFp[i];
+	if (depth) {
+		e->dValid = 1; e->dOw = depth->overworld; e->dTT = depth->textTop; e->dTB = depth->textBot;
+		e->dNspr = depth->nspr; e->dNui = depth->nui; e->dNfg = depth->nfg;
+		e->dMaxd = depth->maxd; e->dCamX = depth->camX; e->dCamY = depth->camY;
+	}
+	s_gsLogN++;
+}
+
+// Decode a GBA key mask (bit order A0 B1 Sel2 St3 R4 L5 U6 D7 Rt8 Lt9) into a compact string.
+static void gs_keystr(uint16_t k, char* out, int cap) {
+	static const char* const N[] = { "A","B","s","S",">","<","^","v","R","L" };
+	int n = 0;
+	for (int i = 0; i < 10 && n < cap - 2; i++) if (k & (1u << i)) { const char* t = N[i]; while (*t && n < cap - 1) out[n++] = *t++; }
+	if (n == 0) out[n++] = '-';
+	out[n] = '\0';
+}
+
+void gamestate_log_dump(const char* path) {
+	mkdir("sdmc:/cias", 0777);           // ensure the parent dir exists (ignored if already present)
+	mkdir("sdmc:/cias/netlogs", 0777);   // ...and the dedicated netlogs folder (same as the net logger)
+	FILE* f = fopen(path, "w");
+	if (!f) return;
+	fprintf(f, "# 3DGBA game-state log  heartbeat=%u frames  scr: 0=top/3D 1=bottom/touch  (cb1/cb2 = raw gMain callbacks, Thumb-stripped)\n", GS_HEARTBEAT_FRAMES);
+	fprintf(f, "# undetected screens (pokedex/townmap/summary/card/keyboard/title) fall through to ctx=field with resolved=0:\n");
+	fprintf(f, "# read the cb2 column for each one you visit, then promote that value into a GameProfile later (logging only; no detection wired yet).\n");
+	fprintf(f, "# geo: px,py=camera tile; objX,objY=true avatar tile; mapG,mapN=which map; face 1=D 2=U 3=L 4=R (NPC-overlay inputs). inj=injected touch key. d_*=3D-effect health (top rows).\n");
+	fprintf(f, "idx,frame,scr,ctx,ctxName,cb1,cb2,sb1V,resolved,px,py,objX,objY,mapG,mapN,face,inj,nTask,t0,t1,t2,t3,t4,t5,t6,t7,d_ow,d_nspr,d_nui,d_nfg,d_maxd,d_camX,d_camY\n");
+	uint32_t n    = (s_gsLogN < GSLOG_N) ? s_gsLogN : GSLOG_N;
+	uint32_t base = (s_gsLogN < GSLOG_N) ? 0u : (s_gsLogN % GSLOG_N);   // oldest retained entry
+	for (uint32_t i = 0; i < n; i++) {
+		const GsLogEntry* e = &s_gsLog[(base + i) % GSLOG_N];
+		char ks[12]; gs_keystr(e->inj, ks, sizeof ks);
+		fprintf(f, "%lu,%lu,%u,%u,%s,%08lX,%08lX,%u,%u,%d,%d,%d,%d,%d,%d,%d,%s,%u,%08lX,%08lX,%08lX,%08lX,%08lX,%08lX,%08lX,%08lX",
+		        (unsigned long)i, (unsigned long)e->frame, e->scr, e->ctx, gamestate_ctx_name(e->ctx),
+		        (unsigned long)e->cb1, (unsigned long)e->cb2, e->sb1V, e->resolved,
+		        e->px, e->py, e->objX, e->objY, e->mapG, e->mapN, e->face, ks, e->nTask,
+		        (unsigned long)e->taskFp[0], (unsigned long)e->taskFp[1], (unsigned long)e->taskFp[2], (unsigned long)e->taskFp[3],
+		        (unsigned long)e->taskFp[4], (unsigned long)e->taskFp[5], (unsigned long)e->taskFp[6], (unsigned long)e->taskFp[7]);
+		if (e->dValid) fprintf(f, ",%u,%d,%d,%d,%.2f,%d,%d\n", e->dOw, e->dNspr, e->dNui, e->dNfg, e->dMaxd, e->dCamX, e->dCamY);
+		else           fprintf(f, ",,,,,,\n");
+	}
+	fclose(f);
 }

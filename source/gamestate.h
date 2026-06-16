@@ -87,10 +87,41 @@ typedef struct {
 	uint32_t bagListTaskBase; // gTasks + 40*listTaskId + 8 (+24 scroll, +26 row)
 	bool     textDlg;         // overworld: a field textbox is up (sFieldMessageBoxMode != 0)
 	bool     textBanner;      // overworld: the map-name banner task is live
+	// --- instrumentation (LOGGING ONLY; never gate touch/3D/gameplay on these) ---
+	uint32_t cb1, cb2;        // raw gMain.callback1/callback2 (Thumb bit stripped) = the screen fingerprint.
+	                          // cb2 is THE value an undetected screen (pokedex/townmap/summary/card/keyboard/
+	                          // title) reveals when you visit it on hw, to be promoted into a profile later.
+	bool     sb1Valid;        // gSaveBlock1Ptr deref valid (save loaded; px/py/map*/obj* meaningful)
+	bool     ctxResolved;     // ctx came from a POSITIVE battle/menu match (true) vs the bare overworld
+	                          // fall-through where undetected screens hide (false -> inspect cb2)
+	int      mapGroup, mapNum;// SaveBlock1.location (-1 if sb1 not ready) — which map (for the NPC overlay)
+	int      objX, objY;      // gObjectEvents[0].currentCoords true avatar tile (-1 if slot inactive)
+	int      facing;          // gObjectEvents[0] facing 1=D 2=U 3=L 4=R (-1 if N/A) — verify-on-hw offset
+	uint8_t  nTask;           // count of active gTasks func ptrs captured in taskFp[]
+	uint32_t taskFp[8];       // active task func pointers (Thumb stripped) — IDs ambiguous-callback2 screens
 } GameState;
+
+// Optional 3D-effect health, logged alongside the TOP game's row (pass NULL for the bottom game).
+// Mirrors the main.c DepthSnap scalars so a wrong-looking 3D pop can be correlated with the screen.
+typedef struct {
+	uint8_t overworld, textTop, textBot;   // depth gating flags
+	short   nspr, nui, nfg;                // on-screen sprite / BG0-panel / foreground-tile counts
+	float   maxd;                          // strongest in-view stereoscopic depth
+	short   camX, camY;                    // gFieldCamera sub-tile scroll
+} GsDepth;
 
 // Profile for a core's ROM (by header game code), or NULL if unknown.
 const GameProfile* profile_for(GbaCore* c);
 
 // Read the running game's live state into `out`. Returns false (out->valid=false) if no profile.
 bool game_read(GbaCore* c, const GameProfile* p, GameState* out);
+
+// --- Game-state instrumentation logger (LOGGING ONLY — never changes gameplay/touch/3D) -----------
+// Edge-triggered in-memory ring: gs_log_sample appends a row ONLY when the screen (ctx) or raw
+// gMain.callback2 changes, or a ~10s heartbeat elapses, per screen-slot. Flushed to one SD text file
+// on gamestate_log_dump. Mirrors the netlog ring + one-shot-dump pattern (no per-frame file I/O).
+void        gs_log_reset(void);   // clear the ring + per-slot edge cache (call once when a session starts)
+void        gs_log_sample(GbaCore* c, const GameProfile* p, const GameState* gs,
+                          int screen, uint16_t injKeys, const GsDepth* depth);  // screen: 0=top/3D, 1=bottom/touch
+void        gamestate_log_dump(const char* path);   // flush the ring to an SD file (mkdir's sdmc:/cias/netlogs)
+const char* gamestate_ctx_name(int ctx);            // GameCtx -> short name (for the log + HUD)

@@ -99,6 +99,17 @@ static void wl_dump(int seat) {
 	gbacore_net_log_dump(lp, seat);
 }
 
+// Dump the game-state instrumentation log to a TIMESTAMPED file in the same netlogs folder. Called on
+// the session teardown path so a play session's screen/geo/3D timeline lands on SD alongside the netlog.
+static void gs_dump(void) {
+	time_t tt = time(NULL); struct tm* lt = localtime(&tt);
+	char lp[96];
+	snprintf(lp, sizeof lp, "sdmc:/cias/netlogs/3DGBA_gs_%02d%02d_%02d%02d%02d.txt",
+	         lt ? lt->tm_mon + 1 : 0, lt ? lt->tm_mday : 0,
+	         lt ? lt->tm_hour : 0, lt ? lt->tm_min : 0, lt ? lt->tm_sec : 0);
+	gamestate_log_dump(lp);
+}
+
 // Link callbacks (invoked by mGBA's lockstep). onSleep runs on this core's worker thread
 // during runFrame and must NOT block — it only requests a park; the worker parks (blocks on
 // waitEv) after runFrame returns. onWake runs on the peer's worker thread and just signals.
@@ -1076,6 +1087,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	bool menuOpen = false;
 	bool workersRunning = false;   // pipeline: a non-link frame is computing while we render the last
 	DepthSnap depth3d = { false };  // top game's overworld state for stereoscopic depth (M2)
+	gs_log_reset();                 // fresh game-state instrumentation log for this play session
 	int  menuSel = 0;
 	int  result = SESSION_QUIT;
 	gfxSet3D(true);   // enable stereoscopic top screen; the right eye is driven below (slider-gated)
@@ -1254,6 +1266,23 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 							}
 						}
 					}
+				}
+				{   // ---- game-state instrumentation log (READ-ONLY; both games; edge-triggered) ----
+					// Records each game's screen/geo/3D timeline to SD. Same parked-window reads the touch+3D
+					// paths already do; captures during links too (the same benign EWRAM race they accept).
+					GbaCore* gsTop = swapped ? emuB.core : emuA.core;
+					GbaCore* gsBot = swapped ? emuA.core : emuB.core;
+					const GameProfile* gpTop = profile_for(gsTop);
+					const GameProfile* gpBot = profile_for(gsBot);
+					GameState gst, gsb;
+					if (game_read(gsTop, gpTop, &gst)) {
+						GsDepth gd = { (uint8_t)depth3d.overworld, (uint8_t)depth3d.textTop, (uint8_t)depth3d.textBot,
+						               (short)depth3d.nspr, (short)depth3d.nui, (short)depth3d.nfg,
+						               depth3d.maxd, (short)depth3d.camX, (short)depth3d.camY };
+						gs_log_sample(gsTop, gpTop, &gst, 0, 0, &gd);     // screen 0 = top/3D
+					}
+					if (game_read(gsBot, gpBot, &gsb))
+						gs_log_sample(gsBot, gpBot, &gsb, 1, tk, NULL);   // screen 1 = bottom/touch (with injected key)
 				}
 				emuA.keys = ((focused == 0) ? g : 0) | (swapped ? tk : 0);
 				emuB.keys = ((focused == 1) ? g : 0) | (swapped ? 0 : tk);
@@ -1718,6 +1747,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	}
 
 	// teardown this session's workers + cores; reset g_quit for the next session
+	gs_dump();   // flush this play session's game-state instrumentation log to SD (Quit / Change games)
 	if (wlOn) {                               // Quit/Change-games straight out of a live WIRELESS link
 		emuA.netLinked = false;               // the worker leaves the net free-run once its collect returns
 		net_link_stop();                      // join the RX thread + abort rounds (any blocked collect returns now)
