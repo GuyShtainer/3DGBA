@@ -64,6 +64,9 @@ static u16           s_peerNode  = UDS_BROADCAST_NETWORKNODEID;   // resolved lo
 static bool          s_peerResolved = false;                     // false => no unicast target yet
 static int           s_wordSendFails = 0;                        // WORD packets that failed to send (counts BUSY too)
 static int           s_netBusyN      = 0;                        // cumulative TX-busy retries observed (diag)
+static int           s_rxWordN       = 0;   // PK_WORD packets the RX thread received from the peer (0 => RX-empty)
+static u32           s_rxMaxSeat0    = 0;   // highest round a SEAT-0 (parent/host) word was merged for
+static bool          s_haveSeat0     = false; // any seat-0 word ever seen (on the JOINER: did the host's words arrive?)
 // Reliable lockstep: THIS console's current outgoing word (the last one net_transfer_send_word sent),
 // atomically packed so the RX thread can RE-SEND it every few ms until the peer responds — a dropped or
 // reordered word (UDS is best-effort + out-of-order) thus always eventually arrives. The RX thread is the
@@ -318,6 +321,7 @@ void net_transfer_reset(void) {
 		LightLock_Unlock(&s_rounds[i].lock);
 	}
 	s_curPacked = 0; s_collectAbort = false;   // fresh link: no pending re-send, not aborting
+	s_rxWordN = 0; s_rxMaxSeat0 = 0; s_haveSeat0 = false;   // fresh link transport stats
 }
 
 // Merge one seat's word into its round slot and wake any waiter. Shared by the local send path and
@@ -338,6 +342,7 @@ static void net_round_merge(int seat, u32 round, u16 word) {
 	}
 	r->words[seat] = word;
 	r->arrivedMask |= (1u << seat);
+	if (seat == 0 && (!s_haveSeat0 || (s32)(round - s_rxMaxSeat0) > 0)) { s_rxMaxSeat0 = round; s_haveSeat0 = true; }  // host-word progress (diag)
 	LightEvent_Signal(&r->ev);
 	LightLock_Unlock(&r->lock);
 }
@@ -474,6 +479,7 @@ static void net_rx_thread(void* arg) {
 				if (sent) { s_pingRtt = (int)((svcGetSystemTick() - sent) * 1000ull / SYSCLOCK_ARM11);
 				            s_pingTick[pk->round % PING_RING] = 0; }
 			} else if (pk->type == PK_WORD) {                // peer's SIO word -> merge + wake any collect
+				s_rxWordN++;                                 // diag: a peer WORD actually arrived (RX-empty if this stays 0)
 				net_round_merge(pk->seat, pk->round, pk->d.send);
 			}
 		}
@@ -534,6 +540,18 @@ void net_link_get_rtt(int* rttMs, int* drops) {
 }
 
 // M3 loss diag: cumulative WORD send failures (incl. busy that exhausted retries) and TX-busy retries seen.
+// Transport-level establishment diagnostics (for the netlog header): did our WORDs leave (txFails/busyN),
+// did the peer's WORDs arrive (rxWordN; 0 => RX-empty = nothing coming back), is the unicast peer resolved
+// (peerUp), and the furthest SEAT-0/host round we've seen a word for (maxSeat0Round; -1 = none). On the JOINER
+// these answer "why didn't round 0 cross": host not TXing vs joiner RX-empty vs round-number desync.
+void net_link_get_stats(int* rxWordN, int* wordSendFails, int* busyN, int* peerUp, int* maxSeat0Round) {
+	if (rxWordN)       *rxWordN       = s_rxWordN;
+	if (wordSendFails) *wordSendFails = s_wordSendFails;
+	if (busyN)         *busyN         = s_netBusyN;
+	if (peerUp)        *peerUp        = s_peerResolved ? 1 : 0;
+	if (maxSeat0Round) *maxSeat0Round = s_haveSeat0 ? (int)s_rxMaxSeat0 : -1;
+}
+
 void net_link_get_loss(int* wordSendFails, int* busyN) {
 	if (wordSendFails) *wordSendFails = s_wordSendFails;
 	if (busyN)         *busyN         = s_netBusyN;

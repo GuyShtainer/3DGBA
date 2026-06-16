@@ -81,6 +81,9 @@ void net_transfer_abort(void);
 void net_link_get_rtt(int* rttMs, int* drops);
 // net_link_get_loss: cumulative WORD send failures (incl. busy that exhausted retries) + TX-busy retries (HUD).
 void net_link_get_loss(int* wordSendFails, int* busyN);
+// net_link_get_stats: establishment diag for the netlog header — RX WORDs received, TX fails/busy, peer
+// resolved?, furthest seat-0/host round seen (-1 none). Any out-param may be NULL.
+void net_link_get_stats(int* rxWordN, int* wordSendFails, int* busyN, int* peerUp, int* maxSeat0Round);
 // CHILD round-from-wire: the lowest parent-stamped round in the ring that is > afterRound and has
 // the parent's word present. Returns true + *round when one exists (the child injects THAT exact
 // wire round). Transport-agnostic: loopback's local parent-merge satisfies it the same way.

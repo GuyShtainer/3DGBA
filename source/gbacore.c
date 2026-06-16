@@ -292,6 +292,7 @@ bool net_round_ready(uint32_t round, uint32_t needMask);
 bool net_round_wait(uint32_t round, uint32_t needMask, uint64_t deadline_ms);  // joiner pacing barrier (blocks)
 uint64_t net_mono_ticks(void);                 // libctru wall-clock tick (for the netlog dt_us column)
 uint32_t net_ticks_to_us(uint64_t dticks);     // ticks -> microseconds
+void net_link_get_stats(int* rxWordN, int* wordSendFails, int* busyN, int* peerUp, int* maxSeat0Round);  // establishment diag
 bool net_round_next_parent(uint32_t afterRound, uint32_t* outRound);   // M3: child adopts the parent's wire round
 
 #define IO_SIOMLT_SEND  0x95          // gba->memory.io[] halfword index for SIOMLT_SEND (0x0400012A)
@@ -557,6 +558,13 @@ void gbacore_net_log_dump(const char* path, int seat) {
 	// < ~10), blkN = times the joiner blocked at the barrier, capK = the configured cap. HOST: both 0.
 	fprintf(f, "# pacing capK=%u vblMax=%lu paceBlkN=%d   (dvbl col below = emulated VBlanks since prev round)\n",
 	        (unsigned)NET_PACE_CAP_VBL, (unsigned long)s_netVblMax, s_netPaceBlkN);
+	// TRANSPORT/ESTABLISHMENT diag: when round 0 never completes (okN=0, no rows below), THIS line says why.
+	// JOIN: rxWords=0 => peer WORDs never arrived (host not TXing / peer unresolved); maxSeat0Round vs the HOST's
+	// hostRound => round-number DESYNC (host raced past round 0 on timeout while we still wait on it). HOST:
+	// txFails/busy => our sends failed. peerUp=0 => no unicast peer (link never really came up).
+	{ int rxW=0, txF=0, busy=0, peerUp=0, maxS0=-1; net_link_get_stats(&rxW, &txF, &busy, &peerUp, &maxS0);
+	  fprintf(f, "# transport rxWords=%d txFails=%d busy=%d peerUp=%d maxSeat0Round=%d hostRound=%lu\n",
+	          rxW, txF, busy, peerUp, maxS0, (unsigned long)s_netRound); }
 	fprintf(f, "# columns: idx,round,frame,dvbl,dt_us,w0,w1,ok   (dvbl=emulated VBlanks since prev round; dt_us=WALL-CLOCK us since prev round -> emulated-divergence vs UDS air latency; w0=seat0/parent w1=seat1/child; ok=1/timeout=0)\n");
 	fprintf(f, "idx,round,frame,dvbl,dt_us,w0,w1,ok\n");
 	uint32_t n    = (s_netLogN < NETLOG_N) ? s_netLogN : NETLOG_N;
