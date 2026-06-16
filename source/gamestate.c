@@ -96,6 +96,13 @@ bool game_read(GbaCore* c, const GameProfile* p, GameState* out) {
 		if (gbacore_read8(c, task + 4) == 0) continue;         // isActive
 		out->taskFp[out->nTask++] = gbacore_read32(c, task + 0) & ~1u;
 	}
+	// Sort the fingerprint ascending so the SAME screen produces the SAME (diffable) signature on every
+	// visit — gTasks SLOT order is unstable across visits, which would make one screen fingerprint differently.
+	for (int i = 1; i < out->nTask; i++) {
+		uint32_t v = out->taskFp[i]; int j = i - 1;
+		while (j >= 0 && out->taskFp[j] > v) { out->taskFp[j + 1] = out->taskFp[j]; j--; }
+		out->taskFp[j + 1] = v;
+	}
 	if (p->mapObjects && (gbacore_read32(c, p->mapObjects) & 1u)) {     // gObjectEvents[0] active (slot 0 = player)
 		out->objX   = (int16_t)gbacore_read16(c, p->mapObjects + 0x10); // currentCoords.x (grid, +7)
 		out->objY   = (int16_t)gbacore_read16(c, p->mapObjects + 0x12); // currentCoords.y
@@ -185,7 +192,8 @@ typedef struct {
 	uint32_t frame; uint32_t cb1, cb2;
 	uint16_t inj;
 	int16_t  px, py, objX, objY;
-	int8_t   mapG, mapN, face;
+	int16_t  mapG, mapN;   // u8 source (0..255) -> int16_t so FR/LG map numbers >=128 aren't sign-wrapped; -1 = N/A
+	int8_t   face;
 	uint8_t  scr, ctx, sb1V, resolved, nTask;
 	uint32_t taskFp[8];
 	uint8_t  dValid, dOw, dTT, dTB;            // 3D-effect health (top game only)
@@ -222,7 +230,7 @@ void gs_log_sample(GbaCore* c, const GameProfile* p, const GameState* gs,
 	e->cb1 = gs->cb1; e->cb2 = gs->cb2; e->inj = injKeys;
 	e->px = (int16_t)gs->px; e->py = (int16_t)gs->py;
 	e->objX = (int16_t)gs->objX; e->objY = (int16_t)gs->objY;
-	e->mapG = (int8_t)gs->mapGroup; e->mapN = (int8_t)gs->mapNum; e->face = (int8_t)gs->facing;
+	e->mapG = (int16_t)gs->mapGroup; e->mapN = (int16_t)gs->mapNum; e->face = (int8_t)gs->facing;
 	for (int i = 0; i < 8; i++) e->taskFp[i] = gs->taskFp[i];
 	if (depth) {
 		e->dValid = 1; e->dOw = depth->overworld; e->dTT = depth->textTop; e->dTB = depth->textBot;
@@ -232,7 +240,7 @@ void gs_log_sample(GbaCore* c, const GameProfile* p, const GameState* gs,
 	s_gsLogN++;
 }
 
-// Decode a GBA key mask (bit order A0 B1 Sel2 St3 R4 L5 U6 D7 Rt8 Lt9) into a compact string.
+// Decode a GBA key mask (bit order A0 B1 Sel2 St3 Right4 Left5 Up6 Down7 R8 L9; see GBAKEY_* in gbacore.h).
 static void gs_keystr(uint16_t k, char* out, int cap) {
 	static const char* const N[] = { "A","B","s","S",">","<","^","v","R","L" };
 	int n = 0;
@@ -242,6 +250,7 @@ static void gs_keystr(uint16_t k, char* out, int cap) {
 }
 
 void gamestate_log_dump(const char* path) {
+	if (s_gsLogN == 0) return;           // nothing captured (e.g. non-Pokemon ROMs) -> don't litter SD with empty files
 	mkdir("sdmc:/cias", 0777);           // ensure the parent dir exists (ignored if already present)
 	mkdir("sdmc:/cias/netlogs", 0777);   // ...and the dedicated netlogs folder (same as the net logger)
 	FILE* f = fopen(path, "w");
@@ -263,7 +272,7 @@ void gamestate_log_dump(const char* path) {
 		        (unsigned long)e->taskFp[0], (unsigned long)e->taskFp[1], (unsigned long)e->taskFp[2], (unsigned long)e->taskFp[3],
 		        (unsigned long)e->taskFp[4], (unsigned long)e->taskFp[5], (unsigned long)e->taskFp[6], (unsigned long)e->taskFp[7]);
 		if (e->dValid) fprintf(f, ",%u,%d,%d,%d,%.2f,%d,%d\n", e->dOw, e->dNspr, e->dNui, e->dNfg, e->dMaxd, e->dCamX, e->dCamY);
-		else           fprintf(f, ",,,,,,\n");
+		else           fprintf(f, ",,,,,,,\n");   // 7 empty fields to match the 7 d_* header columns (was 6 -> misaligned)
 	}
 	fclose(f);
 }
