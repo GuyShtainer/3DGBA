@@ -493,6 +493,13 @@ void net_transfer_abort(void) {
 	}
 }
 
+// Teardown predicate for the joiner's net_poll park: the SAME condition net_transfer_collect uses to bail
+// (s_collectAbort set by net_transfer_abort, OR the session torn down). Exposing it read-only keeps the
+// parked joiner's release IDENTICAL to the proven collect release, without making s_collectAbort cross-TU.
+bool net_collect_aborting(void) {
+	return s_collectAbort || !s_up;
+}
+
 void net_link_stop(void) {
 	if (s_rxThread) {
 		__atomic_store_n(&s_rxRun, false, __ATOMIC_RELEASE);   // the RX poll notices this within ~0.5ms

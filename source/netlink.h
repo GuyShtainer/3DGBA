@@ -70,6 +70,9 @@ void net_link_stop(void);
 // net_transfer_abort: signal every round slot so a blocked net_transfer_collect returns at once
 // (collect then reports timeout -> the worker's net free-run loop checks netLinked and exits).
 void net_transfer_abort(void);
+// net_collect_aborting: true while a teardown/abort is in progress (s_collectAbort) OR the session is down.
+// The joiner's net_poll park polls this so it releases on EXACTLY the collect-release condition.
+bool net_collect_aborting(void);
 // net_link_get_rtt: the RX thread writes RTT(ms,-1=none)/cumulative drops; the HUD reads them.
 void net_link_get_rtt(int* rttMs, int* drops);
 // net_link_get_loss: cumulative WORD send failures (incl. busy that exhausted retries) + TX-busy retries (HUD).

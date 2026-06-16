@@ -71,7 +71,9 @@ void     gbacore_link_detach(GbaCore* c);
 // (0 = parent/clock-owner), peers = number of other GBAs. NEVER attach this AND gbalink to one core.
 void     gbacore_net_attach(GbaCore* c, int seat, int peers);
 void     gbacore_net_detach(GbaCore* c);
-void     gbacore_net_poll(GbaCore* c);        // child-side per-slice hook; call ONLY from the core's worker
+void     gbacore_net_poll(GbaCore* c, volatile bool* alive);   // child-side per-slice hook; call ONLY from the
+                                              // core's worker. `alive` = &EmuInstance.netLinked, so the in-poll
+                                              // park releases the instant the link is torn down (teardown/suspend)
 void     gbacore_net_diag(int* startN, int* injectN, int* okN, int* toN, unsigned* round,
                           unsigned* pWord, unsigned* cWord, int* edgeN, int* forceN,
                           unsigned* rxP, unsigned* rxC);   // M2.5/M3 HUD diag (+ received peer words)

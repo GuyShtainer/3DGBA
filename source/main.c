@@ -161,8 +161,8 @@ static void worker_main(void* arg) {
 			// the trade's block burst. Let the link burst — the collect blocking is the only pacing it needs.
 			while (e->netLinked && !g_quit) {
 				gbacore_set_keys(e->core, (u16)e->keys);
-				gbacore_net_poll(e->core);
-				gbacore_run_loop(e->core);
+				gbacore_net_poll(e->core, &e->netLinked);   // joiner: pauses the emulated CPU while armed-and-waiting
+				gbacore_run_loop(e->core);                   // advances only to the completeEvent net_poll scheduled
 				e->frame++;
 				audio_pump_core(e->id, e->core);
 			}

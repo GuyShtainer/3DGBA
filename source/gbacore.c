@@ -289,6 +289,10 @@ void net_transfer_send_word(int seat, int mode, uint32_t round, uint16_t send);
 bool net_transfer_collect(uint32_t round, int mode, uint16_t out[4], uint32_t needMask, uint64_t deadline_ms);
 bool net_round_ready(uint32_t round, uint32_t needMask);
 bool net_round_next_parent(uint32_t afterRound, uint32_t* outRound);   // M3: child adopts the parent's wire round
+bool net_collect_aborting(void);                                       // teardown predicate for the joiner park
+// libctru's svcSleepThread, declared locally so this mGBA TU needn't include <3ds.h> (matches how the
+// netlink transfer-plane fns above are forward-declared). s64 nanoseconds; ABI-identical to int64_t.
+extern void svcSleepThread(int64_t ns);
 
 #define IO_SIOMLT_SEND  0x95          // gba->memory.io[] halfword index for SIOMLT_SEND (0x0400012A)
 #define IO_IF           0x101         // GBA_REG_IF (0x0400_0202) >> 1 — interrupt-flag latch
@@ -299,6 +303,10 @@ bool net_round_next_parent(uint32_t afterRound, uint32_t* outRound);   // M3: ch
                                       // fires if the peer is truly gone (then the game errors cleanly).
 #define NET_ISR_GUARD_CYCLES 3000u    // local-clock floor before capture: > IRQ_DELAY(7)+ISR+DoSend; ~1 MULTI xfer
 #define NET_ISR_GUARD_CEIL   (NET_ISR_GUARD_CYCLES * 4u)  // hard ceiling: capture on time alone (pure-poll game can't wedge)
+// Joiner pacing park: when the ISR-proof gate is satisfied but the host's word for the next round hasn't
+// arrived, the joiner BLOCKS here (the worker never reaches run_loop) — pausing its emulated clock symmetric
+// to the host frozen in net_transfer_collect, so the slave can't accrue VBlanks-without-IRQ and trip LAG_SLAVE.
+#define NET_JOIN_PARK_SLICE_NS 200000LL   // 0.2 ms recheck (the RX thread merges the host word; ~RTT-bounded)
 
 static volatile uint32_t s_netRound = 0;   // shared per-link round; single writer = the parent seat
 static int s_netStartN = 0, s_netInjectN = 0, s_netOkN = 0, s_netToN = 0;   // M2.5 on-device diagnostics
@@ -526,22 +534,23 @@ void gbacore_net_log_dump(const char* path, int seat) {
 // reached only AFTER the prior round's RECEIVING-end IRQ fired AND the local clock advanced: we capture
 // the FRESH (post-ISR-armed) reply for round R and ship it, then arm completion. This is the proven
 // one-transfer latency (round R's reply is the value the ISR armed in response to round R-1).
-void gbacore_net_poll(GbaCore* g) {
+void gbacore_net_poll(GbaCore* g, volatile bool* alive) {
 	if (!g || !g->core) return;
 	struct NetDriver* nd = &g->netDriver;
-	if (nd->seat == 0) return;                       // the parent captures+sends in net_start
+	if (nd->seat == 0) return;                       // the parent captures+sends in net_start (loopback seat-0 too)
 	struct GBASIO* sio = nd->d.p;
 	struct GBA*    gba = sio->p;
 
-	// M3 RELIABLE: process rounds STRICTLY in order (next == lastInjected+1) — NEVER skip a gap. UDS reorders
-	// and drops, so a not-yet-arrived round must be WAITED for (the parent re-sends it via the collect loop),
-	// not skipped: the Gen-3 trade is a checksummed lockstep where a skipped/duplicated/reordered round
-	// corrupts the stream. The parent (FIX B) stamps exactly one sequential round per COMPLETED transfer, so
-	// lastInjected+1 is always the next wire round. (sentinel 0xFFFFFFFF + 1 = round 0.)
+	// M3 RELIABLE: process rounds STRICTLY in order (next == lastInjected+1) — NEVER skip a gap. The parent
+	// (FIX B) stamps exactly one sequential round per COMPLETED transfer. (sentinel 0xFFFFFFFF + 1 = round 0.)
 	uint32_t round = nd->lastInjectedRound + 1;
-	if (!net_round_ready(round, 1u << 0)) return;    // parent's word for THIS exact round not in yet -> wait
 
-	// --- ISR-PROOF GATE: do not capture round R's reply until round (R-1)'s SIO ISR has run+acked. ---
+	// --- ISR-PROOF GATE FIRST (purely LOCAL; independent of the host word — reads only isrWaitRound /
+	//     irqArmTime / io[IO_IF] / irqEvent, never `round`). If the prior round's SIO ISR has not yet run+armed
+	//     the next word, RETURN so the worker run_loops the CPU forward to take the IRQ + run the ISR. This is
+	//     the ONE place the joiner advances emulated time between transfers — bounded to the gate window (a
+	//     few hundred cycles, far under one VBlank). Moved AHEAD of the host-word check so the park below is
+	//     reached only when the next reply is already armed. ---
 	// All three signals are LOCAL (no peer access, no shared clock):
 	//   acked  = the handler write-1-to-cleared IF.SIO (io.c:518-520) after GBARaiseIRQ set it (gba.c:585)
 	//   fired  = irqEvent is no longer scheduled => the +7 IRQ was taken (gba.c:596-597)
@@ -563,6 +572,17 @@ void gbacore_net_poll(GbaCore* g) {
 		nd->isrWaitRound = 0xFFFFFFFFu;                           // satisfied for this round
 	} else {
 		s_netEdgeN++;   // round 0 (no prior ISR): the pre-seeded io[SIOMLT_SEND] is the correct first word
+	}
+
+	// --- GATE SATISFIED — PACE TO THE HOST. If the host's word for THIS round is not yet on the ring, BLOCK
+	//     (pause the emulated CPU) here until it arrives, instead of returning to the worker's run_loop. This
+	//     is the symmetric twin of the host frozen in net_transfer_collect: the joiner advances at most the
+	//     gate window per transfer, then parks — so it can't accrue VBlanks-without-IRQ and trip LAG_SLAVE.
+	//     Release on the SAME condition collect uses (*alive cleared on teardown, or net_collect_aborting());
+	//     we do NOT fabricate an idle word for a gone host — its own collect times out and errors cleanly. ---
+	while (!net_round_ready(round, 1u << 0)) {
+		if (!*alive || net_collect_aborting()) return;   // teardown / suspend / abort: release, inject nothing
+		svcSleepThread(NET_JOIN_PARK_SLICE_NS);          // 0.2 ms; the RX thread merges the host word
 	}
 
 	// --- SENDING: capture the POST-ISR-armed reply and ship it for THIS round, then arm completion. ---
