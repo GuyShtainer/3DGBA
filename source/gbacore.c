@@ -298,10 +298,12 @@ bool net_round_next_parent(uint32_t afterRound, uint32_t* outRound);   // M3: ch
 #define IO_SIOMLT_SEND  0x95          // gba->memory.io[] halfword index for SIOMLT_SEND (0x0400012A)
 #define IO_IF           0x101         // GBA_REG_IF (0x0400_0202) >> 1 — interrupt-flag latch
 #define SIO_IRQ_BIT     (1u << 7)     // GBA_IRQ_SIO == 7 (gba.h:32)
-#define NET_DEADLINE_MS 2000          // LINK-LOST timeout, not a per-word timeout. net_transfer_collect now
-                                      // re-sends our word every ~4ms and blocks for the GENUINE peer word, so
-                                      // routine UDS loss/reorder is recovered within ms; this deadline only
-                                      // fires if the peer is truly gone (then the game errors cleanly).
+#define NET_DEADLINE_MS 2000          // ESTABLISHED link-lost timeout: re-send recovers routine loss within ms,
+                                      // so this only fires if the peer is truly gone mid-trade (game errors cleanly).
+#define NET_ESTABLISH_MS 100          // PRE-establishment poll period: before the first successful exchange the host
+                                      // re-clocks the same round to poll for the slave; a SHORT deadline here means
+                                      // each no-reply poll frees the host in ~100ms (polls ~10x/s) instead of a 2s
+                                      // wall-clock freeze ("host stuck") while the joiner navigates to the cable club.
 #define NET_ISR_GUARD_CYCLES 3000u    // local-clock floor before capture: > IRQ_DELAY(7)+ISR+DoSend; ~1 MULTI xfer
 #define NET_ISR_GUARD_CEIL   (NET_ISR_GUARD_CYCLES * 4u)  // hard ceiling: capture on time alone (pure-poll game can't wedge)
 // JOINER PACING CAP: max emulated VBlanks the child may free-run past its last completed round before it
@@ -341,6 +343,8 @@ static int      s_netPaceBlkN = 0;
 typedef struct { uint32_t round; uint32_t frame; uint64_t tick; uint16_t w0, w1; uint8_t ok; } NetLogEntry;
 static NetLogEntry s_netLog[NETLOG_N];
 static uint32_t    s_netLogN = 0;   // total appended (ring index = % NETLOG_N)
+static uint32_t    s_netLastLogRound = 0; static bool s_netHaveLastLog = false;  // dedup repeated same-round timeout rows
+static bool        s_netEstablished = false;   // a real exchange has happened -> use the long loss-recovery deadline
 
 static bool     net_init   (struct GBASIODriver* d) { (void)d; return true; }
 static void     net_deinit (struct GBASIODriver* d) { (void)d; }
@@ -423,9 +427,14 @@ static bool net_start(struct GBASIODriver* d) {
 // one-transfer-stale word — exactly the bug. Both seats only RENDEZVOUS on collect (full needMask).
 static void net_finishMulti(struct GBASIODriver* d, uint16_t data[4]) {
 	struct NetDriver* nd = (struct NetDriver*)d;
-	bool ok = net_transfer_collect(nd->pendingRound, GBA_SIO_MULTI, data, nd->needMask, NET_DEADLINE_MS);
+	// PRE-establishment use a short poll deadline so a no-reply transfer frees the host in ~100ms (master
+	// polling for a late slave) instead of a 2s wall-clock freeze; once a real exchange has happened, use the
+	// long loss-recovery deadline. (collect freezes EMULATED time either way, so this only affects real-time feel.)
+	uint64_t deadline = s_netEstablished ? NET_DEADLINE_MS : NET_ESTABLISH_MS;
+	bool ok = net_transfer_collect(nd->pendingRound, GBA_SIO_MULTI, data, nd->needMask, deadline);
 	if (ok) {
 		s_netOkN++;                                 // diag: words converged (the reliable rendezvous resolved)
+		s_netEstablished = true;                    // first real exchange -> switch to the long deadline
 	} else {
 		s_netToN++;                                 // diag: collect gave up -> GENUINE link loss (peer truly gone)
 		if (s_netStallO < 0) s_netStallO = s_netOkN;   // PEAK diag: latch the o-value where progress first stalled
@@ -450,16 +459,22 @@ static void net_finishMulti(struct GBASIODriver* d, uint16_t data[4]) {
 	s_netRxC = data[1];                            // diag: the seat-1 word received
 	if (data[0] && data[0] != 0xFFFF) s_peakRxP = data[0];   // PEAK: latch last non-idle received seat-0 word
 	if (data[1] && data[1] != 0xFFFF) s_peakRxC = data[1];   // PEAK: ...and seat-1
-	// LINK LOG: append this completed round (both seats' agreed words + ok/timeout + the emulated VBlank
-	// stamp) to the ring. The frame stamp lets us read VBlanks-between-IRQs straight off consecutive rows.
-	uint32_t fr = (uint32_t)((struct GBA*)nd->d.p->p)->video.frameCounter;   // == core->frameCounter (gba->video.frameCounter)
-	s_netLog[s_netLogN % NETLOG_N].round = nd->pendingRound;
-	s_netLog[s_netLogN % NETLOG_N].frame = fr;
-	s_netLog[s_netLogN % NETLOG_N].tick  = net_mono_ticks();   // wall-clock stamp -> dt_us (emulated-divergence vs UDS air latency)
-	s_netLog[s_netLogN % NETLOG_N].w0    = data[0];
-	s_netLog[s_netLogN % NETLOG_N].w1    = data[1];
-	s_netLog[s_netLogN % NETLOG_N].ok    = (uint8_t)ok;
-	s_netLogN++;
+	// LINK LOG: append this completed round (both seats' agreed words + ok/timeout + emulated VBlank + wall-clock
+	// stamps). SKIP a repeated TIMEOUT row for the SAME round — the host now re-clocks round N while polling for a
+	// late slave, so without this the ring floods with identical round-N/ok=0 rows and wraps, evicting the very
+	// establishment moment the log exists to capture. A success or a NEW round always logs.
+	bool dupTimeout = (!ok && s_netHaveLastLog && s_netLastLogRound == nd->pendingRound);
+	if (!dupTimeout) {
+		uint32_t fr = (uint32_t)((struct GBA*)nd->d.p->p)->video.frameCounter;   // == core->frameCounter
+		s_netLog[s_netLogN % NETLOG_N].round = nd->pendingRound;
+		s_netLog[s_netLogN % NETLOG_N].frame = fr;
+		s_netLog[s_netLogN % NETLOG_N].tick  = net_mono_ticks();   // wall-clock -> dt_us (emulated-divergence vs UDS latency)
+		s_netLog[s_netLogN % NETLOG_N].w0    = data[0];
+		s_netLog[s_netLogN % NETLOG_N].w1    = data[1];
+		s_netLog[s_netLogN % NETLOG_N].ok    = (uint8_t)ok;
+		s_netLogN++;
+		s_netLastLogRound = nd->pendingRound; s_netHaveLastLog = true;
+	}
 	// RECEIVING-end bookkeeping (child only). GBASIOMultiplayerFinishTransfer (the very next _sioFinish call)
 	// writes SIOMULTI, clears Busy, and GBARaiseIRQ schedules irqEvent at +7. Stamp the LOCAL clock now and
 	// record that THIS round's ISR must complete before the next capture. Flip toward IDLE.
@@ -498,7 +513,8 @@ void gbacore_net_attach(GbaCore* g, int seat, int peers) {
 	// reset left the JOINER (seat 1) showing stale counters/log from a prior session (e.g. startN=720).
 	s_netStartN = s_netInjectN = s_netOkN = s_netToN = 0; s_netEdgeN = s_netForceN = 0;
 	s_netRxP = s_netRxC = 0; s_peakSentP = s_peakSentC = s_peakRxP = s_peakRxC = 0; s_netStallO = -1; s_netLogN = 0;
-	s_netVblMax = 0; s_netPaceBlkN = 0;   // PACING diag: peak VBlanks-between-IRQs + block count
+	s_netVblMax = 0; s_netPaceBlkN = 0;   // PACING diag (barrier reverted -> these stay 0; kept harmless)
+	s_netHaveLastLog = false; s_netLastLogRound = 0; s_netEstablished = false;   // fresh link: not yet established
 	if (seat == 0) s_netRound = 0;   // only the parent owns the shared per-link round counter
 	g->core->setPeripheral(g->core, mPERIPH_GBA_LINK_PORT, &nd->d);
 }
@@ -561,10 +577,10 @@ void gbacore_net_log_dump(const char* path, int seat) {
 	        seat == 0 ? "HOST" : "JOIN", seat, s_netStartN, s_netOkN, s_netToN, s_netEdgeN, s_netForceN, s_netStallO);
 	fprintf(f, "# peakSentP=%04X peakSentC=%04X peakRxP=%04X peakRxC=%04X\n",
 	        s_peakSentP, s_peakSentC, s_peakRxP, s_peakRxC);
-	// PACING: vblMax = peak emulated VBlanks between serial IRQs (the SLAVE-watchdog LAG measure; must stay
-	// < ~10), blkN = times the joiner blocked at the barrier, capK = the configured cap. HOST: both 0.
-	fprintf(f, "# pacing capK=%u vblMax=%lu paceBlkN=%d   (dvbl col below = emulated VBlanks since prev round)\n",
-	        (unsigned)NET_PACE_CAP_VBL, (unsigned long)s_netVblMax, s_netPaceBlkN);
+	// Joiner pacing barrier is REVERTED (the joiner free-runs again), so vblMax/paceBlkN are no longer measured.
+	// established=1 means at least one real word-exchange happened (round 0 crossed); established=0 with okN=0 is
+	// the round-0-never-crosses establishment failure. dvbl col = emulated VBlanks since prev round; dt_us = wall-clock us.
+	fprintf(f, "# established=%d  (joiner pacing barrier reverted -> free-run)\n", s_netEstablished ? 1 : 0);
 	// TRANSPORT/ESTABLISHMENT diag: when round 0 never completes (okN=0, no rows below), THIS line says why.
 	// JOIN: rxWords=0 => peer WORDs never arrived (host not TXing / peer unresolved); maxSeat0Round vs the HOST's
 	// hostRound => round-number DESYNC (host raced past round 0 on timeout while we still wait on it). HOST:
