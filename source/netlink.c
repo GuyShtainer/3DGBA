@@ -422,6 +422,13 @@ bool net_round_wait(u32 round, u32 needMask, u64 deadline_ms) {
 	}
 }
 
+// Monotonic system tick + a ticks->microseconds helper, exposed so the mGBA-side netlog (gbacore.c, which
+// stays libctru-free) can stamp each round's WALL-CLOCK and emit a dt_us column without including <3ds.h>.
+// Per-round wall time vs the emulated-VBlank (dvbl) stamp separates emulated-clock divergence (the LAG
+// hypothesis) from UDS air latency, and HOST dt_us vs JOIN dt_us shows which side is the slow one.
+u64 net_mono_ticks(void)        { return svcGetSystemTick(); }
+u32 net_ticks_to_us(u64 dticks) { return (u32)(dticks * 1000000ull / SYSCLOCK_ARM11); }
+
 // CHILD round-from-wire: scan the ring for the lowest parent-stamped (bit0 set) round strictly
 // greater than afterRound. The child injects exactly the round the PARENT stamped, so "round N" is
 // one wire-defined identity on both consoles; a dropped/extra parent round is skipped cleanly

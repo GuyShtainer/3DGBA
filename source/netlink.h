@@ -63,6 +63,9 @@ bool net_round_ready(u32 round, u32 needMask);   // non-blocking: is `round` pre
 // (s_collectAbort / link-down / deadline_ms link-lost). Copies no words — gates the joiner's emulated
 // clock to the parent's transfer pace so the Gen-3 SLAVE VBlank watchdog can't trip. Returns readiness.
 bool net_round_wait(u32 round, u32 needMask, u64 deadline_ms);
+// Monotonic tick + ticks->us, so the libctru-free mGBA TU (gbacore.c netlog) can stamp per-round wall-clock.
+u64  net_mono_ticks(void);
+u32  net_ticks_to_us(u64 dticks);
 
 // --- M3 wireless transport (real UDS) -------------------------------------------------------
 // net_link_start: arm wireless gameplay AFTER the lobby session is up. loopback=false, reset the

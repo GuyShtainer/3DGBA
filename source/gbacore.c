@@ -290,6 +290,8 @@ void net_transfer_send_word(int seat, int mode, uint32_t round, uint16_t send);
 bool net_transfer_collect(uint32_t round, int mode, uint16_t out[4], uint32_t needMask, uint64_t deadline_ms);
 bool net_round_ready(uint32_t round, uint32_t needMask);
 bool net_round_wait(uint32_t round, uint32_t needMask, uint64_t deadline_ms);  // joiner pacing barrier (blocks)
+uint64_t net_mono_ticks(void);                 // libctru wall-clock tick (for the netlog dt_us column)
+uint32_t net_ticks_to_us(uint64_t dticks);     // ticks -> microseconds
 bool net_round_next_parent(uint32_t afterRound, uint32_t* outRound);   // M3: child adopts the parent's wire round
 
 #define IO_SIOMLT_SEND  0x95          // gba->memory.io[] halfword index for SIOMLT_SEND (0x0400012A)
@@ -335,7 +337,7 @@ static int      s_netPaceBlkN = 0;
 // rounds' `frame` IS the emulated VBlanks-between-serial-IRQs (the SLAVE-watchdog measure), per round, and
 // host-vs-joiner frame deltas show whether the two emulated clocks stay phase-locked. Generally useful for
 // any future link-timing debugging, not just this fix.
-typedef struct { uint32_t round; uint32_t frame; uint16_t w0, w1; uint8_t ok; } NetLogEntry;
+typedef struct { uint32_t round; uint32_t frame; uint64_t tick; uint16_t w0, w1; uint8_t ok; } NetLogEntry;
 static NetLogEntry s_netLog[NETLOG_N];
 static uint32_t    s_netLogN = 0;   // total appended (ring index = % NETLOG_N)
 
@@ -360,6 +362,13 @@ static void     net_setMode(struct GBASIODriver* d, enum GBASIOMode m) {
 		struct GBASIO* sio = d->p;
 		sio->siocnt = GBASIOMultiplayerSetReady(sio->siocnt, 1);
 		sio->rcnt   = GBASIORegisterRCNTSetSd(sio->rcnt, 1);
+		// PACING: baseline the child's VBlank-cap clock at MULTI ENTRY (not at attach). The walk to the
+		// trade room advances frameCounter by hundreds of VBlanks while lastActiveFrame still holds the
+		// attach value; without this rebaseline the first inter-IRQ gap measured in gbacore_net_poll would
+		// latch s_netVblMax (the headline 'V'/vblMax pacing metric) to that huge stale delta. The block
+		// DECISION is unaffected (a huge gap blocks either way) — this only keeps the diagnostic honest.
+		struct NetDriver* nd = (struct NetDriver*)d;
+		if (nd->seat != 0) nd->lastActiveFrame = (uint32_t)((struct GBA*)d->p->p)->video.frameCounter;
 	}
 }
 static bool     net_handles(struct GBASIODriver* d, enum GBASIOMode m) { (void)d; return m == GBA_SIO_MULTI; }
@@ -438,6 +447,7 @@ static void net_finishMulti(struct GBASIODriver* d, uint16_t data[4]) {
 	uint32_t fr = (uint32_t)((struct GBA*)nd->d.p->p)->video.frameCounter;   // == core->frameCounter (gba->video.frameCounter)
 	s_netLog[s_netLogN % NETLOG_N].round = nd->pendingRound;
 	s_netLog[s_netLogN % NETLOG_N].frame = fr;
+	s_netLog[s_netLogN % NETLOG_N].tick  = net_mono_ticks();   // wall-clock stamp -> dt_us (emulated-divergence vs UDS air latency)
 	s_netLog[s_netLogN % NETLOG_N].w0    = data[0];
 	s_netLog[s_netLogN % NETLOG_N].w1    = data[1];
 	s_netLog[s_netLogN % NETLOG_N].ok    = (uint8_t)ok;
@@ -547,18 +557,19 @@ void gbacore_net_log_dump(const char* path, int seat) {
 	// < ~10), blkN = times the joiner blocked at the barrier, capK = the configured cap. HOST: both 0.
 	fprintf(f, "# pacing capK=%u vblMax=%lu paceBlkN=%d   (dvbl col below = emulated VBlanks since prev round)\n",
 	        (unsigned)NET_PACE_CAP_VBL, (unsigned long)s_netVblMax, s_netPaceBlkN);
-	fprintf(f, "# columns: idx,round,frame,dvbl,w0,w1,ok   (w0=seat0/parent word, w1=seat1/child word, ok=1/timeout=0)\n");
-	fprintf(f, "idx,round,frame,dvbl,w0,w1,ok\n");
+	fprintf(f, "# columns: idx,round,frame,dvbl,dt_us,w0,w1,ok   (dvbl=emulated VBlanks since prev round; dt_us=WALL-CLOCK us since prev round -> emulated-divergence vs UDS air latency; w0=seat0/parent w1=seat1/child; ok=1/timeout=0)\n");
+	fprintf(f, "idx,round,frame,dvbl,dt_us,w0,w1,ok\n");
 	uint32_t n    = (s_netLogN < NETLOG_N) ? s_netLogN : NETLOG_N;
 	uint32_t base = (s_netLogN < NETLOG_N) ? 0u : (s_netLogN % NETLOG_N);   // oldest retained entry
-	uint32_t prevFrame = 0; bool havePrev = false;
+	uint32_t prevFrame = 0; uint64_t prevTick = 0; bool havePrev = false;
 	for (uint32_t i = 0; i < n; i++) {
 		const NetLogEntry* e = &s_netLog[(base + i) % NETLOG_N];
-		uint32_t dvbl = havePrev ? (e->frame - prevFrame) : 0;   // VBlanks elapsed since the previous logged round
-		prevFrame = e->frame; havePrev = true;
-		fprintf(f, "%lu,%lu,%lu,%lu,%04X,%04X,%u\n",
+		uint32_t dvbl  = havePrev ? (e->frame - prevFrame) : 0;            // emulated VBlanks since the previous logged round
+		uint32_t dt_us = havePrev ? net_ticks_to_us(e->tick - prevTick) : 0;  // wall-clock us since the previous logged round
+		prevFrame = e->frame; prevTick = e->tick; havePrev = true;
+		fprintf(f, "%lu,%lu,%lu,%lu,%lu,%04X,%04X,%u\n",
 		        (unsigned long)i, (unsigned long)e->round, (unsigned long)e->frame,
-		        (unsigned long)dvbl, e->w0, e->w1, e->ok);
+		        (unsigned long)dvbl, (unsigned long)dt_us, e->w0, e->w1, e->ok);
 	}
 	fclose(f);
 }
