@@ -312,6 +312,14 @@ static uint16_t s_netRxP = 0, s_netRxC = 0;
 static uint16_t s_peakSentP = 0, s_peakSentC = 0;   // peak word the parent / child SENT
 static uint16_t s_peakRxP  = 0, s_peakRxC  = 0;     // peak word THIS console RECEIVED for seat 0 / seat 1
 static int      s_netStallO = -1;                   // o (okN) latched when a collect first MISSED; -1 = never
+// M3 on-device LINK LOG: a ring of the last NETLOG_N completed transfers (round + both seats' exchanged
+// words + ok/timeout), dumped to SD on link stop. Diff the HOST file against the JOIN file by round to
+// pinpoint the exact round where the two consoles' word streams diverge (the block-transfer checksum
+// break). Precise, offline, role-labelled — replaces squinting at HUD photos/video.
+#define NETLOG_N 1024
+typedef struct { uint32_t round; uint16_t w0, w1; uint8_t ok; } NetLogEntry;
+static NetLogEntry s_netLog[NETLOG_N];
+static uint32_t    s_netLogN = 0;   // total appended (ring index = % NETLOG_N)
 
 static bool     net_init   (struct GBASIODriver* d) { (void)d; return true; }
 static void     net_deinit (struct GBASIODriver* d) { (void)d; }
@@ -387,7 +395,8 @@ static bool net_start(struct GBASIODriver* d) {
 // one-transfer-stale word — exactly the bug. Both seats only RENDEZVOUS on collect (full needMask).
 static void net_finishMulti(struct GBASIODriver* d, uint16_t data[4]) {
 	struct NetDriver* nd = (struct NetDriver*)d;
-	if (net_transfer_collect(nd->pendingRound, GBA_SIO_MULTI, data, nd->needMask, NET_DEADLINE_MS)) {
+	bool ok = net_transfer_collect(nd->pendingRound, GBA_SIO_MULTI, data, nd->needMask, NET_DEADLINE_MS);
+	if (ok) {
 		s_netOkN++;                                 // diag: words converged
 		if (nd->seat == 0) {                        // FIX B: parent retires the round EXACTLY here, once per
 			__atomic_store_n(&s_netRound, nd->pendingRound + 1, __ATOMIC_RELEASE);  // completion -> no churn
@@ -407,6 +416,12 @@ static void net_finishMulti(struct GBASIODriver* d, uint16_t data[4]) {
 	s_netRxC = data[1];                            // diag: the seat-1 word received
 	if (data[0] && data[0] != 0xFFFF) s_peakRxP = data[0];   // PEAK: latch last non-idle received seat-0 word
 	if (data[1] && data[1] != 0xFFFF) s_peakRxC = data[1];   // PEAK: ...and seat-1
+	// LINK LOG: append this completed round (both seats' agreed words + ok/timeout) to the ring.
+	s_netLog[s_netLogN % NETLOG_N].round = nd->pendingRound;
+	s_netLog[s_netLogN % NETLOG_N].w0    = data[0];
+	s_netLog[s_netLogN % NETLOG_N].w1    = data[1];
+	s_netLog[s_netLogN % NETLOG_N].ok    = (uint8_t)ok;
+	s_netLogN++;
 	// RECEIVING-end bookkeeping (child only). GBASIOMultiplayerFinishTransfer (the very next _sioFinish call)
 	// writes SIOMULTI, clears Busy, and GBARaiseIRQ schedules irqEvent at +7. Stamp the LOCAL clock now and
 	// record that THIS round's ISR must complete before the next capture. Flip toward IDLE.
@@ -441,7 +456,8 @@ void gbacore_net_attach(GbaCore* g, int seat, int peers) {
 	nd->d.start = net_start;     nd->d.finishMultiplayer = net_finishMulti;
 	nd->d.finishNormal8 = net_finishN8;   nd->d.finishNormal32 = net_finishN32;
 	if (seat == 0) { s_netRound = 0; s_netStartN = s_netInjectN = s_netOkN = s_netToN = 0; s_netEdgeN = s_netForceN = 0;
-	                 s_netRxP = s_netRxC = 0; s_peakSentP = s_peakSentC = s_peakRxP = s_peakRxC = 0; s_netStallO = -1; }   // parent resets shared state
+	                 s_netRxP = s_netRxC = 0; s_peakSentP = s_peakSentC = s_peakRxP = s_peakRxC = 0; s_netStallO = -1;
+	                 s_netLogN = 0; }   // parent resets shared state + the link log
 	g->core->setPeripheral(g->core, mPERIPH_GBA_LINK_PORT, &nd->d);
 }
 
@@ -479,6 +495,28 @@ void gbacore_net_peak(unsigned* peakSentP, unsigned* peakSentC,
 	if (peakRxP)   *peakRxP   = s_peakRxP;
 	if (peakRxC)   *peakRxC   = s_peakRxC;
 	if (stallO)    *stallO    = s_netStallO;
+}
+
+// Dump the M3 link log (the ring of completed transfers) to an SD text file. Called on wireless link
+// stop. seat: 0 = HOST, 1 = JOIN (encoded in the header + the caller's filename). Both consoles' files
+// are then diffed by round to find where the two word streams diverge (the checksum break). w0 = the
+// seat-0/parent word, w1 = the seat-1/child word — identical on both consoles for a correct round.
+void gbacore_net_log_dump(const char* path, int seat) {
+	FILE* f = fopen(path, "w");
+	if (!f) return;
+	fprintf(f, "# 3DGBA netlog role=%s seat=%d startN=%d okN=%d toN=%d edge=%d force=%d stallO=%d\n",
+	        seat == 0 ? "HOST" : "JOIN", seat, s_netStartN, s_netOkN, s_netToN, s_netEdgeN, s_netForceN, s_netStallO);
+	fprintf(f, "# peakSentP=%04X peakSentC=%04X peakRxP=%04X peakRxC=%04X  (w0=seat0 word, w1=seat1 word, ok=1/timeout=0)\n",
+	        s_peakSentP, s_peakSentC, s_peakRxP, s_peakRxC);
+	fprintf(f, "idx,round,w0,w1,ok\n");
+	uint32_t n    = (s_netLogN < NETLOG_N) ? s_netLogN : NETLOG_N;
+	uint32_t base = (s_netLogN < NETLOG_N) ? 0u : (s_netLogN % NETLOG_N);   // oldest retained entry
+	for (uint32_t i = 0; i < n; i++) {
+		const NetLogEntry* e = &s_netLog[(base + i) % NETLOG_N];
+		fprintf(f, "%lu,%lu,%04X,%04X,%u\n",
+		        (unsigned long)i, (unsigned long)e->round, e->w0, e->w1, e->ok);
+	}
+	fclose(f);
 }
 
 // CHILD-side per-slice hook (no-op for the parent). MUST run on this core's OWN worker thread (it

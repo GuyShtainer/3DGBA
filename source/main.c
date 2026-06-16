@@ -1045,6 +1045,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	bool linkOn = false;
 	bool netOn  = false;   // M2.5 net link (loopback) active — mutually exclusive with linkOn
 	bool wlOn   = false;   // M3 WIRELESS link active (one core + real radio); mutually exclusive with linkOn/netOn
+	int  wlSeat = -1;      // this console's seat while wlOn (0 = host, 1 = joiner) — for the SD log filename
 	int  wlRtt  = -1, wlDrops = 0;   // RX-thread-measured link RTT/drops for the HUD
 	int  touchMode = TOUCH_OFF;   // 0 off / 1 gamepad / 2 smart (touch drives the bottom game)
 	bool fsOn = false;      // frameskip the unfocused game to free heavy-scene budget
@@ -1249,6 +1250,8 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 						net_link_get_rtt(&wlRtt, &wlDrops);      // RX-thread-measured RTT for the HUD
 						if (!net_session_active()) {             // peer/session dropped (e.g. resumed after HOME) -> tear down
 							emuA.netLinked = false; LightEvent_Wait(&emuA.done);
+							{ char lp[48]; snprintf(lp, sizeof lp, "sdmc:/3DGBA_net_%s.txt", wlSeat == 0 ? "HOST" : "JOIN");
+							  gbacore_net_log_dump(lp, wlSeat); }   // dump the link log to SD before detaching
 							gbacore_net_detach(emuA.core); net_link_stop();
 							g_netWorker = NULL; emuB.paused = false; wlOn = false;
 							snprintf(status, sizeof status, "Wireless link closed");
@@ -1405,6 +1408,8 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 				else if (menuSel == MENU_WIRELESS_IDX) {        // wireless multi-console lobby (M1) -> M3 link
 					if (wlOn) {                                  // already linked -> stop the wireless link
 						emuA.netLinked = false; LightEvent_Wait(&emuA.done);
+						{ char lp[48]; snprintf(lp, sizeof lp, "sdmc:/3DGBA_net_%s.txt", wlSeat == 0 ? "HOST" : "JOIN");
+						  gbacore_net_log_dump(lp, wlSeat); }   // dump the per-round link log to SD before detaching
 						gbacore_net_detach(emuA.core); net_link_stop(); net_session_close();
 						g_netWorker = NULL; emuB.paused = false; wlOn = false;
 						snprintf(status, sizeof status, "Wireless: off");
@@ -1421,7 +1426,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 								gbacore_net_attach(emuA.core, seat, 1);   // ONE participating core; peers=1; needMask=0x3
 								emuA.netLinked = true;             // emuB.netLinked stays FALSE (parked, core freed)
 								g_netWorker = &emuA;               // the apt hook can now stop this worker on HOME/suspend
-								wlOn = true;
+								wlOn = true; wlSeat = seat;        // remember our seat for the SD log filename
 								LightEvent_Signal(&emuA.go);       // kick ONLY emuA into the net free-run
 								menuOpen = false;
 								snprintf(status, sizeof status, "Wireless: ON (%s)", seat == 0 ? "host" : "join");
@@ -1701,6 +1706,8 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		emuA.netLinked = false;               // the worker leaves the net free-run once its collect returns
 		net_link_stop();                      // join the RX thread + abort rounds (any blocked collect returns now)
 		LightEvent_Wait(&emuA.done);          // wait for emuA's worker to actually exit the net loop before detaching
+		{ char lp[48]; snprintf(lp, sizeof lp, "sdmc:/3DGBA_net_%s.txt", wlSeat == 0 ? "HOST" : "JOIN");
+		  gbacore_net_log_dump(lp, wlSeat); }   // dump the per-round link log to SD before detaching
 		gbacore_net_detach(emuA.core);
 		net_session_close();
 		g_netWorker = NULL;
