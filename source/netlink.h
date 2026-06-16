@@ -66,6 +66,7 @@ bool net_round_wait(u32 round, u32 needMask, u64 deadline_ms);
 // Monotonic tick + ticks->us, so the libctru-free mGBA TU (gbacore.c netlog) can stamp per-round wall-clock.
 u64  net_mono_ticks(void);
 u32  net_ticks_to_us(u64 dticks);
+bool net_older_than_ms(u64 sinceTick, u32 ms);   // u64-safe wall-clock age test (joiner pacing gate)
 
 // --- M3 wireless transport (real UDS) -------------------------------------------------------
 // net_link_start: arm wireless gameplay AFTER the lobby session is up. loopback=false, reset the

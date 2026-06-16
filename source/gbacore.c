@@ -292,6 +292,7 @@ bool net_round_ready(uint32_t round, uint32_t needMask);
 bool net_round_wait(uint32_t round, uint32_t needMask, uint64_t deadline_ms);  // joiner pacing barrier (blocks)
 uint64_t net_mono_ticks(void);                 // libctru wall-clock tick (for the netlog dt_us column)
 uint32_t net_ticks_to_us(uint64_t dticks);     // ticks -> microseconds
+bool net_older_than_ms(uint64_t sinceTick, uint32_t ms);   // u64-safe wall-clock age test (pacing gate)
 void net_link_get_stats(int* rxWordN, int* wordSendFails, int* busyN, int* peerUp, int* maxSeat0Round);  // establishment diag
 bool net_round_next_parent(uint32_t afterRound, uint32_t* outRound);   // M3: child adopts the parent's wire round
 
@@ -521,7 +522,7 @@ void gbacore_net_attach(GbaCore* g, int seat, int peers) {
 	// reset left the JOINER (seat 1) showing stale counters/log from a prior session (e.g. startN=720).
 	s_netStartN = s_netInjectN = s_netOkN = s_netToN = 0; s_netEdgeN = s_netForceN = 0;
 	s_netRxP = s_netRxC = 0; s_peakSentP = s_peakSentC = s_peakRxP = s_peakRxC = 0; s_netStallO = -1; s_netLogN = 0;
-	s_netVblMax = 0; s_netPaceBlkN = 0;   // PACING diag (barrier reverted -> these stay 0; kept harmless)
+	s_netVblMax = 0; s_netPaceBlkN = 0;   // PACING diag: peak emulated-VBlanks-between-IRQs + paced-wait count (active-gated)
 	s_netHaveLastLog = false; s_netLastLogRound = 0; s_netEstablished = false; s_netLastInjectTick = 0;   // fresh link
 	if (seat == 0) s_netRound = 0;   // only the parent owns the shared per-link round counter
 	g->core->setPeripheral(g->core, mPERIPH_GBA_LINK_PORT, &nd->d);
@@ -642,8 +643,7 @@ void gbacore_net_poll(GbaCore* g) {
 		// (navigation / pre-establishment / a mid-trade pause) FREE-RUN — never freeze waiting for a host that
 		// isn't clocking (that was the cable-club freeze). Wall-clock gate (not emulated frames): a block freezes
 		// emulated time, so a frame gate would never age out and would re-freeze us.
-		if (s_netLastInjectTick == 0 ||
-		    net_ticks_to_us(net_mono_ticks() - s_netLastInjectTick) > NET_ACTIVE_MS * 1000u) return;  // not active -> free-run
+		if (s_netLastInjectTick == 0 || net_older_than_ms(s_netLastInjectTick, NET_ACTIVE_MS)) return;  // not active -> free-run
 		uint32_t vbl = (uint32_t)(g->core->frameCounter(g->core) - nd->lastActiveFrame);
 		if (vbl > s_netVblMax) s_netVblMax = vbl;                         // diag: peak emulated VBlanks between serial IRQs
 		s_netPaceBlkN++;                                                  // diag: paced waits during active transfers

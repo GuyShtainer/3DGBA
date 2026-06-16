@@ -433,6 +433,11 @@ bool net_round_wait(u32 round, u32 needMask, u64 deadline_ms) {
 // hypothesis) from UDS air latency, and HOST dt_us vs JOIN dt_us shows which side is the slow one.
 u64 net_mono_ticks(void)        { return svcGetSystemTick(); }
 u32 net_ticks_to_us(u64 dticks) { return (u32)(dticks * 1000000ull / SYSCLOCK_ARM11); }
+// True if more than `ms` of wall-clock has elapsed since `sinceTick`. Compared in u64 ticks (no u32-microsecond
+// overflow — net_ticks_to_us wraps after ~71min), so the joiner pacing gate stays correct over any session.
+bool net_older_than_ms(u64 sinceTick, u32 ms) {
+	return (svcGetSystemTick() - sinceTick) > (u64)ms * (SYSCLOCK_ARM11 / 1000ull);
+}
 
 // CHILD round-from-wire: scan the ring for the lowest parent-stamped (bit0 set) round strictly
 // greater than afterRound. The child injects exactly the round the PARENT stamped, so "round N" is
