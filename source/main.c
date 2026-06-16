@@ -88,8 +88,11 @@ static void apt_hook(APT_HookType t, void* p) {
 // other (compare before/after). Role-named (HOST=seat 0 / JOIN=seat 1) + MMDD_HHMMSS.
 static void wl_dump(int seat) {
 	time_t tt = time(NULL); struct tm* lt = localtime(&tt);
-	char lp[80];
-	snprintf(lp, sizeof lp, "sdmc:/cias/3DGBA_net_%s_%02d%02d_%02d%02d%02d.txt",
+	char lp[96];
+	// All logs live in sdmc:/cias/netlog/ so the whole folder drags-and-drops in one go. Timestamped +
+	// role-named (HOST=seat 0 / JOIN=seat 1) so successive runs never overwrite. (gbacore_net_log_dump
+	// mkdir's the folder.)
+	snprintf(lp, sizeof lp, "sdmc:/cias/netlog/3DGBA_net_%s_%02d%02d_%02d%02d%02d.txt",
 	         seat == 0 ? "HOST" : "JOIN",
 	         lt ? lt->tm_mon + 1 : 0, lt ? lt->tm_mday : 0,
 	         lt ? lt->tm_hour : 0, lt ? lt->tm_min : 0, lt ? lt->tm_sec : 0);
@@ -1490,26 +1493,29 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		C2D_Text tHudTop, tHudBot, tHudStat;
 		const char* topName = swapped ? nameB : nameA;
 		const char* botName = swapped ? nameA : nameB;
-		char hudStat[56];
+		char hudStat[72];
 		if (hudMode) {
 			time_t tt = time(NULL);
 			struct tm* lt = localtime(&tt);
 			if (netOn || wlOn) {   // net-link diag: PEAK sent/received words + start/ok/timeout/stall
 				int ns, ni, no, nt, ne, nf; unsigned nr, pw, cw, rxp, rxc;
 				unsigned psp, psc, prp, prc; int stallO;
+				unsigned vblMax, capK; int paceBlk;
 				gbacore_net_diag(&ns, &ni, &no, &nt, &nr, &pw, &cw, &ne, &nf, &rxp, &rxc);
 				gbacore_net_peak(&psp, &psc, &prp, &prc, &stallO);
-				(void)ni; (void)ne; (void)nr; (void)pw; (void)cw; (void)rxp; (void)rxc; (void)psc; (void)prc; (void)wlDrops;
+				gbacore_net_pace(&vblMax, &paceBlk, &capK);
+				(void)ni; (void)ne; (void)nr; (void)pw; (void)cw; (void)rxp; (void)rxc; (void)psc; (void)prc; (void)wlDrops; (void)capK;
 				// P = peak word WE SENT for seat 0 (watch B9A0->8FFF then BBBB/8888 on the HOST);
 				// R = peak word WE RECEIVED for seat 0 (watch the same on the JOINER); s/o = starts/oks
 				// (s~=o now means no round churn); to = timeouts; ST = o-value where a collect first MISSED
-				// (-1 = never). A single photo shows how far the protocol got. Fits char[56].
+				// (-1 = never). V = peak emulated VBlanks between serial IRQs (the JOINER pacing/LAG measure;
+				// must stay < ~10 or the SLAVE watchdog trips); b = times the joiner blocked at the barrier.
 				if (wlOn)
-					snprintf(hudStat, sizeof hudStat, "N P%04X R%04X s%d o%d to%d ST%d rtt%d",
-					         psp, prp, ns, no, nt, stallO, wlRtt);
+					snprintf(hudStat, sizeof hudStat, "N P%04X R%04X s%d o%d to%d ST%d V%u b%d rtt%d",
+					         psp, prp, ns, no, nt, stallO, vblMax, paceBlk, wlRtt);
 				else
-					snprintf(hudStat, sizeof hudStat, "N P%04X R%04X s%d o%d to%d ST%d",
-					         psp, prp, ns, no, nt, stallO);
+					snprintf(hudStat, sizeof hudStat, "N P%04X R%04X s%d o%d to%d ST%d V%u b%d",
+					         psp, prp, ns, no, nt, stallO, vblMax, paceBlk);
 			} else
 			snprintf(hudStat, sizeof hudStat, "%s %dfps %dms %02d:%02d %d/5 f%d d%.1f c%d,%d",
 			         linkOn ? "LINK" : AUDIO_NAMES[audioMode], fps, showMs, lt ? lt->tm_hour : 0, lt ? lt->tm_min : 0, batLvl, depth3d.nfg, depth3d.maxd, depth3d.camX, depth3d.camY);

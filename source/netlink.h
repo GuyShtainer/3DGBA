@@ -59,6 +59,10 @@ void net_transfer_reset(void);
 void net_transfer_send_word(int seat, int mode, u32 round, u16 send);
 bool net_transfer_collect(u32 round, int mode, u16 out[4], u32 needMask, u64 deadline_ms);
 bool net_round_ready(u32 round, u32 needMask);   // non-blocking: is `round` present with needMask seats in?
+// JOINER PACING BARRIER: block until `round` is present (needMask seats) or an escape fires
+// (s_collectAbort / link-down / deadline_ms link-lost). Copies no words — gates the joiner's emulated
+// clock to the parent's transfer pace so the Gen-3 SLAVE VBlank watchdog can't trip. Returns readiness.
+bool net_round_wait(u32 round, u32 needMask, u64 deadline_ms);
 
 // --- M3 wireless transport (real UDS) -------------------------------------------------------
 // net_link_start: arm wireless gameplay AFTER the lobby session is up. loopback=false, reset the

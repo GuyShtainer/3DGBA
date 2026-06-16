@@ -403,6 +403,25 @@ bool net_round_ready(u32 round, u32 needMask) {
 	return ready;
 }
 
+// PACING BARRIER (joiner side): block until `round` is present with needMask seats, OR an escape
+// fires. Mirrors net_transfer_collect's escapes exactly (s_collectAbort, !s_up, deadline) so a gone
+// peer / HOME-close never hangs and the RX thread's re-send delivers a dropped word while we wait.
+// Copies NO words — the subsequent net_finishMulti->collect reads them; this only gates the joiner's
+// emulated clock to the parent's transfer pace (freezing the emulated clock keeps the Gen-3 SLAVE
+// VBlank watchdog satisfied). Returns true if the round became ready, false on abort/link-down/
+// deadline (the caller then free-runs and net_transfer_collect's link-lost machinery reports the loss).
+bool net_round_wait(u32 round, u32 needMask, u64 deadline_ms) {
+	net_rounds_init();
+	if (net_round_ready(round, needMask)) return true;
+	u64 deadlineTick = svcGetSystemTick() + (u64)deadline_ms * (SYSCLOCK_ARM11 / 1000ull);
+	for (;;) {
+		if (s_collectAbort || !s_up) return false;                          // teardown / link down
+		if ((s64)deadlineTick - (s64)svcGetSystemTick() <= 0) return false; // genuine link-lost
+		svcSleepThread(1000000ll);                                          // 1ms poll (RX thread merges/re-sends)
+		if (net_round_ready(round, needMask)) return true;
+	}
+}
+
 // CHILD round-from-wire: scan the ring for the lowest parent-stamped (bit0 set) round strictly
 // greater than afterRound. The child injects exactly the round the PARENT stamped, so "round N" is
 // one wire-defined identity on both consoles; a dropped/extra parent round is skipped cleanly

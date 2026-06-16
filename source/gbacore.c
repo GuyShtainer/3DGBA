@@ -64,6 +64,7 @@ struct NetDriver {
 	enum NetChildPhase phase;    // child only; NET_IDLE on the parent
 	uint32_t isrWaitRound;       // round whose SIO ISR must finish before we capture next; 0xFFFFFFFF = none
 	uint32_t irqArmTime;         // local cycle stamp when that round's RECEIVING-end armed the IRQ
+	uint32_t lastActiveFrame;    // child PACING: emulated frame (VBlank) counter at the last injected round
 };
 
 struct GbaCore {
@@ -288,6 +289,7 @@ void gbacore_link_detach(GbaCore* g) {
 void net_transfer_send_word(int seat, int mode, uint32_t round, uint16_t send);
 bool net_transfer_collect(uint32_t round, int mode, uint16_t out[4], uint32_t needMask, uint64_t deadline_ms);
 bool net_round_ready(uint32_t round, uint32_t needMask);
+bool net_round_wait(uint32_t round, uint32_t needMask, uint64_t deadline_ms);  // joiner pacing barrier (blocks)
 bool net_round_next_parent(uint32_t afterRound, uint32_t* outRound);   // M3: child adopts the parent's wire round
 
 #define IO_SIOMLT_SEND  0x95          // gba->memory.io[] halfword index for SIOMLT_SEND (0x0400012A)
@@ -299,6 +301,11 @@ bool net_round_next_parent(uint32_t afterRound, uint32_t* outRound);   // M3: ch
                                       // fires if the peer is truly gone (then the game errors cleanly).
 #define NET_ISR_GUARD_CYCLES 3000u    // local-clock floor before capture: > IRQ_DELAY(7)+ISR+DoSend; ~1 MULTI xfer
 #define NET_ISR_GUARD_CEIL   (NET_ISR_GUARD_CYCLES * 4u)  // hard ceiling: capture on time alone (pure-poll game can't wedge)
+// JOINER PACING CAP: max emulated VBlanks the child may free-run past its last completed round before it
+// BLOCKS for the parent's next word. Keeps the child's emulated clock within K VBlanks of the parent so the
+// Gen-3 SLAVE watchdog (LinkVSync trips at >10 emulated VBlanks without a serial IRQ) can never fire; K well
+// under 10 leaves margin for UDS RTT jitter. A small K free-run absorbs jitter without stuttering every xfer.
+#define NET_PACE_CAP_VBL  4u
 
 static volatile uint32_t s_netRound = 0;   // shared per-link round; single writer = the parent seat
 static int s_netStartN = 0, s_netInjectN = 0, s_netOkN = 0, s_netToN = 0;   // M2.5 on-device diagnostics
@@ -313,12 +320,22 @@ static uint16_t s_netRxP = 0, s_netRxC = 0;
 static uint16_t s_peakSentP = 0, s_peakSentC = 0;   // peak word the parent / child SENT
 static uint16_t s_peakRxP  = 0, s_peakRxC  = 0;     // peak word THIS console RECEIVED for seat 0 / seat 1
 static int      s_netStallO = -1;                   // o (okN) latched when a collect first MISSED; -1 = never
+// JOINER PACING diag: peak emulated VBlanks the child free-ran past its last completed round (i.e. between
+// serial IRQs). This is the DIRECT measure of the LAG hypothesis — if it stays < the SLAVE watchdog limit
+// (>10) the divergence that tripped "communication error" is gone. s_netPaceBlkN = times the child blocked.
+static uint32_t s_netVblMax = 0;
+static int      s_netPaceBlkN = 0;
 // M3 on-device LINK LOG: a ring of the last NETLOG_N completed transfers (round + both seats' exchanged
 // words + ok/timeout), dumped to SD on link stop. Diff the HOST file against the JOIN file by round to
 // pinpoint the exact round where the two consoles' word streams diverge (the block-transfer checksum
 // break). Precise, offline, role-labelled — replaces squinting at HUD photos/video.
 #define NETLOG_N 1024
-typedef struct { uint32_t round; uint16_t w0, w1; uint8_t ok; } NetLogEntry;
+// Per completed transfer: the round id, both seats' exchanged words, ok/timeout, AND the emulated VBlank
+// (frame) counter at retire. `frame` is the rich datum the pacing work needs — the gap between consecutive
+// rounds' `frame` IS the emulated VBlanks-between-serial-IRQs (the SLAVE-watchdog measure), per round, and
+// host-vs-joiner frame deltas show whether the two emulated clocks stay phase-locked. Generally useful for
+// any future link-timing debugging, not just this fix.
+typedef struct { uint32_t round; uint32_t frame; uint16_t w0, w1; uint8_t ok; } NetLogEntry;
 static NetLogEntry s_netLog[NETLOG_N];
 static uint32_t    s_netLogN = 0;   // total appended (ring index = % NETLOG_N)
 
@@ -416,8 +433,11 @@ static void net_finishMulti(struct GBASIODriver* d, uint16_t data[4]) {
 	s_netRxC = data[1];                            // diag: the seat-1 word received
 	if (data[0] && data[0] != 0xFFFF) s_peakRxP = data[0];   // PEAK: latch last non-idle received seat-0 word
 	if (data[1] && data[1] != 0xFFFF) s_peakRxC = data[1];   // PEAK: ...and seat-1
-	// LINK LOG: append this completed round (both seats' agreed words + ok/timeout) to the ring.
+	// LINK LOG: append this completed round (both seats' agreed words + ok/timeout + the emulated VBlank
+	// stamp) to the ring. The frame stamp lets us read VBlanks-between-IRQs straight off consecutive rows.
+	uint32_t fr = (uint32_t)((struct GBA*)nd->d.p->p)->video.frameCounter;   // == core->frameCounter (gba->video.frameCounter)
 	s_netLog[s_netLogN % NETLOG_N].round = nd->pendingRound;
+	s_netLog[s_netLogN % NETLOG_N].frame = fr;
 	s_netLog[s_netLogN % NETLOG_N].w0    = data[0];
 	s_netLog[s_netLogN % NETLOG_N].w1    = data[1];
 	s_netLog[s_netLogN % NETLOG_N].ok    = (uint8_t)ok;
@@ -448,6 +468,7 @@ void gbacore_net_attach(GbaCore* g, int seat, int peers) {
 	nd->phase = NET_IDLE;
 	nd->isrWaitRound = 0xFFFFFFFFu;
 	nd->irqArmTime = 0;
+	nd->lastActiveFrame = g->core->frameCounter(g->core);   // PACING baseline = current emulated VBlank count
 	nd->d.init = net_init;       nd->d.deinit = net_deinit;     nd->d.reset = net_reset;
 	nd->d.driverId = net_id;     nd->d.loadState = net_load;    nd->d.saveState = net_save;
 	nd->d.setMode = net_setMode; nd->d.handlesMode = net_handles;
@@ -459,6 +480,7 @@ void gbacore_net_attach(GbaCore* g, int seat, int peers) {
 	// reset left the JOINER (seat 1) showing stale counters/log from a prior session (e.g. startN=720).
 	s_netStartN = s_netInjectN = s_netOkN = s_netToN = 0; s_netEdgeN = s_netForceN = 0;
 	s_netRxP = s_netRxC = 0; s_peakSentP = s_peakSentC = s_peakRxP = s_peakRxC = 0; s_netStallO = -1; s_netLogN = 0;
+	s_netVblMax = 0; s_netPaceBlkN = 0;   // PACING diag: peak VBlanks-between-IRQs + block count
 	if (seat == 0) s_netRound = 0;   // only the parent owns the shared per-link round counter
 	g->core->setPeripheral(g->core, mPERIPH_GBA_LINK_PORT, &nd->d);
 }
@@ -499,25 +521,44 @@ void gbacore_net_peak(unsigned* peakSentP, unsigned* peakSentC,
 	if (stallO)    *stallO    = s_netStallO;
 }
 
+// JOINER PACING diagnostic (HUD + log). vblMax = peak emulated VBlanks the child free-ran between serial
+// IRQs (the LAG measure; must stay < the SLAVE watchdog's >10 limit). blkN = times the child blocked at the
+// pacing barrier. capK = the configured VBlank cap. On the HOST these stay 0 (only the joiner paces).
+void gbacore_net_pace(unsigned* vblMax, int* blkN, unsigned* capK) {
+	if (vblMax) *vblMax = s_netVblMax;
+	if (blkN)   *blkN   = s_netPaceBlkN;
+	if (capK)   *capK   = NET_PACE_CAP_VBL;
+}
+
 // Dump the M3 link log (the ring of completed transfers) to an SD text file. Called on wireless link
 // stop. seat: 0 = HOST, 1 = JOIN (encoded in the header + the caller's filename). Both consoles' files
 // are then diffed by round to find where the two word streams diverge (the checksum break). w0 = the
 // seat-0/parent word, w1 = the seat-1/child word — identical on both consoles for a correct round.
 void gbacore_net_log_dump(const char* path, int seat) {
-	mkdir("sdmc:/cias", 0777);   // ensure the log dir exists (ignored if already present)
+	mkdir("sdmc:/cias", 0777);          // ensure the parent dir exists (ignored if already present)
+	mkdir("sdmc:/cias/netlog", 0777);   // ...and the dedicated netlog folder (drag-and-drop the whole folder)
 	FILE* f = fopen(path, "w");
 	if (!f) return;
 	fprintf(f, "# 3DGBA netlog role=%s seat=%d startN=%d okN=%d toN=%d edge=%d force=%d stallO=%d\n",
 	        seat == 0 ? "HOST" : "JOIN", seat, s_netStartN, s_netOkN, s_netToN, s_netEdgeN, s_netForceN, s_netStallO);
-	fprintf(f, "# peakSentP=%04X peakSentC=%04X peakRxP=%04X peakRxC=%04X  (w0=seat0 word, w1=seat1 word, ok=1/timeout=0)\n",
+	fprintf(f, "# peakSentP=%04X peakSentC=%04X peakRxP=%04X peakRxC=%04X\n",
 	        s_peakSentP, s_peakSentC, s_peakRxP, s_peakRxC);
-	fprintf(f, "idx,round,w0,w1,ok\n");
+	// PACING: vblMax = peak emulated VBlanks between serial IRQs (the SLAVE-watchdog LAG measure; must stay
+	// < ~10), blkN = times the joiner blocked at the barrier, capK = the configured cap. HOST: both 0.
+	fprintf(f, "# pacing capK=%u vblMax=%lu paceBlkN=%d   (dvbl col below = emulated VBlanks since prev round)\n",
+	        (unsigned)NET_PACE_CAP_VBL, (unsigned long)s_netVblMax, s_netPaceBlkN);
+	fprintf(f, "# columns: idx,round,frame,dvbl,w0,w1,ok   (w0=seat0/parent word, w1=seat1/child word, ok=1/timeout=0)\n");
+	fprintf(f, "idx,round,frame,dvbl,w0,w1,ok\n");
 	uint32_t n    = (s_netLogN < NETLOG_N) ? s_netLogN : NETLOG_N;
 	uint32_t base = (s_netLogN < NETLOG_N) ? 0u : (s_netLogN % NETLOG_N);   // oldest retained entry
+	uint32_t prevFrame = 0; bool havePrev = false;
 	for (uint32_t i = 0; i < n; i++) {
 		const NetLogEntry* e = &s_netLog[(base + i) % NETLOG_N];
-		fprintf(f, "%lu,%lu,%04X,%04X,%u\n",
-		        (unsigned long)i, (unsigned long)e->round, e->w0, e->w1, e->ok);
+		uint32_t dvbl = havePrev ? (e->frame - prevFrame) : 0;   // VBlanks elapsed since the previous logged round
+		prevFrame = e->frame; havePrev = true;
+		fprintf(f, "%lu,%lu,%lu,%lu,%04X,%04X,%u\n",
+		        (unsigned long)i, (unsigned long)e->round, (unsigned long)e->frame,
+		        (unsigned long)dvbl, e->w0, e->w1, e->ok);
 	}
 	fclose(f);
 }
@@ -541,7 +582,23 @@ void gbacore_net_poll(GbaCore* g) {
 	// corrupts the stream. The parent (FIX B) stamps exactly one sequential round per COMPLETED transfer, so
 	// lastInjected+1 is always the next wire round. (sentinel 0xFFFFFFFF + 1 = round 0.)
 	uint32_t round = nd->lastInjectedRound + 1;
-	if (!net_round_ready(round, 1u << 0)) return;    // parent's word for THIS exact round not in yet -> wait
+	if (!net_round_ready(round, 1u << 0)) {
+		// --- JOINER PACING BARRIER: the parent's word for THIS round isn't in yet. ---
+		// The bug we're fixing: the host blocks its emulated CPU per transfer (net_transfer_collect) so it
+		// advances ~per-transfer (slow), while the joiner here used to just `return` and let the worker loop
+		// step the CPU anyway — free-running its emulated clock between transfers until it raced > the Gen-3
+		// SLAVE VBlank watchdog (>10 emulated VBlanks w/o a serial IRQ) and tripped "communication error".
+		// Fix: give the joiner the SAME per-transfer barrier the host has, but GATED so it engages ONLY during
+		// an active MULTI link and only past a small VBlank cap (so the overworld/menus free-run — the reverted
+		// park's deadlock was from blocking unconditionally, before any transfer existed).
+		if (sio->mode != GBA_SIO_MULTI) return;               // not in a link (overworld/menus) -> free-run, gate transparent
+		uint32_t vbl = (uint32_t)(g->core->frameCounter(g->core) - nd->lastActiveFrame);
+		if (vbl > s_netVblMax) s_netVblMax = vbl;             // diag: peak emulated VBlanks between serial IRQs (the LAG measure)
+		if (vbl < NET_PACE_CAP_VBL) return;                   // under cap -> free-run a little to absorb UDS RTT jitter
+		s_netPaceBlkN++;                                      // over cap -> BLOCK for the parent's word (freezes our emulated clock)
+		if (!net_round_wait(round, 1u << 0, NET_DEADLINE_MS)) return;  // timed out/aborted -> free-run; collect reports the loss
+		// word arrived -> fall through and capture+inject this round exactly as if it had been ready
+	}
 
 	// --- ISR-PROOF GATE: do not capture round R's reply until round (R-1)'s SIO ISR has run+acked. ---
 	// All three signals are LOCAL (no peer access, no shared clock):
@@ -577,6 +634,7 @@ void gbacore_net_poll(GbaCore* g) {
 	nd->pendingRound = round;
 	nd->lastInjectedRound = round;
 	nd->phase = NET_RECEIVING;                       // completion delivers+IRQs, then net_finishMulti flips to IDLE
+	nd->lastActiveFrame = g->core->frameCounter(g->core);  // PACING: reset the VBlank-cap baseline at each completed round
 	s_netInjectN++;                                  // diag: the child captured+armed a parent-initiated round
 	int32_t cyc = GBASIOTransferCycles(GBA_SIO_MULTI, sio->siocnt, nd->peers);
 	mTimingDeschedule(&gba->timing, &sio->completeEvent);
