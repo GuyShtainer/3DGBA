@@ -535,8 +535,8 @@ void gbacore_net_pace(unsigned* vblMax, int* blkN, unsigned* capK) {
 // are then diffed by round to find where the two word streams diverge (the checksum break). w0 = the
 // seat-0/parent word, w1 = the seat-1/child word — identical on both consoles for a correct round.
 void gbacore_net_log_dump(const char* path, int seat) {
-	mkdir("sdmc:/cias", 0777);          // ensure the parent dir exists (ignored if already present)
-	mkdir("sdmc:/cias/netlog", 0777);   // ...and the dedicated netlog folder (drag-and-drop the whole folder)
+	mkdir("sdmc:/cias", 0777);           // ensure the parent dir exists (ignored if already present)
+	mkdir("sdmc:/cias/netlogs", 0777);   // ...and the dedicated netlogs folder (matches the local netlogs/ dir; drag-and-drop)
 	FILE* f = fopen(path, "w");
 	if (!f) return;
 	fprintf(f, "# 3DGBA netlog role=%s seat=%d startN=%d okN=%d toN=%d edge=%d force=%d stallO=%d\n",

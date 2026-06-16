@@ -89,10 +89,10 @@ static void apt_hook(APT_HookType t, void* p) {
 static void wl_dump(int seat) {
 	time_t tt = time(NULL); struct tm* lt = localtime(&tt);
 	char lp[96];
-	// All logs live in sdmc:/cias/netlog/ so the whole folder drags-and-drops in one go. Timestamped +
-	// role-named (HOST=seat 0 / JOIN=seat 1) so successive runs never overwrite. (gbacore_net_log_dump
-	// mkdir's the folder.)
-	snprintf(lp, sizeof lp, "sdmc:/cias/netlog/3DGBA_net_%s_%02d%02d_%02d%02d%02d.txt",
+	// All logs live in sdmc:/cias/netlogs/ (matches the local netlogs/ folder) so the whole folder
+	// drags-and-drops in one go. Timestamped + role-named (HOST=seat 0 / JOIN=seat 1) so successive runs
+	// never overwrite. (gbacore_net_log_dump mkdir's the folder.)
+	snprintf(lp, sizeof lp, "sdmc:/cias/netlogs/3DGBA_net_%s_%02d%02d_%02d%02d%02d.txt",
 	         seat == 0 ? "HOST" : "JOIN",
 	         lt ? lt->tm_mon + 1 : 0, lt ? lt->tm_mday : 0,
 	         lt ? lt->tm_hour : 0, lt ? lt->tm_min : 0, lt ? lt->tm_sec : 0);
