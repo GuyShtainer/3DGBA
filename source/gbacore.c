@@ -435,10 +435,17 @@ static void net_finishMulti(struct GBASIODriver* d, uint16_t data[4]) {
 		// Gen-3 checksum); the round is retired below exactly once, just like a success.
 		memset(data, 0xFF, sizeof(uint16_t) * 4);
 	}
-	if (nd->seat == 0) {                            // parent retires the round (advance s_netRound) EXACTLY once
-		__atomic_store_n(&s_netRound, nd->pendingRound + 1, __ATOMIC_RELEASE);  // per transfer -> sequential
-		nd->roundOpen = false;                      // wire rounds, no churn, no retry-phantom. Next Busy mints next.
+	if (nd->seat == 0 && ok) {                      // ADVANCE THE WIRE ROUND ONLY ON A REAL EXCHANGE (both words in).
+		__atomic_store_n(&s_netRound, nd->pendingRound + 1, __ATOMIC_RELEASE);
+		nd->roundOpen = false;                      // success -> next Busy mints the next round
 	}
+	// On a TIMEOUT (ok==false) we deliberately do NOT advance s_netRound and KEEP roundOpen: the host re-clocks
+	// the SAME round (a real GBA master polling an absent/late slave), and the RX re-send delivers a lost reply,
+	// so the host and joiner stay LOCKED to one round number. The old "advance on every transfer" raced the host
+	// ahead in round-number while the joiner was still navigating to the cable club -> the joiner (waiting on
+	// round 0) and the host (already at round N) never met = the intermittent "round 0 never crosses" / host-
+	// stuck establishment failure (predates the pacing barrier; see netlogs 0616). No-op on a healthy trade
+	// (toN==0 there). A genuinely-gone peer keeps reading 0xFFFF -> the game's own link watchdog errors cleanly.
 	s_netRxP = data[0];                            // diag: the seat-0 word THIS console received this round
 	s_netRxC = data[1];                            // diag: the seat-1 word received
 	if (data[0] && data[0] != 0xFFFF) s_peakRxP = data[0];   // PEAK: latch last non-idle received seat-0 word
@@ -601,23 +608,14 @@ void gbacore_net_poll(GbaCore* g) {
 	// corrupts the stream. The parent (FIX B) stamps exactly one sequential round per COMPLETED transfer, so
 	// lastInjected+1 is always the next wire round. (sentinel 0xFFFFFFFF + 1 = round 0.)
 	uint32_t round = nd->lastInjectedRound + 1;
-	if (!net_round_ready(round, 1u << 0)) {
-		// --- JOINER PACING BARRIER: the parent's word for THIS round isn't in yet. ---
-		// The bug we're fixing: the host blocks its emulated CPU per transfer (net_transfer_collect) so it
-		// advances ~per-transfer (slow), while the joiner here used to just `return` and let the worker loop
-		// step the CPU anyway — free-running its emulated clock between transfers until it raced > the Gen-3
-		// SLAVE VBlank watchdog (>10 emulated VBlanks w/o a serial IRQ) and tripped "communication error".
-		// Fix: give the joiner the SAME per-transfer barrier the host has, but GATED so it engages ONLY during
-		// an active MULTI link and only past a small VBlank cap (so the overworld/menus free-run — the reverted
-		// park's deadlock was from blocking unconditionally, before any transfer existed).
-		if (sio->mode != GBA_SIO_MULTI) return;               // not in a link (overworld/menus) -> free-run, gate transparent
-		uint32_t vbl = (uint32_t)(g->core->frameCounter(g->core) - nd->lastActiveFrame);
-		if (vbl > s_netVblMax) s_netVblMax = vbl;             // diag: peak emulated VBlanks between serial IRQs (the LAG measure)
-		if (vbl < NET_PACE_CAP_VBL) return;                   // under cap -> free-run a little to absorb UDS RTT jitter
-		s_netPaceBlkN++;                                      // over cap -> BLOCK for the parent's word (freezes our emulated clock)
-		if (!net_round_wait(round, 1u << 0, NET_DEADLINE_MS)) return;  // timed out/aborted -> free-run; collect reports the loss
-		// word arrived -> fall through and capture+inject this round exactly as if it had been ready
-	}
+	// The joiner FREE-RUNS when the parent's word for this round isn't in yet (the original baseline behavior).
+	// A blocking "pacing barrier" was tried here (commits 0e51302/972f745) to fix the late-trade SLAVE-watchdog
+	// divergence, but the Gen-3 game asserts GBA_SIO_MULTI as soon as it enters the cable club — long before any
+	// real trade — so the barrier FROZE the joiner during navigation (hardware logs 0616 18:00: rxWords=0,
+	// paceBlkN climbing, joiner stuck). REVERTED: free-run here; the worker loop steps the CPU and the RX thread
+	// keeps merging, so the round is adopted the instant the parent's word arrives. (s_netVblMax/paceBlkN now
+	// stay 0 — kept only as harmless diag fields.)
+	if (!net_round_ready(round, 1u << 0)) return;
 
 	// --- ISR-PROOF GATE: do not capture round R's reply until round (R-1)'s SIO ISR has run+acked. ---
 	// All three signals are LOCAL (no peer access, no shared clock):
