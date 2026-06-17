@@ -350,13 +350,14 @@ static int      s_netPaceBlkN = 0;
 // rounds' `frame` IS the emulated VBlanks-between-serial-IRQs (the SLAVE-watchdog measure), per round, and
 // host-vs-joiner frame deltas show whether the two emulated clocks stay phase-locked. Generally useful for
 // any future link-timing debugging, not just this fix.
-typedef struct { uint32_t round; uint32_t frame; uint64_t tick; uint16_t w0, w1; uint8_t ok; } NetLogEntry;
+typedef struct { uint32_t round; uint32_t frame; uint64_t tick; uint32_t rtt; uint16_t w0, w1; uint8_t ok; } NetLogEntry;
 static NetLogEntry s_netLog[NETLOG_N];
 static uint32_t    s_netLogN = 0;   // total appended (ring index = % NETLOG_N)
 static uint32_t    s_netLastLogRound = 0; static bool s_netHaveLastLog = false;  // dedup repeated same-round timeout rows
 static bool        s_netEstablished = false;   // a real exchange has happened -> use the long loss-recovery deadline
 static uint64_t    s_netLastInjectTick = 0;    // wall-clock tick of the joiner's last inject (0 = none) -> pacing gate
 static int         s_netBaudSeen = -1;         // the game's intended MULTI baud (before we throttle it); diag
+static uint64_t    s_roundSendTick = 0;        // host: wall-clock tick the current round's word was first sent (rtt X-ray)
 
 static bool     net_init   (struct GBASIODriver* d) { (void)d; return true; }
 static void     net_deinit (struct GBASIODriver* d) { (void)d; }
@@ -431,6 +432,7 @@ static bool net_start(struct GBASIODriver* d) {
 		round = __atomic_load_n(&s_netRound, __ATOMIC_ACQUIRE);
 		nd->pendingRound = round;
 		nd->roundOpen    = true;                     // closed by net_finishMulti on a successful collect
+		s_roundSendTick  = net_mono_ticks();         // LATENCY X-RAY: stamp when the host first sent this round's word
 	}
 	net_transfer_send_word(0, GBA_SIO_MULTI, round, w);
 	s_netStartN++;
@@ -484,8 +486,14 @@ static void net_finishMulti(struct GBASIODriver* d, uint16_t data[4]) {
 	bool dupTimeout = (!ok && s_netHaveLastLog && s_netLastLogRound == nd->pendingRound);
 	if (!dupTimeout) {
 		uint32_t fr = (uint32_t)((struct GBA*)nd->d.p->p)->video.frameCounter;   // == core->frameCounter
+		// rtt = the ACTUAL host round-trip this round: from first-send (net_start) to this collect succeeding.
+		// Compare to dt_us (wall-clock between rounds): rtt~=dt_us => the time IS the wire round-trip; rtt<<dt_us
+		// => the latency is emulated processing/gap between rounds, NOT the wire. Host-only (joiner never sends in
+		// net_start, so s_roundSendTick stays 0 -> rtt 0 there).
+		uint32_t rtt = (nd->seat == 0 && s_roundSendTick) ? net_ticks_to_us(net_mono_ticks() - s_roundSendTick) : 0;
 		s_netLog[s_netLogN % NETLOG_N].round = nd->pendingRound;
 		s_netLog[s_netLogN % NETLOG_N].frame = fr;
+		s_netLog[s_netLogN % NETLOG_N].rtt   = rtt;
 		s_netLog[s_netLogN % NETLOG_N].tick  = net_mono_ticks();   // wall-clock -> dt_us (emulated-divergence vs UDS latency)
 		s_netLog[s_netLogN % NETLOG_N].w0    = data[0];
 		s_netLog[s_netLogN % NETLOG_N].w1    = data[1];
@@ -532,7 +540,7 @@ void gbacore_net_attach(GbaCore* g, int seat, int peers) {
 	s_netStartN = s_netInjectN = s_netOkN = s_netToN = 0; s_netEdgeN = s_netForceN = 0;
 	s_netRxP = s_netRxC = 0; s_peakSentP = s_peakSentC = s_peakRxP = s_peakRxC = 0; s_netStallO = -1; s_netLogN = 0;
 	s_netVblMax = 0; s_netPaceBlkN = 0;   // PACING diag: peak emulated-VBlanks-between-IRQs + paced-wait count (active-gated)
-	s_netHaveLastLog = false; s_netLastLogRound = 0; s_netEstablished = false; s_netLastInjectTick = 0; s_netBaudSeen = -1;   // fresh link
+	s_netHaveLastLog = false; s_netLastLogRound = 0; s_netEstablished = false; s_netLastInjectTick = 0; s_netBaudSeen = -1; s_roundSendTick = 0;   // fresh link
 	if (seat == 0) s_netRound = 0;   // only the parent owns the shared per-link round counter
 	g->core->setPeripheral(g->core, mPERIPH_GBA_LINK_PORT, &nd->d);
 }
@@ -609,8 +617,8 @@ void gbacore_net_log_dump(const char* path, int seat) {
 	{ int rxW=0, txF=0, busy=0, peerUp=0, maxS0=-1; net_link_get_stats(&rxW, &txF, &busy, &peerUp, &maxS0);
 	  fprintf(f, "# transport rxWords=%d txFails=%d busy=%d peerUp=%d maxSeat0Round=%d hostRound=%lu\n",
 	          rxW, txF, busy, peerUp, maxS0, (unsigned long)s_netRound); }
-	fprintf(f, "# columns: idx,round,frame,dvbl,dt_us,w0,w1,ok   (dvbl=emulated VBlanks since prev round; dt_us=WALL-CLOCK us since prev round -> emulated-divergence vs UDS air latency; w0=seat0/parent w1=seat1/child; ok=1/timeout=0)\n");
-	fprintf(f, "idx,round,frame,dvbl,dt_us,w0,w1,ok\n");
+	fprintf(f, "# columns: idx,round,frame,dvbl,dt_us,rtt_us,w0,w1,ok   (dt_us=wall-clock between rounds; rtt_us=HOST round-trip this round [send->collect]; rtt~=dt => wire-bound, rtt<<dt => emulated-gap-bound; w0=seat0/parent w1=seat1/child; ok=1/timeout=0)\n");
+	fprintf(f, "idx,round,frame,dvbl,dt_us,rtt_us,w0,w1,ok\n");
 	uint32_t n    = (s_netLogN < NETLOG_N) ? s_netLogN : NETLOG_N;
 	uint32_t base = (s_netLogN < NETLOG_N) ? 0u : (s_netLogN % NETLOG_N);   // oldest retained entry
 	uint32_t prevFrame = 0; uint64_t prevTick = 0; bool havePrev = false;
@@ -619,9 +627,9 @@ void gbacore_net_log_dump(const char* path, int seat) {
 		uint32_t dvbl  = havePrev ? (e->frame - prevFrame) : 0;            // emulated VBlanks since the previous logged round
 		uint32_t dt_us = havePrev ? net_ticks_to_us(e->tick - prevTick) : 0;  // wall-clock us since the previous logged round
 		prevFrame = e->frame; prevTick = e->tick; havePrev = true;
-		fprintf(f, "%lu,%lu,%lu,%lu,%lu,%04X,%04X,%u\n",
+		fprintf(f, "%lu,%lu,%lu,%lu,%lu,%lu,%04X,%04X,%u\n",
 		        (unsigned long)i, (unsigned long)e->round, (unsigned long)e->frame,
-		        (unsigned long)dvbl, (unsigned long)dt_us, e->w0, e->w1, e->ok);
+		        (unsigned long)dvbl, (unsigned long)dt_us, (unsigned long)e->rtt, e->w0, e->w1, e->ok);
 	}
 	fclose(f);
 }
