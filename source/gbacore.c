@@ -358,6 +358,7 @@ static bool        s_netEstablished = false;   // a real exchange has happened -
 static uint64_t    s_netLastInjectTick = 0;    // wall-clock tick of the joiner's last inject (0 = none) -> pacing gate
 static int         s_netBaudSeen = -1;         // the game's intended MULTI baud (before we throttle it); diag
 static uint64_t    s_roundSendTick = 0;        // host: wall-clock tick the current round's word was first sent (rtt X-ray)
+static int         s_netFinishN = 0;           // times net_finishMulti was ENTERED (completeEvent fired) — joiner-stall X-ray
 
 static bool     net_init   (struct GBASIODriver* d) { (void)d; return true; }
 static void     net_deinit (struct GBASIODriver* d) { (void)d; }
@@ -447,6 +448,9 @@ static bool net_start(struct GBASIODriver* d) {
 // one-transfer-stale word — exactly the bug. Both seats only RENDEZVOUS on collect (full needMask).
 static void net_finishMulti(struct GBASIODriver* d, uint16_t data[4]) {
 	struct NetDriver* nd = (struct NetDriver*)d;
+	s_netFinishN++;   // DIAG: net_finishMulti ENTERED (completeEvent fired). finishN==0 while edge>0 => the
+	                  // completeEvent never fired (worker not running run_loop after inject); finishN>okN+toN
+	                  // => entered but collect is BLOCKED (stuck waiting for a word). Pins the joiner round-0 stall.
 	// PRE-establishment use a short poll deadline so a no-reply transfer frees the host in ~100ms (master
 	// polling for a late slave) instead of a 2s wall-clock freeze; once a real exchange has happened, use the
 	// long loss-recovery deadline. (collect freezes EMULATED time either way, so this only affects real-time feel.)
@@ -540,7 +544,7 @@ void gbacore_net_attach(GbaCore* g, int seat, int peers) {
 	s_netStartN = s_netInjectN = s_netOkN = s_netToN = 0; s_netEdgeN = s_netForceN = 0;
 	s_netRxP = s_netRxC = 0; s_peakSentP = s_peakSentC = s_peakRxP = s_peakRxC = 0; s_netStallO = -1; s_netLogN = 0;
 	s_netVblMax = 0; s_netPaceBlkN = 0;   // PACING diag: peak emulated-VBlanks-between-IRQs + paced-wait count (active-gated)
-	s_netHaveLastLog = false; s_netLastLogRound = 0; s_netEstablished = false; s_netLastInjectTick = 0; s_netBaudSeen = -1; s_roundSendTick = 0;   // fresh link
+	s_netHaveLastLog = false; s_netLastLogRound = 0; s_netEstablished = false; s_netLastInjectTick = 0; s_netBaudSeen = -1; s_roundSendTick = 0; s_netFinishN = 0;   // fresh link
 	if (seat == 0) s_netRound = 0;   // only the parent owns the shared per-link round counter
 	g->core->setPeripheral(g->core, mPERIPH_GBA_LINK_PORT, &nd->d);
 }
@@ -599,8 +603,8 @@ void gbacore_net_log_dump(const char* path, int seat) {
 	mkdir("sdmc:/cias/netlogs", 0777);   // ...and the dedicated netlogs folder (matches the local netlogs/ dir; drag-and-drop)
 	FILE* f = fopen(path, "w");
 	if (!f) return;
-	fprintf(f, "# 3DGBA netlog role=%s seat=%d startN=%d okN=%d toN=%d edge=%d force=%d stallO=%d\n",
-	        seat == 0 ? "HOST" : "JOIN", seat, s_netStartN, s_netOkN, s_netToN, s_netEdgeN, s_netForceN, s_netStallO);
+	fprintf(f, "# 3DGBA netlog role=%s seat=%d startN=%d injectN=%d finishN=%d okN=%d toN=%d edge=%d force=%d stallO=%d\n",
+	        seat == 0 ? "HOST" : "JOIN", seat, s_netStartN, s_netInjectN, s_netFinishN, s_netOkN, s_netToN, s_netEdgeN, s_netForceN, s_netStallO);
 	fprintf(f, "# peakSentP=%04X peakSentC=%04X peakRxP=%04X peakRxC=%04X\n",
 	        s_peakSentP, s_peakSentC, s_peakRxP, s_peakRxC);
 	// established=1 = round 0 crossed (past the handshake wall); established=0 + okN=0 = round-0-never-crosses.
