@@ -101,12 +101,20 @@ static void wl_dump(int seat) {
 
 // Dump the game-state instrumentation log to a TIMESTAMPED file in the same netlogs folder. Called on
 // the session teardown path so a play session's screen/geo/3D timeline lands on SD alongside the netlog.
-static void gs_dump(void) {
+// seat: 0=HOST, 1=JOIN -> tag the filename with the wireless role so a gs log is identifiable WITHOUT
+// cross-referencing the netlog timestamp; seat<0 (Quit/Change, no link) -> plain timestamped name.
+static void gs_dump(int seat) {
 	time_t tt = time(NULL); struct tm* lt = localtime(&tt);
 	char lp[96];
-	snprintf(lp, sizeof lp, "sdmc:/cias/netlogs/3DGBA_gs_%02d%02d_%02d%02d%02d.txt",
-	         lt ? lt->tm_mon + 1 : 0, lt ? lt->tm_mday : 0,
-	         lt ? lt->tm_hour : 0, lt ? lt->tm_min : 0, lt ? lt->tm_sec : 0);
+	if (seat >= 0)
+		snprintf(lp, sizeof lp, "sdmc:/cias/netlogs/3DGBA_gs_%s_%02d%02d_%02d%02d%02d.txt",
+		         seat == 0 ? "HOST" : "JOIN",
+		         lt ? lt->tm_mon + 1 : 0, lt ? lt->tm_mday : 0,
+		         lt ? lt->tm_hour : 0, lt ? lt->tm_min : 0, lt ? lt->tm_sec : 0);
+	else
+		snprintf(lp, sizeof lp, "sdmc:/cias/netlogs/3DGBA_gs_%02d%02d_%02d%02d%02d.txt",
+		         lt ? lt->tm_mon + 1 : 0, lt ? lt->tm_mday : 0,
+		         lt ? lt->tm_hour : 0, lt ? lt->tm_min : 0, lt ? lt->tm_sec : 0);
 	gamestate_log_dump(lp);
 }
 
@@ -1305,7 +1313,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 						if (!net_session_active()) {             // peer/session dropped (e.g. resumed after HOME) -> tear down
 							emuA.netLinked = false; LightEvent_Wait(&emuA.done);
 							wl_dump(wlSeat);   // dump the per-round link log to a timestamped SD file
-							gs_dump();         // + the game-state log (captures the link-error reason: lerr/lstat/lbuf)
+							gs_dump(wlSeat);   // + the game-state log (HOST/JOIN-tagged; captures the link-error reason)
 							gbacore_net_detach(emuA.core); net_link_stop();
 							g_netWorker = NULL; emuB.paused = false; wlOn = false;
 							snprintf(status, sizeof status, "Wireless link closed");
@@ -1463,7 +1471,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					if (wlOn) {                                  // already linked -> stop the wireless link
 						emuA.netLinked = false; LightEvent_Wait(&emuA.done);
 						wl_dump(wlSeat);   // dump the per-round link log to a timestamped SD file
-						gs_dump();         // + the game-state log (captures the link-error reason: lerr/lstat/lbuf)
+						gs_dump(wlSeat);   // + the game-state log (HOST/JOIN-tagged; captures the link-error reason)
 						gbacore_net_detach(emuA.core); net_link_stop(); net_session_close();
 						g_netWorker = NULL; emuB.paused = false; wlOn = false;
 						snprintf(status, sizeof status, "Wireless: off");
@@ -1759,7 +1767,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	}
 
 	// teardown this session's workers + cores; reset g_quit for the next session
-	gs_dump();   // flush this play session's game-state instrumentation log to SD (Quit / Change games)
+	gs_dump(-1);   // flush this play session's game-state instrumentation log to SD (Quit / Change games; no link role)
 	if (wlOn) {                               // Quit/Change-games straight out of a live WIRELESS link
 		emuA.netLinked = false;               // the worker leaves the net free-run once its collect returns
 		net_link_stop();                      // join the RX thread + abort rounds (any blocked collect returns now)
