@@ -133,7 +133,10 @@ bool game_read(GbaCore* c, const GameProfile* p, GameState* out);
 // gMain.callback2 changes, or a ~10s heartbeat elapses, per screen-slot. Flushed to one SD text file
 // on gamestate_log_dump. Mirrors the netlog ring + one-shot-dump pattern (no per-frame file I/O).
 void        gs_log_reset(void);   // clear the ring + per-slot edge cache (call once when a session starts)
+// nowMs = a wall-clock millisecond stamp (osGetTime). Drives a WALL-CLOCK heartbeat so a FROZEN/STUCK game
+// (emulated clock stopped — e.g. FireRed hanging on connect) keeps emitting rows; an emulated-frame heartbeat
+// alone goes silent the instant the game stops advancing, hiding exactly the stuck state we want to capture.
 void        gs_log_sample(GbaCore* c, const GameProfile* p, const GameState* gs,
-                          int screen, uint16_t injKeys, const GsDepth* depth);  // screen: 0=top/3D, 1=bottom/touch
+                          int screen, uint16_t injKeys, const GsDepth* depth, uint32_t nowMs);  // screen: 0=top/3D, 1=bottom/touch
 void        gamestate_log_dump(const char* path);   // flush the ring to an SD file (mkdir's sdmc:/cias/netlogs)
 const char* gamestate_ctx_name(int ctx);            // GameCtx -> short name (for the log + HUD)

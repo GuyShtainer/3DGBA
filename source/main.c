@@ -1289,10 +1289,10 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 						GsDepth gd = { (uint8_t)depth3d.overworld, (uint8_t)depth3d.textTop, (uint8_t)depth3d.textBot,
 						               (short)depth3d.nspr, (short)depth3d.nui, (short)depth3d.nfg,
 						               depth3d.maxd, (short)depth3d.camX, (short)depth3d.camY };
-						gs_log_sample(gsTop, gpTop, &gst, 0, 0, &gd);     // screen 0 = top/3D
+						gs_log_sample(gsTop, gpTop, &gst, 0, 0, &gd, (uint32_t)nowMs);     // screen 0 = top/3D
 					}
 					if (game_read(gsBot, gpBot, &gsb))
-						gs_log_sample(gsBot, gpBot, &gsb, 1, tk, NULL);   // screen 1 = bottom/touch (with injected key)
+						gs_log_sample(gsBot, gpBot, &gsb, 1, tk, NULL, (uint32_t)nowMs);   // screen 1 = bottom/touch (with injected key)
 				}
 				emuA.keys = ((focused == 0) ? g : 0) | (swapped ? tk : 0);
 				emuB.keys = ((focused == 1) ? g : 0) | (swapped ? 0 : tk);

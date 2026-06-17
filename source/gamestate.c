@@ -200,7 +200,10 @@ const char* gamestate_ctx_name(int ctx) {
 }
 
 #define GSLOG_N 1024
-#define GS_HEARTBEAT_FRAMES 600u   // ~10s @ 60fps: a liveness/drift row even when nothing changed
+#define GS_HEARTBEAT_FRAMES 600u   // ~10s @ 60fps: a liveness/drift row even when nothing changed (EMULATED frames)
+#define GS_HEARTBEAT_MS     2000u  // ~2s WALL-CLOCK: keeps logging a STUCK/FROZEN game (emulated clock stopped ->
+                                   // the emulated-frame heartbeat can't fire). This is how we capture FireRed's
+                                   // immediate hang and Emerald's post-error freeze (cb2 frozen at the error CB).
 typedef struct {
 	uint32_t frame; uint32_t cb1, cb2;
 	uint16_t inj;
@@ -222,6 +225,7 @@ static uint8_t  s_lastCtx[2]   = { 0xFF, 0xFF };
 static uint32_t s_lastCb2[2]   = { 0, 0 };
 static uint32_t s_lastFrame[2] = { 0, 0 };
 static uint8_t  s_lastLinkErr[2] = { 0xFF, 0xFF };   // edge on the link-error flag flipping -> always log the death
+static uint32_t s_lastTickMs[2]  = { 0, 0 };          // wall-clock of the last logged row (frozen-game heartbeat)
 
 void gs_log_reset(void) {
 	s_gsLogN = 0;
@@ -229,18 +233,20 @@ void gs_log_reset(void) {
 	s_lastCb2[0] = s_lastCb2[1] = 0;
 	s_lastFrame[0] = s_lastFrame[1] = 0;
 	s_lastLinkErr[0] = s_lastLinkErr[1] = 0xFF;
+	s_lastTickMs[0] = s_lastTickMs[1] = 0;
 }
 
 void gs_log_sample(GbaCore* c, const GameProfile* p, const GameState* gs,
-                   int screen, uint16_t injKeys, const GsDepth* depth) {
+                   int screen, uint16_t injKeys, const GsDepth* depth, uint32_t nowMs) {
 	if (!c || !p || !gs || !gs->valid || screen < 0 || screen > 1) return;
 	uint32_t frame = gbacore_frame_counter(c);
 	bool edge = (gs->ctx != s_lastCtx[screen]) || (gs->cb2 != s_lastCb2[screen])
 	            || (gs->linkErr != s_lastLinkErr[screen])   // capture the exact frame the link error flips
-	            || (frame - s_lastFrame[screen] >= GS_HEARTBEAT_FRAMES);
+	            || (frame - s_lastFrame[screen] >= GS_HEARTBEAT_FRAMES)
+	            || (nowMs - s_lastTickMs[screen] >= GS_HEARTBEAT_MS);   // WALL-CLOCK: keep logging a frozen game
 	if (!edge) return;                                 // cheap no-op on the common (unchanged) frame
 	s_lastCtx[screen] = (uint8_t)gs->ctx; s_lastCb2[screen] = gs->cb2; s_lastFrame[screen] = frame;
-	s_lastLinkErr[screen] = gs->linkErr;
+	s_lastLinkErr[screen] = gs->linkErr; s_lastTickMs[screen] = nowMs;
 
 	GsLogEntry* e = &s_gsLog[s_gsLogN % GSLOG_N];
 	memset(e, 0, sizeof *e);
