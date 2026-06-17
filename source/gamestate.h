@@ -66,6 +66,13 @@ typedef struct {
 	uint32_t fieldMsgMode;  // sFieldMessageBoxMode (EM) / sMessageBoxType (FRLG): u8, != 0 while a field textbox is up
 	uint32_t mapNameTask;   // Task_MapNamePopUpWindow (EM) / Task_MapNamePopup (FRLG) — map-name banner task (ROM)
 	uint32_t fieldCamera;   // gFieldCamera (+0x10 x, +0x14 y = sub-tile scroll, %%16) -> 3D depth scroll-align
+	// --- link-error diagnostics (LOGGING ONLY; addresses verified vs pret symbols-branch rev0). When the
+	// wireless trade dies the game enters CB2_PrintErrorMessage; these latch WHY (which watchdog / queue /
+	// player-drop tripped) even though OUR transport was clean. 0 = not mapped for this game. ---
+	uint32_t linkStatus;    // gLinkStatus (u32 bitfield: player count + LINK_STAT_* error bits, live)
+	uint32_t linkErr;       // gLinkErrorOccurred (u8; 1 once the game's link layer flagged an error)
+	uint32_t linkErrBuf;    // sLinkErrorBuffer (8B latched at error: status u32 + send/recv queue counts)
+	uint32_t linkNotRecv;   // gRemoteLinkPlayersNotReceived (u32 player bitmask we stopped hearing from)
 } GameProfile;
 
 // One-pass snapshot of the live game.
@@ -99,6 +106,11 @@ typedef struct {
 	int      facing;          // gObjectEvents[0] facing 1=D 2=U 3=L 4=R (-1 if N/A) — verify-on-hw offset
 	uint8_t  nTask;           // count of active gTasks func ptrs captured in taskFp[]
 	uint32_t taskFp[8];       // active task func pointers (Thumb stripped) — IDs ambiguous-callback2 screens
+	// --- link-error diagnostics (LOGGING ONLY) — see GameProfile link* fields ---
+	uint32_t linkStatus;      // gLinkStatus (live bitfield)
+	uint32_t linkErrBuf0, linkErrBuf1;   // sLinkErrorBuffer[0..3] / [4..7] (latched status + queue counts)
+	uint32_t linkNotRecv;     // gRemoteLinkPlayersNotReceived
+	uint8_t  linkErr;         // gLinkErrorOccurred (1 = the game flagged a link error)
 } GameState;
 
 // Optional 3D-effect health, logged alongside the TOP game's row (pass NULL for the bottom game).

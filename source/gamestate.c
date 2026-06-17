@@ -20,21 +20,27 @@ static const GameProfile PROFILES[] = {
             0x03005DF4u, 0x0809FAC4u, 0x0203CD90u, 0x02020004u, 0x0203760Eu, 0x03005E00u, 0x081AAD5Cu, 0x081ABD28u, 0x00000000u,
             0x081B1370u, 0x080E215Cu, 0x080E2058u, 0x081B3730u, 0x0809FA34u, 0x02037318u,
             0x08038420u, 0x02037350u,
-            0x020375BCu, 0x080D487Cu, 0x03005DD0u },
+            0x020375BCu, 0x080D487Cu, 0x03005DD0u,
+            /* link diag (EM): gLinkStatus gLinkErrorOccurred sLinkErrorBuffer gRemoteLinkPlayersNotReceived */
+            0x030030E0u, 0x0300306Cu, 0x02022B00u, 0x03003078u },
   { "BPRE", 0x03005008u, 0x02022B4Cu, 0x02023FF8u, 0x02023FFCu, 0x02023BE4u, 0x02022976u,
             0x0203B0A0u, 0x02024029u, 0x030030F4u, 0x0811EBA0u, 0x0811EBD0u, 0x0303011Eu,
             0x03004FE0u, 0x0802E674u, 0x03004FF4u, 0x02023BD6u, 0x02023BCCu, 0x02023D70u, 0x02023BC4u, 0x03005040u,
             0x020370F0u, 0x0806F280u, 0x0203ADE4u, 0x020204B4u, 0x020370F4u, 0x03005090u, 0x08107EE0u, 0x08108F0Cu, 0x0203AD01u,
             0x0811FB28u, 0x0809CE54u, 0x0809CC98u, 0x08122C5Cu, 0x0806F1F0u, 0x00000000u,
             0x08011100u, 0x02036E38u,
-            0x0203709Cu, 0x080981ACu, 0x03005050u },
+            0x0203709Cu, 0x080981ACu, 0x03005050u,
+            /* link diag (FRLG): gLinkStatus gLinkErrorOccurred sLinkErrorBuffer gRemoteLinkPlayersNotReceived */
+            0x03003F20u, 0x03003EACu, 0x02022854u, 0x03003EB8u },
   { "BPGE", 0x03005008u, 0x02022B4Cu, 0x02023FF8u, 0x02023FFCu, 0x02023BE4u, 0x02022976u,
             0x0203B0A0u, 0x02024029u, 0x030030F4u, 0x0811EBA0u, 0x0811EBD0u, 0x0303011Eu,
             0x03004FE0u, 0x0802E674u, 0x03004FF4u, 0x02023BD6u, 0x02023BCCu, 0x02023D70u, 0x02023BC4u, 0x03005040u,
             0x020370F0u, 0x0806F280u, 0x0203ADE4u, 0x020204B4u, 0x020370F4u, 0x03005090u, 0x08107EE0u, 0x08108F0Cu, 0x0203AD01u,
             0x0811FB28u, 0x0809CE54u, 0x0809CC98u, 0x08122C5Cu, 0x0806F1F0u, 0x00000000u,
             0x08011100u, 0x02036E38u,
-            0x0203709Cu, 0x080981ACu, 0x03005050u },
+            0x0203709Cu, 0x080981ACu, 0x03005050u,
+            /* link diag (FRLG): gLinkStatus gLinkErrorOccurred sLinkErrorBuffer gRemoteLinkPlayersNotReceived */
+            0x03003F20u, 0x03003EACu, 0x02022854u, 0x03003EB8u },
 };
 
 const GameProfile* profile_for(GbaCore* c) {
@@ -91,6 +97,13 @@ bool game_read(GbaCore* c, const GameProfile* p, GameState* out) {
 	out->cb2 = gbacore_read32(c, p->mainCb2) & ~1u;            // raw gMain.callback2 = the screen fingerprint
 	out->cb1 = gbacore_read32(c, p->mainCb2 - 4u) & ~1u;       // gMain.callback1 (gMain+0 = mainCb2-4)
 	out->ctxResolved = true;                                   // default; cleared in the overworld fall-through
+	// link-error diagnostics: WHY the game's own link layer aborted (latched in sLinkErrorBuffer even after
+	// it enters CB2_PrintErrorMessage). All read-only; never gates anything. 0 addr -> 0 (game not mapped).
+	out->linkStatus  = p->linkStatus  ? gbacore_read32(c, p->linkStatus)      : 0;
+	out->linkErr     = p->linkErr     ? (uint8_t)gbacore_read8(c, p->linkErr) : 0;
+	out->linkErrBuf0 = p->linkErrBuf  ? gbacore_read32(c, p->linkErrBuf)      : 0;
+	out->linkErrBuf1 = p->linkErrBuf  ? gbacore_read32(c, p->linkErrBuf + 4u) : 0;
+	out->linkNotRecv = p->linkNotRecv ? gbacore_read32(c, p->linkNotRecv)     : 0;
 	for (int t = 0; t < 16 && out->nTask < 8; t++) {           // up to 8 active gTasks func ptrs (screen ID)
 		uint32_t task = p->gTasksBase + 40u * (uint32_t)t;
 		if (gbacore_read8(c, task + 4) == 0) continue;         // isActive
@@ -199,6 +212,8 @@ typedef struct {
 	uint8_t  dValid, dOw, dTT, dTB;            // 3D-effect health (top game only)
 	int16_t  dNspr, dNui, dNfg, dCamX, dCamY;
 	float    dMaxd;
+	uint32_t lstat, lbuf0, lbuf1, lnotrecv;    // link-error diagnostics (gLinkStatus / sLinkErrorBuffer / notRecv)
+	uint8_t  lerr;                             // gLinkErrorOccurred
 } GsLogEntry;
 static GsLogEntry s_gsLog[GSLOG_N];
 static uint32_t   s_gsLogN = 0;
@@ -206,12 +221,14 @@ static uint32_t   s_gsLogN = 0;
 static uint8_t  s_lastCtx[2]   = { 0xFF, 0xFF };
 static uint32_t s_lastCb2[2]   = { 0, 0 };
 static uint32_t s_lastFrame[2] = { 0, 0 };
+static uint8_t  s_lastLinkErr[2] = { 0xFF, 0xFF };   // edge on the link-error flag flipping -> always log the death
 
 void gs_log_reset(void) {
 	s_gsLogN = 0;
 	s_lastCtx[0] = s_lastCtx[1] = 0xFF;
 	s_lastCb2[0] = s_lastCb2[1] = 0;
 	s_lastFrame[0] = s_lastFrame[1] = 0;
+	s_lastLinkErr[0] = s_lastLinkErr[1] = 0xFF;
 }
 
 void gs_log_sample(GbaCore* c, const GameProfile* p, const GameState* gs,
@@ -219,9 +236,11 @@ void gs_log_sample(GbaCore* c, const GameProfile* p, const GameState* gs,
 	if (!c || !p || !gs || !gs->valid || screen < 0 || screen > 1) return;
 	uint32_t frame = gbacore_frame_counter(c);
 	bool edge = (gs->ctx != s_lastCtx[screen]) || (gs->cb2 != s_lastCb2[screen])
+	            || (gs->linkErr != s_lastLinkErr[screen])   // capture the exact frame the link error flips
 	            || (frame - s_lastFrame[screen] >= GS_HEARTBEAT_FRAMES);
 	if (!edge) return;                                 // cheap no-op on the common (unchanged) frame
 	s_lastCtx[screen] = (uint8_t)gs->ctx; s_lastCb2[screen] = gs->cb2; s_lastFrame[screen] = frame;
+	s_lastLinkErr[screen] = gs->linkErr;
 
 	GsLogEntry* e = &s_gsLog[s_gsLogN % GSLOG_N];
 	memset(e, 0, sizeof *e);
@@ -237,6 +256,8 @@ void gs_log_sample(GbaCore* c, const GameProfile* p, const GameState* gs,
 		e->dNspr = depth->nspr; e->dNui = depth->nui; e->dNfg = depth->nfg;
 		e->dMaxd = depth->maxd; e->dCamX = depth->camX; e->dCamY = depth->camY;
 	}
+	e->lstat = gs->linkStatus; e->lbuf0 = gs->linkErrBuf0; e->lbuf1 = gs->linkErrBuf1;
+	e->lnotrecv = gs->linkNotRecv; e->lerr = gs->linkErr;
 	s_gsLogN++;
 }
 
@@ -259,7 +280,8 @@ void gamestate_log_dump(const char* path) {
 	fprintf(f, "# undetected screens (pokedex/townmap/summary/card/keyboard/title) fall through to ctx=field with resolved=0:\n");
 	fprintf(f, "# read the cb2 column for each one you visit, then promote that value into a GameProfile later (logging only; no detection wired yet).\n");
 	fprintf(f, "# geo: px,py=camera tile; objX,objY=true avatar tile; mapG,mapN=which map; face 1=D 2=U 3=L 4=R (NPC-overlay inputs). inj=injected touch key. d_*=3D-effect health (top rows).\n");
-	fprintf(f, "idx,frame,scr,ctx,ctxName,cb1,cb2,sb1V,resolved,px,py,objX,objY,mapG,mapN,face,inj,nTask,t0,t1,t2,t3,t4,t5,t6,t7,d_ow,d_nspr,d_nui,d_nfg,d_maxd,d_camX,d_camY\n");
+	fprintf(f, "# link: lerr=gLinkErrorOccurred (1=game flagged a link error); lstat=gLinkStatus (live); lbuf0/lbuf1=sLinkErrorBuffer 8B LATCHED at error (lbuf0=status word, lbuf1 low bytes=send/recv queue counts+disconnected); lnotrecv=gRemoteLinkPlayersNotReceived. cb2=0800B1A0(EM)/0800AF2C(FR) = CB2_PrintErrorMessage = the red error screen.\n");
+	fprintf(f, "idx,frame,scr,ctx,ctxName,cb1,cb2,sb1V,resolved,px,py,objX,objY,mapG,mapN,face,inj,nTask,t0,t1,t2,t3,t4,t5,t6,t7,d_ow,d_nspr,d_nui,d_nfg,d_maxd,d_camX,d_camY,lerr,lstat,lbuf0,lbuf1,lnotrecv\n");
 	uint32_t n    = (s_gsLogN < GSLOG_N) ? s_gsLogN : GSLOG_N;
 	uint32_t base = (s_gsLogN < GSLOG_N) ? 0u : (s_gsLogN % GSLOG_N);   // oldest retained entry
 	for (uint32_t i = 0; i < n; i++) {
@@ -271,8 +293,10 @@ void gamestate_log_dump(const char* path) {
 		        e->px, e->py, e->objX, e->objY, e->mapG, e->mapN, e->face, ks, e->nTask,
 		        (unsigned long)e->taskFp[0], (unsigned long)e->taskFp[1], (unsigned long)e->taskFp[2], (unsigned long)e->taskFp[3],
 		        (unsigned long)e->taskFp[4], (unsigned long)e->taskFp[5], (unsigned long)e->taskFp[6], (unsigned long)e->taskFp[7]);
-		if (e->dValid) fprintf(f, ",%u,%d,%d,%d,%.2f,%d,%d\n", e->dOw, e->dNspr, e->dNui, e->dNfg, e->dMaxd, e->dCamX, e->dCamY);
-		else           fprintf(f, ",,,,,,,\n");   // 7 empty fields to match the 7 d_* header columns (was 6 -> misaligned)
+		if (e->dValid) fprintf(f, ",%u,%d,%d,%d,%.2f,%d,%d", e->dOw, e->dNspr, e->dNui, e->dNfg, e->dMaxd, e->dCamX, e->dCamY);
+		else           fprintf(f, ",,,,,,,");   // 7 empty fields to match the 7 d_* header columns
+		fprintf(f, ",%u,%08lX,%08lX,%08lX,%08lX\n", e->lerr,                       // link-error diagnostics
+		        (unsigned long)e->lstat, (unsigned long)e->lbuf0, (unsigned long)e->lbuf1, (unsigned long)e->lnotrecv);
 	}
 	fclose(f);
 }

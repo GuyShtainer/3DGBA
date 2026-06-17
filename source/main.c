@@ -1305,6 +1305,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 						if (!net_session_active()) {             // peer/session dropped (e.g. resumed after HOME) -> tear down
 							emuA.netLinked = false; LightEvent_Wait(&emuA.done);
 							wl_dump(wlSeat);   // dump the per-round link log to a timestamped SD file
+							gs_dump();         // + the game-state log (captures the link-error reason: lerr/lstat/lbuf)
 							gbacore_net_detach(emuA.core); net_link_stop();
 							g_netWorker = NULL; emuB.paused = false; wlOn = false;
 							snprintf(status, sizeof status, "Wireless link closed");
@@ -1462,6 +1463,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					if (wlOn) {                                  // already linked -> stop the wireless link
 						emuA.netLinked = false; LightEvent_Wait(&emuA.done);
 						wl_dump(wlSeat);   // dump the per-round link log to a timestamped SD file
+						gs_dump();         // + the game-state log (captures the link-error reason: lerr/lstat/lbuf)
 						gbacore_net_detach(emuA.core); net_link_stop(); net_session_close();
 						g_netWorker = NULL; emuB.paused = false; wlOn = false;
 						snprintf(status, sizeof status, "Wireless: off");
