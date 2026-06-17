@@ -319,8 +319,7 @@ bool net_round_next_parent(uint32_t afterRound, uint32_t* outRound);   // M3: ch
 // at most one bounded wait then ages out to free-run (no hang).
 #define NET_ACTIVE_MS     250u   // pace only if a round injected within this many ms of wall-clock
 #define NET_PACE_WAIT_MS  500    // max paced wait for the parent's word during an active burst (else free-run)
-#define NET_PACE_CAP_VBL  6u     // free-run up to this many emulated VBlanks between rounds before blocking (keeps
-                                 // the joiner walkable + replies prompt; < the Gen-3 SLAVE watchdog's >10 limit)
+// (NET_PACE_CAP_VBL free-run removed: it desynced the joiner ahead of the host -> earlier comm error.)
 // (LINK-RATE THROTTLE removed: forcing the MULTI baud cut round-trips ~3x but the Gen-3 game reads SIOCNT back
 // during connection-verify and rejects a baud mismatch — it broke the link right after save. See net_wSIOCNT.)
 
@@ -676,16 +675,15 @@ void gbacore_net_poll(GbaCore* g) {
 		// isn't clocking (that was the cable-club freeze). Wall-clock gate (not emulated frames): a block freezes
 		// emulated time, so a frame gate would never age out and would re-freeze us.
 		if (s_netLastInjectTick == 0 || net_older_than_ms(s_netLastInjectTick, NET_ACTIVE_MS)) return;  // not active -> free-run
-		// VBLANK-CAP: free-run up to NET_PACE_CAP_VBL emulated VBlanks since the last completed round, THEN block.
-		// The old "block every round" pinned the joiner to vblMax=1 = FROZEN between rounds ("can't move a step",
-		// hardware 0617) and delayed its reply (the round's SIO ISR couldn't fire while the clock was frozen,
-		// inflating the round-trip). Letting it run a few VBlanks first keeps the joiner WALKABLE and replies
-		// prompt, while still blocking before the Gen-3 SLAVE watchdog (>10 VBlanks w/o a serial IRQ) — K well
-		// under 10. This is the "flexible wait": give the joiner the headroom it needs, block only near the limit.
+		// VBlank-CAP free-run was REVERTED (it felt "way faster" but desynced): letting the joiner run extra
+		// VBlanks between rounds advanced its emulated clock ~1.9 frames/round vs the host's ~0.11, so the joiner
+		// raced ~90s AHEAD -> the two game clocks diverged -> comm error SOONER (0617: 3068 rounds with the cap vs
+		// 9785 without). Block per round so the joiner advances as little as possible between rounds = closest to
+		// the host's rate = least divergence. Real speed must come from MORE ROUNDS/SEC (concurrent exchange),
+		// not from free-running one side ahead of the other.
 		uint32_t vbl = (uint32_t)(g->core->frameCounter(g->core) - nd->lastActiveFrame);
 		if (vbl > s_netVblMax) s_netVblMax = vbl;                         // diag: peak emulated VBlanks between serial IRQs
-		if (vbl < NET_PACE_CAP_VBL) return;                              // under the cap -> FREE-RUN (walkable, prompt)
-		s_netPaceBlkN++;                                                  // at the cap -> block for the word (watchdog-safe)
+		s_netPaceBlkN++;
 		if (!net_round_wait(round, 1u << 0, NET_PACE_WAIT_MS)) return;    // bounded wait; stalled link -> free-run, no hang
 		// word arrived -> fall through and inject
 	}
