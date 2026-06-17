@@ -78,6 +78,8 @@ void     gbacore_net_diag(int* startN, int* injectN, int* okN, int* toN, unsigne
 void     gbacore_net_peak(unsigned* peakSentP, unsigned* peakSentC,
                           unsigned* peakRxP, unsigned* peakRxC, int* stallO);   // M3 peak-word watch
 void     gbacore_net_pace(unsigned* vblMax, int* blkN, unsigned* capK);   // M3 joiner pacing diag (HUD+log)
+void     gbacore_net_set_exp(int exp);   // live A/B/C pacing experiment (0=A baseline,1=B free-run,2=C capped)
+int      gbacore_net_get_exp(void);      // current experiment state (for the HUD letter)
 void     gbacore_net_log_dump(const char* path, int seat);   // M3: dump the per-round link log to SD (0=HOST,1=JOIN)
 
 uint32_t gbacore_frame_counter(GbaCore* c);   // bumps once per produced video frame

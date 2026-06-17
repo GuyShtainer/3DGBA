@@ -320,6 +320,18 @@ bool net_round_next_parent(uint32_t afterRound, uint32_t* outRound);   // M3: ch
 #define NET_ACTIVE_MS     250u   // pace only if a round injected within this many ms of wall-clock
 #define NET_PACE_WAIT_MS  500    // max paced wait for the parent's word during an active burst (else free-run)
 // (NET_PACE_CAP_VBL free-run removed: it desynced the joiner ahead of the host -> earlier comm error.)
+// EXPERIMENT HARNESS (live-toggled from the wireless HUD, KEY_Y). The ONLY thing each state changes is WHEN the
+// joiner BLOCKS for the host's word — round-lock, capture-LAST, and adopt-on-host-word are identical in all
+// states, so toggling mid-trade is always safe and never desyncs the word stream. The goal is to sweep the
+// pacing dimension in ONE hardware run and read, per round (the `exp` log column), which strategy is faster /
+// completes. A=baseline (proven: block per round, slow-but-synced); B=free-run (never block -> measures the host
+// round-trip WITHOUT our barrier, the decisive radio-vs-pacing test; expected to diverge+error, but the rtt it
+// yields is the datum); C=capped free-run (run up to NET_EXP_CAP_VBL emulated VBlanks, then block — a middle
+// ground). Per-round `paceus` (joiner only) = wall-clock spent blocked at the barrier this round.
+#define NET_EXP_CAP_VBL   3u     // state C: free-run up to this many emulated VBlanks past the last round, then block
+static volatile int s_netExp     = 0;   // 0=A 1=B 2=C — live experiment state (set from the HUD)
+static int          s_netExpSeen = 1;   // bitmask of states active during this run (header diag; A seen by default)
+static uint32_t     s_netRoundPaceUs = 0;   // joiner: wall-clock us blocked at the barrier for the in-flight round
 // (LINK-RATE THROTTLE removed: forcing the MULTI baud cut round-trips ~3x but the Gen-3 game reads SIOCNT back
 // during connection-verify and rejects a baud mismatch — it broke the link right after save. See net_wSIOCNT.)
 
@@ -351,7 +363,7 @@ static int      s_netPaceBlkN = 0;
 // rounds' `frame` IS the emulated VBlanks-between-serial-IRQs (the SLAVE-watchdog measure), per round, and
 // host-vs-joiner frame deltas show whether the two emulated clocks stay phase-locked. Generally useful for
 // any future link-timing debugging, not just this fix.
-typedef struct { uint32_t round; uint32_t frame; uint64_t tick; uint32_t rtt; uint16_t w0, w1; uint8_t ok; } NetLogEntry;
+typedef struct { uint32_t round; uint32_t frame; uint64_t tick; uint32_t rtt; uint32_t paceus; uint16_t w0, w1; uint8_t ok; uint8_t exp; } NetLogEntry;
 static NetLogEntry s_netLog[NETLOG_N];
 static uint32_t    s_netLogN = 0;   // total appended (ring index = % NETLOG_N)
 static uint32_t    s_netLastLogRound = 0; static bool s_netHaveLastLog = false;  // dedup repeated same-round timeout rows
@@ -496,16 +508,19 @@ static void net_finishMulti(struct GBASIODriver* d, uint16_t data[4]) {
 		// => the latency is emulated processing/gap between rounds, NOT the wire. Host-only (joiner never sends in
 		// net_start, so s_roundSendTick stays 0 -> rtt 0 there).
 		uint32_t rtt = (nd->seat == 0 && s_roundSendTick) ? net_ticks_to_us(net_mono_ticks() - s_roundSendTick) : 0;
-		s_netLog[s_netLogN % NETLOG_N].round = nd->pendingRound;
-		s_netLog[s_netLogN % NETLOG_N].frame = fr;
-		s_netLog[s_netLogN % NETLOG_N].rtt   = rtt;
-		s_netLog[s_netLogN % NETLOG_N].tick  = net_mono_ticks();   // wall-clock -> dt_us (emulated-divergence vs UDS latency)
-		s_netLog[s_netLogN % NETLOG_N].w0    = data[0];
-		s_netLog[s_netLogN % NETLOG_N].w1    = data[1];
-		s_netLog[s_netLogN % NETLOG_N].ok    = (uint8_t)ok;
+		s_netLog[s_netLogN % NETLOG_N].round  = nd->pendingRound;
+		s_netLog[s_netLogN % NETLOG_N].frame  = fr;
+		s_netLog[s_netLogN % NETLOG_N].rtt    = rtt;
+		s_netLog[s_netLogN % NETLOG_N].paceus = s_netRoundPaceUs;   // joiner: wall-clock blocked at the barrier this round (0 on host)
+		s_netLog[s_netLogN % NETLOG_N].tick   = net_mono_ticks();   // wall-clock -> dt_us (emulated-divergence vs UDS latency)
+		s_netLog[s_netLogN % NETLOG_N].w0     = data[0];
+		s_netLog[s_netLogN % NETLOG_N].w1     = data[1];
+		s_netLog[s_netLogN % NETLOG_N].ok     = (uint8_t)ok;
+		s_netLog[s_netLogN % NETLOG_N].exp    = (uint8_t)s_netExp;   // experiment state active when this round retired
 		s_netLogN++;
 		s_netLastLogRound = nd->pendingRound; s_netHaveLastLog = true;
 	}
+	s_netRoundPaceUs = 0;   // reset the per-round barrier-block accumulator for the next round
 	// RECEIVING-end bookkeeping (child only). GBASIOMultiplayerFinishTransfer (the very next _sioFinish call)
 	// writes SIOMULTI, clears Busy, and GBARaiseIRQ schedules irqEvent at +7. Stamp the LOCAL clock now and
 	// record that THIS round's ISR must complete before the next capture. Flip toward IDLE.
@@ -533,6 +548,7 @@ void gbacore_net_attach(GbaCore* g, int seat, int peers) {
 	nd->isrWaitRound = 0xFFFFFFFFu;
 	nd->irqArmTime = 0;
 	nd->lastActiveFrame = g->core->frameCounter(g->core);   // PACING baseline = current emulated VBlank count
+	s_netExp = 0; s_netExpSeen = 1; s_netRoundPaceUs = 0;    // each session starts at the SAFE baseline (A); no leak across links
 	nd->d.init = net_init;       nd->d.deinit = net_deinit;     nd->d.reset = net_reset;
 	nd->d.driverId = net_id;     nd->d.loadState = net_load;    nd->d.saveState = net_save;
 	nd->d.setMode = net_setMode; nd->d.handlesMode = net_handles;
@@ -595,6 +611,16 @@ void gbacore_net_pace(unsigned* vblMax, int* blkN, unsigned* capK) {
 	if (capK)   *capK   = NET_ACTIVE_MS;
 }
 
+// EXPERIMENT STATE (live A/B/C pacing sweep). set_exp is called from the wireless HUD (KEY_Y); it records the
+// state in s_netExpSeen so the netlog header shows which strategies a run exercised. Global (one net link), not
+// per-core. Only the joiner's net_poll acts on it; on the host it is inert (the host never paces).
+void gbacore_net_set_exp(int exp) {
+	if (exp < 0 || exp > 2) return;
+	s_netExp = exp;
+	s_netExpSeen |= (1 << exp);
+}
+int gbacore_net_get_exp(void) { return s_netExp; }
+
 // Dump the M3 link log (the ring of completed transfers) to an SD text file. Called on wireless link
 // stop. seat: 0 = HOST, 1 = JOIN (encoded in the header + the caller's filename). Both consoles' files
 // are then diffed by round to find where the two word streams diverge (the checksum break). w0 = the
@@ -612,9 +638,13 @@ void gbacore_net_log_dump(const char* path, int seat) {
 	// PACING (active-gated, JOIN only): vblMax = peak emulated VBlanks the joiner ran between serial IRQs (must
 	// stay < ~10 or the Gen-3 SLAVE watchdog trips mid-trade); paceN = paced waits during active transfers.
 	// dvbl col below = emulated VBlanks since prev round (per-round watchdog measure); dt_us = wall-clock us.
-	fprintf(f, "# established=%d vblMax=%lu paceN=%d activeMs=%u baudGame=%d\n",
+	char expSeen[4] = {0}; int es = 0;   // which experiment states (A/B/C) were active during this run
+	if (s_netExpSeen & 1) expSeen[es++] = 'A';
+	if (s_netExpSeen & 2) expSeen[es++] = 'B';
+	if (s_netExpSeen & 4) expSeen[es++] = 'C';
+	fprintf(f, "# established=%d vblMax=%lu paceN=%d activeMs=%u baudGame=%d expSeen=%s capVbl=%u\n",
 	        s_netEstablished ? 1 : 0, (unsigned long)s_netVblMax, s_netPaceBlkN, (unsigned)NET_ACTIVE_MS,
-	        s_netBaudSeen);
+	        s_netBaudSeen, expSeen, (unsigned)NET_EXP_CAP_VBL);
 	// TRANSPORT/ESTABLISHMENT diag: when round 0 never completes (okN=0, no rows below), THIS line says why.
 	// JOIN: rxWords=0 => peer WORDs never arrived (host not TXing / peer unresolved); maxSeat0Round vs the HOST's
 	// hostRound => round-number DESYNC (host raced past round 0 on timeout while we still wait on it). HOST:
@@ -622,8 +652,8 @@ void gbacore_net_log_dump(const char* path, int seat) {
 	{ int rxW=0, txF=0, busy=0, peerUp=0, maxS0=-1; net_link_get_stats(&rxW, &txF, &busy, &peerUp, &maxS0);
 	  fprintf(f, "# transport rxWords=%d txFails=%d busy=%d peerUp=%d maxSeat0Round=%d hostRound=%lu\n",
 	          rxW, txF, busy, peerUp, maxS0, (unsigned long)s_netRound); }
-	fprintf(f, "# columns: idx,round,frame,dvbl,dt_us,rtt_us,w0,w1,ok   (dt_us=wall-clock between rounds; rtt_us=HOST round-trip this round [send->collect]; rtt~=dt => wire-bound, rtt<<dt => emulated-gap-bound; w0=seat0/parent w1=seat1/child; ok=1/timeout=0)\n");
-	fprintf(f, "idx,round,frame,dvbl,dt_us,rtt_us,w0,w1,ok\n");
+	fprintf(f, "# columns: idx,round,frame,dvbl,dt_us,rtt_us,paceus,exp,w0,w1,ok   (dt_us=wall-clock between rounds; rtt_us=HOST round-trip this round [send->collect]; paceus=JOINER wall-clock blocked at the pacing barrier this round [0 on host/free-run]; exp=A/B/C experiment state active when the round retired; rtt~=dt => wire-bound; compare rtt_us across A vs B rounds to split radio vs pacing; w0=seat0/parent w1=seat1/child; ok=1/timeout=0)\n");
+	fprintf(f, "idx,round,frame,dvbl,dt_us,rtt_us,paceus,exp,w0,w1,ok\n");
 	uint32_t n    = (s_netLogN < NETLOG_N) ? s_netLogN : NETLOG_N;
 	uint32_t base = (s_netLogN < NETLOG_N) ? 0u : (s_netLogN % NETLOG_N);   // oldest retained entry
 	uint32_t prevFrame = 0; uint64_t prevTick = 0; bool havePrev = false;
@@ -632,9 +662,10 @@ void gbacore_net_log_dump(const char* path, int seat) {
 		uint32_t dvbl  = havePrev ? (e->frame - prevFrame) : 0;            // emulated VBlanks since the previous logged round
 		uint32_t dt_us = havePrev ? net_ticks_to_us(e->tick - prevTick) : 0;  // wall-clock us since the previous logged round
 		prevFrame = e->frame; prevTick = e->tick; havePrev = true;
-		fprintf(f, "%lu,%lu,%lu,%lu,%lu,%lu,%04X,%04X,%u\n",
+		fprintf(f, "%lu,%lu,%lu,%lu,%lu,%lu,%lu,%c,%04X,%04X,%u\n",
 		        (unsigned long)i, (unsigned long)e->round, (unsigned long)e->frame,
-		        (unsigned long)dvbl, (unsigned long)dt_us, (unsigned long)e->rtt, e->w0, e->w1, e->ok);
+		        (unsigned long)dvbl, (unsigned long)dt_us, (unsigned long)e->rtt,
+		        (unsigned long)e->paceus, (char)('A' + (e->exp <= 2 ? e->exp : 0)), e->w0, e->w1, e->ok);
 	}
 	fclose(f);
 }
@@ -683,8 +714,17 @@ void gbacore_net_poll(GbaCore* g) {
 		// not from free-running one side ahead of the other.
 		uint32_t vbl = (uint32_t)(g->core->frameCounter(g->core) - nd->lastActiveFrame);
 		if (vbl > s_netVblMax) s_netVblMax = vbl;                         // diag: peak emulated VBlanks between serial IRQs
+		// EXPERIMENT (live-toggled, KEY_Y): the ONLY behavioural fork. A=block per round (proven baseline); B=never
+		// block (free-run -> the host rtt this round excludes our barrier = the decisive radio-vs-pacing datum);
+		// C=free-run until NET_EXP_CAP_VBL VBlanks, then block. Adoption stays gated on the host's word either way.
+		int exp = s_netExp;
+		if (exp == 1) return;                                  // B: free-run — never block
+		if (exp == 2 && vbl < NET_EXP_CAP_VBL) return;         // C: free-run until the cap, then block
 		s_netPaceBlkN++;
-		if (!net_round_wait(round, 1u << 0, NET_PACE_WAIT_MS)) return;    // bounded wait; stalled link -> free-run, no hang
+		uint64_t pt0 = net_mono_ticks();
+		bool got = net_round_wait(round, 1u << 0, NET_PACE_WAIT_MS);     // bounded wait; stalled link -> free-run, no hang
+		s_netRoundPaceUs += net_ticks_to_us(net_mono_ticks() - pt0);     // diag: wall-clock blocked at the barrier this round
+		if (!got) return;
 		// word arrived -> fall through and inject
 	}
 

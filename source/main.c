@@ -1155,10 +1155,20 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					if (emuA.core) upload_frame(&emuA); if (emuB.core) upload_frame(&emuB);
 					workersRunning = false;
 				}
-				if (kDown & KEY_Y) {                                         // switch focus
-					focused ^= 1; audio_reset_stream();
-					gbacore_set_frameskip(emuA.core, (fsOn && focused != 0) ? 2 : 0);
-					gbacore_set_frameskip(emuB.core, (fsOn && focused != 1) ? 2 : 0);
+				if (kDown & KEY_Y) {
+					if (wlOn) {   // WIRELESS LINK: Y cycles the A/B/C pacing EXPERIMENT (focus-switch is a no-op here
+						// — the peer game is paused). The active state is stamped per-round into the netlog (exp col),
+						// so one hardware run sweeps strategies. A=baseline(paced) B=free-run C=capped free-run.
+						static const char* const EXP_NAMES[3] = { "A baseline (paced)", "B free-run", "C capped free-run" };
+						int ex = (gbacore_net_get_exp() + 1) % 3;
+						gbacore_net_set_exp(ex);
+						snprintf(toast, sizeof toast, "Link exp: %s", EXP_NAMES[ex]);
+						toastTimer = 120;
+					} else {                                                 // switch focus (non-link)
+						focused ^= 1; audio_reset_stream();
+						gbacore_set_frameskip(emuA.core, (fsOn && focused != 0) ? 2 : 0);
+						gbacore_set_frameskip(emuB.core, (fsOn && focused != 1) ? 2 : 0);
+					}
 				}
 				if (kDown & KEY_X) {                                         // swap which game is on which screen
 					swapped = !swapped;
@@ -1540,8 +1550,8 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 				// (-1 = never). V = peak emulated VBlanks between serial IRQs (the JOINER pacing/LAG measure;
 				// must stay < ~10 or the SLAVE watchdog trips); b = times the joiner blocked at the barrier.
 				if (wlOn)
-					snprintf(hudStat, sizeof hudStat, "N P%04X R%04X s%d o%d to%d ST%d V%u b%d rtt%d",
-					         psp, prp, ns, no, nt, stallO, vblMax, paceBlk, wlRtt);
+					snprintf(hudStat, sizeof hudStat, "N P%04X R%04X o%d to%d V%u b%d rtt%d X%c",
+					         psp, prp, no, nt, vblMax, paceBlk, wlRtt, 'A' + gbacore_net_get_exp());
 				else
 					snprintf(hudStat, sizeof hudStat, "N P%04X R%04X s%d o%d to%d ST%d V%u b%d",
 					         psp, prp, ns, no, nt, stallO, vblMax, paceBlk);
