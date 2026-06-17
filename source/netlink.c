@@ -113,24 +113,8 @@ static Result net_send_locked(u16 dst, u32 flags, const void* p, size_t n) {
 	return r;
 }
 
-// WORD-path send: a TX-busy (0xC86113F0) means the frame did NOT leave the radio. For the SIO WORD
-// path that IS link loss (it 0xFFFF-poisons the peer's Gen-3 handshake), so retry the busy a bounded
-// number of times, releasing s_txLock between tries so the RX-thread PONG and the other seat's WORD
-// are never starved. Bounded well under NET_DEADLINE_MS. s_netBusyN counts every busy waited out; the
-// return is the LAST udsSendTo result (success, a fatal error, or busy if all retries were exhausted).
-static Result net_send_word_retry(u16 dst, const void* p, size_t n) {
-	if (!s_inited || !s_up) return (Result)0xD8E007FA;
-	Result r = (Result)0xC86113F0;
-	for (int t = 0; t < 64; t++) {                 // <=64 * 125us = ~8ms worst case, << 250ms deadline
-		LightLock_Lock(&s_txLock);
-		r = udsSendTo(dst, DGBA_DATACHAN, (u8)UDS_SENDFLAG_Default, p, n);
-		LightLock_Unlock(&s_txLock);
-		if (r != (Result)0xC86113F0) break;        // sent, or a real (fatal) error -> stop
-		s_netBusyN++;                              // diag: a TX-busy we had to wait out
-		svcSleepThread(125000LL);                  // 0.125ms: let nwm drain its TX ring
-	}
-	return r;
-}
+// (net_send_word_retry removed: its on-WORKER busy-retry (~8ms) starved run_loop under UDS contention and
+// stuck the link — net_word_tx now does a single non-blocking try and relies on the RX-thread re-send.)
 
 // Resolve the lone peer's unicast node id. Sets s_peerResolved only when a real (non-broadcast)
 // peer node is found — WORD packets MUST go unicast (MAC-ACKed); a broadcast fallback is a hard
@@ -347,15 +331,21 @@ static void net_round_merge(int seat, u32 round, u16 word) {
 	LightLock_Unlock(&r->lock);
 }
 
-// Put one WORD packet on the wire (unicast to the peer, MAC-ACKed, busy-retried). Used by the primary
-// send AND the reliable re-send. Idempotent on the peer (net_round_merge overwrites the same slot).
+// Put one WORD packet on the wire (unicast to the peer, MAC-ACKed). SINGLE non-blocking try — used by the
+// primary send (worker thread) AND the periodic RX-thread re-send. A TX-busy (0xC86113F0) here does NOT
+// block: the previous busy-RETRY (up to 64*125us=~8ms) ran on the WORKER thread, so under UDS contention it
+// starved gbacore_run_loop and the round's completeEvent never fired -> the link stuck (hardware 0617:
+// busy=236, JOIN established=0, stuck at round 1). A dropped/busy word is harmless: s_curPacked holds it and
+// the RX thread re-sends every ~4ms (OFF the worker), and the peer's collect waits for the genuine word (no
+// 0xFFFF poison before the deadline). So delivery is preserved without ever blocking the emulated clock.
 static void net_word_tx(int seat, int mode, u32 round, u16 word) {
 	if (s_loopback || !s_up || !s_peerResolved) return;
 	DgbaLinkPkt pk; memset(&pk, 0, sizeof pk);
 	pk.magic = 'G'; pk.type = PK_WORD; pk.seat = (u8)seat; pk.mode = (u8)mode;
 	pk.round = round; pk.d.send = word;
-	Result rc = net_send_word_retry(s_peerNode, &pk, sizeof pk);
-	if (R_FAILED(rc)) s_wordSendFails++;             // a WORD that never left IS link loss — count BUSY too
+	Result rc = net_send_locked(s_peerNode, UDS_SENDFLAG_Default, &pk, sizeof pk);
+	if (rc == (Result)0xC86113F0) s_netBusyN++;      // TX-busy: dropped this try; the RX re-send retries it (not loss)
+	else if (R_FAILED(rc)) s_wordSendFails++;        // a real (non-busy) send failure
 }
 
 void net_transfer_send_word(int seat, int mode, u32 round, u16 send) {
