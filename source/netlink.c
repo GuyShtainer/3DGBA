@@ -491,7 +491,7 @@ static void net_rx_thread(void* arg) {
 	}
 }
 
-bool net_link_start(int seat) {
+bool net_link_start(int seat, int rxCore) {
 	(void)seat;                            // role is decided in gbacore_net_attach(seat)
 	if (!s_inited || !s_up) return false;
 	net_rounds_init();                     // (also arms s_txLock/s_rxLock)
@@ -501,9 +501,10 @@ bool net_link_start(int seat) {
 	if (!s_rxThread) {
 		__atomic_store_n(&s_rxRun, true, __ATOMIC_RELEASE);
 		s32 prio = 0x30; svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
-		// Core 2 (freed when emuB pauses) so the RX poll never contends with emuA's trade worker on core 0.
-		// Fall back to the default core if core 2 is unavailable (Old 3DS / no grant).
-		s_rxThread = threadCreate(net_rx_thread, NULL, NET_RX_STACK, prio - 1, 2, false);
+		// Pin the RX poll to rxCore = the core the participating game does NOT run on (the freed core when the
+		// other game pauses), so the radio never contends with the trade worker. Fall back to the libctru
+		// default core if rxCore is unavailable (Old 3DS / no core-2 grant).
+		s_rxThread = threadCreate(net_rx_thread, NULL, NET_RX_STACK, prio - 1, rxCore, false);
 		if (!s_rxThread) s_rxThread = threadCreate(net_rx_thread, NULL, NET_RX_STACK, prio - 1, -2, false);
 		if (!s_rxThread) { __atomic_store_n(&s_rxRun, false, __ATOMIC_RELEASE); return false; }
 	}

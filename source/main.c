@@ -1099,7 +1099,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	int  menuSel = 0;
 	int  result = SESSION_QUIT;
 	gfxSet3D(true);   // enable stereoscopic top screen; the right eye is driven below (slider-gated)
-	char status[24] = "";   // last save/load result, shown in the menu
+	char status[48] = "";   // last save/load result, shown in the menu (fits "Wireless: ON (join, <game>)")
 	// Scale + filter are PER SCREEN ([0]=top, [1]=bottom): the 400x240 top and 320x240 bottom
 	// have different best fits. ZR/ZL adjust the focused screen (X/Y switches focus).
 	int  scaleMode[2] = { SCALE_FIT, SCALE_FIT };
@@ -1311,11 +1311,13 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 						net_ping_update(NULL, NULL, NULL);       // send-only outbound ping; the RX thread echoes + times it
 						net_link_get_rtt(&wlRtt, &wlDrops);      // RX-thread-measured RTT for the HUD
 						if (!net_session_active()) {             // peer/session dropped (e.g. resumed after HOME) -> tear down
-							emuA.netLinked = false; LightEvent_Wait(&emuA.done);
+							EmuInstance* part = g_netWorker ? g_netWorker : &emuA;   // the participant (focused game at link start)
+							EmuInstance* other = (part == &emuA) ? &emuB : &emuA;
+							part->netLinked = false; LightEvent_Wait(&part->done);
 							wl_dump(wlSeat);   // dump the per-round link log to a timestamped SD file
 							gs_dump(wlSeat);   // + the game-state log (HOST/JOIN-tagged; captures the link-error reason)
-							gbacore_net_detach(emuA.core); net_link_stop();
-							g_netWorker = NULL; emuB.paused = false; wlOn = false;
+							gbacore_net_detach(part->core); net_link_stop();
+							g_netWorker = NULL; other->paused = false; wlOn = false;
 							snprintf(status, sizeof status, "Wireless link closed");
 						}
 					}
@@ -1469,31 +1471,40 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 				}
 				else if (menuSel == MENU_WIRELESS_IDX) {        // wireless multi-console lobby (M1) -> M3 link
 					if (wlOn) {                                  // already linked -> stop the wireless link
-						emuA.netLinked = false; LightEvent_Wait(&emuA.done);
+						EmuInstance* part = g_netWorker ? g_netWorker : &emuA;   // the participant (focused game at link start)
+						EmuInstance* other = (part == &emuA) ? &emuB : &emuA;
+						part->netLinked = false; LightEvent_Wait(&part->done);
 						wl_dump(wlSeat);   // dump the per-round link log to a timestamped SD file
 						gs_dump(wlSeat);   // + the game-state log (HOST/JOIN-tagged; captures the link-error reason)
-						gbacore_net_detach(emuA.core); net_link_stop(); net_session_close();
-						g_netWorker = NULL; emuB.paused = false; wlOn = false;
+						gbacore_net_detach(part->core); net_link_stop(); net_session_close();
+						g_netWorker = NULL; other->paused = false; wlOn = false;
 						snprintf(status, sizeof status, "Wireless: off");
 					} else {
 						EmuInstance* fg = (focused == 0) ? &emuA : &emuB;
 						char gcode[5] = { 0 };
 						if (fg->core) gbacore_game_code(fg->core, gcode);
 						int lr = wireless_lobby_run(top, bot, txtBuf, gcode);   // 0 closed, 1 host, 2 joiner
-						if ((lr == 1 || lr == 2) && emuA.core && !linkOn && !netOn) {
+						if ((lr == 1 || lr == 2) && fg->core && !linkOn && !netOn) {
 							int seat = (lr == 1) ? 0 : 1;          // host = seat 0 (parent/master), joiner = seat 1 (child)
+							// The FOCUSED game (fg) is the trade participant — matches the code the lobby advertised
+							// (gcode above) and lets the user trade with EITHER loaded game (incl. FireRed) without
+							// reordering ROMs. The OTHER game pauses, freeing its core for the radio.
+							EmuInstance* part  = fg;
+							EmuInstance* other = (fg == &emuA) ? &emuB : &emuA;
+							int rxCore = (part == &emuA) ? 2 : 0;  // RX on the freed (non-participant) core
 							if (workersRunning) { LightEvent_Wait(&emuA.done); LightEvent_Wait(&emuB.done); workersRunning = false; }
-							emuB.paused = true;                    // FREE emuB's core for emuA + the radio (NOT netLinked)
-							if (net_link_start(seat)) {            // loopback=false; resolves the peer; spins the RX thread
-								gbacore_net_attach(emuA.core, seat, 1);   // ONE participating core; peers=1; needMask=0x3
-								emuA.netLinked = true;             // emuB.netLinked stays FALSE (parked, core freed)
-								g_netWorker = &emuA;               // the apt hook can now stop this worker on HOME/suspend
+							other->paused = true;                  // FREE the other core for the participant + the radio (NOT netLinked)
+							if (net_link_start(seat, rxCore)) {    // loopback=false; resolves the peer; spins the RX thread
+								gbacore_net_attach(part->core, seat, 1);   // ONE participating core; peers=1; needMask=0x3
+								part->netLinked = true;            // the other stays FALSE (parked, core freed)
+								g_netWorker = part;                // the apt hook can now stop this worker on HOME/suspend
 								wlOn = true; wlSeat = seat;        // remember our seat for the SD log filename
-								LightEvent_Signal(&emuA.go);       // kick ONLY emuA into the net free-run
+								LightEvent_Signal(&part->go);      // kick ONLY the participant into the net free-run
 								menuOpen = false;
-								snprintf(status, sizeof status, "Wireless: ON (%s)", seat == 0 ? "host" : "join");
+								char pn[24]; rom_display_name(part == &emuA ? pathA : pathB, pn, sizeof pn);
+								snprintf(status, sizeof status, "Wireless: ON (%s, %s)", seat == 0 ? "host" : "join", pn);
 							} else {
-								emuB.paused = false;               // couldn't arm (no unicast peer / RX thread) -> undo
+								other->paused = false;             // couldn't arm (no unicast peer / RX thread) -> undo
 								net_session_close();
 								snprintf(status, sizeof status, "WL link failed: no peer");
 							}
@@ -1769,14 +1780,16 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	// teardown this session's workers + cores; reset g_quit for the next session
 	gs_dump(-1);   // flush this play session's game-state instrumentation log to SD (Quit / Change games; no link role)
 	if (wlOn) {                               // Quit/Change-games straight out of a live WIRELESS link
-		emuA.netLinked = false;               // the worker leaves the net free-run once its collect returns
+		EmuInstance* part = g_netWorker ? g_netWorker : &emuA;   // the participant (focused game at link start)
+		EmuInstance* other = (part == &emuA) ? &emuB : &emuA;
+		part->netLinked = false;              // the worker leaves the net free-run once its collect returns
 		net_link_stop();                      // join the RX thread + abort rounds (any blocked collect returns now)
-		LightEvent_Wait(&emuA.done);          // wait for emuA's worker to actually exit the net loop before detaching
+		LightEvent_Wait(&part->done);         // wait for the participant's worker to exit the net loop before detaching
 		wl_dump(wlSeat);   // dump the per-round link log to a timestamped SD file
-		gbacore_net_detach(emuA.core);
+		gbacore_net_detach(part->core);
 		net_session_close();
 		g_netWorker = NULL;
-		emuB.paused = false;
+		other->paused = false;
 		wlOn = false;
 	}
 	emuA.linked = emuB.linked = false;        // stop the free-run loop

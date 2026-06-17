@@ -72,7 +72,10 @@ bool net_older_than_ms(u64 sinceTick, u32 ms);   // u64-safe wall-clock age test
 // net_link_start: arm wireless gameplay AFTER the lobby session is up. loopback=false, reset the
 // ring, resolve the lone peer (REFUSING if it can't get a unicast node id), and spin the one RX
 // thread that owns every udsPullPacket. Returns false if the session/peer isn't ready.
-bool net_link_start(int seat);
+// rxCore = the CPU core to pin the RX thread to: the one the participating game does NOT run on
+// (so the radio never contends with the trade worker). Pass the free core (2 if the participant is
+// the core-0 game, 0 if the participant is the core-2 game); -2 = libctru default.
+bool net_link_start(int seat, int rxCore);
 // net_link_stop: stop+join the RX thread and release any worker blocked in collect. Idempotent.
 void net_link_stop(void);
 // net_transfer_abort: signal every round slot so a blocked net_transfer_collect returns at once
