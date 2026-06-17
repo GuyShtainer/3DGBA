@@ -766,7 +766,12 @@ void gbacore_net_poll(GbaCore* g) {
 		bool acked   = (gba->memory.io[IO_IF] & SIO_IRQ_BIT) == 0;
 		bool fired   = !mTimingIsScheduled(&gba->timing, &gba->irqEvent);
 		bool guarded = elapsed >= NET_ISR_GUARD_CYCLES;
-		bool ceiling = elapsed >= NET_ISR_GUARD_CEIL;
+		// State D EDGE-STRICT: disable the time-ceiling so we ALWAYS wait for the proven (acked && fired) ISR edge
+		// and never force-capture a not-yet-armed (stale) word. Force-captures correlate with the host CHECKSUM
+		// error (D run: force=185 -> errored at round 3824; force=0 runs survived 10000+); D free-runs more
+		// emulated cycles between rounds, so it blew past the ceiling and grabbed stale words. Gen-3 is
+		// interrupt-driven (the edge always comes; run_loop advances on each re-poll), so waiting can't wedge.
+		bool ceiling = (s_netExp != 3) && (elapsed >= NET_ISR_GUARD_CEIL);
 		if (!ceiling && !((acked && fired) && guarded)) return;   // not yet — re-poll next slice (CPU advances)
 		if (ceiling && !(acked && fired)) s_netForceN++;          // captured on the time floor, not a proven edge
 		else                              s_netEdgeN++;           // captured behind the proven ISR-ran edge (good)
