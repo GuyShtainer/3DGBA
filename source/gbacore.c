@@ -329,9 +329,20 @@ bool net_round_next_parent(uint32_t afterRound, uint32_t* outRound);   // M3: ch
 // yields is the datum); C=capped free-run (run up to NET_EXP_CAP_VBL emulated VBlanks, then block — a middle
 // ground). Per-round `paceus` (joiner only) = wall-clock spent blocked at the barrier this round.
 #define NET_EXP_CAP_VBL   3u     // state C: free-run up to this many emulated VBlanks past the last round, then block
-static volatile int s_netExp     = 0;   // 0=A 1=B 2=C — live experiment state (set from the HUD)
+// State D = HOST-RATE FOLLOW. The comm error decoded to a HOST CHECKSUM error (LINK_STAT_ERROR_CHECKSUM): the
+// frozen-XA joiner (~0fps) can't compute the correct word per round, so it sends STALE words and the host's
+// running checksum fails. Fix: let the joiner free-run but bound its emulated-frame advance to track the host's
+// rate — the host clocks ~NET_HOSTRATE_DIV MULTI transfers per emulated frame (baudGame=0 ⇒ ~9), and the link is
+// round-locked, so the joiner's adopted-round count IS the host's transfer count. Target joiner frame-delta =
+// (round - base) / DIV; free-run while at/under target (+slack) so it advances at ~the host's fps (walkable AND
+// in-sync words), block when it would pull ahead (no divergence). Round-count proxy — NO transport change.
+#define NET_HOSTRATE_DIV   9u    // host MULTI transfers per emulated frame (baudGame=0) -> rounds-per-joiner-frame
+#define NET_HOSTRATE_SLACK 2u    // emulated-frame slack the joiner may lead the host before it blocks
+static volatile int s_netExp     = 0;   // 0=A 1=B 2=C 3=D — live experiment state (set from the HUD)
 static int          s_netExpSeen = 1;   // bitmask of states active during this run (header diag; A seen by default)
 static uint32_t     s_netRoundPaceUs = 0;   // joiner: wall-clock us blocked at the barrier for the in-flight round
+static uint32_t     s_netHostRateBaseFrame = 0, s_netHostRateBaseRound = 0;  // state D: frame/round baseline
+static bool         s_netHostRateValid = false;                             // ...armed at the first D-paced round
 // (LINK-RATE THROTTLE removed: forcing the MULTI baud cut round-trips ~3x but the Gen-3 game reads SIOCNT back
 // during connection-verify and rejects a baud mismatch — it broke the link right after save. See net_wSIOCNT.)
 
@@ -549,6 +560,7 @@ void gbacore_net_attach(GbaCore* g, int seat, int peers) {
 	nd->irqArmTime = 0;
 	nd->lastActiveFrame = g->core->frameCounter(g->core);   // PACING baseline = current emulated VBlank count
 	s_netExp = 0; s_netExpSeen = 1; s_netRoundPaceUs = 0;    // each session starts at the SAFE baseline (A); no leak across links
+	s_netHostRateValid = false;                              // re-arm state D's host-rate baseline for this session
 	nd->d.init = net_init;       nd->d.deinit = net_deinit;     nd->d.reset = net_reset;
 	nd->d.driverId = net_id;     nd->d.loadState = net_load;    nd->d.saveState = net_save;
 	nd->d.setMode = net_setMode; nd->d.handlesMode = net_handles;
@@ -615,7 +627,9 @@ void gbacore_net_pace(unsigned* vblMax, int* blkN, unsigned* capK) {
 // state in s_netExpSeen so the netlog header shows which strategies a run exercised. Global (one net link), not
 // per-core. Only the joiner's net_poll acts on it; on the host it is inert (the host never paces).
 void gbacore_net_set_exp(int exp) {
-	if (exp < 0 || exp > 2) return;
+	if (exp < 0 || exp > 3) return;
+	if (exp == 3) s_netHostRateValid = false;   // re-arm state D's baseline on (re-)entry so a stale frame/round
+	                                            // pair from a prior D stint can't mis-pace (toggling A<->D)
 	s_netExp = exp;
 	s_netExpSeen |= (1 << exp);
 }
@@ -638,10 +652,11 @@ void gbacore_net_log_dump(const char* path, int seat) {
 	// PACING (active-gated, JOIN only): vblMax = peak emulated VBlanks the joiner ran between serial IRQs (must
 	// stay < ~10 or the Gen-3 SLAVE watchdog trips mid-trade); paceN = paced waits during active transfers.
 	// dvbl col below = emulated VBlanks since prev round (per-round watchdog measure); dt_us = wall-clock us.
-	char expSeen[4] = {0}; int es = 0;   // which experiment states (A/B/C) were active during this run
+	char expSeen[5] = {0}; int es = 0;   // which experiment states (A/B/C/D) were active during this run
 	if (s_netExpSeen & 1) expSeen[es++] = 'A';
 	if (s_netExpSeen & 2) expSeen[es++] = 'B';
 	if (s_netExpSeen & 4) expSeen[es++] = 'C';
+	if (s_netExpSeen & 8) expSeen[es++] = 'D';
 	fprintf(f, "# established=%d vblMax=%lu paceN=%d activeMs=%u baudGame=%d expSeen=%s capVbl=%u\n",
 	        s_netEstablished ? 1 : 0, (unsigned long)s_netVblMax, s_netPaceBlkN, (unsigned)NET_ACTIVE_MS,
 	        s_netBaudSeen, expSeen, (unsigned)NET_EXP_CAP_VBL);
@@ -665,7 +680,7 @@ void gbacore_net_log_dump(const char* path, int seat) {
 		fprintf(f, "%lu,%lu,%lu,%lu,%lu,%lu,%lu,%c,%04X,%04X,%u\n",
 		        (unsigned long)i, (unsigned long)e->round, (unsigned long)e->frame,
 		        (unsigned long)dvbl, (unsigned long)dt_us, (unsigned long)e->rtt,
-		        (unsigned long)e->paceus, (char)('A' + (e->exp <= 2 ? e->exp : 0)), e->w0, e->w1, e->ok);
+		        (unsigned long)e->paceus, (char)('A' + (e->exp <= 3 ? e->exp : 0)), e->w0, e->w1, e->ok);
 	}
 	fclose(f);
 }
@@ -720,6 +735,14 @@ void gbacore_net_poll(GbaCore* g) {
 		int exp = s_netExp;
 		if (exp == 1) return;                                  // B: free-run — never block
 		if (exp == 2 && vbl < NET_EXP_CAP_VBL) return;         // C: free-run until the cap, then block
+		if (exp == 3) {                                        // D: follow the host's frame rate (round/DIV)
+			uint32_t fr = g->core->frameCounter(g->core);
+			if (!s_netHostRateValid) { s_netHostRateBaseFrame = fr; s_netHostRateBaseRound = round; s_netHostRateValid = true; }
+			uint32_t expDelta = (round - s_netHostRateBaseRound) / NET_HOSTRATE_DIV;   // host frames elapsed (proxy)
+			uint32_t actDelta = fr - s_netHostRateBaseFrame;                            // joiner frames elapsed
+			if (actDelta <= expDelta + NET_HOSTRATE_SLACK) return;   // at/under the host's pace -> free-run (walkable)
+			// else: pulling ahead of the host -> fall through and BLOCK (stay in sync, no divergence/checksum break)
+		}
 		s_netPaceBlkN++;
 		uint64_t pt0 = net_mono_ticks();
 		bool got = net_round_wait(round, 1u << 0, NET_PACE_WAIT_MS);     // bounded wait; stalled link -> free-run, no hang

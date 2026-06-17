@@ -1167,8 +1167,8 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					if (wlOn) {   // WIRELESS LINK: Y cycles the A/B/C pacing EXPERIMENT (focus-switch is a no-op here
 						// — the peer game is paused). The active state is stamped per-round into the netlog (exp col),
 						// so one hardware run sweeps strategies. A=baseline(paced) B=free-run C=capped free-run.
-						static const char* const EXP_NAMES[3] = { "A baseline (paced)", "B free-run", "C capped free-run" };
-						int ex = (gbacore_net_get_exp() + 1) % 3;
+						static const char* const EXP_NAMES[4] = { "A baseline (paced)", "B free-run", "C capped free-run", "D host-rate (walk+sync)" };
+						int ex = (gbacore_net_get_exp() + 1) % 4;
 						gbacore_net_set_exp(ex);
 						snprintf(toast, sizeof toast, "Link exp: %s", EXP_NAMES[ex]);
 						toastTimer = 120;
