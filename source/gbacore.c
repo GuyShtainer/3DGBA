@@ -652,72 +652,79 @@ void gbacore_net_poll(GbaCore* g) {
 	struct GBASIO* sio = nd->d.p;
 	struct GBA*    gba = sio->p;
 
-	// CONCURRENT EXCHANGE (pre-send). The old flow WAITED for the host's word, THEN sent our reply — a full
-	// A->B->A round-trip per transfer (rtt~=dt~=23ms = the trade-room speed wall). Now we SEND our word the instant
-	// our game has it (right after the prior round's SIO ISR), CONCURRENTLY with the host, then ADOPT/complete the
-	// round when the host's word lands. Both words cross in parallel -> each side waits ONE one-way hop, not two
-	// -> ~2x rounds/sec. The net_round_ready ADOPTION + strict lastInjected+1 ordering are UNCHANGED, so the two
-	// seats stay round-LOCKED (the counter advances only when the host's word for the round is in -> no desync);
-	// only the SEND moves earlier. Phases: IDLE -(pre-send)-> SENDING -(host word in)-> RECEIVING -(finish)-> IDLE.
-	if (nd->phase == NET_RECEIVING) return;   // a round is adopted + in flight: let run_loop fire its completeEvent
-	                                          // + SIO ISR before touching the next round (one-round-in-flight; a
-	                                          // pace-block must never starve a pending completion). 0616: okN stalled.
+	// STRICTLY ONE round in flight. If a round was injected but net_finishMulti hasn't processed its completion
+	// yet (phase != IDLE), RETURN so this worker's run_loop can fire that round's completeEvent + SIO IRQ before
+	// we touch the next round. CRITICAL with pacing: the pace-block below sleeps ON THIS WORKER THREAD, so if we
+	// reached it while a round were still in flight it would starve run_loop and the in-flight round's completion
+	// would never fire — okN stalls and the joiner sticks at the handshake (0616 18:40: edge=529 injects but
+	// okN=3 completed). Also prevents injecting round N+1 before round N completes. net_finishMulti -> phase=IDLE.
+	if (nd->phase != NET_IDLE) return;
 
-	if (nd->phase == NET_IDLE) {
-		// Engage only in an ACTIVE link; in the overworld (not MULTI) free-run — a plain return, NOT a block, so
-		// no cable-club freeze — and don't pre-send garbage / flood UDS.
-		if (sio->mode != GBA_SIO_MULTI) return;
-		uint32_t round = nd->lastInjectedRound + 1;   // strict order; sentinel 0xFFFFFFFF + 1 = round 0
-		// --- ISR-PROOF GATE: don't capture round R's reply until round (R-1)'s SIO ISR has run+acked, so
-		// io[SIOMLT_SEND] already holds round R's word (the VBA-M one-transfer latency). All signals LOCAL:
-		//   acked = handler write-1-cleared IF.SIO; fired = irqEvent no longer scheduled; guarded = local-clock
-		//   floor so DoSend completed; ceiling = capture on time alone so a pure-poll game can't wedge us.
-		if (nd->isrWaitRound != 0xFFFFFFFFu) {
-			uint32_t now     = (uint32_t)mTimingCurrentTime(&gba->timing);
-			uint32_t elapsed = now - nd->irqArmTime;
-			bool acked   = (gba->memory.io[IO_IF] & SIO_IRQ_BIT) == 0;
-			bool fired   = !mTimingIsScheduled(&gba->timing, &gba->irqEvent);
-			bool guarded = elapsed >= NET_ISR_GUARD_CYCLES;
-			bool ceiling = elapsed >= NET_ISR_GUARD_CEIL;
-			if (!ceiling && !((acked && fired) && guarded)) return;   // ISR not done yet -> re-poll next slice
-			if (ceiling && !(acked && fired)) s_netForceN++;          // captured on the time floor, not a proven edge
-			else                              s_netEdgeN++;           // captured behind the proven ISR-ran edge (good)
-			nd->isrWaitRound = 0xFFFFFFFFu;
-		} else {
-			s_netEdgeN++;   // round 0 (no prior ISR): the pre-seeded io[SIOMLT_SEND] is the correct first word
-		}
-		// PRE-SEND round R's word NOW, CONCURRENTLY with the host — do NOT wait for the host's word. The RX thread
-		// re-sends it (s_curPacked) every ~4ms while we await the host's, so the host gets it within ~one hop.
-		// Counter NOT advanced here -> no desync: adoption below is still gated on the host's word for this round.
-		uint16_t w = gba->memory.io[IO_SIOMLT_SEND];     // armed by the ISR we proved ran (or round-0 pre-seed)
-		s_netCWord = w; if (w && w != 0xFFFF) s_peakSentC = w;   // diag / peak word the child sent
-		net_transfer_send_word(nd->seat, GBA_SIO_MULTI, round, w);
-		nd->pendingRound = round;
-		nd->phase = NET_SENDING;   // pre-sent; awaiting the host's word to adopt
-		// fall through: the host's word for this round may already be present
-	}
-
-	// phase == NET_SENDING: our word for pendingRound is pre-sent; ADOPT (arm completion) once the host's word
-	// lands. This wait is ~ONE one-way hop now (the host sent its word concurrently), not a round-trip.
-	uint32_t round = nd->pendingRound;
+	// M3 RELIABLE: process rounds STRICTLY in order (next == lastInjected+1) — NEVER skip a gap. UDS reorders
+	// and drops, so a not-yet-arrived round must be WAITED for (the parent re-sends it via the collect loop),
+	// not skipped: the Gen-3 trade is a checksummed lockstep where a skipped/duplicated/reordered round
+	// corrupts the stream. The parent (FIX B) stamps exactly one sequential round per COMPLETED transfer, so
+	// lastInjected+1 is always the next wire round. (sentinel 0xFFFFFFFF + 1 = round 0.)
+	uint32_t round = nd->lastInjectedRound + 1;
 	if (!net_round_ready(round, 1u << 0)) {
-		// ACTIVE-GATED PACING: block for the host's word only while actively transferring (recent adopt); else
-		// free-run (navigation / pre-establishment / pause) -> no freeze. RX keeps re-sending our pre-sent word.
-		// Blocking freezes our emulated clock -> low VBlanks-between-IRQs (SLAVE-watchdog safe). Wall-clock gate so
-		// a block (which freezes emulated time) still ages out and never re-freezes us (the old cable-club bug).
-		if (s_netLastInjectTick == 0 || net_older_than_ms(s_netLastInjectTick, NET_ACTIVE_MS)) return;
+		// ACTIVE-GATED PACING (see NET_ACTIVE_MS note). Pace (briefly block for the parent's word) ONLY while
+		// actively transferring — a round was injected within the last NET_ACTIVE_MS of WALL-CLOCK time. Blocking
+		// freezes our emulated clock between rounds so the SLAVE watchdog's VBlanks-without-serial-IRQ stays low
+		// (fixes the 2x-Emerald mid-trade "link error", okN=261, dvbl 2-11). When NOT actively transferring
+		// (navigation / pre-establishment / a mid-trade pause) FREE-RUN — never freeze waiting for a host that
+		// isn't clocking (that was the cable-club freeze). Wall-clock gate (not emulated frames): a block freezes
+		// emulated time, so a frame gate would never age out and would re-freeze us.
+		if (s_netLastInjectTick == 0 || net_older_than_ms(s_netLastInjectTick, NET_ACTIVE_MS)) return;  // not active -> free-run
+		// VBlank-CAP free-run was REVERTED (it felt "way faster" but desynced): letting the joiner run extra
+		// VBlanks between rounds advanced its emulated clock ~1.9 frames/round vs the host's ~0.11, so the joiner
+		// raced ~90s AHEAD -> the two game clocks diverged -> comm error SOONER (0617: 3068 rounds with the cap vs
+		// 9785 without). Block per round so the joiner advances as little as possible between rounds = closest to
+		// the host's rate = least divergence. Real speed must come from MORE ROUNDS/SEC (concurrent exchange),
+		// not from free-running one side ahead of the other.
 		uint32_t vbl = (uint32_t)(g->core->frameCounter(g->core) - nd->lastActiveFrame);
 		if (vbl > s_netVblMax) s_netVblMax = vbl;                         // diag: peak emulated VBlanks between serial IRQs
 		s_netPaceBlkN++;
 		if (!net_round_wait(round, 1u << 0, NET_PACE_WAIT_MS)) return;    // bounded wait; stalled link -> free-run, no hang
+		// word arrived -> fall through and inject
 	}
-	// host word arrived -> ADOPT round R: arm completion (net_finishMulti's collect already holds both words).
+
+	// --- ISR-PROOF GATE: do not capture round R's reply until round (R-1)'s SIO ISR has run+acked. ---
+	// All three signals are LOCAL (no peer access, no shared clock):
+	//   acked  = the handler write-1-to-cleared IF.SIO (io.c:518-520) after GBARaiseIRQ set it (gba.c:585)
+	//   fired  = irqEvent is no longer scheduled => the +7 IRQ was taken (gba.c:596-597)
+	//   guarded= a local-clock floor so DoSend (which arms SIOMLT_SEND a few hundred cycles into the handler)
+	//            has completed; this is VBA-M's "give the CPU a time window then read" on the LOCAL clock.
+	// The (acked && fired) edge is value-agnostic — it fires even when the reply equals the prior word
+	// (the identical-idle/handshake rounds that dominate a trade), which is why a value-change detector fails.
+	// A hard ceiling (NET_ISR_GUARD_CEIL) captures on time alone so a pure-poll SIO game cannot wedge us.
+	if (nd->isrWaitRound != 0xFFFFFFFFu) {
+		uint32_t now     = (uint32_t)mTimingCurrentTime(&gba->timing);
+		uint32_t elapsed = now - nd->irqArmTime;
+		bool acked   = (gba->memory.io[IO_IF] & SIO_IRQ_BIT) == 0;
+		bool fired   = !mTimingIsScheduled(&gba->timing, &gba->irqEvent);
+		bool guarded = elapsed >= NET_ISR_GUARD_CYCLES;
+		bool ceiling = elapsed >= NET_ISR_GUARD_CEIL;
+		if (!ceiling && !((acked && fired) && guarded)) return;   // not yet — re-poll next slice (CPU advances)
+		if (ceiling && !(acked && fired)) s_netForceN++;          // captured on the time floor, not a proven edge
+		else                              s_netEdgeN++;           // captured behind the proven ISR-ran edge (good)
+		nd->isrWaitRound = 0xFFFFFFFFu;                           // satisfied for this round
+	} else {
+		s_netEdgeN++;   // round 0 (no prior ISR): the pre-seeded io[SIOMLT_SEND] is the correct first word
+	}
+
+	// --- SENDING: capture the POST-ISR-armed reply and ship it for THIS round, then arm completion. ---
+	uint16_t w = gba->memory.io[IO_SIOMLT_SEND];     // armed by the ISR we just proved ran (or round-0 pre-seed)
+	s_netCWord = w;                                  // diag: the FRESH word the child sends (what 'c' shows)
+	if (w && w != 0xFFFF) s_peakSentC = w;           // PEAK: latch last non-idle word the child SENT
+	net_transfer_send_word(nd->seat, GBA_SIO_MULTI, round, w);
+
 	sio->siocnt |= 0x80;                             // Busy: transfer in progress (lockstep.c:967)
+	nd->pendingRound = round;
 	nd->lastInjectedRound = round;
 	nd->phase = NET_RECEIVING;                       // completion delivers+IRQs, then net_finishMulti flips to IDLE
 	nd->lastActiveFrame = g->core->frameCounter(g->core);  // emulated-VBlank baseline for the dvbl/vblMax diag
-	s_netLastInjectTick = net_mono_ticks();          // wall-clock of this adopt -> the active-transfer pacing gate
-	s_netInjectN++;                                  // diag: the child adopted a parent-initiated round
+	s_netLastInjectTick = net_mono_ticks();          // wall-clock of this inject -> the active-transfer pacing gate
+	s_netInjectN++;                                  // diag: the child captured+armed a parent-initiated round
 	int32_t cyc = GBASIOTransferCycles(GBA_SIO_MULTI, sio->siocnt, nd->peers);
 	mTimingDeschedule(&gba->timing, &sio->completeEvent);
 	mTimingSchedule(&gba->timing, &sio->completeEvent, cyc);
