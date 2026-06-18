@@ -723,7 +723,16 @@ void gbacore_net_poll(GbaCore* g) {
 		// (navigation / pre-establishment / a mid-trade pause) FREE-RUN — never freeze waiting for a host that
 		// isn't clocking (that was the cable-club freeze). Wall-clock gate (not emulated frames): a block freezes
 		// emulated time, so a frame gate would never age out and would re-freeze us.
-		if (s_netLastInjectTick == 0 || net_older_than_ms(s_netLastInjectTick, NET_ACTIVE_MS)) return;  // not active -> free-run
+		if (s_netLastInjectTick == 0 || net_older_than_ms(s_netLastInjectTick, NET_ACTIVE_MS)) {
+			// NOT actively transferring (overworld navigation / pre-establishment / a mid-trade pause): FREE-RUN.
+			// Also INVALIDATE state D's host-rate baseline here — while navigating, the joiner advances emulated
+			// FRAMES with no rounds, so a baseline taken before/through navigation makes actDelta(frames) >>
+			// expDelta(round/DIV) once the trade starts, and D would then block EVERY round (frozen joiner — the
+			// default-D regression). Re-arming on idle makes D re-base at the START of each active burst (= what
+			// toggling to D in the room did manually), so it tracks the host's rate from there.
+			s_netHostRateValid = false;
+			return;
+		}
 		// VBlank-CAP free-run was REVERTED (it felt "way faster" but desynced): letting the joiner run extra
 		// VBlanks between rounds advanced its emulated clock ~1.9 frames/round vs the host's ~0.11, so the joiner
 		// raced ~90s AHEAD -> the two game clocks diverged -> comm error SOONER (0617: 3068 rounds with the cap vs
