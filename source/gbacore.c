@@ -559,7 +559,10 @@ void gbacore_net_attach(GbaCore* g, int seat, int peers) {
 	nd->isrWaitRound = 0xFFFFFFFFu;
 	nd->irqArmTime = 0;
 	nd->lastActiveFrame = g->core->frameCounter(g->core);   // PACING baseline = current emulated VBlank count
-	s_netExp = 0; s_netExpSeen = 1; s_netRoundPaceUs = 0;    // each session starts at the SAFE baseline (A); no leak across links
+	s_netExp = 3; s_netExpSeen = 8; s_netRoundPaceUs = 0;    // DEFAULT = state D (host-rate-follow + edge-strict) — the
+	                                                        // PROVEN trade recipe: every link uses it from round 0 (no
+	                                                        // toggle, no pre-D force-captures, no mid-switch desync). A/B/C
+	                                                        // stay reachable via the HUD's Y toggle as diagnostic fallbacks.
 	s_netHostRateValid = false;                              // re-arm state D's host-rate baseline for this session
 	nd->d.init = net_init;       nd->d.deinit = net_deinit;     nd->d.reset = net_reset;
 	nd->d.driverId = net_id;     nd->d.loadState = net_load;    nd->d.saveState = net_save;
