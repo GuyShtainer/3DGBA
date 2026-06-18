@@ -294,6 +294,7 @@ uint64_t net_mono_ticks(void);                 // libctru wall-clock tick (for t
 uint32_t net_ticks_to_us(uint64_t dticks);     // ticks -> microseconds
 bool net_older_than_ms(uint64_t sinceTick, uint32_t ms);   // u64-safe wall-clock age test (pacing gate)
 void net_link_get_stats(int* rxWordN, int* wordSendFails, int* busyN, int* peerUp, int* maxSeat0Round);  // establishment diag
+void net_link_get_rtt(int* rttMs, int* drops);   // PURE-NETWORK ping round-trip (no game) — splits radio vs our per-round overhead
 bool net_round_next_parent(uint32_t afterRound, uint32_t* outRound);   // M3: child adopts the parent's wire round
 
 #define IO_SIOMLT_SEND  0x95          // gba->memory.io[] halfword index for SIOMLT_SEND (0x0400012A)
@@ -670,6 +671,12 @@ void gbacore_net_log_dump(const char* path, int seat) {
 	{ int rxW=0, txF=0, busy=0, peerUp=0, maxS0=-1; net_link_get_stats(&rxW, &txF, &busy, &peerUp, &maxS0);
 	  fprintf(f, "# transport rxWords=%d txFails=%d busy=%d peerUp=%d maxSeat0Round=%d hostRound=%lu\n",
 	          rxW, txF, busy, peerUp, maxS0, (unsigned long)s_netRound); }
+	// PURE-NETWORK latency (the decisive split): the PING round-trip runs alongside the trade with NO game in the
+	// loop. If pingRtt << the per-round rtt_us below, the ~21ms-over-floor is OUR per-round turnaround (worker
+	// poll/emulate/reply), NOT the radio -> a router/socket won't help, but tightening the loop would. If
+	// pingRtt ~= rtt_us, it's the radio/UDS scheduling -> a router/socket path could approach the ~3ms floor.
+	{ int pr=-1, pd=0; net_link_get_rtt(&pr, &pd);
+	  fprintf(f, "# ping pureNetRtt_ms=%d drops=%d  (vs the per-round rtt_us below: << => our overhead; ~= => the radio)\n", pr, pd); }
 	// DATA-RATE summary (DEMAND vs SUPPLY — the system-limit question). Over the logged rounds: the emulated-frame
 	// span is the GAME's demand (transfers/emu-frame ~= what a full-speed/in-console trade needs per frame, ~9 for
 	// Gen-3 => ~9*60=540 transfers/s at 60fps); the wall-clock span is what the WIRELESS supplied. supply
