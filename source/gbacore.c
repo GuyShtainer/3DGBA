@@ -670,6 +670,25 @@ void gbacore_net_log_dump(const char* path, int seat) {
 	{ int rxW=0, txF=0, busy=0, peerUp=0, maxS0=-1; net_link_get_stats(&rxW, &txF, &busy, &peerUp, &maxS0);
 	  fprintf(f, "# transport rxWords=%d txFails=%d busy=%d peerUp=%d maxSeat0Round=%d hostRound=%lu\n",
 	          rxW, txF, busy, peerUp, maxS0, (unsigned long)s_netRound); }
+	// DATA-RATE summary (DEMAND vs SUPPLY — the system-limit question). Over the logged rounds: the emulated-frame
+	// span is the GAME's demand (transfers/emu-frame ~= what a full-speed/in-console trade needs per frame, ~9 for
+	// Gen-3 => ~9*60=540 transfers/s at 60fps); the wall-clock span is what the WIRELESS supplied. supply
+	// transfers/s + payload B/s show the trade is LATENCY-bound (tiny bytes, but one synchronous round-trip per
+	// 16-bit transfer); sustained emu-fps = the speed the link holds. demand/supply gap = the round-trip wall.
+	{ uint32_t nn = (s_netLogN < NETLOG_N) ? s_netLogN : NETLOG_N;
+	  uint32_t b0 = (s_netLogN < NETLOG_N) ? 0u : (s_netLogN % NETLOG_N);
+	  if (nn >= 2) {
+	    const NetLogEntry* e0 = &s_netLog[b0 % NETLOG_N];
+	    const NetLogEntry* eN = &s_netLog[(b0 + nn - 1) % NETLOG_N];
+	    uint32_t frameSpan = eN->frame - e0->frame;
+	    uint32_t wallUs    = net_ticks_to_us(eN->tick - e0->tick);
+	    float    wallSec   = wallUs / 1.0e6f;
+	    float    rps       = wallSec > 0.0f ? nn / wallSec : 0.0f;
+	    float    tpf       = frameSpan > 0 ? (float)nn / frameSpan : 0.0f;
+	    float    fps       = wallSec > 0.0f ? frameSpan / wallSec : 0.0f;
+	    fprintf(f, "# rate rounds=%lu wall_ms=%lu emuFrames=%lu | SUPPLY %.1f transfers/s (~%.0f payload B/s) | DEMAND %.1f transfers/emu-frame (~%.0f/s @60fps) | sustained %.2f emu-fps  [LATENCY-bound: 1 round-trip per 2-byte transfer]\n",
+	            (unsigned long)nn, (unsigned long)(wallUs/1000u), (unsigned long)frameSpan, rps, rps*2.0f, tpf, tpf*60.0f, fps);
+	  } }
 	fprintf(f, "# columns: idx,round,frame,dvbl,dt_us,rtt_us,paceus,exp,w0,w1,ok   (dt_us=wall-clock between rounds; rtt_us=HOST round-trip this round [send->collect]; paceus=JOINER wall-clock blocked at the pacing barrier this round [0 on host/free-run]; exp=A/B/C experiment state active when the round retired; rtt~=dt => wire-bound; compare rtt_us across A vs B rounds to split radio vs pacing; w0=seat0/parent w1=seat1/child; ok=1/timeout=0)\n");
 	fprintf(f, "idx,round,frame,dvbl,dt_us,rtt_us,paceus,exp,w0,w1,ok\n");
 	uint32_t n    = (s_netLogN < NETLOG_N) ? s_netLogN : NETLOG_N;
