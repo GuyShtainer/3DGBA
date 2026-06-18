@@ -342,6 +342,13 @@ bool net_round_next_parent(uint32_t afterRound, uint32_t* outRound);   // M3: ch
 static volatile int s_netExp     = 0;   // 0=A 1=B 2=C 3=D — live experiment state (set from the HUD)
 static int          s_netExpSeen = 1;   // bitmask of states active during this run (header diag; A seen by default)
 static uint32_t     s_netRoundPaceUs = 0;   // joiner: wall-clock us blocked at the barrier for the in-flight round
+// TURNAROUND split (the 19ms-over-radio X-ray): per round, the role-specific PRODUCTION time. HOST = collect-done
+// -> next net_start (the host emulating to its next transfer). JOINER = host-word-ready -> reply-sent (the joiner
+// emulating to produce + ship its reply). Radio is ~5ms (the ping); these say how much of the ~24ms rtt is each
+// console's per-round software/emulation turnaround (the speed lever if it dominates) vs the wire.
+static uint32_t     s_netTurnUs = 0;          // role-specific turnaround for the in-flight round (us)
+static uint64_t     s_netCollectDoneTick = 0; // HOST: tick the previous round's collect finished
+static uint64_t     s_netReadyTick = 0;       // JOINER: tick the host's word for this round first became ready
 static uint32_t     s_netHostRateBaseFrame = 0, s_netHostRateBaseRound = 0;  // state D: frame/round baseline
 static bool         s_netHostRateValid = false;                             // ...armed at the first D-paced round
 // (LINK-RATE THROTTLE removed: forcing the MULTI baud cut round-trips ~3x but the Gen-3 game reads SIOCNT back
@@ -375,7 +382,7 @@ static int      s_netPaceBlkN = 0;
 // rounds' `frame` IS the emulated VBlanks-between-serial-IRQs (the SLAVE-watchdog measure), per round, and
 // host-vs-joiner frame deltas show whether the two emulated clocks stay phase-locked. Generally useful for
 // any future link-timing debugging, not just this fix.
-typedef struct { uint32_t round; uint32_t frame; uint64_t tick; uint32_t rtt; uint32_t paceus; uint16_t w0, w1; uint8_t ok; uint8_t exp; } NetLogEntry;
+typedef struct { uint32_t round; uint32_t frame; uint64_t tick; uint32_t rtt; uint32_t paceus; uint32_t turnus; uint16_t w0, w1; uint8_t ok; uint8_t exp; } NetLogEntry;
 static NetLogEntry s_netLog[NETLOG_N];
 static uint32_t    s_netLogN = 0;   // total appended (ring index = % NETLOG_N)
 static uint32_t    s_netLastLogRound = 0; static bool s_netHaveLastLog = false;  // dedup repeated same-round timeout rows
@@ -459,6 +466,7 @@ static bool net_start(struct GBASIODriver* d) {
 		nd->pendingRound = round;
 		nd->roundOpen    = true;                     // closed by net_finishMulti on a successful collect
 		s_roundSendTick  = net_mono_ticks();         // LATENCY X-RAY: stamp when the host first sent this round's word
+		s_netTurnUs = s_netCollectDoneTick ? net_ticks_to_us(s_roundSendTick - s_netCollectDoneTick) : 0;  // HOST emulate-to-next-transfer
 	}
 	net_transfer_send_word(0, GBA_SIO_MULTI, round, w);
 	s_netStartN++;
@@ -524,6 +532,7 @@ static void net_finishMulti(struct GBASIODriver* d, uint16_t data[4]) {
 		s_netLog[s_netLogN % NETLOG_N].frame  = fr;
 		s_netLog[s_netLogN % NETLOG_N].rtt    = rtt;
 		s_netLog[s_netLogN % NETLOG_N].paceus = s_netRoundPaceUs;   // joiner: wall-clock blocked at the barrier this round (0 on host)
+		s_netLog[s_netLogN % NETLOG_N].turnus = s_netTurnUs;        // HOST emulate-to-next-send / JOINER reply-production (us)
 		s_netLog[s_netLogN % NETLOG_N].tick   = net_mono_ticks();   // wall-clock -> dt_us (emulated-divergence vs UDS latency)
 		s_netLog[s_netLogN % NETLOG_N].w0     = data[0];
 		s_netLog[s_netLogN % NETLOG_N].w1     = data[1];
@@ -532,7 +541,8 @@ static void net_finishMulti(struct GBASIODriver* d, uint16_t data[4]) {
 		s_netLogN++;
 		s_netLastLogRound = nd->pendingRound; s_netHaveLastLog = true;
 	}
-	s_netRoundPaceUs = 0;   // reset the per-round barrier-block accumulator for the next round
+	s_netRoundPaceUs = 0; s_netTurnUs = 0;          // reset per-round accumulators
+	s_netCollectDoneTick = net_mono_ticks();        // HOST: collect just finished -> base for the next emulate-to-send
 	// RECEIVING-end bookkeeping (child only). GBASIOMultiplayerFinishTransfer (the very next _sioFinish call)
 	// writes SIOMULTI, clears Busy, and GBARaiseIRQ schedules irqEvent at +7. Stamp the LOCAL clock now and
 	// record that THIS round's ISR must complete before the next capture. Flip toward IDLE.
@@ -696,8 +706,8 @@ void gbacore_net_log_dump(const char* path, int seat) {
 	    fprintf(f, "# rate rounds=%lu wall_ms=%lu emuFrames=%lu | SUPPLY %.1f transfers/s (~%.0f payload B/s) | DEMAND %.1f transfers/emu-frame (~%.0f/s @60fps) | sustained %.2f emu-fps  [LATENCY-bound: 1 round-trip per 2-byte transfer]\n",
 	            (unsigned long)nn, (unsigned long)(wallUs/1000u), (unsigned long)frameSpan, rps, rps*2.0f, tpf, tpf*60.0f, fps);
 	  } }
-	fprintf(f, "# columns: idx,round,frame,dvbl,dt_us,rtt_us,paceus,exp,w0,w1,ok   (dt_us=wall-clock between rounds; rtt_us=HOST round-trip this round [send->collect]; paceus=JOINER wall-clock blocked at the pacing barrier this round [0 on host/free-run]; exp=A/B/C experiment state active when the round retired; rtt~=dt => wire-bound; compare rtt_us across A vs B rounds to split radio vs pacing; w0=seat0/parent w1=seat1/child; ok=1/timeout=0)\n");
-	fprintf(f, "idx,round,frame,dvbl,dt_us,rtt_us,paceus,exp,w0,w1,ok\n");
+	fprintf(f, "# columns: idx,round,frame,dvbl,dt_us,rtt_us,paceus,turnus,exp,w0,w1,ok   (dt_us=wall-clock between rounds; rtt_us=HOST round-trip [send->collect]; paceus=JOINER barrier-block this round; turnus=role TURNAROUND [HOST: collect-done->next-send = emulate-to-next-transfer; JOINER: host-word-ready->reply-sent = reply-production] — the 19ms-over-radio X-ray: big turnus => that console's per-round software/emulation is the wall [the speed lever]; small turnus on both => it's the wire/scheduling; w0=seat0 w1=seat1; ok=1/timeout=0)\n");
+	fprintf(f, "idx,round,frame,dvbl,dt_us,rtt_us,paceus,turnus,exp,w0,w1,ok\n");
 	uint32_t n    = (s_netLogN < NETLOG_N) ? s_netLogN : NETLOG_N;
 	uint32_t base = (s_netLogN < NETLOG_N) ? 0u : (s_netLogN % NETLOG_N);   // oldest retained entry
 	uint32_t prevFrame = 0; uint64_t prevTick = 0; bool havePrev = false;
@@ -706,10 +716,10 @@ void gbacore_net_log_dump(const char* path, int seat) {
 		uint32_t dvbl  = havePrev ? (e->frame - prevFrame) : 0;            // emulated VBlanks since the previous logged round
 		uint32_t dt_us = havePrev ? net_ticks_to_us(e->tick - prevTick) : 0;  // wall-clock us since the previous logged round
 		prevFrame = e->frame; prevTick = e->tick; havePrev = true;
-		fprintf(f, "%lu,%lu,%lu,%lu,%lu,%lu,%lu,%c,%04X,%04X,%u\n",
+		fprintf(f, "%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%c,%04X,%04X,%u\n",
 		        (unsigned long)i, (unsigned long)e->round, (unsigned long)e->frame,
 		        (unsigned long)dvbl, (unsigned long)dt_us, (unsigned long)e->rtt,
-		        (unsigned long)e->paceus, (char)('A' + (e->exp <= 3 ? e->exp : 0)), e->w0, e->w1, e->ok);
+		        (unsigned long)e->paceus, (unsigned long)e->turnus, (char)('A' + (e->exp <= 3 ? e->exp : 0)), e->w0, e->w1, e->ok);
 	}
 	fclose(f);
 }
@@ -788,6 +798,7 @@ void gbacore_net_poll(GbaCore* g) {
 		if (!got) return;
 		// word arrived -> fall through and inject
 	}
+	if (!s_netReadyTick) s_netReadyTick = net_mono_ticks();   // JOINER: host word is now available -> start timing reply-production
 
 	// --- ISR-PROOF GATE: do not capture round R's reply until round (R-1)'s SIO ISR has run+acked. ---
 	// All three signals are LOCAL (no peer access, no shared clock):
@@ -823,6 +834,8 @@ void gbacore_net_poll(GbaCore* g) {
 	s_netCWord = w;                                  // diag: the FRESH word the child sends (what 'c' shows)
 	if (w && w != 0xFFFF) s_peakSentC = w;           // PEAK: latch last non-idle word the child SENT
 	net_transfer_send_word(nd->seat, GBA_SIO_MULTI, round, w);
+	s_netTurnUs = s_netReadyTick ? net_ticks_to_us(net_mono_ticks() - s_netReadyTick) : 0;  // JOINER reply-production us
+	s_netReadyTick = 0;                              // re-arm for the next round
 
 	sio->siocnt |= 0x80;                             // Busy: transfer in progress (lockstep.c:967)
 	nd->pendingRound = round;
