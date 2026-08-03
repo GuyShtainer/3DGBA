@@ -17,6 +17,7 @@
 #include <stdint.h>
 
 #include "../source/celiolink.c"
+#include "../source/fingerprint.c"   // D6 link-surface fingerprint (TEST 16 golden / TEST 17 mutation)
 
 // --------------------------------------------------------------------------------------------
 static int g_fail = 0;
@@ -327,8 +328,13 @@ typedef struct {
 	int crc_mismatches;
 } CrcTracker;
 
+// D7a: forward decl — the lag shim hooks EVERY frame drive (no-op unless a lagged pair is armed).
+// One frame_drive == one "pump" == one game frame (~16.7ms), which is the unit the delay is in.
+static void lag_pump_for(CelioLink* cl);
+
 static void frame_drive(CelioLink* cl, CrcTracker* ct, const uint16_t game_cmd[8], uint16_t out_tx[8])
 {
+	lag_pump_for(cl);                 // D7a: deliver whatever the modelled radio owes this side
 	uint16_t dongle_crc = drive_crc(cl, 0x0000);
 	if (ct->first_crc) {
 		if (dongle_crc != LINK_SLAVE_HANDSHAKE) ct->crc_mismatches++;
@@ -515,20 +521,287 @@ static int relay_until_event(CelioLink* from, CelioLink* to, uint8_t want, ClEve
 	return found;
 }
 
+// ============================================================================================
+// D7a — THE laggyPair DELAY SHIM (SPEC-suite-hardening.md §D7a; design source gen1recomp's
+// tests/engine/link_desync_fuzz.lua via docs/kb/external/gen1-parity.md §7).
+//
+// WHY. relay_events()/relay_until_event() above deliver semantic events SYNCHRONOUSLY and
+// INSTANTLY — "loopbackPair delivers instantly, which is the one thing the real relay never
+// does" (link_desync_fuzz.lua:65-91). Our real channel is the UDS event plane at a measured
+// ~23ms RTT (HANDOFF: rtt~24ms, pure-ping 5-24ms) => 1-2 game frames of ONE-WAY delay. Every
+// hold in the FSM is therefore released by an event that arrives LATE, which is exactly the
+// defect class run #8 shipped (edge- vs LEVEL-triggered hold releases).
+//
+// WHAT IS MODELLED: latency only. In-order, no loss, no duplication — because the transport is
+// reliable-ordered by construction (netlink.h event plane: seq/ack + retransmit), and loss /
+// reorder / duplication are already the netlink host suite's job
+// (test/host/test_netlink_reliability.c, 66 checks). Modelling them here would test the
+// transport twice and the FSM never.
+//
+// UNIT: one lag_pump == one frame_drive == one game frame. delay 1-2 == the measured radio; the
+// sweep runs 0..4 (the charter) so the FSM is proven well past the real channel.
+// ============================================================================================
+#define LAG_Q_DEPTH 64
+
+typedef struct { ClEvent ev; int due; } LagSlot;
+
+typedef struct {
+	LagSlot  q[LAG_Q_DEPTH];
+	int      n;            // events in flight
+	int      now;          // pump clock of THIS direction (advances when the RECEIVER drives a frame)
+	int      fixed;        // fixed delay in pumps (used when rndMax == 0)
+	int      rndMax;       // >0: delay ~ U[0, rndMax] drawn from `rng`
+	uint32_t rng;          // Park-Miller state — "a failure replays from its seed alone" (:44-54)
+	int      lastDue;      // in-order delivery: due is monotone non-decreasing
+	int      overflow;     // events the shim could not queue (must stay 0)
+	int      delivered;    // total delivered (anti-vacuity)
+	int      maxInFlight;
+} LagQ;
+
+static void lag_init(LagQ* q, int fixed, int rndMax, uint32_t seed)
+{
+	memset(q, 0, sizeof(*q));
+	q->fixed = fixed; q->rndMax = rndMax;
+	q->rng = seed ? seed : 1u;          // Park-Miller state must never be 0
+}
+
+static int lag_next_delay(LagQ* q)
+{
+	if (q->rndMax <= 0) return q->fixed;
+	q->rng = (uint32_t)(((uint64_t)q->rng * 48271u) % 2147483647u);
+	return (int)(q->rng % (uint32_t)(q->rndMax + 1));
+}
+
+// Deliver one event into `to`, then MIRROR-CHECK the transport->state path byte-exactly for the
+// payload-carrying event types (the "A's bytes == B's captured bytes" half of D7b).
+static void lag_deliver(const ClEvent* ev, CelioLink* to)
+{
+	cl_put_incoming(to, ev);
+	if (ev->type == CL_EV_PARTY_CHUNK && ev->len) {
+		uint32_t off = (uint32_t)ev->arg * 200u;
+		if (off + ev->len <= CL_PARTNER_PARTY_BYTES)
+			CHECK(memcmp(to->partnerParty + off, ev->data, ev->len) == 0,
+			      "D7b: relayed PARTY_CHUNK(%u) landed byte-exact in the peer's window\n", ev->arg);
+	}
+}
+
+static void lag_put(LagQ* q, const ClEvent* ev, int delay)
+{
+	int due = q->now + delay;
+	if (due < q->lastDue) due = q->lastDue;   // reliable-ORDERED: never let a later event overtake
+	q->lastDue = due;
+	if (q->n >= LAG_Q_DEPTH) { q->overflow++; return; }
+	q->q[q->n].ev = *ev; q->q[q->n].due = due; q->n++;
+	if (q->n > q->maxInFlight) q->maxInFlight = q->n;
+}
+
+// Advance this direction's clock one frame and deliver everything now due, in order.
+static int lag_pump(LagQ* q, CelioLink* to)
+{
+	q->now++;
+	int delivered = 0, keep = 0;
+	for (int i = 0; i < q->n; i++) {
+		if (q->q[i].due <= q->now && keep == i) {   // in-order: stop at the first not-yet-due slot
+			lag_deliver(&q->q[i].ev, to);
+			delivered++; q->delivered++;
+		} else {
+			if (keep != i) q->q[keep] = q->q[i];
+			keep++;
+		}
+	}
+	q->n = keep;
+	return delivered;
+}
+
+// Pump until the queue is empty (the drain-before-compare rule: "let it drain ... or the check
+// reads a mid-match frame", gen1-parity.md §8). Used where the test asserts arrival immediately.
+static int lag_drain(LagQ* q, CelioLink* to)
+{
+	int n = 0, guard = 0;
+	while (q->n > 0 && guard++ < 256) n += lag_pump(q, to);
+	return n;
+}
+
+// Take everything `from` wants to ship and hand it to the modelled radio (one draw per event).
+static int relay_events_lagged(CelioLink* from, LagQ* q)
+{
+	int n = 0; ClEvent ev;
+	while (cl_take_outgoing(from, &ev)) { lag_put(q, &ev, lag_next_delay(q)); n++; }
+	return n;
+}
+
+// The lagged twin of relay_until_event: draining OUR OWN outgoing queue is local and instant (the
+// app does it every frame); only the DELIVERY to the peer is delayed.
+static int relay_until_event_lagged(CelioLink* from, LagQ* q, uint8_t want, ClEvent* out)
+{
+	int found = 0; ClEvent ev;
+	while (cl_take_outgoing(from, &ev)) {
+		if (ev.type == want && !found) { *out = ev; found = 1; }
+		if (q) lag_put(q, &ev, lag_next_delay(q));
+	}
+	return found;
+}
+
+// ============================================================================================
+// D7b — PER-PUMP MIRROR AGREEMENT ACROSS BOTH SYNTHESIZED SIDES (SPEC §D7b).
+//
+// NOT a cross-instance CRC compare: under local termination the two consoles run DIFFERENT
+// game<->dongle conversations by design (celiolink.h:21-27), so cross-instance CRC equality is a
+// FALSE invariant (SPEC §D7b.1) — per-instance CRC correctness is already asserted every frame by
+// CrcTracker. The real cross-console invariant is the MIRROR: A's "local" facts must equal B's
+// "partner" facts once the relay settles (gen1's final-HP mirror, link_desync_fuzz.lua:216-240).
+//
+// FIELD-BY-FIELD, NOT A DIGEST — deliberately: gen1's v1 single-hash "ended in a draw that
+// explained nothing"; a named field + pump index + seed localizes a failure completely.
+// Violations are ACCUMULATED per field and asserted once per run (one CHECK per field per lag
+// combo) instead of one CHECK per pump — same localization, sane check counter.
+// ============================================================================================
+typedef struct {
+	CelioLink *A, *B;
+	LagQ      *qAB, *qBA;        // A->B and B->A
+	int        pumpIdx;
+	uint32_t   seed;
+	int        lagAB, lagBA, rndMax;
+	int        armed;            // equality/monotone sampling on (off across a session re-arm)
+	int        settledSamples;   // anti-vacuity: the equality assert must actually have run
+	// violation accumulators (one per mirrored fact)
+	int vSelAB, vSelBA, vConfAB, vConfBA, vSection, vMono, vTrade;
+	int vPump; char vField[80];  // first violation: pump index + the field that broke
+	// monotone trackers (a set slot never changes; a confirm/complete never reverts)
+	int mLocalA, mLocalB, mPartA, mPartB;
+	int mConfA, mConfB, mPConfA, mPConfB, mDoneA, mDoneB;
+} Pair;
+
+static Pair* g_pair = NULL;
+
+static const char* sec_name(int s)
+{
+	switch (s) {
+	case CL_SEC_SETUP:      return "SETUP";
+	case CL_SEC_CONNECTION: return "CONNECTION";
+	case CL_SEC_DISCONNECT: return "DISCONNECT";
+	case CL_SEC_LOUNGE:     return "LOUNGE";
+	default:                return "?";
+	}
+}
+
+// The legal (A.section, B.section) pairs — derived from the dispatcher's transitions:
+// SETUP->CONNECTION (celiolink.c:779), CONNECTION->DISCONNECT|LOUNGE (:650), DISCONNECT->CONNECTION
+// (:845), LOUNGE->CONNECTION (:899), any->SETUP (cl_reset_session :953). One side may lead the other
+// by ONE transition during a hand-off; anything else means the two consoles diverged.
+static int section_pair_legal(int a, int b)
+{
+	static const uint8_t legal[][2] = {
+		{ CL_SEC_SETUP,      CL_SEC_SETUP      }, { CL_SEC_SETUP,      CL_SEC_CONNECTION },
+		{ CL_SEC_CONNECTION, CL_SEC_CONNECTION }, { CL_SEC_CONNECTION, CL_SEC_DISCONNECT },
+		{ CL_SEC_DISCONNECT, CL_SEC_DISCONNECT }, { CL_SEC_CONNECTION, CL_SEC_LOUNGE     },
+		{ CL_SEC_LOUNGE,     CL_SEC_LOUNGE     }, { CL_SEC_DISCONNECT, CL_SEC_CONNECTION },
+	};
+	for (int i = 0; i < (int)(sizeof legal / sizeof legal[0]); i++)
+		if ((legal[i][0] == a && legal[i][1] == b) || (legal[i][0] == b && legal[i][1] == a))
+			return 1;
+	return 0;
+}
+
+static void mirror_note(Pair* p, const char* field)
+{
+	if (p->vPump) return;                       // keep the FIRST violation (the causal one)
+	p->vPump = p->pumpIdx;
+	snprintf(p->vField, sizeof p->vField, "%s", field);
+}
+
+// Sampled once per frame_drive of either side (see lag_pump_for).
+static void mirror_sample(Pair* p)
+{
+	CelioLink* A = p->A; CelioLink* B = p->B;
+	p->pumpIdx++;
+
+	// --- section-pair legality: always armed (a divergence here is never legitimate) ---
+	if (!section_pair_legal(A->section, B->section)) {
+		p->vSection++;
+		char f[80]; snprintf(f, sizeof f, "sectionPair(%s,%s)", sec_name(A->section), sec_name(B->section));
+		mirror_note(p, f);
+	}
+	if (!p->armed) return;
+
+	// --- MONOTONE facts: asserted even while events are legitimately in flight ---
+	// trackers start at -1 ("never seen"); once a slot is set it may never change again
+	#define MONO(track, live, name) do { \
+		if ((live) >= 0) { \
+			if ((track) >= 0 && (track) != (live)) { p->vMono++; mirror_note(p, name); } \
+			(track) = (live); \
+		} \
+	} while (0)
+	MONO(p->mLocalA, A->localSelectSlot,   "monotone:A.localSelectSlot");
+	MONO(p->mLocalB, B->localSelectSlot,   "monotone:B.localSelectSlot");
+	MONO(p->mPartA,  A->partnerSelectSlot, "monotone:A.partnerSelectSlot");
+	MONO(p->mPartB,  B->partnerSelectSlot, "monotone:B.partnerSelectSlot");
+	#undef MONO
+	#define NOREVERT(track, live, name) do { \
+		if ((track) && !(live)) { p->vMono++; mirror_note(p, name); } \
+		if (live) (track) = 1; \
+	} while (0)
+	NOREVERT(p->mConfA,  A->localConfirmed,   "monotone:A.localConfirmed");
+	NOREVERT(p->mConfB,  B->localConfirmed,   "monotone:B.localConfirmed");
+	NOREVERT(p->mPConfA, A->partnerConfirmed, "monotone:A.partnerConfirmed");
+	NOREVERT(p->mPConfB, B->partnerConfirmed, "monotone:B.partnerConfirmed");
+	NOREVERT(p->mDoneA,  A->tradeComplete,    "monotone:A.tradeComplete");
+	NOREVERT(p->mDoneB,  B->tradeComplete,    "monotone:B.tradeComplete");
+	#undef NOREVERT
+
+	// --- FULL equality only once nothing is in flight (drain-before-compare, §D7b.3) ---
+	int settled = (p->qAB->n == 0 && p->qBA->n == 0 &&
+	               A->outHead == A->outTail && B->outHead == B->outTail);
+	if (!settled) return;
+	p->settledSamples++;
+	if (A->localSelectSlot >= 0 && B->partnerSelectSlot != A->localSelectSlot) {
+		p->vSelAB++; mirror_note(p, "mirror:A.localSelectSlot!=B.partnerSelectSlot");
+	}
+	if (B->localSelectSlot >= 0 && A->partnerSelectSlot != B->localSelectSlot) {
+		p->vSelBA++; mirror_note(p, "mirror:B.localSelectSlot!=A.partnerSelectSlot");
+	}
+	if (A->localConfirmed && !B->partnerConfirmed) {
+		p->vConfAB++; mirror_note(p, "mirror:A.localConfirmed!=B.partnerConfirmed");
+	}
+	if (B->localConfirmed && !A->partnerConfirmed) {
+		p->vConfBA++; mirror_note(p, "mirror:B.localConfirmed!=A.partnerConfirmed");
+	}
+}
+
+// The hook frame_drive calls: deliver this side's due events, then sample the mirror. No-op when
+// no lagged pair is armed (every other TEST in this file drives instances standalone).
+static void lag_pump_for(CelioLink* cl)
+{
+	Pair* p = g_pair;
+	if (!p) return;
+	if      (cl == p->B) lag_pump(p->qAB, p->B);
+	else if (cl == p->A) lag_pump(p->qBA, p->A);
+	else return;
+	mirror_sample(p);
+}
+
 // Supply a peer identity + a (one-chunk) party so the PARTY0 hold can release. arg `slot_byte`
 // makes the parties distinguishable but the exact bytes don't matter to the coordination logic.
-static void supply_peer_party(CelioLink* cl, uint8_t fill)
+// When a lag queue is given the events ride the modelled radio (and get the byte-exact mirror
+// check in lag_deliver) instead of being poked straight into the struct.
+static void supply_peer_party_q(CelioLink* cl, uint8_t fill, LagQ* q)
 {
 	ClEvent ev;
 	ev.type = CL_EV_LINKPLAYER; ev.arg = 0;
 	ClLinkPlayerBlock blk; cl_make_linkplayer_block(&blk, LINKTYPE_TRADE_CONNECTING);
 	ev.len = CL_LINKPLAYER_BLOCK_SIZE; memcpy(ev.data, &blk, ev.len);
-	cl_put_incoming(cl, &ev);
+	if (q) lag_put(q, &ev, lag_next_delay(q)); else cl_put_incoming(cl, &ev);
 	for (uint8_t c = 0; c < 3; c++) {                 // per-chunk holds need ALL THREE windows
 		ev.type = CL_EV_PARTY_CHUNK; ev.arg = c; ev.len = 200;
 		for (int i = 0; i < 200; i++) ev.data[i] = (uint8_t)(fill + c * 3 + i);
-		cl_put_incoming(cl, &ev);
+		if (q) lag_put(q, &ev, lag_next_delay(q)); else cl_put_incoming(cl, &ev);
 	}
+	if (q) lag_drain(q, cl);      // the party must be in before the block stream is driven
+}
+
+static void supply_peer_party(CelioLink* cl, uint8_t fill)
+{
+	supply_peer_party_q(cl, fill, NULL);
 }
 
 // Get a freshly-inited dongle out of handshake and into CONNECTION's block exchange, parked just
@@ -583,13 +856,25 @@ static int negotiate_select(CelioLink* cl, CrcTracker* ct, uint16_t slot, int li
 	return 0;
 }
 
-static void test_two_instance_coordination(void)
+// D7a/D7b: the whole TEST-5 flow, parameterized by the modelled radio delay. lagAB/lagBA are the
+// one-way delays (in pumps == game frames) for A->B and B->A; rndMax>0 draws each event's delay
+// from U[0,rndMax] with the printed seed. lag(0,0) reproduces the original zero-latency run.
+static void run_two_instance_coordination(int lagAB, int lagBA, int rndMax, uint32_t seed)
 {
-	printf("TEST 5 (T1): two live instances coordinate the same slot pair\n");
-
 	CelioLink A, B;
 	cl_init(&A, CL_MASTER, LINKTYPE_TRADE);
 	cl_init(&B, CL_SLAVE,  LINKTYPE_TRADE);
+
+	LagQ qAB, qBA;
+	lag_init(&qAB, lagAB, rndMax, seed);
+	lag_init(&qBA, lagBA, rndMax, seed ^ 0x5EEDu);
+	Pair P; memset(&P, 0, sizeof P);
+	P.A = &A; P.B = &B; P.qAB = &qAB; P.qBA = &qBA;
+	P.seed = seed; P.lagAB = lagAB; P.lagBA = lagBA; P.rndMax = rndMax; P.armed = 1;
+	P.mLocalA = P.mLocalB = P.mPartA = P.mPartB = -1;
+	g_pair = &P;
+	// worst-case one-way delay in pumps — every "wait for the peer" loop bound grows by it.
+	const int lagW = (rndMax > 0 ? rndMax : (lagAB > lagBA ? lagAB : lagBA)) + 2;
 
 	CrcTracker ctA, ctB;
 
@@ -601,14 +886,15 @@ static void test_two_instance_coordination(void)
 	CHECK(A.partnerPartyHeld == 1, "A reports the party-block hold (partnerPartyHeld)\n");
 
 	// now supply A's peer party (B's identity+party) -> the hold releases and the stream completes.
-	supply_peer_party(&A, 0x10);
+	// It rides the modelled radio (qBA) so lag_deliver byte-checks it into A's partner window.
+	supply_peer_party_q(&A, 0x10, &qBA);
 	drive_block_stream(&A, &ctA, 200);
 	CHECK(A.blockSeq == CL_BLK_LINKCMD, "A advances past PartyPart0 once peer party arrives (seq=%d)\n", A.blockSeq);
 	CHECK(A.partnerPartyHeld == 0, "A clears the party-block hold after release\n");
 
 	// bring B up the same way, peer party supplied up front (so we focus on the SELECT/CONFIRM gates).
 	to_party0(&B, &ctB, /*game_is_master=*/1);
-	supply_peer_party(&B, 0x20);
+	supply_peer_party_q(&B, 0x20, &qAB);
 	drive_block_stream(&B, &ctB, 200);
 	CHECK(B.blockSeq == CL_BLK_LINKCMD, "B reached negotiation (seq=%d)\n", B.blockSeq);
 
@@ -620,24 +906,31 @@ static void test_two_instance_coordination(void)
 	CHECK(A.selectHeld == 1, "A reports the SELECT hold\n");
 	CHECK(A.localSelectSlot == (int)iA, "A recorded its own offered slot iA=%u\n", iA);
 
-	// (a) A emitted CL_EV_SELECT(iA); relay it to B.
+	// (a) A emitted CL_EV_SELECT(iA); ship it to B over the modelled radio.
 	{
 		ClEvent ev;
-		int got = relay_until_event(&A, &B, CL_EV_SELECT, &ev);
+		int got = relay_until_event_lagged(&A, &qAB, CL_EV_SELECT, &ev);
 		CHECK(got, "A emitted CL_EV_SELECT for the peer\n");
 		CHECK(got && ev.arg == iA, "A's CL_EV_SELECT carries iA=%u (got %u)\n", iA, ev.arg);
 	}
 
 	// B is the HOST-side (FOLLOWER) partner: on A's relayed SELECT it must ANNOUNCE [AABB, iA] to
 	// its game-Leader (whose own selection is silent-local; the pairing happens inside the game).
+	// Under lag the announce cannot happen before the event lands — the loop budget grows by lagW,
+	// and the LEVEL-triggered re-assert (run-#8 fix) is what makes the late release work at all.
 	{
 		uint16_t idleB[8] = {0,0,0,0,0,0,0,0}, txB[8];
-		int sawAABB = 0;
-		for (int i = 0; i < 10 && !sawAABB; i++) {
+		int sawAABB = 0, framesToAnnounce = 0;
+		for (int i = 0; i < 10 + lagW && !sawAABB; i++) {
 			frame_drive(&B, &ctB, idleB, txB);
+			framesToAnnounce++;
 			if (txB[0] == LINKCMD_CONT_BLOCK && txB[1] == LINKCMD_READY_TO_TRADE && txB[2] == iA) sawAABB = 1;
 		}
-		CHECK(sawAABB, "(a) B announced the peer's select [AABB, iA=%u] to its game-Leader\n", iA);
+		CHECK(sawAABB, "(a) B announced the peer's select [AABB, iA=%u] to its game-Leader (lag %d/%d seed %u)\n",
+		      iA, lagAB, lagBA, seed);
+		CHECK(!sawAABB || framesToAnnounce > lagAB || rndMax > 0,
+		      "(a) the announce could not have preceded the delayed event (took %d frames, lagAB=%d)\n",
+		      framesToAnnounce, lagAB);
 	}
 	// B's game-Leader (having paired) broadcasts [DDDD, jB] — the only wire trace of the HOST
 	// player's own pick. B must capture it + push CL_EV_SELECT(jB) for A.
@@ -648,16 +941,18 @@ static void test_two_instance_coordination(void)
 		frame_drive(&B, &ctB, init20, txB);
 		frame_drive(&B, &ctB, dddd, txB);
 		ClEvent ev;
-		int got = relay_until_event(&B, &A, CL_EV_SELECT, &ev);
+		int got = relay_until_event_lagged(&B, &qBA, CL_EV_SELECT, &ev);
 		CHECK(got, "B captured its game-Leader's DDDD broadcast -> CL_EV_SELECT\n");
 		CHECK(got && ev.arg == jB, "B's CL_EV_SELECT carries jB=%u (got %u)\n", jB, ev.arg);
 		b_committed = iA;   // the follower side commits via its game's own pairing
 	}
 	// A (the Leader) now releases LEVEL-TRIGGERED: idle frames let the preamble fire SET_MONS(jB).
+	// This is the run-#8 defect class under lag: an EDGE-triggered release would have fired while
+	// the event was still in flight (never) — the hold must re-assert every idle frame until it lands.
 	{
 		uint16_t idleA[8] = {0,0,0,0,0,0,0,0}, txA[8];
 		int a_rel = 0;
-		for (int i = 0; i < 10 && !a_rel; i++) {
+		for (int i = 0; i < 10 + lagW && !a_rel; i++) {
 			frame_drive(&A, &ctA, idleA, txA);
 			if (txA[0] == LINKCMD_CONT_BLOCK && txA[1] == LINKCMD_SET_MONS_TO_TRADE) { a_rel = 1; a_committed = txA[2]; }
 		}
@@ -687,24 +982,26 @@ static void test_two_instance_coordination(void)
 		CHECK(!a_started, "A HOLDS the confirm chain until B's CL_EV_CONFIRM arrives\n");
 		CHECK(A.confirmHeld == 1, "A reports the confirm hold\n");
 
-		// A emitted CL_EV_CONFIRM; relay to B (and bring B's confirm back to A).
+		// A emitted CL_EV_CONFIRM; ship to B (and bring B's confirm back to A).
 		{
 			ClEvent ev;
-			int gotA = relay_until_event(&A, &B, CL_EV_CONFIRM, &ev);
+			int gotA = relay_until_event_lagged(&A, &qAB, CL_EV_CONFIRM, &ev);
 			CHECK(gotA, "(e) A emitted CL_EV_CONFIRM for the peer\n");
 		}
-		// B opens its confirm chain too, emitting CL_EV_CONFIRM; relay it to A.
+		// B opens its confirm chain too, emitting CL_EV_CONFIRM; ship it to A and DRAIN before
+		// comparing (gen1-parity §8: compare a settled state, never a mid-flight one).
 		frame_drive(&B, &ctB, init20, tx);
 		frame_drive(&B, &ctB, confirm, tx);
 		for (int i = 0; i < 3; i++) frame_drive(&B, &ctB, idle, tx);
-		relay_events(&B, &A);
+		relay_events_lagged(&B, &qBA);
+		lag_drain(&qBA, &A);
 		CHECK(A.partnerConfirmed == 1, "A received B's CL_EV_CONFIRM\n");
 
 		// now A's confirm chain releases: drive frames until START_TRADE/INIT_BLOCK block ships.
 		// (re-open the chain since the previous hold answered EMPTY without retiring section state)
 		frame_drive(&A, &ctA, init20, tx);
 		frame_drive(&A, &ctA, confirm, tx);
-		for (int i = 0; i < 10 && !a_started; i++) {
+		for (int i = 0; i < 10 + lagW && !a_started; i++) {
 			frame_drive(&A, &ctA, idle, tx);
 			if (tx[0] == LINKCMD_CONT_BLOCK &&
 			    (tx[1] == LINKCMD_INIT_BLOCK || tx[1] == LINKCMD_START_TRADE)) a_started = 1;
@@ -715,6 +1012,11 @@ static void test_two_instance_coordination(void)
 
 	// ---- (f) close out: both reach trade-complete consistently. The trade flows
 	// CONNECTION -> DISCONNECT (close) -> re-handshake -> finish -> close -> tradeComplete. ----
+	// The DISCONNECT close deliberately RE-ARMS the whole negotiation for the next trade round
+	// (celiolink.c:845-856 clears localSelectSlot/partnerConfirmed/...), so the slot/confirm mirror
+	// and its monotone rule legitimately stop applying here. Disarm those; section-pair legality
+	// and the CRC trackers stay armed through the close.
+	P.armed = 0;
 	{
 		uint16_t close[8] = { LINKCMD_READY_CLOSE_LINK, 0,0,0,0,0,0,0 };
 		uint16_t init[8]  = { LINKCMD_INIT_BLOCK, 0,0,0,0,0,0,0 };
@@ -739,7 +1041,53 @@ static void test_two_instance_coordination(void)
 	CHECK(ctA.crc_mismatches == 0, "A: no CRC mismatch across coordination (%d)\n", ctA.crc_mismatches);
 	CHECK(ctB.crc_mismatches == 0, "B: no CRC mismatch across coordination (%d)\n", ctB.crc_mismatches);
 
-	printf("  ok\n");
+	// ---- D7b VERDICT: one CHECK per mirrored fact, each naming the field + pump + seed ----
+	#define MIRROR_OK(counter, what) CHECK((counter) == 0, \
+		"D7b %s violated %d× (lag %d/%d rnd %d seed %u; first at pump %d: %s)\n", \
+		what, (counter), lagAB, lagBA, rndMax, seed, P.vPump, P.vField)
+	MIRROR_OK(P.vSection, "section-pair legality");
+	MIRROR_OK(P.vMono,    "monotone coordination facts");
+	MIRROR_OK(P.vSelAB,   "A.localSelectSlot == B.partnerSelectSlot");
+	MIRROR_OK(P.vSelBA,   "B.localSelectSlot == A.partnerSelectSlot");
+	MIRROR_OK(P.vConfAB,  "A.localConfirmed => B.partnerConfirmed");
+	MIRROR_OK(P.vConfBA,  "B.localConfirmed => A.partnerConfirmed");
+	#undef MIRROR_OK
+	// ANTI-VACUITY (gen1-parity §12: an unwired tier must never report itself exercised).
+	CHECK(P.settledSamples > 0, "D7b: the settled-state mirror actually ran (%d samples, lag %d/%d)\n",
+	      P.settledSamples, lagAB, lagBA);
+	CHECK(qAB.overflow == 0 && qBA.overflow == 0, "D7a: the lag queues never overflowed (%d/%d)\n",
+	      qAB.overflow, qBA.overflow);
+	CHECK(qAB.delivered > 0 && qBA.delivered > 0, "D7a: both directions actually delivered (%d/%d)\n",
+	      qAB.delivered, qBA.delivered);
+	CHECK((lagAB == 0 && lagBA == 0 && rndMax == 0) || qAB.maxInFlight > 0 || qBA.maxInFlight > 0,
+	      "D7a: a nonzero lag really did hold events in flight\n");
+
+	g_pair = NULL;
+}
+
+// TEST 5 wrapper: the zero-lag run (the original, unchanged assertions) plus the D7a sweep and the
+// seeded randomized runs. `runs`/`firstSeed` come from argv (default 3 runs from seed 12345) so a
+// failure replays with `/tmp/tc <runs> <seed>` — "a failure replays from its seed alone".
+static void test_two_instance_coordination(int runs, uint32_t firstSeed)
+{
+	printf("TEST 5 (T1): two live instances coordinate the same slot pair\n");
+	run_two_instance_coordination(0, 0, 0, 1);           // the original zero-latency run
+	printf("  ok (lag 0/0)\n");
+
+	// D7a fixed sweep: one-way delay 0..4 pumps (~0..67ms; the measured radio is 1-2).
+	for (int lag = 1; lag <= 4; lag++) {
+		for (int sym = 0; sym < 2; sym++) {              // asymmetric (a->b only) then symmetric
+			int lagBA = sym ? lag : 0;
+			run_two_instance_coordination(lag, lagBA, 0, 1);
+			printf("  ok (lag %d/%d)\n", lag, lagBA);
+		}
+	}
+	// Randomized runs: per-event delay ~ U[0,4], seed printed so any failure replays exactly.
+	for (int r = 0; r < runs; r++) {
+		uint32_t seed = firstSeed + (uint32_t)r * 7919u;
+		run_two_instance_coordination(0, 0, 4, seed);
+		printf("  ok (lag rnd<=4 seed %u)\n", seed);
+	}
 }
 
 // --------------------------------------------------------------------------------------------
@@ -1307,8 +1655,215 @@ static void test_trainer_card_exchange(void)
 	printf("  ok\n");
 }
 
-int main(void)
+// ============================================================================================
+// D6 — LINK-SURFACE FINGERPRINT (source/fingerprint.c). Phase-13-prep slice D6; spec:
+// docs/phase13-diagnostics/SPEC-suite-hardening.md §D6.7. Design source: gen1recomp's
+// tests/engine/gate_fingerprint.lua via docs/kb/external/gen1-parity.md §9.
+//
+// TWO gates, and they only work TOGETHER:
+//   TEST 16 GOLDEN  — pinned hex constants. Catches the accidental edit that "no schema check or
+//                     self-comparing parity gate would catch ... would silently make two builds of
+//                     the same engine refuse to link. Here it flips one hex string and fails"
+//                     (gate_fingerprint.lua:1-13).
+//   TEST 17 MUTATION— every surface field must MOVE the digest: "If any of these pass unchanged
+//                     the gate is decorative" (gate_fingerprint.lua:50-110).
+//
+// BLESS DISCIPLINE (celiolink.h CL_PROTO_REV comment): the constants below may only change in a
+// commit that also records WHY (KNOWN-DIFFERENCES.md / BUILDLOG.md) — moving the fingerprint breaks
+// linking between every existing build and every new one. There is no --bless tool by design.
+// (source/fingerprint.c is #included at the top of this file, the same way celiolink.c is.)
+// ============================================================================================
+
+// The pinned surfaces. Field order == the wire order == the hash order (fingerprint.h).
+//   G1 = {"BPEE", rev 0, clProtoRev 1, netProto 1, modeFlags 5}   — Emerald, the common case
+//   G2 = {"BPRE", rev 1, clProtoRev 1, netProto 1, modeFlags 5}   — the user's REAL FireRed rev1
+// The pair proves gameCode AND gameRev both participate (a digest that ignored either would give
+// these two the same value on some field flip).
+#define G1_LANE_A 0x0DC57870u
+#define G1_LANE_B 0x2A5C56C7u
+#define G1_HASH   0x0DC578702A5C56C7ull
+#define G2_LANE_A 0x8B048F76u
+#define G2_LANE_B 0xA51D3329u
+#define G2_HASH   0x8B048F76A51D3329ull
+
+static void fp_base(DgbaFprint* f, const char* code, uint8_t rev)
 {
+	// NOTE the live values this pins: dgba_fprint_fill hard-wires modeFlags = DGBA_NET_EXP_DEFAULT
+	// (fingerprint.h, shared with gbacore.c's session init) and the caller passes CL_PROTO_REV
+	// (celiolink.h) + DGBA_PROTO (netlink.h — not includable here, it drags in <3ds.h>, so the
+	// golden pins the VALUE 1 and the checks below pin the two constants the test CAN see).
+	dgba_fprint_fill(f, code, rev, CL_PROTO_REV, 1);
+}
+
+static void test_fingerprint_golden(void)
+{
+	printf("TEST 16 (D6): link-surface fingerprint GOLDEN (pinned digests)\n");
+
+	CHECK(sizeof(DgbaFprint) == 8, "16: the surface is 8 packed bytes (the wire format)\n");
+	CHECK(DGBA_FPRINT_BYTES == 8, "16: DGBA_FPRINT_BYTES agrees with the struct\n");
+	// The two live constants folded into the golden. If either moves, the golden below is stale —
+	// which is exactly the parity-change signal (bump + re-pin + record, never re-pin silently).
+	CHECK(CL_PROTO_REV == 1, "16: CL_PROTO_REV is 1 (the value the goldens were pinned at)\n");
+	CHECK(DGBA_NET_EXP_DEFAULT == 5, "16: DGBA_NET_EXP_DEFAULT is 5 = state F (Celio local termination)\n");
+
+	DgbaFprint g1; fp_base(&g1, "BPEE", 0);
+	DgbaFprint g2; fp_base(&g2, "BPRE", 1);
+
+	// --- canonical bytes: the struct IS the serialization, in declared order -------------------
+	const uint8_t* b1 = (const uint8_t*)&g1;
+	CHECK(b1[0]=='B' && b1[1]=='P' && b1[2]=='E' && b1[3]=='E', "16: bytes 0-3 = gameCode\n");
+	CHECK(b1[4] == 0, "16: byte 4 = gameRev\n");
+	CHECK(b1[5] == CL_PROTO_REV, "16: byte 5 = clProtoRev\n");
+	CHECK(b1[6] == 1, "16: byte 6 = netProto\n");
+	CHECK(b1[7] == DGBA_NET_EXP_DEFAULT, "16: byte 7 = modeFlags (link strategy nibble)\n");
+
+	// --- the pinned digests -------------------------------------------------------------------
+	// Both 32-bit lanes are pinned SEPARATELY as well as the fold, so a change that happens to
+	// preserve one lane still fails visibly (lane independence).
+	CHECK(dgba_fprint_lane(&g1, 0) == G1_LANE_A, "16: G1 lane A pinned (got %08X)\n", dgba_fprint_lane(&g1, 0));
+	CHECK(dgba_fprint_lane(&g1, 1) == G1_LANE_B, "16: G1 lane B pinned (got %08X)\n", dgba_fprint_lane(&g1, 1));
+	CHECK(dgba_fprint_hash(&g1)    == G1_HASH,   "16: G1 folded u64 pinned\n");
+	CHECK(dgba_fprint_lane(&g2, 0) == G2_LANE_A, "16: G2 lane A pinned (got %08X)\n", dgba_fprint_lane(&g2, 0));
+	CHECK(dgba_fprint_lane(&g2, 1) == G2_LANE_B, "16: G2 lane B pinned (got %08X)\n", dgba_fprint_lane(&g2, 1));
+	CHECK(dgba_fprint_hash(&g2)    == G2_HASH,   "16: G2 folded u64 pinned\n");
+
+	// --- the fold + the two-lane construction -------------------------------------------------
+	CHECK(dgba_fprint_hash(&g1) == (((uint64_t)dgba_fprint_lane(&g1,0) << 32) | dgba_fprint_lane(&g1,1)),
+	      "16: hash = laneA:laneB (gen1's fold)\n");
+	CHECK(dgba_fprint_lane(&g1,0) != dgba_fprint_lane(&g1,1),
+	      "16: the two lanes really do start from different bases (64 bits of signal, not 32 twice)\n");
+	CHECK(dgba_fprint_hash(&g1) != dgba_fprint_hash(&g2), "16: the two goldens are distinct\n");
+
+	// --- short / NULL game codes zero-fill (the 'no core loaded yet' lobby case) ----------------
+	DgbaFprint sh; dgba_fprint_fill(&sh, "BP", 0, CL_PROTO_REV, 1);
+	const uint8_t* bs = (const uint8_t*)&sh;
+	CHECK(bs[0]=='B' && bs[1]=='P' && bs[2]==0 && bs[3]==0, "16: a short game code zero-fills\n");
+	DgbaFprint nl; dgba_fprint_fill(&nl, NULL, 0, CL_PROTO_REV, 1);
+	CHECK(((const uint8_t*)&nl)[0] == 0, "16: a NULL game code zero-fills (never reads off the end)\n");
+
+	// --- the netlog line: format regression (tools grep this; D6.6) ----------------------------
+	char line[224];
+	int n = dgba_fprint_format(&g1, dgba_fprint_hash(&g1), &g2, dgba_fprint_hash(&g2), 1, line, (int)sizeof line);
+	CHECK(n > 0, "16: format returns a length\n");
+	CHECK(!strcmp(line,
+	      "# fprint local=BPEE r0 cl1 np1 m5 h=0DC578702A5C56C7 peer=BPRE r1 cl1 np1 m5 h=8B048F76A51D3329"
+	      " verdict=DIFF:gameCode(BPEE!=BPRE),gameRev(0!=1)"),
+	      "16: DIFF netlog line is byte-exact — got '%s'\n", line);
+	n = dgba_fprint_format(&g1, dgba_fprint_hash(&g1), &g1, dgba_fprint_hash(&g1), 1, line, (int)sizeof line);
+	CHECK(strstr(line, "verdict=MATCH") != NULL, "16: identical surfaces read MATCH\n");
+	// UNKNOWN DISCIPLINE: no peer surface is NEVER a match (absence of evidence is not a PASS).
+	n = dgba_fprint_format(&g1, dgba_fprint_hash(&g1), &g2, 0, 0, line, (int)sizeof line);
+	CHECK(!strcmp(line, "# fprint local=BPEE r0 cl1 np1 m5 h=0DC578702A5C56C7 peer=none verdict=unknown"),
+	      "16: an absent peer logs verdict=unknown — got '%s'\n", line);
+	CHECK(strstr(line, "MATCH") == NULL, "16: an absent peer NEVER reads as a match\n");
+	CHECK(dgba_fprint_format(NULL, 0, NULL, 0, 0, line, (int)sizeof line) == -1, "16: format rejects a NULL local\n");
+
+	// --- truncation safety (a HUD/netlog buffer is finite; a short buffer must not corrupt) -----
+	char tiny[24]; memset(tiny, 0x7E, sizeof tiny);
+	dgba_fprint_format(&g1, dgba_fprint_hash(&g1), &g2, dgba_fprint_hash(&g2), 1, tiny, 16);
+	CHECK(tiny[15] == '\0', "16: format NUL-terminates inside the given max\n");
+	CHECK(tiny[16] == 0x7E && tiny[23] == 0x7E, "16: format never writes past max\n");
+
+	printf("  ok\n");
+}
+
+// TEST 17 — MUTATION: every field of the surface must move the digest, or the gate is decorative.
+static void test_fingerprint_mutation(void)
+{
+	printf("TEST 17 (D6): fingerprint MUTATION — every surface field moves the digest\n");
+
+	DgbaFprint base; fp_base(&base, "BPEE", 0);
+	const uint64_t h0 = dgba_fprint_hash(&base);
+	CHECK(h0 == G1_HASH, "17: the mutation base is the TEST-16 golden\n");
+
+	// determinism within a process (gate_fingerprint.lua:112-124)
+	CHECK(dgba_fprint_hash(&base) == h0, "17: recomputing the same surface gives the same digest\n");
+	DgbaFprint copy = base;
+	CHECK(dgba_fprint_hash(&copy) == h0, "17: a byte-identical copy hashes identically\n");
+
+	// One mutation per FIELD (all four game-code bytes individually — a 4cc is one field but four
+	// bytes, and a digest that only mixed the first byte would still pass a 1-field test).
+	struct { const char* name; int off; uint8_t val; } mut[] = {
+		{ "gameCode[0]", 0, (uint8_t)'C' }, { "gameCode[1]", 1, (uint8_t)'Q' },
+		{ "gameCode[2]", 2, (uint8_t)'F' }, { "gameCode[3]", 3, (uint8_t)'D' },
+		{ "gameRev",     4, 1            }, { "clProtoRev",  5, 2 },
+		{ "netProto",    6, 2            }, { "modeFlags",   7, 3 },
+	};
+	const int nm = (int)(sizeof mut / sizeof mut[0]);
+	uint64_t hs[8];
+
+	for (int i = 0; i < nm; i++) {
+		DgbaFprint m = base;
+		uint8_t* mb = (uint8_t*)&m;
+		CHECK(mb[mut[i].off] != mut[i].val, "17: %s mutation actually changes the byte\n", mut[i].name);
+		mb[mut[i].off] = mut[i].val;
+		hs[i] = dgba_fprint_hash(&m);
+		CHECK(hs[i] != h0, "17: mutating %s MOVES the u64 digest\n", mut[i].name);
+		// lane independence: a single byte flip must move BOTH lanes (FNV-1a's per-byte step is a
+		// bijection on the 32-bit state, so anything less means the lane stopped reading the byte).
+		CHECK(dgba_fprint_lane(&m, 0) != dgba_fprint_lane(&base, 0), "17: %s moves lane A\n", mut[i].name);
+		CHECK(dgba_fprint_lane(&m, 1) != dgba_fprint_lane(&base, 1), "17: %s moves lane B\n", mut[i].name);
+		// mutation ISOLATION: putting the byte back restores the golden exactly.
+		mb[mut[i].off] = ((const uint8_t*)&base)[mut[i].off];
+		CHECK(dgba_fprint_hash(&m) == h0, "17: restoring %s restores the golden\n", mut[i].name);
+	}
+	// no two single-field mutants collide (a digest that folded fields together could alias them)
+	for (int i = 0; i < nm; i++)
+		for (int j = i + 1; j < nm; j++)
+			CHECK(hs[i] != hs[j], "17: mutants %s and %s do not collide\n", mut[i].name, mut[j].name);
+
+	// --- dgba_fprint_diff names EXACTLY the mutated field (the modDiff lesson) ------------------
+	{	struct { int off; uint8_t val; const char* tok; } dm[] = {
+			{ 0, (uint8_t)'C', "gameCode(BPEE!=CPEE)" }, { 4, 1, "gameRev(0!=1)" },
+			{ 5, 2, "clProtoRev(1!=2)" }, { 6, 2, "netProto(1!=2)" }, { 7, 3, "modeFlags(5!=3)" },
+		};
+		for (int i = 0; i < (int)(sizeof dm / sizeof dm[0]); i++) {
+			DgbaFprint m = base; ((uint8_t*)&m)[dm[i].off] = dm[i].val;
+			char d[96];
+			int nd = dgba_fprint_diff(&base, &m, d, (int)sizeof d);
+			CHECK(nd == 1, "17: one changed field => one named field (got %d for %s)\n", nd, dm[i].tok);
+			CHECK(!strcmp(d, dm[i].tok), "17: diff names it exactly — expected '%s' got '%s'\n", dm[i].tok, d);
+		}
+	}
+	// identical surfaces: 0 fields, empty string (the HUD prints MATCH off this)
+	{	char d[32]; memset(d, 0x5A, sizeof d);
+		CHECK(dgba_fprint_diff(&base, &base, d, (int)sizeof d) == 0, "17: identical surfaces diff to 0 fields\n");
+		CHECK(d[0] == '\0', "17: a 0-field diff is the empty string\n");
+	}
+	// all five fields at once: five names, comma-separated, no spaces (one greppable netlog token)
+	{	DgbaFprint m; dgba_fprint_fill(&m, "BPRE", 9, 7, 8); ((uint8_t*)&m)[7] = 2;
+		char d[128];
+		CHECK(dgba_fprint_diff(&base, &m, d, (int)sizeof d) == 5, "17: five differing fields are all named\n");
+		CHECK(strchr(d, ' ') == NULL, "17: the diff string has no spaces (stays one token)\n");
+		CHECK(strstr(d, "gameCode(") && strstr(d, "gameRev(") && strstr(d, "clProtoRev(")
+		   && strstr(d, "netProto(") && strstr(d, "modeFlags("), "17: all five field names present\n");
+	}
+	// truncation safety of the diff itself (a 64-byte HUD buffer meets a 5-field diff)
+	{	char d[80]; memset(d, 0x7E, sizeof d);
+		DgbaFprint m; dgba_fprint_fill(&m, "BPRE", 9, 7, 8); ((uint8_t*)&m)[7] = 2;
+		int nd = dgba_fprint_diff(&base, &m, d, 20);
+		CHECK(nd == 5, "17: a truncated diff still COUNTS every differing field\n");
+		CHECK(d[19] == '\0' || strlen(d) < 20, "17: a truncated diff stays NUL-terminated\n");
+		CHECK(d[20] == 0x7E && d[79] == 0x7E, "17: a truncated diff never writes past outMax\n");
+	}
+	// NULL-safety (the lobby calls this before either side is known)
+	{	char d[16]; memset(d, 0x11, sizeof d);
+		CHECK(dgba_fprint_diff(NULL, &base, d, (int)sizeof d) == 0, "17: diff(NULL, b) is 0 fields\n");
+		CHECK(d[0] == '\0', "17: diff(NULL, b) still terminates the buffer\n");
+		CHECK(dgba_fprint_lane(NULL, 0) == 0 && dgba_fprint_hash(NULL) == 0, "17: hashing NULL is 0, not a crash\n");
+		dgba_fprint_fill(NULL, "BPEE", 0, 1, 1);   // must not fault
+		CHECK(1, "17: fill(NULL, ...) is a no-op\n");
+	}
+	printf("  ok\n");
+}
+
+int main(int argc, char** argv)
+{
+	// D7a: optional `[runs] [firstSeed]` — the randomized lag runs. Defaults 3 runs from 12345.
+	int runs = (argc > 1) ? atoi(argv[1]) : 3;
+	uint32_t firstSeed = (argc > 2) ? (uint32_t)strtoul(argv[2], NULL, 0) : 12345u;
+	if (runs < 0) runs = 0;
+
 	printf("==== celiolink T0 unit test ====\n");
 
 	// sanity: struct sizes that the wire format depends on.
@@ -1319,7 +1874,7 @@ int main(void)
 	test_crc();
 	test_handlers();
 	test_scripted_trade();
-	test_two_instance_coordination();
+	test_two_instance_coordination(runs, firstSeed);   // D7a/D7b: zero-lag + the lag sweep
 	test_master_drives_handshake();
 	test_rehandshake();
 	test_clock_pacing();
@@ -1332,6 +1887,8 @@ int main(void)
 	test_lounge_reentry();
 	test_room_exit_close();
 	test_trainer_card_exchange();
+	test_fingerprint_golden();      // D6 (SPEC-suite-hardening §D6.7)
+	test_fingerprint_mutation();    // D6
 
 	printf("================================\n");
 	printf("checks: %d   failures: %d\n", g_checks, g_fail);

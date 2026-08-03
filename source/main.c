@@ -36,6 +36,7 @@ static u32 dim_color(u32 c, float f);   // fwd (defined near run_splash)
 #include "netlink.h"
 #include "wireless.h"
 #include "diag.h"     // D1 breadcrumbs + surviving-thread watchdog (docs/phase13-diagnostics/SPEC-firmware-diag.md)
+#include "control.h"  // D4 file-driven tile-exact movement (docs/phase13-diagnostics/SPEC-control-replay.md)
 #include "warp_shbin.h"   // M2 grid-warp vertex shader (generated from source/warp.v.pica)
 
 #define WORKER_STACKSIZE (512 * 1024)   // mGBA runFrame has deep call chains; 32KB overflows
@@ -198,6 +199,254 @@ static void diag_wd_session_reset(void) {
 	struct stat st;
 	s_diagOff = (stat("sdmc:/cias/control/diag_off.txt", &st) == 0);
 }
+
+// ---- D4 file-driven tile-exact movement: control-file polling + the status-log writer --------
+// (SPEC-control-replay.md §D4 + §C.3-C.5; design docs/kb/external/pm-bridge-forensics.md PART 2
+// #10 melonds_move.txt / #9 go-files, PART 3 ranked port item 2.) source/control.c is PURE C and
+// does NO I/O — every sdmc stat/fopen/remove/fprintf for the feature lives right here, and the
+// only thing that reaches the emulator is a GBA key mask ORed into the EXISTING per-seat key
+// assembly (the emulated keypad — the seam touch_update already uses). Nothing on the
+// SIO/celiolink/netlink path is touched: PHASE.md invariant 1.
+//
+// DEFAULT-OFF (invariant 2): the whole feature arms only when the directory sdmc:/cias/control
+// exists, checked ONCE per run_session. No directory => zero polls, zero injection, no log file.
+static CtlSched s_ctl[2];            // seat 0 = p1/game A, 1 = p2/game B (FIXED, independent of
+                                     // swapped/focused/screen — each console stages its own file)
+static bool     s_ctlOn   = false;   // sdmc:/cias/control exists (one stat per session)
+static FILE*    s_ctlFile = NULL;    // LAZILY opened at the FIRST status line — a session that
+                                     // never runs a script writes no file and never fopens
+static char     s_ctlHdr[192];       // the '# control p1=.. p2=.. dir=..' first line (D4.14)
+#if CTL_D5_ENABLE
+// D5 record/replay state (SPEC §D5). Static, like the schedulers: CtlRep carries the 8192-entry
+// table (~48 KB/seat as parallel arrays) and has no business on run_session's stack.
+static CtlRec s_ctlRec[2];
+static CtlRep s_ctlRep[2];
+static FILE*  s_recFile[2] = { NULL, NULL };   // per-seat recording, created AT the anchor
+static CtlIn  s_ctlIn[2];                      // this frame's snapshot, kept for the recorder —
+static bool   s_ctlInOk[2];                    // it needs the FINAL mask, assembled further down
+#endif
+
+// control.h mirrors the GBA KEYINPUT bit order by hand (it must stay libctru-free — pure-C rule).
+// A drift between the two tables would silently press the WRONG button on hardware, so make it a
+// BUILD error instead of a hardware surprise.
+_Static_assert(CTL_KEY_A      == (1u << GBAKEY_A)      && CTL_KEY_B     == (1u << GBAKEY_B) &&
+               CTL_KEY_SELECT == (1u << GBAKEY_SELECT) && CTL_KEY_START == (1u << GBAKEY_START) &&
+               CTL_KEY_RIGHT  == (1u << GBAKEY_RIGHT)  && CTL_KEY_LEFT  == (1u << GBAKEY_LEFT) &&
+               CTL_KEY_UP     == (1u << GBAKEY_UP)     && CTL_KEY_DOWN  == (1u << GBAKEY_DOWN) &&
+               CTL_KEY_R      == (1u << GBAKEY_R)      && CTL_KEY_L     == (1u << GBAKEY_L),
+               "control.h CTL_KEY_* drifted from gbacore.h GBAKEY_*");
+
+// Append one status line to the control log, creating it on the FIRST line. fflush per line is
+// the PM crash-safety rule (mp_bridge.cpp §1): these scripts run precisely in the hang-prone
+// hardware sessions where a buffered tail dies with the power switch (the run-#11 lost-log
+// lesson — HANDOFF says "POWER OFF, don't press Quit"). Status events are rare (pickup / GO /
+// token transitions / abort), so this is never a hot path.
+static void ctl_log_line(const char* line) {
+	if (!s_ctlFile) {
+		mkdir("sdmc:/cias", 0777);           // same preamble as the existing netlog writers
+		mkdir("sdmc:/cias/netlogs", 0777);
+		char p[96]; diag_log_path(p, sizeof p, "control", "txt", -1);
+		s_ctlFile = fopen(p, "w");
+		if (s_ctlFile && s_ctlHdr[0]) fputs(s_ctlHdr, s_ctlFile);
+	}
+	if (s_ctlFile) { fputs(line, s_ctlFile); fflush(s_ctlFile); }
+}
+
+static void ctl_drain_seat(int seat) {
+	char line[CTL_STATUS_LEN];
+	while (ctl_status(&s_ctl[seat], line, sizeof line) > 0) ctl_log_line(line);
+}
+
+static void ctl_close(void) {
+	if (s_ctlFile) { fclose(s_ctlFile); s_ctlFile = NULL; }
+}
+
+#if CTL_D4_ENABLE
+static void ctl_path(char* out, size_t cap, const char* kind, int seat) {
+	snprintf(out, cap, "sdmc:/cias/control/%s_p%d.txt", kind, seat + 1);
+}
+
+// Read a control file whole. Returns the byte count, -1 = missing/unreadable, -2 = larger than
+// the cap (the first CTL_FILE_MAX bytes are still in buf, so a leading '!' abort still works).
+static int ctl_read_file(const char* path, char* buf, int cap) {
+	FILE* f = fopen(path, "rb");
+	if (!f) return -1;
+	size_t n = fread(buf, 1, (size_t)cap - 1, f);
+	int over = (fgetc(f) != EOF);
+	fclose(f);
+	buf[n] = '\0';
+	return over ? -2 : (int)n;
+}
+
+#if CTL_D5_ENABLE
+// ---- D5 input record/replay glue (SPEC-control-replay.md §D5 + C.3-C.5) ---------------------
+// Same opt-in directory, same status log, same injection seam as D4 — the module halves are pure
+// C (source/control.c) and every stat/fopen/fread/fwrite/remove for them lives here.
+//   record_p<N>.txt     marker  -> arm the recorder (content ignored, consumed on pickup, D5.1)
+//   3DGBA_rec_p<N>_*.txt output <- the recording, created AT THE ANCHOR (netlogs, so the run
+//                                  workflow archives it with everything else)
+//   replay_p<N>.txt     table   -> loaded when...
+//   replay_go_p<N>.txt  trigger -> ...this one-shot appears (consumed; D5.6)
+// The table is streamed through a 512-byte buffer into the chunked parser: an 8192-entry
+// recording is ~80 KB of text and materialising it whole next to two mGBA cores would be silly.
+static void ctl_rec_close(int seat) {
+	if (s_recFile[seat]) { fclose(s_recFile[seat]); s_recFile[seat] = NULL; }
+}
+
+// Drain the recorder's + replayer's status rings into the SAME control log the scheduler uses
+// (one operator-facing timeline per seat; open-once + fflush per line, D4.13).
+static void ctl_rr_drain_seat(int seat) {
+	char line[CTL_STATUS_LEN];
+	while (ctl_rec_status(&s_ctlRec[seat], line, sizeof line) > 0) ctl_log_line(line);
+	while (ctl_rep_status(&s_ctlRep[seat], line, sizeof line) > 0) ctl_log_line(line);
+}
+
+// The record/replay poll, staggered HALF a period away from that seat's move/go poll so no single
+// render frame ever does more than one file's worth of sdmc stat work (D4.2's rule, extended).
+static void ctl_rr_poll_seat(int seat) {
+	if ((g_renderSeq % (2u * CTL_POLL_FRAMES)) !=
+	    (uint32_t)(seat * CTL_POLL_FRAMES + CTL_POLL_FRAMES / 2)) return;
+	CtlSched* cs = &s_ctl[seat];        // the scheduler's ring carries the glue's own notes
+	char path[96], msg[CTL_STATUS_LEN];
+	struct stat st;
+
+	// --- record_p<N>.txt (D5.1): a marker file. Consumed on pickup like every control file, so a
+	// stale marker can never re-arm a later session.
+	if (!ctl_rec_armed(&s_ctlRec[seat])) {
+		ctl_path(path, sizeof path, "record", seat);
+		if (stat(path, &st) == 0) {
+			remove(path);
+			ctl_rec_close(seat);        // a previous recording's file is closed before the new one
+			ctl_rec_arm(&s_ctlRec[seat]);
+		}
+	}
+
+	// --- replay_go_p<N>.txt (D5.6): the one-shot trigger LOADS replay_p<N>.txt. A load failure is
+	// loud and arms nothing, and the bad table is removed so it cannot re-fire on the next touch.
+	if (!ctl_rep_active(&s_ctlRep[seat])) {
+		ctl_path(path, sizeof path, "replay_go", seat);
+		if (stat(path, &st) == 0) {
+			remove(path);
+			char tpath[96]; ctl_path(tpath, sizeof tpath, "replay", seat);
+			FILE* tf = fopen(tpath, "rb");
+			if (!tf) {
+				snprintf(msg, sizeof msg, "replay load error: no replay_p%d.txt", seat + 1);
+				ctl_note(cs, msg);
+			} else {
+				static char chunk[512];   // static: no 512-byte stack burst on the render thread
+				char err[96]; err[0] = '\0';
+				ctl_rep_load_begin(&s_ctlRep[seat]);
+				size_t got;
+				while ((got = fread(chunk, 1, sizeof chunk, tf)) > 0)
+					if (ctl_rep_load_feed(&s_ctlRep[seat], chunk, (int)got, err, sizeof err) < 0) break;
+				fclose(tf);
+				if (ctl_rep_load_end(&s_ctlRep[seat], err, sizeof err) < 0) {
+					snprintf(msg, sizeof msg, "replay load error: %s", err);
+					ctl_note(cs, msg);
+					remove(tpath);
+				}
+				// success: ctl_rep_load_end already queued the "replay armed: N entries" line.
+			}
+		}
+	}
+}
+
+// D5.4: feed the recorder the seat's FINAL assembled mask (what the core actually received) and
+// append any produced line. The file is created lazily AT THE ANCHOR — a session that never
+// anchors writes nothing at all — and fflushed per line, the PM crash-safety rule
+// (mp_bridge.cpp §1): these recordings are made in exactly the sessions that end with the power
+// switch (the run-#11 lost-log lesson).
+static void ctl_rec_feed(int seat, u16 finalMask, GbaCore* core) {
+	CtlRec* r = &s_ctlRec[seat];
+	if (!ctl_rec_armed(r)) return;
+	char line[CTL_REC_LINE];
+	int n = ctl_rec_tick(r, &s_ctlIn[seat], finalMask, line, sizeof line);
+	if (n <= 0) return;                 // 0 = nothing due; -1 = the cap stopped it (ring says so)
+	if (!s_recFile[seat]) {
+		mkdir("sdmc:/cias", 0777);      // same preamble as every other netlog writer
+		mkdir("sdmc:/cias/netlogs", 0777);
+		char kind[12], p[96];
+		snprintf(kind, sizeof kind, "rec_p%d", seat + 1);
+		diag_log_path(p, sizeof p, kind, "txt", -1);
+		s_recFile[seat] = fopen(p, "w");
+		if (s_recFile[seat]) {
+			char code[5] = "----", date[24], hdr[768];
+			if (core) gbacore_game_code(core, code);
+			time_t tt = time(NULL); struct tm* lt = localtime(&tt);
+			snprintf(date, sizeof date, "%02d%02d_%02d%02d%02d",
+			         lt ? lt->tm_mon + 1 : 0, lt ? lt->tm_mday : 0,
+			         lt ? lt->tm_hour : 0, lt ? lt->tm_min : 0, lt ? lt->tm_sec : 0);
+			int hl = ctl_rec_header(r, hdr, sizeof hdr, code, date);
+			if (hl > 0) fwrite(hdr, 1, (size_t)hl, s_recFile[seat]);
+		}
+	}
+	if (s_recFile[seat]) { fwrite(line, 1, (size_t)n, s_recFile[seat]); fflush(s_recFile[seat]); }
+}
+#endif
+
+// One seat's idle poll (D4.2): every CTL_POLL_FRAMES render frames, seats STAGGERED so at most
+// one sdmc stat happens on any single frame. The stat is the cheap common case — a fopen only
+// happens on a tick where the operator actually dropped a file. Returns true when go_p<N>.txt was
+// consumed this tick (the CtlIn.goSeen one-tick pulse).
+static bool ctl_poll_seat(int seat, bool paused) {
+	if ((g_renderSeq % (2u * CTL_POLL_FRAMES)) != (uint32_t)(seat * CTL_POLL_FRAMES)) return false;
+	CtlSched* cs = &s_ctl[seat];
+	static char body[CTL_FILE_MAX + 2];   // static: no per-poll stack pressure on the render thread
+	char path[96], err[80], msg[CTL_STATUS_LEN];
+	struct stat st;
+
+	// --- move_p<N>.txt -----------------------------------------------------------------------
+	ctl_path(path, sizeof path, "move", seat);
+	if (stat(path, &st) == 0) {
+		int n = ctl_read_file(path, body, (int)sizeof body);
+		if (n != -1) {
+			const char* p = body;
+			while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+			if (*p == '!') {                    // D4.4: abort files are honoured MID-script
+				remove(path);
+				ctl_note(cs, "ABORT by file");
+				ctl_abort(cs, NULL);            // silent clear — the note above IS the message
+#if CTL_D5_ENABLE
+				// D5.5/D5.8: one '!' stops EVERYTHING this seat's harness is doing — the
+				// script, an armed-or-running replay, AND the recorder.
+				ctl_rep_abort(&s_ctlRep[seat], "by file");
+				ctl_rec_stop(&s_ctlRec[seat], "abort file");
+				ctl_rec_close(seat);
+#endif
+			} else if (ctl_active(cs)) {
+				// A non-abort file dropped mid-script is LEFT IN PLACE untouched and picked up
+				// when the script ends (D4.4) — no consume, no parse, no log spam.
+			} else {
+				remove(path);                   // CONSUMED ON PICKUP: a stale script can never re-fire
+				if (n == -2) {
+					snprintf(msg, sizeof msg, "parse error: file larger than %d bytes", CTL_FILE_MAX);
+					ctl_note(cs, msg);
+				} else {
+					int t = ctl_load(cs, body, err, sizeof err);
+					if (t < 0) snprintf(msg, sizeof msg, "parse error: %s", err);
+					else       snprintf(msg, sizeof msg, "picked up %d tokens%s", t,
+					                    ctl_waiting_go(cs) ? " (holding for the go file)" : "");
+					ctl_note(cs, msg);
+					// SPEC Open Question 2 (scripts on a paused seat): ACCEPT the pickup, but say
+					// out loud that this seat's emulated clock is stopped — otherwise the log
+					// shows a queued script that never moves and nothing explains why.
+					if (t > 0 && paused)
+						ctl_note(cs, "note: seat PAUSED (emulated clock stopped) - the script waits");
+				}
+			}
+		}
+	}
+
+	// --- go_p<N>.txt (D4.10): polled only while a G-script holds. One-shot + re-armable by
+	// nature (consumed each time); a go file with no waiting script is left in place.
+	if (ctl_waiting_go(cs)) {
+		ctl_path(path, sizeof path, "go", seat);
+		if (stat(path, &st) == 0) { remove(path); return true; }
+	}
+	return false;
+}
+
+#endif
 
 // Link callbacks (invoked by mGBA's lockstep). onSleep runs on this core's worker thread
 // during runFrame and must NOT block — it only requests a park; the worker parks (blocks on
@@ -1412,6 +1661,34 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	gs_log_reset();                 // fresh game-state instrumentation log for this play session
 	touch_log_reset();              // fresh touch-event instrumentation log for this play session
 	diag_wd_session_reset();        // D1: fresh watchdog episode + kill-switch check for this session
+	ctl_init(&s_ctl[0], 0); ctl_init(&s_ctl[1], 1);   // D4: fresh script schedulers (SPEC C.3)
+	ctl_publish(&s_ctl[0]); ctl_publish(&s_ctl[1]);
+	ctl_close();                    // D4: a previous session's control log never leaks into this one
+	s_ctlOn = false; s_ctlHdr[0] = '\0';
+#if CTL_D5_ENABLE
+	for (int i = 0; i < 2; i++) {   // D5: fresh recorder + replayer; no rec file leaks across
+		ctl_rec_init(&s_ctlRec[i], i);
+		ctl_rep_init(&s_ctlRep[i], i);
+		ctl_rec_close(i);
+		s_ctlInOk[i] = false;
+		ctl_publish_rr(i, &s_ctlRec[i], &s_ctlRep[i]);
+	}
+#endif
+#if CTL_D4_ENABLE
+	{   // D4.1: the whole feature arms iff sdmc:/cias/control exists — the operator opts in with
+		// one mkdir, ONCE per session. No directory => zero polls, zero injection, no log file.
+		struct stat cst;
+		s_ctlOn = (stat("sdmc:/cias/control", &cst) == 0);
+		if (s_ctlOn) {   // D4.14 session-start mapping echo (the control log's first line)
+			char ca[5] = "----", cb[5] = "----";
+			if (emuA.core) gbacore_game_code(emuA.core, ca);
+			if (emuB.core) gbacore_game_code(emuB.core, cb);
+			snprintf(s_ctlHdr, sizeof s_ctlHdr,
+			         "# control p1=%s p2=%s dir=sdmc:/cias/control  (p1=game A, p2=game B, fixed; "
+			         "clock=emulated frames of that game)\n", ca, cb);
+		}
+	}
+#endif
 	int  menuSel = 0;
 	int  menuTab = 0, menuRow = 0;   // tabbed pause menu (UI redesign)
 	int  menuScroll = 0;             // content scroll offset (tall tabs scroll; see menu_layout)
@@ -1466,6 +1743,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		u32 kDown = hidKeysDown();
 		u32 kHeld = hidKeysHeld();
 		u16 tk = 0;             // touch-injected keys for the bottom game this frame
+		u16 ckA = 0, ckB = 0;   // D4 script-injected keys, per GAME SLOT (A = p1, B = p2)
 		TouchSmart sm = { 0 };   // bottom game live state for SMART touch
 		int tmEff = (single && touchMode == TOUCH_SMART) ? TOUCH_PAD : touchMode;   // SMART needs a bottom-screen game
 
@@ -1505,7 +1783,11 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			wds.rxSeq     = g_diagRxSeq;
 			wds.netCrumb  = g_diagNetCrumb;
 			wds.sioCrumb  = g_diagSioCrumb;
-			gbacore_net_wd_counters(&wds.gateN, &wds.forceN);
+			// celio gate-health quick-reads for the STUCK line, out of D3's single read-only
+			// counters seam (D1 deviation #3 folded into gbacore_net_counters — one struct fill
+			// per 200 ms tick, all pure copies of the worker-captured statics).
+			{ GbaNetCounters wdc; gbacore_net_counters(&wdc);
+			  wds.gateN = wdc.celioGateN; wds.forceN = wdc.celioForceN; }
 			wds.wl   = wlOn ? 1 : 0;
 			wds.seat = wlOn ? wlSeat : -1;
 			char wdLine[192];
@@ -1721,6 +2003,62 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					// re-read"); game_read fills *out (memset + sentinels) even when it returns false.
 					bool gsTopOk = game_read(gsTop, gpTop, &gst);
 					bool gsBotOk = game_read(gsBot, gpBot, &gsb);
+#if CTL_D4_ENABLE
+					// ---- D4 file-driven tile-exact movement (SPEC-control-replay.md §D4 / C.4).
+					// Runs HERE, at the existing parked-window read site, because the two
+					// GameState snapshots above are exactly what the closed loop needs — the
+					// player's live tile + map (SaveBlock1 pos/location) — so D4 adds NO game-RAM
+					// reads and no new race class (SPEC §0). The scheduler clock is the scripted
+					// core's EMULATED frame counter, so a paused seat / open pause menu /
+					// backgrounded app freezes the script in place instead of blind-firing.
+					// Output = a key mask ORed into the assembly below (the emulated keypad).
+					if (s_ctlOn) {
+						const GameState* gsFor[2] = { swapped ? &gsb : &gst, swapped ? &gst : &gsb };
+						GbaCore*         coFor[2] = { emuA.core, emuB.core };
+						bool             pzFor[2] = { emuA.paused, emuB.paused };
+						// The seat's NON-script routed mask = the D4.11 abort trigger. It MIRRORS
+						// the assembly at the end of this block, so a key the seat never receives
+						// (3DS-level HUD keys, touch while TOUCH_OFF, the other game's pad) can
+						// never abort a script — by construction, not by a list.
+						u16 rkFor[2];
+						rkFor[0] = single ? (u16)(g | tk) : (u16)(((focused == 0) ? g : 0) | (swapped ? tk : 0));
+						rkFor[1] = single ? (u16)0        : (u16)(((focused == 1) ? g : 0) | (swapped ? 0 : tk));
+#if CTL_D5_ENABLE
+						s_ctlInOk[0] = s_ctlInOk[1] = false;   // a stale snapshot never records
+#endif
+						for (int sq = 0; sq < 2; sq++) {
+							if (!coFor[sq]) continue;
+							CtlIn ci;
+							ci.emuFrame   = gbacore_frame_counter(coFor[sq]);
+							ci.fieldValid = gsFor[sq]->valid && gsFor[sq]->ctx == GCTX_OVERWORLD &&
+							                gsFor[sq]->sb1Valid && gsFor[sq]->px >= 0;   // D4.9
+							ci.px         = (int16_t)gsFor[sq]->px;
+							ci.py         = (int16_t)gsFor[sq]->py;
+							ci.mapGroup   = (int16_t)gsFor[sq]->mapGroup;
+							ci.mapNum     = (int16_t)gsFor[sq]->mapNum;
+							ci.realKeys   = rkFor[sq];
+							ci.goSeen     = ctl_poll_seat(sq, pzFor[sq]);
+							u16 m = ctl_tick(&s_ctl[sq], &ci);
+#if CTL_D5_ENABLE
+							// D5: a replay mask is a harness mask exactly like a script mask —
+							// same emulated-keypad seam, ORed in the same additive way
+							// (D4.12/D5.7). The snapshot is KEPT because the recorder needs the
+							// FINAL assembled mask, which only exists after the key assembly
+							// further down (D5.4).
+							ctl_rr_poll_seat(sq);
+							m = (u16)(m | ctl_rep_tick(&s_ctlRep[sq], &ci));
+							s_ctlIn[sq] = ci; s_ctlInOk[sq] = true;
+							ctl_publish_rr(sq, &s_ctlRec[sq], &s_ctlRep[sq]);
+#endif
+							if (sq == 0) ckA = m; else ckB = m;
+							ctl_publish(&s_ctl[sq]);     // D4.14 '# control' netlog mirror
+							ctl_drain_seat(sq);          // status lines -> the control log
+#if CTL_D5_ENABLE
+							ctl_rr_drain_seat(sq);       // ...and the record/replay lines
+#endif
+						}
+					}
+#endif
 					if (gsTopOk) {
 						GsDepth gd = { (uint8_t)depth3d.overworld, (uint8_t)depth3d.textTop, (uint8_t)depth3d.textBot,
 						               (short)depth3d.nspr, (short)depth3d.nui, (short)depth3d.nfg,
@@ -1729,10 +2067,12 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 						gd.headMin = depth3d.headMin; gd.headMax = depth3d.headMax;
 						gd.tallOk = depth3d.tallOk; gd.tallFail = depth3d.tallFail; gd.orderOk = depth3d.orderOk ? 1 : 0;
 						gd.s3d = (osGet3DSliderState() > 0.03f && !menuOpen) ? 1 : 0;          // stereoscopic engaged this frame (read-only)
-						gs_log_sample(gsTop, gpTop, &gst, 0, 0, &gd, (uint32_t)nowMs);     // screen 0 = top/3D
+						// injKeys carries the TOP game's script mask so D4 injection shows up in the same
+						// timeline as ctx/geo (D4.14 — free correlation, no new log).
+						gs_log_sample(gsTop, gpTop, &gst, 0, (u16)(swapped ? ckB : ckA), &gd, (uint32_t)nowMs);   // screen 0 = top/3D
 					}
 					if (gsBotOk)
-						gs_log_sample(gsBot, gpBot, &gsb, 1, tk, NULL, (uint32_t)nowMs);   // screen 1 = bottom/touch (with injected key)
+						gs_log_sample(gsBot, gpBot, &gsb, 1, (u16)(tk | (swapped ? ckA : ckB)), NULL, (uint32_t)nowMs);   // screen 1 = bottom/touch (touch + script keys)
 #if DIAG_D3_ENABLE
 					// ---- D3 per-frame CSV telemetry row (SPEC-firmware-diag D3.3-D3.6; LOGGING
 					// ONLY — reads + one buffered fwrite, zero heap, zero writes to game RAM).
@@ -1789,11 +2129,24 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					}
 #endif
 				}
-				if (single) { emuA.keys = g | tk; emuB.keys = 0; }   // one game: pad + touch both drive it
+				// D4 (SPEC D4.12): script keys are ORed in, strictly additive — no existing bit is
+				// ever cleared and nothing else writes these words. ckA/ckB are 0 unless a script is
+				// running on that slot, so with no control directory this is the original assembly.
+				if (single) { emuA.keys = g | tk | ckA; emuB.keys = 0; }   // one game: pad + touch both drive it
 				else {
-					emuA.keys = ((focused == 0) ? g : 0) | (swapped ? tk : 0);
-					emuB.keys = ((focused == 1) ? g : 0) | (swapped ? 0 : tk);
+					emuA.keys = ((focused == 0) ? g : 0) | (swapped ? tk : 0) | ckA;
+					emuB.keys = ((focused == 1) ? g : 0) | (swapped ? 0 : tk) | ckB;
 				}
+#if CTL_D4_ENABLE && CTL_D5_ENABLE
+				// D5.4 RECORD the seat's FINAL assembled mask — real pad + touch + any script or
+				// replay keys, i.e. exactly what the core received; that is the only thing that
+				// replays faithfully. PASSIVE: this READS the word, never writes one, so a
+				// recording can never fight live input (PM mp_bridge.cpp:1614, by construction).
+				if (s_ctlOn) {
+					if (s_ctlInOk[0]) ctl_rec_feed(0, (u16)emuA.keys, emuA.core);
+					if (s_ctlInOk[1]) ctl_rec_feed(1, (u16)emuB.keys, emuB.core);
+				}
+#endif
 				if (linkOn || netOn || wlOn) {
 					// Workers free-run + pump their own audio rings; main just samples the latest frames
 					// and stays responsive. Audio keeps playing during a link (rings are worker-private).
@@ -2013,8 +2366,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					} else {
 						EmuInstance* fg = (focused == 0) ? &emuA : &emuB;
 						char gcode[5] = { 0 };
-						if (fg->core) gbacore_game_code(fg->core, gcode);
-						int lr = wireless_lobby_run(top, bot, txtBuf, gcode);   // 0 closed, 1 host, 2 joiner
+						uint8_t grev = 0;                    // D6: ROM header 0xBC (revision) of the participating game
+						if (fg->core) { gbacore_game_code(fg->core, gcode); grev = gbacore_game_rev(fg->core); }
+						int lr = wireless_lobby_run(top, bot, txtBuf, gcode, grev);   // 0 closed, 1 host, 2 joiner
 						if ((lr == 1 || lr == 2) && fg->core && !linkOn && !netOn) {
 							int seat = (lr == 1) ? 0 : 1;          // host = seat 0 (parent/master), joiner = seat 1 (child)
 							// The FOCUSED game (fg) is the trade participant — matches the code the lobby advertised
@@ -2404,6 +2758,16 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		other->paused = false;
 		wlOn = false;
 	}
+	ctl_drain_seat(0); ctl_drain_seat(1);     // D4: flush the tail status lines...
+#if CTL_D5_ENABLE
+	for (int i = 0; i < 2; i++) {             // D5.5: session end stops recording + any replay
+		ctl_rec_stop(&s_ctlRec[i], "session end");
+		ctl_rep_abort(&s_ctlRep[i], "session end");
+		ctl_rr_drain_seat(i);
+		ctl_rec_close(i);
+	}
+#endif
+	ctl_close();                              // ...and close the control log (SPEC C.5)
 	diag_wd_close();                          // D1/D3: session over — close the wd/hang logs + the CSV
 	emuA.linked = emuB.linked = false;        // stop the free-run loop
 	emuA.netLinked = emuB.netLinked = false;  // ...and the net free-run loop (symmetric teardown)

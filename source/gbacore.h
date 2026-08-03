@@ -80,7 +80,6 @@ void     gbacore_net_diag(int* startN, int* injectN, int* okN, int* toN, unsigne
 void     gbacore_net_peak(unsigned* peakSentP, unsigned* peakSentC,
                           unsigned* peakRxP, unsigned* peakRxC, int* stallO);   // M3 peak-word watch
 void     gbacore_net_pace(unsigned* vblMax, int* blkN, unsigned* capK);   // M3 joiner pacing diag (HUD+log)
-void     gbacore_net_wd_counters(int* gateN, int* forceN);   // D1 watchdog quick-reads (celio gate/force; STUCK line)
 
 // D3 per-frame CSV telemetry (SPEC-firmware-diag D3.2): the FULL read-only counters snapshot the
 // render thread turns into CSV columns each frame. Pure copies of gbacore.c's worker-captured
@@ -88,7 +87,8 @@ void     gbacore_net_wd_counters(int* gateN, int* forceN);   // D1 watchdog quic
 // path; net_celio_capture (LOGGING ONLY) now additionally snapshots the whole ClStatus + the
 // outgoing-event queue depth worker-side. Each field is a single aligned-word read; CROSS-FIELD
 // TEARING between worker writes and this render-thread copy is accepted, disclosed telemetry
-// (SPEC Open Q5) — no lock is taken.
+// (SPEC Open Q5) — no lock is taken. Also feeds the D1 watchdog's STUCK line (celioGateN/
+// celioForceN): D1's minimal gbacore_net_wd_counters forward was FOLDED into this export.
 typedef struct {
 	// celio FSM (worker-captured snapshot; single-word reads, benign race)
 	int clSection, clState, clBlk;  unsigned clFrames, clPartyBytes;
@@ -124,5 +124,11 @@ void     gbacore_write8(GbaCore* c, uint32_t addr, uint8_t val);
 void     gbacore_write16(GbaCore* c, uint32_t addr, uint16_t val);
 // 4-char ROM game code from the header (e.g. "BPEE"); out must hold >=5 bytes (NUL-terminated).
 void     gbacore_game_code(GbaCore* c, char out[5]);
+// ROM header "software version" byte (0x080000BC) — the game REVISION (FR rev0 vs rev1, ...).
+// D6 link-surface fingerprint field 2 (SPEC-suite-hardening.md §D6.1): revisions share the RAM map
+// and trade freely, so this is FORENSIC, never refuse-grade — its job is to make the netlog SAY
+// which rev each console ran so a symbol map is never guessed again (run #12 had to prove the
+// user's FR was rev1 by exact cb2 matches).
+uint8_t  gbacore_game_rev(GbaCore* c);
 
 void     gbacore_destroy(GbaCore* c);

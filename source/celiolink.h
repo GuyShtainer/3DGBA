@@ -170,6 +170,19 @@ typedef enum { CL_HS_DISABLED = 0, CL_HS_ENABLED, CL_HS_CONNECT } ClHandshakeSta
                                       // drain (must EXCEED the game's 1.0x send-queue fill; catch-up absorbs
                                       // the surplus, the heartbeat keeps over-drained bursts nonzero)
 
+// D6 (SPEC-suite-hardening.md §D6.2): protocol revision of THIS FSM's wire-visible behavior +
+// CL_EV_* semantic contract. It is the one field of the link-surface fingerprint (fingerprint.h)
+// that tracks US rather than the ROM or the transport. The FSM never reads it — only the
+// fingerprint fill (wireless.c) does.
+// BUMP it whenever a change alters what the synthesized partner puts on the (virtual) wire or what
+// a CL_EV_* event means — and NEVER without, in the same commit:
+//   (1) an entry in docs/kb/celio/KNOWN-DIFFERENCES.md (or docs/phase13-diagnostics/BUILDLOG.md)
+//       describing the change, and
+//   (2) re-pinning the fingerprint goldens in test/test_celiolink.c TEST 16.
+// (gen1recomp bless discipline: "moving the fingerprint breaks linking between every existing
+//  build and every new one — that is a parity change", gen1-parity.md §9.)
+#define CL_PROTO_REV 1
+
 // blockCommand handler state (Celio blockCommand.cpp globals, made per-instance).
 typedef struct {
 	const uint8_t* src;       // g_src

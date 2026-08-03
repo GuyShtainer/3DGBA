@@ -28,9 +28,11 @@
                // here to avoid a redefinition warning when gbacore.h defines GBA_H = 160.
 #include "gbacore.h"
 #include "celiolink.h"   // Celio-style local-termination link partner (state F)
+#include "control.h"     // D4 file-driven movement — the g_ctlStat mirror for the '# control' line
 #include "diag.h"        // D1 breadcrumbs: pure-C header (no mGBA/libctru types) — one volatile
                          // store per gated return names WHERE the driver's clock parked
                          // (SPEC-firmware-diag D1.1 sites 2000-3000; the run-#4 wedge class)
+#include "fingerprint.h"  // D6: DGBA_NET_EXP_DEFAULT (the shared session-entry link strategy)
 
 // FIXED_ROM_BUFFER: libmgba's 3DS build (ctru-heap.c, compiled into libmgba.a) DEFINES these
 // and allocates one boot romBuffer (~32 MB). The GBA core points gba->memory.rom at romBuffer,
@@ -323,6 +325,7 @@ bool net_older_than_ms(uint64_t sinceTick, uint32_t ms);   // u64-safe wall-cloc
 void net_link_get_stats(int* rxWordN, int* wordSendFails, int* busyN, int* peerUp, int* maxSeat0Round);  // establishment diag
 void net_link_get_rtt(int* rttMs, int* drops);   // PURE-NETWORK ping round-trip (no game) — splits radio vs our per-round overhead
 bool net_round_next_parent(uint32_t afterRound, uint32_t* outRound);   // M3: child adopts the parent's wire round
+int  net_fprint_log(char* buf, int max);       // D6: the '# fprint' link-surface line (lobby-stage exchange)
 // Celio EVENT channel (netlink.c): reliable, in-order semantic ClEvents (party/select/confirm) for state F.
 int  net_event_send(int seat, const void* clEvent);
 int  net_event_recv(int seat, void* clEventOut);
@@ -768,7 +771,10 @@ void gbacore_net_attach(GbaCore* g, int seat, int peers) {
 	cl_get_status(&nd->cl, &s_celioStatus);   // D3 (LOGGING ONLY): truthful baseline from the freshly
 	s_celioOutQ = 0;                          // cl_init'd FSM (select slots -1, holds 0) for row 0
 	net_event_reset();
-	s_netExp = 5; s_netExpSeen = 32; s_netRoundPaceUs = 0;   // DEFAULT = state F (Celio local termination); D/A/B/C/E via KEY_Y.    // DEFAULT = state D (host-rate-follow + edge-strict) — the
+	// DGBA_NET_EXP_DEFAULT (fingerprint.h) == 5: the SINGLE SOURCE OF TRUTH for the session-entry
+	// link strategy, shared with the D6 fingerprint's modeFlags nibble so the value the peer is told
+	// can never drift from the value we actually run (SPEC-suite-hardening.md §D6.1 field 5).
+	s_netExp = DGBA_NET_EXP_DEFAULT; s_netExpSeen = (1 << DGBA_NET_EXP_DEFAULT); s_netRoundPaceUs = 0;   // DEFAULT = state F (Celio local termination); D/A/B/C/E via KEY_Y.    // DEFAULT = state D (host-rate-follow + edge-strict) — the
 	                                                        // PROVEN trade recipe: every link uses it from round 0 (no
 	                                                        // toggle, no pre-D force-captures, no mid-switch desync). A/B/C
 	                                                        // stay reachable via the HUD's Y toggle as diagnostic fallbacks.
@@ -837,17 +843,12 @@ void gbacore_net_pace(unsigned* vblMax, int* blkN, unsigned* capK) {
 	if (capK)   *capK   = NET_ACTIVE_MS;
 }
 
-// D1 watchdog quick-reads: the two celio gate-health counters the STUCK line carries (SPEC D1.5).
-// Minimal forward of what D3's full gbacore_net_counters will also expose — pure copies of the
-// s_celio* statics (single aligned-word reads from the render thread; same benign-race class as
-// gbacore_net_diag). gateN pinned+rising while frozen = the link-ready gate never opened;
-// forceN rising = the ISR-edge wedge escape is firing (run-#4 class).
-void gbacore_net_wd_counters(int* gateN, int* forceN) {
-	if (gateN)  *gateN  = s_celioGateN;
-	if (forceN) *forceN = s_celioForceN;
-}
-
 // D3 per-frame CSV telemetry (SPEC-firmware-diag D3.2): the full read-only counters snapshot.
+// NOTE (D3 fold, BUILDLOG 2026-08-03): slice D1 shipped a minimal `gbacore_net_wd_counters(gateN,
+// forceN)` forward for the STUCK line and recorded "D3 may fold it into the full export" (D1
+// deviation #3). Folded here — the D1 watchdog sampler now reads celioGateN/celioForceN out of
+// this one snapshot (~200 ms cadence, a single struct fill), so there is exactly ONE read-only
+// counters seam in gbacore.c instead of two.
 // Pure copies of the statics above — NO logic change, NO lock. Called at ~60 Hz from the render
 // thread; every field is a single aligned-word read (the gbacore_net_diag benign-race class);
 // cross-field tearing between a worker write and this copy is accepted, disclosed telemetry
@@ -965,6 +966,15 @@ void gbacore_net_log_dump(const char* path, int seat) {
 	{ int rxW=0, txF=0, busy=0, peerUp=0, maxS0=-1; net_link_get_stats(&rxW, &txF, &busy, &peerUp, &maxS0);
 	  fprintf(f, "# transport rxWords=%d txFails=%d busy=%d peerUp=%d maxSeat0Round=%d hostRound=%lu\n",
 	          rxW, txF, busy, peerUp, maxS0, (unsigned long)s_netRound); }
+	// D6 LINK SURFACE (SPEC-suite-hardening.md §D6.6): what the two consoles told each other in the
+	// LOBBY about whether they can link at all — game code + revision, our FSM's protocol rev, the
+	// transport rev, and the session-entry link strategy. verdict=MATCH / DIFF:<named fields> /
+	// unknown (the peer's surface never arrived — NEVER read that as a match). A `DIFF:` here is the
+	// one-line diagnosis for a run that would otherwise be a mystery; none of it is refuse-grade
+	// (EM<->FR and FR rev0<->rev1 trade legitimately — over-hashing would reject compatible peers,
+	// gen1recomp #511). Absent entirely = no lobby exchange ran (e.g. a loopback/one-console run).
+	{ char fpline[224];
+	  if (net_fprint_log(fpline, (int)sizeof fpline) > 0) fprintf(f, "%s\n", fpline); }
 	// PURE-NETWORK latency (the decisive split): the PING round-trip runs alongside the trade with NO game in the
 	// loop. If pingRtt << the per-round rtt_us below, the ~21ms-over-floor is OUR per-round turnaround (worker
 	// poll/emulate/reply), NOT the radio -> a router/socket won't help, but tightening the loop would. If
@@ -994,6 +1004,22 @@ void gbacore_net_log_dump(const char* path, int seat) {
 	        s_celioSection, s_celioState, s_celioBlk, s_celioFrames, s_celioPartyB, s_celioTradeC,
 	        s_celioGateN, s_celioResetN, s_celioForceN, s_celioSioMode, s_celioSiocnt,
 	        s_celioExitP, s_celioSessEnd, s_celioPCard, s_celioIdReal);
+	// D4 file-driven movement summary (SPEC-control-replay.md D4.14). Pure copies of the
+	// g_ctlStat mirror main.c publishes after every scheduler tick — this dump function never
+	// touches the schedulers themselves. All-zero = no script ran this session (the normal case).
+	fprintf(f, "# control p1 tok=%u abort=%u timeout=%u pick=%u st=%u(%d/%d) | p2 tok=%u abort=%u timeout=%u pick=%u st=%u(%d/%d)  (D4 sdmc:/cias/control move_p<N>.txt scripts; st 0=idle 1=waiting-for-go 2=running, (idx/nTok); the per-event detail is in 3DGBA_control_*.txt)\n",
+	        g_ctlStat[0].toksDone, g_ctlStat[0].aborts, g_ctlStat[0].timeouts, g_ctlStat[0].pickups,
+	        g_ctlStat[0].state, (int)g_ctlStat[0].idx, (int)g_ctlStat[0].nTok,
+	        g_ctlStat[1].toksDone, g_ctlStat[1].aborts, g_ctlStat[1].timeouts, g_ctlStat[1].pickups,
+	        g_ctlStat[1].state, (int)g_ctlStat[1].idx, (int)g_ctlStat[1].nTok);
+	// D5 record/replay half of the same mirror (SPEC-control-replay.md D5). All-zero = neither
+	// was armed this session. rec: 0=off 1=armed(hunting the field-entry anchor) 2=recording;
+	// rep: 0=idle 1=armed(hunting the anchor) 2=playing, (idx/entries).
+	fprintf(f, "# control-rr p1 rec=%u(%lu lines) rep=%u(%u/%u) | p2 rec=%u(%lu lines) rep=%u(%u/%u)  (D5 record_p<N>.txt arms recording -> 3DGBA_rec_p<N>_*.txt; replay_go_p<N>.txt loads replay_p<N>.txt)\n",
+	        g_ctlStat[0].recState, (unsigned long)g_ctlStat[0].recLines,
+	        g_ctlStat[0].repState, g_ctlStat[0].repIdx, g_ctlStat[0].repN,
+	        g_ctlStat[1].recState, (unsigned long)g_ctlStat[1].recLines,
+	        g_ctlStat[1].repState, g_ctlStat[1].repIdx, g_ctlStat[1].repN);
 	if (s_celioNdForTrace) {
 		uint32_t tf[32]; uint16_t tc[32]; uint8_t tsec[32], tst[32], tbl[32];
 		int tn = cl_get_trace(&s_celioNdForTrace->cl, tf, tc, tsec, tst, tbl, 32);
@@ -1318,6 +1344,13 @@ void     gbacore_write16(GbaCore* g, uint32_t a, uint16_t v) { g->core->busWrite
 void gbacore_game_code(GbaCore* g, char out[5]) {
 	for (int i = 0; i < 4; i++) out[i] = (char)g->core->busRead8(g->core, 0x080000ACu + i);
 	out[4] = '\0';
+}
+
+// GBA cartridge header (GBATEK "GBA Cartridge Header"): 0xAC..0xAF = game code, 0xB0..0xB1 = maker
+// code, 0xBC = SOFTWARE VERSION (the revision byte). Read-only, one bus byte — D6 fingerprint.
+uint8_t gbacore_game_rev(GbaCore* g) {
+	if (!g || !g->core) return 0;
+	return (uint8_t)g->core->busRead8(g->core, 0x080000BCu);
 }
 
 void gbacore_destroy(GbaCore* g) {

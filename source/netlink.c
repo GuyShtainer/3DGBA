@@ -7,12 +7,15 @@
 #include "netlink.h"
 #include "diag.h"    // D1 breadcrumbs: pure-C header (no libctru leak) — one volatile store per
                      // wait-loop iteration names WHERE a thread is parked (SPEC-firmware-diag D1.1-D1.2)
+#include "fingerprint.h"   // D6: the pure-C link-surface formatter. The transport still treats the
+                           // surface bytes as OPAQUE on the wire (same rule as ClEvent) — this
+                           // include exists only so net_fprint_log can render the netlog line
+                           // through the HOST-TESTED formatter instead of a second copy here.
 
 // Our app's UDS identity — the scan filter, so we only ever see other 3DGBA lobbies.
 #define DGBA_WLANCOMMID 0x44474241u   // 'DGBA'
 #define DGBA_ID8        0x00
 #define DGBA_DATACHAN   0x01          // must be non-zero
-#define DGBA_PROTO      1
 #define DGBA_SHMEM_SZ   0x3000        // udsInit shared-mem (0x1000-aligned; verify headroom on hw)
 #define SCAN_BUFSZ      0x4000
 
@@ -47,6 +50,39 @@ typedef struct __attribute__((packed)) {
 #define PK_WORD 7   // M3: one seat's SIO word for a round (pk->seat / pk->round / pk->d.send)
 #define PK_EVENT     8   // Celio EVENT channel: a fragment of a reliable, in-order ClEvent (DgbaEventPkt)
 #define PK_EVENT_ACK 9   // cumulative ACK for the EVENT channel (reuses DgbaLinkPkt: seat + round=ackSeq)
+#define PK_FPRINT   10   // D6 link-surface fingerprint (DgbaFprintPkt) — LOBBY ONLY, never in-link
+
+// --- D6 link-surface fingerprint packet (lobby stage only) ----------------------------------------
+// 20 bytes: bigger than DgbaLinkPkt (16) but it shares the {magic,type} prefix, so it passes the
+// lobby drain's `got >= sizeof(DgbaLinkPkt)` gate and is dispatched by type like everything else
+// (precedent: DgbaEventPkt, above — non-16-byte packets already ride the same NET_PKT_BUF pull).
+// The 8 surface bytes are OPAQUE here: netlink stores/ships/returns them and never interprets them
+// (the ClEvent opacity rule, netlink.h). Only the netlog line reaches for fingerprint.h's formatter.
+typedef struct __attribute__((packed)) {
+	u8  magic;         // 'G'
+	u8  type;          // PK_FPRINT
+	u8  seat;          // sender's LOBBY role: 1 = host (myNode==1), 0 = client. Carried so a future
+	                   //   3-4 player lobby can compare per-peer; v0 stores ONE peer's surface.
+	u8  pad;           // reserved 0 (keeps hash 4-byte aligned inside the packed struct)
+	u8  surface[NET_FPRINT_BYTES];   // the DgbaFprint canonical bytes
+	u64 hash;          // dgba_fprint_hash(surface), little-endian
+} DgbaFprintPkt;
+_Static_assert(sizeof(DgbaFprintPkt) == 20, "PK_FPRINT wire size");
+_Static_assert(sizeof(DgbaFprintPkt) >= sizeof(DgbaLinkPkt), "PK_FPRINT must pass the lobby size gate");
+
+// Local surface (set by wireless.c BEFORE host/join) + the peer's, once it arrives.
+static u8   s_fprintLocal[NET_FPRINT_BYTES];
+static u64  s_fprintLocalHash  = 0;
+static bool s_fprintLocalValid = false;
+static u8   s_fprintPeer[NET_FPRINT_BYTES];
+static u64  s_fprintPeerHash   = 0;
+static bool s_fprintPeerValid  = false;
+// Send budget AFTER the peer's surface has arrived: keep repeating a few more times so the peer
+// converges too even under loss, then go quiet (the exchange is idempotent — a duplicate overwrites
+// with identical bytes). Re-armed only when the peer's bytes CHANGE, so two consoles cannot ping-pong
+// forever. While the peer's surface has NOT arrived we send on every ping tick (~6 Hz, lobby only).
+#define FPRINT_POST_SENDS 3
+static int  s_fprintPost = FPRINT_POST_SENDS;
 
 // --- Celio EVENT channel wire layout --------------------------------------------------------------
 // PK_WORD stays a dumb (seat,round)-keyed word pipe (untouched). The EVENT channel is a PARALLEL,
@@ -259,6 +295,11 @@ void net_session_close(void) {
 		for (int i = 0; i < NET_ROUNDS; i++) LightEvent_Signal(&s_rounds[i].ev);
 	s_pingSeq = 0; s_pingFrame = 0; s_pingRtt = -1; s_pingDrops = 0; s_pingSendFails = 0; s_wordSendFails = 0; s_netBusyN = 0;
 	memset(s_pingTick, 0, sizeof s_pingTick);
+	// D6: the PEER's surface belongs to the session that just ended — drop it (a stale peer would be
+	// a lie next session). OUR surface is deliberately KEPT: wireless.c re-publishes it before every
+	// host/join, and keeping it means a netlog written after teardown still names our own side.
+	s_fprintPeerValid = false; s_fprintPeerHash = 0; s_fprintPost = FPRINT_POST_SENDS;
+	memset(s_fprintPeer, 0, sizeof s_fprintPeer);
 }
 
 // Call once per frame while connected. In the LOBBY (no RX thread yet) this owns the pull/echo/RTT
@@ -285,6 +326,15 @@ void net_ping_update(int* rttMs, int* drops, int* sendFails) {
 						s_pingRtt = (int)((svcGetSystemTick() - sent) * 1000ull / SYSCLOCK_ARM11);
 						s_pingTick[pk->round % PING_RING] = 0;
 					}
+				} else if (pk->type == PK_FPRINT && got >= sizeof(DgbaFprintPkt)) {
+					// D6: the peer's link surface. Idempotent — a duplicate rewrites identical bytes.
+					const DgbaFprintPkt* fp = (const DgbaFprintPkt*)buf;
+					bool changed = !s_fprintPeerValid || fp->hash != s_fprintPeerHash
+					            || memcmp(s_fprintPeer, fp->surface, NET_FPRINT_BYTES) != 0;
+					memcpy(s_fprintPeer, fp->surface, NET_FPRINT_BYTES);
+					s_fprintPeerHash  = fp->hash;
+					s_fprintPeerValid = true;
+					if (changed) s_fprintPost = FPRINT_POST_SENDS;   // a NEW peer surface -> repeat ours a few more times
 				}
 			}
 			net_resolve_peer();   // keep M2's unicast-once-2-nodes lobby behavior (cheap; lobby has no workers)
@@ -306,11 +356,56 @@ void net_ping_update(int* rttMs, int* drops, int* sendFails) {
 			} else {
 				s_pingSendFails++;                               // TX busy/refused: nothing sent, don't arm a phantom drop
 			}
+			// D6: piggyback ONE fingerprint on the same ~6 Hz tick — LOBBY ONLY (!s_rxRun), so the
+			// exchange is strictly BEFORE net_link_start and the in-link path never sees this type.
+			// Repeat until the peer's surface arrives, then FPRINT_POST_SENDS more (loss tolerance
+			// by repetition; no new reliability machinery, no round-trip inside the link).
+			if (!s_rxRun && s_fprintLocalValid && (!s_fprintPeerValid || s_fprintPost > 0)) {
+				DgbaFprintPkt fp; memset(&fp, 0, sizeof fp);
+				fp.magic = 'G'; fp.type = PK_FPRINT;
+				fp.seat  = (u8)(s_host ? 1 : 0);                 // lobby role, not the GBA seat
+				memcpy(fp.surface, s_fprintLocal, NET_FPRINT_BYTES);
+				fp.hash  = s_fprintLocalHash;
+				Result fr = net_send_locked(dst, flags, &fp, sizeof fp);
+				if (R_SUCCEEDED(fr)) { if (s_fprintPeerValid && s_fprintPost > 0) s_fprintPost--; }
+				else s_pingSendFails++;                          // TX busy: counted like any other refused send
+			}
 		}
 	}
 	if (rttMs) *rttMs = s_pingRtt;
 	if (drops) *drops = s_pingDrops;
 	if (sendFails) *sendFails = s_pingSendFails;
+}
+
+// --- D6 link-surface fingerprint API (netlink.h) -----------------------------------------------
+// Storage + transport only: the 8 bytes are opaque here. Every caller runs on the MAIN thread while
+// the RX thread is down (lobby), so no lock is needed — and net_fprint_log's only in-game caller is
+// the netlog dump, which reads a pair of words the lobby stopped writing before the link started.
+
+void net_fprint_set_local(const void* surface8, u64 hash) {
+	if (!surface8) { s_fprintLocalValid = false; return; }
+	memcpy(s_fprintLocal, surface8, NET_FPRINT_BYTES);
+	s_fprintLocalHash  = hash;
+	s_fprintLocalValid = true;
+	s_fprintPost       = FPRINT_POST_SENDS;   // fresh surface -> the peer must hear it again
+}
+
+int net_fprint_peer(void* out8, u64* hash) {
+	if (!s_fprintPeerValid) return 0;
+	if (out8) memcpy(out8, s_fprintPeer, NET_FPRINT_BYTES);
+	if (hash) *hash = s_fprintPeerHash;
+	return 1;
+}
+
+int net_fprint_log(char* buf, int max) {
+	if (!buf || max <= 0) return -1;
+	buf[0] = '\0';
+	if (!s_fprintLocalValid) return 0;        // no lobby ran this session -> nothing honest to say
+	DgbaFprint lf, pf;
+	memcpy(&lf, s_fprintLocal, sizeof lf);
+	memcpy(&pf, s_fprintPeer,  sizeof pf);
+	return dgba_fprint_format(&lf, s_fprintLocalHash, &pf, s_fprintPeerHash,
+	                          s_fprintPeerValid ? 1 : 0, buf, max);
 }
 
 // ---------------------------------------------------------------------------------------------

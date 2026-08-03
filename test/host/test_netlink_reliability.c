@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "../../source/diag.c"      // D1 crumb globals + watchdog: netlink.c's crumb stamps reference them
+#include "../../source/fingerprint.c"  // D6: netlink.c's net_fprint_log calls the pure-C formatter
 #include "../../source/netlink.c"   // pulls in the mock <3ds.h>, all statics, and the event logic
 
 // ClEvent (celiolink.h) is ABI-identical to netlink.c's NetEvent (both 260 B) — use NetEvent here.

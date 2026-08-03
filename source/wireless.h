@@ -4,10 +4,13 @@
 #pragma once
 #include <citro2d.h>
 #include <citro3d.h>
+#include <stdint.h>
 
 // Open the lobby. myGameCode = the focused game's 4-char GBA code ("BPEE" etc.), used for the
-// advertisement and the per-seat identity (✓/✗) check. Renders on the passed screen targets.
+// advertisement and the per-seat identity (✓/✗) check. myGameRev = that ROM's header revision byte
+// (gbacore_game_rev; 0 when no core is loaded) — D6 link-surface fingerprint field 2, which the
+// lobby exchanges with the peer BEFORE the link starts. Renders on the passed screen targets.
 // Returns: 0 = closed (session torn down), 1 = START LINK as host (seat 0), 2 = START LINK as
 // joiner (seat 1). On a non-zero return the UDS session is left UP for gameplay; on 0 it is closed.
 int wireless_lobby_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txtBuf,
-                       const char* myGameCode);
+                       const char* myGameCode, uint8_t myGameRev);

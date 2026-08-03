@@ -2,6 +2,399 @@
 
 Dated entry per slice (PHASE.md invariant 7). Newest first.
 
+## 2026-08-03 — Slice D6: link-surface fingerprint at connect (SPEC-suite-hardening §D6)
+
+**Landed**
+- `source/fingerprint.{h,c}` (NEW, PURE C — `<stdint.h>`/`<string.h>`/`<stdio.h>` only, no libctru /
+  no mGBA / no celiolink, dual-compiled by two host suites): the 8-byte packed `DgbaFprint` surface
+  (`gameCode[4]`, `gameRev`, `clProtoRev`, `netProto`, `modeFlags`) whose **struct layout IS the wire
+  format**, `dgba_fprint_fill`, the **two-lane FNV-1a** (`dgba_fprint_lane` A/B on different offset
+  bases → `dgba_fprint_hash` fold, gen1's construction, Fingerprint.lua:21-63), `dgba_fprint_diff`
+  (names the differing fields — the modDiff lesson, Handshake.lua:215-236 — comma-separated so a
+  netlog line stays one greppable token), and `dgba_fprint_format` (the `# fprint` line, incl. the
+  UNKNOWN-never-MATCH rule). NO ROM CRC, no trainer identity, no build id — the gen1recomp #511
+  over-coverage lesson is quoted at the top of the header next to the exclusion list.
+- `source/celiolink.h`: **the one `#define CL_PROTO_REV 1`** + its bless-discipline comment. Zero
+  logic; `celiolink.c` diff is EMPTY (acceptance gate 5).
+- `source/gbacore.{h,c}`: `gbacore_game_rev()` — one `busRead8(0x080000BC)` (GBATEK header:
+  0xAC game code, **0xBC software version**); `s_netExp = DGBA_NET_EXP_DEFAULT` /
+  `s_netExpSeen = (1 << DGBA_NET_EXP_DEFAULT)` (same values, now a single source of truth shared
+  with the fingerprint's `modeFlags`); the `# fprint` netlog line next to `# transport`, emitted
+  through a `net_fprint_log` **forward declaration** so the TU stays libctru-free (the
+  `net_mono_ticks` precedent).
+- `source/netlink.{h,c}`: `DGBA_PROTO` moved netlink.c → netlink.h (value unchanged) so the
+  fingerprint fill reads the same symbol the wire uses; **`PK_FPRINT` (type 10) + the 20-byte
+  `DgbaFprintPkt`** (shares the `{magic,type}` prefix, so it passes the lobby drain's
+  `got >= sizeof(DgbaLinkPkt)` gate — the `DgbaEventPkt` precedent) with two `_Static_assert`s on
+  its size; the RX branch in the **lobby pump** `net_ping_update` and the piggyback send on the same
+  ~6 Hz ping tick, **both gated on `!s_rxRun`** so the exchange is strictly pre-`net_link_start` and
+  the in-link path never sees the type; `net_fprint_set_local` / `net_fprint_peer` /
+  `net_fprint_log`; peer state cleared in `net_session_close`.
+- `source/wireless.{h,c}` + `source/main.c`: the lobby builds its own surface once
+  (`dgba_fprint_fill(&myFp, myCode, myGameRev, CL_PROTO_REV, DGBA_PROTO)`), publishes it with
+  `net_fprint_set_local` **before** `net_session_host` / `net_session_join`, and each frame diffs
+  the peer's → a top-screen line `link-surface: MATCH` (dim) / `link-surface DIFF: <fields>`
+  (`THEME_QUIT_TEXT` red, y209) plus a one-shot echo into `status[]`. `wireless_lobby_run` gained a
+  `uint8_t myGameRev` parameter; main.c reads it from the focused core beside the game code.
+- `test/test_celiolink.c`: `#include "../source/fingerprint.c"` + **TEST 16 (GOLDEN)** — both 32-bit
+  lanes AND the folded u64 pinned for `{"BPEE",0,1,1,5}` (`0DC57870`/`2A5C56C7`) and the user's real
+  `{"BPRE",1,1,1,5}` (`8B048F76`/`A51D3329`), the canonical byte order, `CL_PROTO_REV`/
+  `DGBA_NET_EXP_DEFAULT` pinned, byte-exact `# fprint` DIFF/MATCH/unknown lines, short/NULL game
+  codes, truncation guard-bytes — and **TEST 17 (MUTATION)**: all 8 surface bytes moved one at a
+  time, each must move the u64 **and both lanes**, mutation isolation (restore ⇒ golden), no
+  pairwise collisions, `dgba_fprint_diff` naming exactly the mutated field, the 5-field diff, diff
+  truncation/NULL safety.
+- `test/host/test_netlink_reliability.c`: ONE added include line (`fingerprint.c`) — netlink.c's
+  `net_fprint_log` calls the formatter, so the TU no longer links without it. No check changed.
+- `docs/HANDOFF.md`: the run-#13 checklist (Next steps #2) gained the D6 paragraph — what the lobby
+  line means and the "**confirm both consoles agree before running**" pre-flight.
+
+**Gates** — celiolink suite **538 PASS** (was 417, +121), netlink **66 PASS** (unchanged, as gate 2
+requires), test_diag **360 PASS** and test_control **6897 PASS** (both untouched); `make -j8` →
+`3DGBA.3dsx` green with **fingerprint.c 0 warnings, gbacore.c 0, netlink.c unchanged at its 1
+pre-existing misleading-indentation, wireless.c unchanged at its 1 pre-existing scan-card
+format-truncation** (verified by rebuilding all of `source/` and diffing the warning inventory
+against the D5 baseline: main.c still 15, every other file identical). `git diff source/celiolink.c`
+is EMPTY; `git diff source/celiolink.h` is the single `#define` block.
+
+**Decisions / deviations (recorded per the phase contract)**
+1. **Charter vs SPEC on the transport — the SPEC wins, and it is the only reading that satisfies
+   "no new radio round-trips inside the link".** The task charter said "reuse the existing
+   connect-time event machinery (trainer-card/identity precedent)"; SPEC §D6.4 examined exactly that
+   and **rejected** it with evidence: `net_event_*` only exists after `net_link_start` spins the RX
+   thread (netlink.h) and `net_event_reset` runs at link start, so using it would move the exchange
+   INSIDE the link window — next to the frozen path. The lobby pump (`net_ping_update`) is the sole
+   packet path while `!s_rxRun`, already owns pull/echo/RTT pre-link, and never runs concurrently
+   with the trade path. Implemented on the lobby pump; gbacore.c/celiolink.c gain no exchange code
+   at all. What IS reused from the trainer-card precedent is its *shape*: an opaque blob the
+   transport ships without interpreting.
+2. **Convergence rule made explicit** (SPEC said "3 extra sends after it has [arrived]"): we send on
+   every ping tick while the peer's surface is missing, and after it arrives send
+   `FPRINT_POST_SENDS`=3 more. The budget is re-armed **only when the peer's bytes actually CHANGE**
+   — re-arming on every received packet would make two consoles ping-pong forever at 6 Hz.
+3. **`net_session_close` clears the PEER surface but KEEPS ours.** SPEC said "all state cleared"; a
+   stale peer would be a lie next session, but our own surface is re-published before every
+   host/join anyway, and keeping it means a netlog dumped after teardown still names our own side
+   (`wl_dump` runs before `net_session_close` today, but that ordering shouldn't be load-bearing).
+4. **The packet's `seat` field is filled from `s_host`**, not from a `myNode==1` status call — the
+   two are the same fact (the host IS node 1) and `s_host` needs no UDS round-trip. It is carried,
+   unread, for the future 3-4 player lobby (HANDOFF Next steps #3), exactly as SPEC intended.
+5. **`net_fprint_log` interprets the surface via `fingerprint.h`** rather than netlink.c growing a
+   second formatter. The *wire* stays opaque (the packet field is `u8 surface[8]`, never parsed on
+   the RX path); the include exists only so the netlog line is rendered by the HOST-TESTED formatter.
+   This is why `test_netlink_reliability.c` needed its one added include.
+6. **No rompicker file-read fallback for the pre-boot case.** SPEC mentioned falling back to
+   `rom_game_code()` "when no core is loaded yet"; the existing lobby has no such fallback for the
+   advertisement game code either (main.c leaves it empty when `!fg->core`), so rev falls back to 0
+   the same way. Adding a new file-read path would have been new untested behavior on a path the
+   lobby cannot currently reach with a link.
+7. **Open Questions resolved as spec'd, none blocking**: (1) `netProto`/`clProtoRev` stay
+   **allow-with-warning** in v0 — PHASE.md's D6 row is binding and a refusal path is new behavior
+   next to a frozen transport; revisit at first public release. (2) The **beacon is byte-identical**
+   — `udsGetNetworkStructApplicationData`'s truncation semantics for a larger-than-buffer appdata
+   are unverified, and getting them wrong breaks old↔new scanning entirely. (3) **No re-exchange on
+   a mid-link KEY_Y** — mid-link KEY_Y is already forbidden (HANDOFF run-#11); if the A–E fallback
+   ever becomes a lobby-stage choice, the send must re-arm on that change (one call to
+   `net_fprint_set_local`).
+8. **Two lanes with the same prime and byte order, different bases** — SPEC's wording followed
+   exactly. TEST 17 asserts a single byte flip moves BOTH lanes, which is guaranteed rather than
+   lucky: FNV-1a's per-byte step (XOR then multiply by an odd prime mod 2³²) is a bijection on the
+   32-bit state, so distinct intermediate states can never re-converge.
+
+**For the HW run-#13 checklist**: the lobby now answers "are these two consoles even running the
+same build?" BEFORE the link — `link-surface: MATCH` / red `link-surface DIFF: <field>` on the top
+screen, and a `# fprint local=… peer=… verdict=…` line in every `3DGBA_net_*` header. Two habits
+worth keeping: (a) glance at the lobby line before pressing Start-link — a `DIFF:clProtoRev` means
+one console has a stale `.cia` and the run's forensics would be worthless; (b) the header's
+`local=BPRE r1` now RECORDS the ROM revision of each side, so no future session has to re-derive it
+from callback fingerprints. `verdict=unknown` = the exchange never completed (short lobby / lossy
+radio) — it is not a match.
+
+## 2026-08-03 — Slice D5: input record / replay (SPEC-control-replay §D5 + §C)
+
+**Landed**
+- `source/control.{h,c}` (EXTENDED, still PURE C — no libctru, no mGBA, no file I/O, no clock):
+  - **`CtlRec` (record, PASSIVE)** — `ctl_rec_init/arm/armed/anchored/anchor_frame/lines/stop/
+    tick/header/status`. `ctl_rec_tick` takes the seat's FINAL assembled mask and returns a
+    `"<frameOffset> <mask>\n"` line ON CHANGE (PM's `apRecLastMask`, mp_bridge.cpp:1591-1615),
+    0 when silent, **-1 exactly once** at the `CTL_REC_MAX_LINES` cap. It returns TEXT, never a
+    key mask, so "record never overrides live input" (PM's early return at mp_bridge.cpp:1614)
+    holds by construction. `ctl_rec_header` formats the `#` header (seat/game/anchored/date, the
+    GBA KEYINPUT bit table, the determinism rules) — pure formatting, host-tested, and skipped by
+    the loader so a recording is a valid replay table verbatim.
+  - **`CtlRep` (replay)** — `ctl_rep_init/load/load_begin/load_feed/load_end/active/abort/tick/
+    status`. The table is `CTL_REP_MAX`=8192 **parallel arrays** (`uint32 f[]` + `uint16 mask[]`
+    = 6 B/entry = 48 KB/seat, the spec's sizing; a `{u32,u16}` struct would pad to 8). Playback
+    is PM's catch-up loop verbatim (mp_bridge.cpp:1616-1647): consume every entry already due,
+    inject only the LATEST, so a slow render frame or the wireless ~4-5 emu-fps loses nothing.
+  - **`CtlAnchor` — the ONE field-entry EDGE detector both halves share** (D5.2): `fieldValid`
+    (the existing D4.9 predicate) held for `CTL_ANCHOR_FRAMES`=3 consecutive ticks **after a
+    non-field tick**. Same code, same debounce on both sides, so the constant delay cancels and
+    the offsets mean the same thing on the replaying console.
+  - `CtlStat` gained `recLines/recState/repState/repIdx/repN` + `ctl_publish_rr`.
+  - Internal-only refactor: the status-ring push/drain became `ctl_ring_vpush/push/drain(buffer,
+    head, count, seat, …)` so the two new halves get their OWN rings. **`CtlSched`'s layout and
+    every D4 entry point are unchanged** (the D4 tests still poke `cs.ring`/`cs.rCount`).
+- `source/main.c` glue (all sdmc I/O, ~150 lines, inside the existing `#if CTL_D4_ENABLE`
+  region so D5 can never build without its host): `s_ctlRec[2]`/`s_ctlRep[2]`/`s_recFile[2]` in
+  **static** storage; `ctl_rr_poll_seat` — the record/replay polls staggered **half a period**
+  from that seat's move/go poll (`g_renderSeq%20 == seat*10+5`), so no render frame ever does two
+  poll sites; `record_p<N>.txt` marker → `ctl_rec_arm`; `replay_go_p<N>.txt` → **streams**
+  `replay_p<N>.txt` through a 512-byte static buffer into the chunked parser (an 8192-entry table
+  is ~80 KB of text — never materialised); `ctl_rec_feed` writes the lazily-created
+  `sdmc:/cias/netlogs/3DGBA_rec_p<N>_<MMDD>_<HHMMSS>.txt` (header at the anchor, `fflush` per
+  line = the PM crash-safety rule / the run-#11 lost-log lesson); the replay mask ORs into the
+  SAME `ckA/ckB` term D4 already injects (one seam, strictly additive); the recorder is fed the
+  FINAL `emuA.keys`/`emuB.keys` immediately after the existing assembly (D5.4); `!` abort files
+  now also `ctl_rep_abort` + `ctl_rec_stop` + close the file (D5.5/D5.8); session init/teardown
+  reset/stop/close both halves next to the D4 calls.
+- `source/gbacore.c`: one added `fprintf` — `# control-rr p1 rec=..(N lines) rep=..(i/n) | p2 …`
+  next to the D4 `# control` line, read from the same mirror. Zero logic change.
+- `test/host/test_control.c`: TESTs 14-20 added (same run line) — record anchor/debounce/
+  on-change/offset-across-a-frozen-clock, ON-FIELD arming waiting loudly for a real edge,
+  stop/re-arm, the cap returning -1 once, the header (every line `#`, loads as a table), the
+  loader's 9 loud-failure modes + the exact cap, chunked==whole-buffer for chunk sizes 1..7,
+  playback (edge wait, catch-up, done, non-zero tail release, both abort paths), the D5 mirror,
+  two independent seats — and **TEST 19, the RECORD → REPLAY ROUND TRIP**: a 22-tick mask
+  timeline recorded through `ctl_rec_tick`, written as a real header+body file, reloaded through
+  `ctl_rep_load` and replayed through `ctl_rep_tick` reproduces the mask **exactly, tick for
+  tick** (from a different absolute start frame), plus a coarse-clock (wireless-speed) pass.
+
+**Gates** — celiolink **417 PASS**, netlink **66 PASS**, test_diag **360 PASS** (all unchanged),
+test_control **6897 PASS** (was 6287, +610); `make -j8` → `3DGBA.3dsx` green with **control.c 0
+warnings, gbacore.c 0**, and main.c still at its pre-slice **15** (the same pre-existing
+UI-redesign leftovers — full list diffed against the D4 baseline).
+
+**Decisions / deviations (recorded per the phase contract)**
+1. **The anchor requires a real EDGE, and arming on the field says so LOUDLY.** D5.2's "edge =
+   first frame after a non-field state" is taken literally: a recorder/replayer armed while the
+   player is already standing in the field waits, and pushes one `record|replay armed ON-FIELD:
+   waiting for a field-entry EDGE` line naming the cheapest way to make one (open+close the START
+   menu — `GCTX_FIELDMENU` is a non-field context). Rationale: an anchor that fires "wherever we
+   happen to be standing" is not reproducible on the second console, and a silent no-op would be
+   the exact quiet-failure class this project refuses. The operator discipline (Appendix R2) is
+   unchanged; the difference is that a mis-armed session now explains itself in the log.
+2. **The anchor latches on the CONFIRMING tick** (the 3rd consecutive field tick), not on the
+   first. Both halves run the identical detector, so the 2-tick delay cancels between record and
+   replay, and "the first line sits at offset 0" stays exactly true.
+3. **Replay's real-input abort applies only while RUNNING**, not while it hunts the anchor —
+   the same scope call D4 made for the go-gate (BUILDLOG D4 §3), and for the same reason: the
+   operator has to walk/press into the field BY HAND to create the anchor edge, so aborting on
+   that input would make an armed replay impossible to start. Recording never aborts on real
+   input at all (it is *recording* it). Both halves pinned by TEST 18.
+4. **A chunked loader was added** (`ctl_rep_load_begin/feed/end`); `ctl_rep_load(text, …)` is
+   kept with the spec's exact signature and implemented on top of it. Reason: a full 8192-entry
+   table is ~80 KB of TEXT, and a static 80 KB scratch buffer next to two mGBA cores (on top of
+   the 48 KB table itself) is not worth it — the glue streams the file in 512-byte reads. TEST 17
+   proves every chunk size 1..7 parses identically to the whole-buffer path.
+5. **Over-long `#` comment lines are legal; over-long DATA lines are a loud error.** The partial-
+   line buffer is `CTL_REP_LINE_MAX`=63; a header line explaining the format (or a hand-written
+   `# save:` note) is longer than that, so the loader swallows over-long comments and only fails
+   on over-long data. Found by TEST 15/19 the moment the real header met the real loader.
+6. **Backwards offsets are rejected** (`line N: offset X goes backwards`). The playback loop only
+   walks forward, so such an entry could never be played — rejecting the table is honest;
+   skipping the entry would silently replay something else.
+7. **On a load failure the table file is REMOVED** (with the go file) so a broken table cannot
+   re-fire on the next trigger; on SUCCESS `replay_p<N>.txt` is LEFT in place, so the same table
+   can be re-armed by touching the go file again (the go file is the one-shot, per D5.6).
+8. **Recording file name reuses the existing writer helper** — `diag_log_path(…, "rec_p<N>", …)`
+   → `sdmc:/cias/netlogs/3DGBA_rec_p<N>_<MMDD>_<HHMMSS>.txt` rather than the spec's literal
+   `rec_p<N>_<MMDD>_<HHMMSS>.txt`: same folder, same information, and the `3DGBA_` prefix keeps
+   it consistent with every other netlog (the charter's "reuse the existing writer helpers").
+9. **API additions beyond the spec's listing** (all additive, none renamed): `ctl_rec_stop`,
+   `ctl_rec_anchored`, `ctl_rec_anchor_frame`, `ctl_rec_lines`, `ctl_rec_header`,
+   `ctl_rec_status`, `ctl_publish_rr`, the chunked loader. `ctl_rec_status` mirrors the spec's
+   own `ctl_rep_status` (the anchor/cap/stop events are detected INSIDE the module, so it needs a
+   way to say so); the rest are the glue's read-only questions.
+10. **SPEC Open Question 3 (does the 3DS START+SELECT menu chord leak GBA START/SELECT into a
+    recording?): resolved — NO leak on the chord frame.** The menu trigger and the whole input
+    block are the two halves of one `if (combo) {…} else {…}` (main.c), so the frame that opens
+    the menu skips the input block entirely and records nothing. The frames where START alone was
+    genuinely delivered to the game before the chord completed ARE recorded — correctly: the game
+    really received them, and replaying them reproduces the same game behaviour (the 3DS-level
+    pause menu is not part of the emulated game).
+11. **SPEC Open Question 5 (sdmc `stat` cost): held at the spec's cadence** — D5 adds 2 more
+    polled files per seat, but on a DIFFERENT tick (offset `CTL_POLL_FRAMES/2`), so the worst
+    frame still does at most one poll site (≤2 `stat`s) and `fopen` still only happens when a
+    file is actually there. The one genuinely new hot-ish cost is the spec-mandated `fflush` per
+    recorded line (D5.3, PM crash-safety); recordings are on-change, so a walking player produces
+    a few lines a second. Both are on the run-#13 worst-frame-ms watch list.
+12. **SPEC Open Question 7 (replay cap 8192): shipped as spec'd** — the loud `table too large`
+    failure names the fix if a real recording ever overflows it.
+13. **Not exercised on hardware** (invariant 8): PC suites + a clean `make` are this slice's
+    gate. The HANDOFF run-#13 checklist (Next steps #2) now documents the record/replay files,
+    the field-entry anchor recipe, the artifacts and the determinism rules.
+
+## 2026-08-03 — Slice D4: file-driven tile-exact movement + go-files (SPEC-control-replay §D4 + §C)
+
+**Landed**
+- `source/control.{h,c}` (NEW, PURE C — no libctru, no mGBA, **no file I/O and no clock**, so it
+  dual-compiles on the PC and the whole feature is testable with a fake coordinate feed):
+  the token grammar (`L<n>/R<n>/U<n>/D<n>` walks, lowercase = sprint (+B), bare dirs = taps,
+  `a b s c x y` → A/B/START/SELECT/**GBA L/R** (the GBA has no X/Y), `W<n>` waits, leading `G`
+  go-gate, leading `!` abort), the **closed-loop walk scheduler** (latch start tile → target →
+  hold the d-pad until the GAME's own coordinate reaches it; warp = map change completes the
+  token; cross-axis drift completes + logs; `n*60+240` emulated-frame wall timeout aborts the
+  WHOLE queue; `CTL_NOFIELD_DL`=600 field-validity guard), the real-input abort rule, a 16×96
+  status ring, per-seat counters and the `g_ctlStat[2]` netlog mirror. Every timer is a uint32
+  delta of the scripted core's EMULATED frame counter, so a frozen clock freezes the script.
+- `source/main.c` glue (all sdmc I/O; ~130 lines): `s_ctl[2]` schedulers in **static** storage
+  (off run_session's stack), the D4.1 arm-iff-`sdmc:/cias/control`-exists check (ONE stat per
+  session), `ctl_poll_seat` (staggered 10-frame polls — seat 0 on `g_renderSeq%20==0`, seat 1 on
+  `==10`, so at most one sdmc stat per frame; `stat` is the cheap common case, `fopen` only when
+  a file is really there; consume-on-pickup; `!` honoured mid-script; a non-abort file dropped
+  mid-script is LEFT IN PLACE; `go_p<N>.txt` polled only while gated), the per-frame tick at the
+  EXISTING parked-window read site (reuses the `gst`/`gsb` GameStates the gs logger already read
+  — **no new game-RAM reads, no new addresses**), and the injection: `emuA.keys |= ckA` /
+  `emuB.keys |= ckB` — strictly additive at the same emulated-keypad seam touch uses. Status
+  lines go to a LAZY `sdmc:/cias/netlogs/3DGBA_control_<MMDD>_<HHMMSS>.txt` (reuses
+  `diag_log_path` + the existing mkdir preamble; fflush per line, PM crash-safety). Script keys
+  also ride the gs log's existing `injKeys` column (free correlation). A `_Static_assert` pins
+  `CTL_KEY_*` to `GBAKEY_*` so the hand-mirrored key table can never drift silently.
+- `source/gbacore.c`: one `fprintf` in `gbacore_net_log_dump` next to `# celio` — the
+  `# control p1 tok=/abort=/timeout=/pick=/st=` summary, read from the `g_ctlStat` mirror
+  (pure copies; the dump never touches the schedulers). Zero logic change.
+- `test/host/test_control.c` (NEW; run line in its header:
+  `clang -std=c11 -Wall -Wextra -O0 -g -I source test/host/test_control.c -o /tmp/tcl && /tmp/tcl`):
+  13 tests / **6287 checks** — full grammar incl. both Appendix run-#13 recipes verbatim and the
+  64-token / 512-byte caps; 14 loud parse-error cases; the `!` file + `ctl_abort` idempotence;
+  closed-loop convergence on a fake coordinate feed (lag-immune hold, sprint mask, multi-token
+  boundaries, cross-drift); warp completion (and "map became known" is NOT a warp); the
+  `n*60+240` timeout aborting the whole queue + deadline-armed-at-real-start; the no-field guard
+  (and taps/waits staying menu-legal); frame-exact tap press/slot windows and `W<n>`; the go-gate
+  (incl. hand-staging not aborting it); real-input abort naming the live token; **frozen-clock
+  behaviour** (no progress, no timeout, resume fires it); status-ring FIFO/overflow/truncation;
+  counters + mirror; and two independent seats.
+
+**Gates** — celiolink **417 PASS**, netlink **66 PASS**, test_diag **360 PASS** (all unchanged),
+NEW test_control **6287 PASS**; `make -j8` → `3DGBA.3dsx` green with **control.c 0 warnings,
+gbacore.c 0**, and main.c still at its pre-slice **15** (all pre-existing UI-redesign leftovers).
+
+**Decisions / deviations (recorded per the phase contract)**
+1. **Test lives at `test/host/test_control.c`** (the charter's path) rather than the spec's
+   `test/test_control.c` — it belongs with the other pure-host suites (`test_diag.c`,
+   `test_netlink_reliability.c`); `test/test_celiolink.c` is the one legacy exception.
+2. **D5 (record/replay) is NOT in this slice** — the charter scopes D4 only. `control.h` is
+   written so `CtlRec`/`CtlRep` slot in additively (the shared `CtlIn` snapshot and the status
+   ring already carry them); nothing here needs changing when D5 lands.
+3. **Real-input abort applies only while RUNNING, not while a `G` script is gated (SPEC D4.11
+   scope call).** D4.11 says "any real input aborts", but D4.10/Appendix R2 explicitly design
+   the go-gate for the operator to **stage the scene by hand** and then touch the file — if the
+   staging input aborted the waiting script, the whole go-file workflow (the two-console sync for
+   run #13) would be unusable. Aborting a *running* script is unchanged, and TEST 9 pins both
+   halves.
+4. **One token completion per tick** (the completing tick injects 0). This gives every token
+   boundary a one-frame key RELEASE — a Gen-3 menu needs the `newKeys` edge and a walk needs the
+   d-pad let go before the next direction. Documented in `ctl_next`, pinned by TEST 4/8.
+5. **Buttons are LOWERCASE ONLY** (strict spec grammar). An uppercase `A` is a loud parse error
+   that names the token and says so, rather than a silently-accepted synonym — the "loud not
+   silent" discipline; a superset would have fossilized into recipes untested.
+6. **Open Question 2 (script picked up on a PAUSED seat): accept + say so.** The pickup succeeds
+   (the spec's default) but the glue emits one extra status line naming the stopped emulated
+   clock — otherwise the log shows a queued script that never moves with nothing explaining why.
+7. **Open Question 1 (tap frame constants 4/16 and 12/40): shipped at the spec's values,
+   verify-on-hw-pending**, all four in one `#define` block in `control.h` with the reason
+   (PM's numbers are DS-era; the Gen-3 turn-vs-step threshold was never frame-counted here).
+   Run #13 tunes them in one place.
+8. **Open Question 5 (sdmc `stat` cost at ~6 Hz): shipped at the spec's 10-frame cadence**
+   (`CTL_POLL_FRAMES`), staggered so no frame ever does two stats, and the `fopen` only happens
+   on a tick where a file actually exists. If the HUD's worst-frame-ms shows it, the cadence is
+   one constant.
+9. **Abort files are read, not just stat'd, while a script runs.** D4.4 requires honouring `!`
+   mid-script, which needs the first byte — so the poll opens the file only when `stat` says one
+   exists (rare, operator-created), and a non-abort file found mid-script is left untouched.
+10. **`control.c` uses `<stdarg.h>` + `vsnprintf`** for the status ring (the spec's include list
+    named only `snprintf`). One variadic helper replaced ~14 hand-rolled snprintf sites; still
+    pure C, still no file I/O.
+11. **Open Question 6 (auto-go from a celio FSM transition): deferred as spec'd** — the go file
+    stays manual; wiring it to `s_celioSection` would couple the control glue to celiolink state
+    and run #13 does not need it.
+12. **Not exercised on hardware** (invariant 8): PC suites + a clean `make` are this slice's
+    gate. The HANDOFF run-#13 checklist (Next steps #2) now documents the grammar, the arm-by-
+    `mkdir` opt-in, the `3DGBA_control_*.txt` artifact and the `# control` netlog line.
+
+## 2026-08-03 — Slice D3 (RESUMED + COMPLETE): per-frame CSV telemetry (SPEC-firmware-diag §D3)
+
+Resumed the interrupted D3 attempt. **Audit first**: the killed session's work was committed
+(2b20149) and turned out to be much further along than its own BUILDLOG note claimed — a diff of
+the tree against SPEC §D3 found the capture extension, BOTH exports and the whole main.c writer
+already landed and green. This entry records what was already there (verified line-by-line
+against the spec, nothing rewritten) plus what this session finished.
+
+**Already landed by the interrupted attempt (verified against the SPEC, kept as-is)**
+- `source/diag.{h,c}`: `DiagCsvRow` (one field per D3.3 column, in column order),
+  `DIAG_CSV_COLUMNS`, `diag_csv_header` (2 lines: build/role comment + column names),
+  `diag_csv_row` (ONE bounded snprintf; `%lu/%lX` + casts so devkitARM newlib and the PC host
+  format identically), `DIAG_D3_ENABLE` bisect gate.
+- `source/gbacore.c`: `net_celio_capture` (LOGGING ONLY seam, unchanged call sites) additionally
+  snapshots the FULL `ClStatus` into `s_celioStatus` + the outgoing-ClEvent queue depth
+  `s_celioOutQ = (outTail - outHead + CL_EVENT_QUEUE_DEPTH) % CL_EVENT_QUEUE_DEPTH` (ring indices
+  — verified against celiolink.c:24-34/1170-1172). New `gbacore_net_counters(GbaNetCounters*)`:
+  pure copies of the worker-captured statics + the netlog ring tail, no lock, tearing disclosed.
+- `source/netlink.{c,h}`: `net_event_get_queue()` — max un-ACKed outbound backlog across seats
+  under the existing `s_evLock` (the live form of the run-#6 send-queue-overflow X-ray).
+- `source/main.c`: `s_csvFile`/`s_csvRows` writer state; CSV **opened once** at the `wlOn = true`
+  site (after `diag_wd_session_reset` re-reads the `diag_off.txt` kill switch) with
+  `setvbuf(_IOFBF, 8192)` + header + one `fflush`; the row emitted from the gs-logger block
+  REUSING the `GameState` it already read (SPEC D3.4 "do NOT re-read"), `fwrite` from a
+  `static char[512]`, **fflush every 256 rows**; `fclose` folded into `diag_wd_close` so all
+  three wl teardown sites + session end already close it (zero new call sites on the frozen path).
+
+**Finished this session**
+- `test/host/test_diag.c`: **TEST 6** (CSV header) — golden bytes for both lines (the column-name
+  line spelled out INDEPENDENTLY of `DIAG_CSV_COLUMNS`, so a silent rename/reorder fails),
+  HOST/JOIN role line, the D3.8 **header-vs-row field-count parity assert** (comma counts equal;
+  62 columns; no empty name or value), truncation returns the would-be length and never overflows,
+  degenerate args refused. **TEST 7** (CSV row) — golden bytes over a sample exercising every
+  format class (hex columns hex + un-padded, `-1` sentinels, 0/1 booleans, large decimals); the
+  all-zero row; an all-sentinel row proving no `-1` prints as `4294967295`/`FFFFFFFF`; truncation
+  + degenerate args; and the **one-column diff smoke** (D3.8 item 3): flipping `clHS` changes
+  exactly ONE byte and the comma count before it equals `clHS`'s column index — repeated for a
+  HEX column (`lastW0`) so hex formatting can't smear into neighbours.
+- **D1 deviation #3 FOLD (charter directive)**: `gbacore_net_wd_counters(gateN, forceN)` REMOVED
+  from `gbacore.{c,h}`; the D1 watchdog sampler now takes `celioGateN`/`celioForceN` out of
+  `gbacore_net_counters` — one read-only counters seam in gbacore.c instead of two (one struct
+  fill per 200 ms tick; all pure copies, no logic change).
+- `docs/HANDOFF.md` Next steps #2 (SPEC step 3): the run-#13 checklist now names the three new
+  artifacts (`3DGBA_csv_*.csv`, `3DGBA_wd_*.txt`, `3DGBA_hang_*.txt`), how to read them, the
+  "check `vbl` ticks ~60/s to promote the D2.1 address to verified" instruction, and the
+  `diag_off.txt` kill switch.
+
+**Gates** — celiolink **417 PASS** (unchanged), netlink **66 PASS** (unchanged), test_diag
+**321 → 360 PASS**; `make -j8` → `3DGBA.3dsx` green; per-file warning counts unchanged from the
+D2 baseline (main.c 15, gbacore.c 0, diag.c 0, gamestate.c 0 — all pre-existing UI-redesign
+leftovers; touch.c's 4 are likewise pre-existing).
+
+**Decisions / deviations (recorded per the phase contract)**
+1. **Charter said "counters export from celiolink.h (const struct pointer)"; the binding SPEC
+   D3.2 explicitly RESOLVES that differently and was followed**: celiolink.h gets NO new export
+   (the FROZEN FSM already exposes itself read-only via `cl_get_status`/`ClStatus`, and the live
+   `CelioLink` lives inside the worker-owned `NetDriver` — a const pointer into it would hand the
+   render thread a struct being mutated mid-`cl_transfer`). The safe seam is the existing
+   worker-side `net_celio_capture` snapshot + `gbacore_net_counters`. Zero celiolink.c/h changes.
+2. **Charter said "the CSV writer in gamestate.c (or a new csvlog.c)"; the SPEC pins main.c**
+   (D3.4 hook = the gs-logger block where the participant's `GameState` is already in hand;
+   D3.5 open site = the `wlOn = true` line; the teardown closes are main.c's). Followed the SPEC —
+   a writer in gamestate.c would have to re-read the game state (explicitly forbidden by D3.4)
+   and would need its own teardown call sites on the frozen path.
+3. **D3.3's prose says "52 columns"; the column LIST it pins has 62.** The list is binding and
+   was implemented verbatim; the test asserts 62 (61 commas) and header/row parity, so the count
+   can't drift silently. Noted in the test comment.
+4. **`built=` in the CSV header line 1 is diag.c's `__DATE__ " " __TIME__`.** Because the host
+   test `#include`s diag.c, both expand in the SAME translation unit — the golden test reproduces
+   the exact bytes without hardcoding a date.
+5. **Open Q4 (CSV size/cadence): shipped per-frame as spec'd** (~15 KB/s; runs are minutes).
+   Decimation is a one-line change if run #13's files prove unwieldy — the `rf` column already
+   makes gaps explicit.
+6. **Open Q6 (D3 under loopback `netOn`): deferred as spec'd (D3.7)** — armed on `wlOn` +
+   participant only; enabling loopback needs two files/two rows per frame. One-line arming change.
+7. **Open Q5 (`GbaNetCounters` tearing): accepted + disclosed**, no seqlock — it would add
+   worker-side cost inside the FROZEN path's logging call (PHASE invariant 1).
+8. **SPEC step 3's "manual Azahar boot proving a csv file appears" was NOT performed** and cannot
+   be, solo: the CSV opens only at wireless link start, which requires a resolved UDS peer (two
+   consoles). PC suites + `make` green are this slice's gate; the file's first real proof is the
+   run-#13 checklist item added to HANDOFF (invariant 8: hardware-final).
+
 ## 2026-08-03 — Slice D2: game-heartbeat hang catcher + auto ARM register dump (SPEC-firmware-diag §D2)
 
 **Landed**
@@ -172,9 +565,37 @@ artifacts when D3 lands; noting the wd file here so an earlier run doesn't disca
 
 ## 2026-08-03 — Slice D3: PARTIAL — session stopped mid-slice (model switch)
 
+*(Superseded by the completed D3 entry at the top of this file. Kept for the record — and as a
+caution: this note UNDERSTATED what the killed session had actually committed. The resuming
+implementer's first action, diffing the tree against the SPEC, found the exports and the whole
+main.c writer already present and green; only the host tests and the D1 fold were missing.)*
+
 The D3 agent was killed ~10 min in. What exists in the tree: `diag_csv_header()` /
 `diag_csv_row()` formatters in `source/diag.c` (+ their decls/struct). Wiring state
 (celiolink/netlink counter exports, gamestate writer, main.c hookup) NOT complete —
 the resuming D3 implementer must diff the tree against SPEC-firmware-diag §D3 and
 finish, not restart. Tree verified green at checkpoint: celiolink 417 PASS,
 netlink 66 PASS, test_diag 321 PASS, `make` → 3DGBA.3dsx clean.
+
+## 2026-08-03 — Slice D7: PARTIAL — session stopped at the usage limit
+
+D7a (laggyPair delay shim) LANDED and is green: `test/test_celiolink.c` gained the
+delay-queue shim hooked into every `frame_drive`, running the two-instance TESTs under
+modelled radio lag — suite grew 417 -> **1171 checks, 0 failures**. The D7 agent was
+killed before returning, so BUILDLOG has no D7 entry of its own and the remaining
+sub-slices are NOT started:
+
+- **D7b** per-round CRC/hash agreement assertions across both synthesized sides — TODO
+- **D7c** `test/host/test_trace_replay.c` + `test/fixtures/` from
+  `netlogs-archive-2026-07-06.tar.gz` — TODO (files absent)
+- **D7d** `tools/verdict.sh` netlog-folder -> per-checklist PASS/FAIL/UNKNOWN — TODO (absent)
+- **D7e** `docs/kb/celio/KNOWN-DIFFERENCES.md` tri-ledger — TODO (absent)
+
+Verified green at this checkpoint: celiolink **1171**, netlink **66**, diag **360**,
+control **6897** — all PASS; `make` -> `3DGBA.3dsx` clean, warning count identical to the
+pre-phase baseline (26, all pre-existing in main.c) and **zero** warnings in diag.c /
+control.c / fingerprint.c. `make cia` NOT yet run (final gate never executed).
+
+NOT started after D7: the two adversarial reviews, the fix pass, and the final gate
+(which also owns the HANDOFF run-#13 checklist update). `docs/HANDOFF.md` shows as
+modified — that is a slice-local edit, not the final gate's rewrite.

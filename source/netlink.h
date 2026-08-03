@@ -8,6 +8,11 @@
 
 #define DGBA_MAX_SEATS 4
 #define DGBA_NAME_LEN  24   // UTF-8 username buffer (10 UTF-16 chars -> <=30B; we clamp)
+// Transport framing revision. Broadcast in the beacon (DgbaAdv.proto) since M1 — and, since D6,
+// also carried in the link-surface fingerprint so it is finally COMPARED, not just advertised.
+// Moved here (from netlink.c) purely so the fingerprint fill in wireless.c reads the same symbol
+// the wire uses; no value change, no logic change (SPEC-suite-hardening.md §D6.1 field 4).
+#define DGBA_PROTO     1
 
 // One lobby as seen in a scan: the host's advertisement + identity, for the join list.
 typedef struct {
@@ -142,3 +147,36 @@ void net_event_get_stats(int* txSeq, int* txAcked, int* rxDelivered, int* overfl
 //   (next - base) across seats. The D3 CSV `evTxQ` column (SPEC-firmware-diag D3.2): the live
 //   form of the run-#6 send-queue-overflow X-ray. Lock-guarded like net_event_get_stats.
 int  net_event_get_queue(void);
+
+// --- D6 LINK-SURFACE FINGERPRINT (lobby stage, strictly BEFORE net_link_start) -----------------
+// "Can these two consoles link at all?" — answered in the LOBBY, where the answer is still useful,
+// instead of by a mystery hardware run. Spec: docs/phase13-diagnostics/SPEC-suite-hardening.md §D6;
+// design source: docs/kb/external/gen1-link.md (Fingerprint/Handshake), gen1-parity.md §9.
+//
+// WHY THE LOBBY PUMP AND NOT THE EVENT CHANNEL (§D6.4): net_event_* is reliable+ordered, but it
+// only exists after net_link_start spins the RX thread — using it would put the exchange INSIDE the
+// link window, next to the FROZEN trade path. net_ping_update() is the sole packet path while the
+// RX thread is down; it already owns pull/echo/RTT pre-link, and the trade path never runs
+// concurrently with it. So the whole exchange is finished (or honestly reported `unknown`) before
+// the SIO driver ever attaches. gbacore.c/celiolink.c are untouched by it.
+//
+// Loss tolerance is by REPETITION on the existing ~6 Hz ping cadence — no new reliability
+// machinery, no new radio round-trips inside the link.
+//
+// The 8 surface bytes are OPAQUE to the transport (exactly like a ClEvent blob, above): netlink
+// never interprets them; it stores, ships, and hands them back. Meaning lives in fingerprint.h.
+#define NET_FPRINT_BYTES 8
+
+// Publish OUR surface. Call BEFORE net_session_host / net_session_join (the lobby pump starts
+// piggybacking it on the next ping tick). Safe to call repeatedly; last call wins.
+void net_fprint_set_local(const void* surface8, u64 hash);
+
+// The peer's surface, once it has arrived. Returns 1 and fills out8 (8 bytes) + *hash (may be
+// NULL); 0 while it has NOT arrived — which the caller MUST render as `unknown`, never as a match
+// (absence of evidence is not a PASS — the run-#11 lost-log lesson).
+int  net_fprint_peer(void* out8, u64* hash);
+
+// Format the one-line "# fprint local=... peer=... verdict=..." netlog record into buf.
+// Returns strlen, or <=0 if nothing to say (no local surface set). gbacore.c calls this through a
+// forward declaration so its translation unit stays libctru-free (the net_mono_ticks precedent).
+int  net_fprint_log(char* buf, int max);

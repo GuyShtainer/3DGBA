@@ -17,6 +17,9 @@
 #include "theme.h"
 #include "ui.h"
 #include "assets.h"
+#include "fingerprint.h"   // D6 link-surface fingerprint (pure C)
+#include "celiolink.h"     // ...for CL_PROTO_REV only — the single source of truth for our FSM's
+                           // wire revision. No FSM call is made from the lobby.
 
 static const char* game_name(const char* code) {
 	if (!strncmp(code, "BPEE", 4)) return "Emerald";
@@ -28,9 +31,20 @@ static const char* game_name(const char* code) {
 }
 
 int wireless_lobby_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txtBuf,
-                       const char* myGameCode) {
+                       const char* myGameCode, uint8_t myGameRev) {
 	char myCode[5] = { 0 };
 	if (myGameCode) memcpy(myCode, myGameCode, 4);
+
+	// D6 (SPEC-suite-hardening.md §D6): OUR link surface. Built once here, published to the
+	// transport BEFORE every host/join so the lobby pump can start piggybacking it on the ping
+	// cadence; compared against the peer's below. Nothing in it is refuse-grade in v0 — the whole
+	// point is to turn "the hardware run just didn't work" into a named field on screen.
+	DgbaFprint myFp;
+	dgba_fprint_fill(&myFp, myCode, myGameRev, CL_PROTO_REV, DGBA_PROTO);
+	u64 myFpHash = dgba_fprint_hash(&myFp);
+	char fpLine[96] = "";      // the HUD verdict line ("" until a peer surface arrives)
+	int  fpVerdict  = -1;      // -1 unknown, 0 match, >0 = number of differing fields
+	int  fpShown    = -2;      // last verdict echoed into status[] (so we echo a DIFF once, not per frame)
 
 	gfxSet3D(false);   // 2D lobby; restore stereo on exit so the games look right again
 
@@ -67,8 +81,14 @@ int wireless_lobby_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 			if (kd & KEY_B) break;
 			if (act == 0) {                                  // Host
 				if (!avail) snprintf(status, sizeof status, "Wireless off — install + run the .CIA");
-				else if (net_session_host(myCode, 0, 4)) { phase = 1; peerCode[0] = '\0'; status[0] = '\0'; }
-				else snprintf(status, sizeof status, "Host failed");
+				else {
+					net_fprint_set_local(&myFp, myFpHash);   // D6: publish OUR surface BEFORE the session exists
+					if (net_session_host(myCode, 0, 4)) {
+						phase = 1; peerCode[0] = '\0'; status[0] = '\0';
+						fpVerdict = -1; fpShown = -2; fpLine[0] = '\0';
+					}
+					else snprintf(status, sizeof status, "Host failed");
+				}
 			} else if (act == 1) {                           // Join -> scan
 				if (!avail) snprintf(status, sizeof status, "Wireless off — install + run the .CIA");
 				else { phase = 2; sel = 0; rescan = 0; nLob = 0; status[0] = '\0'; }
@@ -102,7 +122,11 @@ int wireless_lobby_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 			if (kd & KEY_B) { phase = 0; sel = 1; }
 			if (join >= 0) {
 				memcpy(peerCode, lobbies[join].gameCode, 5);   // remember the host's code for the seat map
-				if (net_session_join(join)) { phase = 3; status[0] = '\0'; }
+				net_fprint_set_local(&myFp, myFpHash);         // D6: publish OUR surface BEFORE connecting
+				if (net_session_join(join)) {
+					phase = 3; status[0] = '\0';
+					fpVerdict = -1; fpShown = -2; fpLine[0] = '\0';
+				}
 				else snprintf(status, sizeof status, "Join failed");
 			}
 		} else {                                            // ---- joined ----
@@ -121,6 +145,22 @@ int wireless_lobby_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 		if (phase == 1 || phase == 3) {
 			haveConn = net_lobby_status(&conn2);
 			if (haveConn && conn2.totalNodes >= 2) { net_ping_update(&rtt, &drops, &busy); canStart = true; }   // M2 RTT + arm Start-link
+			// D6: the peer's surface arrives on that same pump. Verdict = MATCH / the NAMED differing
+			// fields / unknown-until-it-arrives (never a silent "assume compatible"). Allow-with-warning
+			// in v0 (PHASE.md D6): nothing here blocks the link — EM<->FR and FR rev0<->rev1 trade for
+			// real, so refusing on a diff would be the gen1recomp #511 false-incompatibility bug.
+			u8 peer8[NET_FPRINT_BYTES]; u64 peerHash = 0;
+			if (net_fprint_peer(peer8, &peerHash)) {
+				DgbaFprint pf; memcpy(&pf, peer8, sizeof pf);
+				char d[64];
+				fpVerdict = dgba_fprint_diff(&myFp, &pf, d, (int)sizeof d);
+				if (fpVerdict == 0) snprintf(fpLine, sizeof fpLine, "link-surface: MATCH");
+				else                snprintf(fpLine, sizeof fpLine, "link-surface DIFF: %s", d);
+				if (fpVerdict > 0 && fpShown != fpVerdict) {   // echo a DIFF into the status line ONCE
+					snprintf(status, sizeof status, "Link surface DIFF: %.40s", d);   // status[] is 64B
+					fpShown = fpVerdict;
+				}
+			}
 		}
 		// The APT suspend hook drops the UDS session on any HOME press; if it did, fall back to the menu so
 		// a resumed lobby doesn't show a phantom HOSTING/JOINED for a dead link.
@@ -177,6 +217,13 @@ int wireless_lobby_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 			if (live) snprintf(v, sizeof v, "%d %%", drops); else snprintf(v, sizeof v, "—");
 			assets_text(txtBuf, FNT_JBM_BOLD, v, 215.0f, 184.0f, 13.0f, live?THEME_GAME_A:g_ui.dim);
 		}
+		// D6 link-surface verdict (SPEC-suite-hardening.md §D6.6): dim when the two surfaces match,
+		// RED and naming the field when they differ. Blank until the peer's surface arrives — an
+		// unknown verdict is drawn as nothing here and logged as `unknown` in the netlog, never as a
+		// match. Sits just above the status line (below the RTT/LOSS tiles at y182).
+		if (fpLine[0] && (phase == 1 || phase == 3))
+			assets_text(txtBuf, FNT_JBM_MED, fpLine, 20.0f, 209.0f, 8.5f,
+			            fpVerdict > 0 ? THEME_QUIT_TEXT : g_ui.dim);
 		if (status[0]) assets_text(txtBuf, FNT_JBM_MED, status, 20.0f, 226.0f, 8.5f, g_ui.acc);
 
 		// =============== BOTTOM: idle actions / scan cards / connected ===============

@@ -1,9 +1,10 @@
-// test_diag.c — PC host unit test for the D1+D2 diagnostics module (source/diag.{c,h}): crumb
+// test_diag.c — PC host unit test for the D1+D2+D3 diagnostics module (source/diag.{c,h}): crumb
 // encode/decode for every SPEC D1.1 site, the watchdog escalation state machine, the exact
 // STUCK line format, the D2 hang-catcher trigger edge logic (>180-frozen-render-frames, 24-cap,
-// re-arm), and the D2 register-dump formatter golden bytes. Pure-C dual-compile per CLAUDE.md
-// rule #4 / PHASE.md invariant 3-4; spec: docs/phase13-diagnostics/SPEC-firmware-diag.md
-// §D1.9 + §D2.7.
+// re-arm), the D2 register-dump formatter golden bytes, and the D3 per-frame CSV header/row
+// formatters (golden bytes, header-vs-row field-count parity, truncation, one-column diff
+// localization). Pure-C dual-compile per CLAUDE.md rule #4 / PHASE.md invariant 3-4; spec:
+// docs/phase13-diagnostics/SPEC-firmware-diag.md §D1.9 + §D2.7 + §D3.8.
 //
 //   clang -std=c11 -Wall -Wextra -O2 -I source test/host/test_diag.c -o /tmp/td && /tmp/td
 //
@@ -385,13 +386,198 @@ static void test_hang_format(void) {
 	CHECK(diag_hang_format(buf, sizeof buf, NULL, 0, 0, 1, 0, 0, 0) < 0, "NULL dump accepted\n");
 }
 
+// --------------------------------------------------------------------------------------------
+// TEST 6 — D3 CSV header: golden bytes for BOTH lines + the header/row field-count parity assert
+// (SPEC D3.8 item 1). The column-name line is spelled out INDEPENDENTLY here (not reused from
+// diag.c's DIAG_CSV_COLUMNS macro) so a silent rename/reorder in the writer fails this test.
+// --------------------------------------------------------------------------------------------
+// The binding SPEC D3.3 column list, verbatim (the spec's prose says "52 columns"; the list it
+// actually pins has 62 — the list is binding, see BUILDLOG 2026-08-03 slice D3).
+static const char* const CSV_COLS =
+	"tms,rf,exp,"
+	"ctx,cb2,px,py,mapg,mapn,objx,objy,face,sb1,lstat,lerr,lnrecv,lbuf0,lbuf1,vbl,"
+	"clSec,clSt,clBlk,clFrm,clPB,clTC,clHP,clHS,clHC,clSelL,clSelP,clExitP,clSessEnd,clPCard,"
+	"clIdReal,clOutQ,gateN,cForceN,resetN,sioMode,siocnt,"
+	"startN,injN,finN,okN,toN,edgeN,forceN,round,lastW0,lastW1,lastOk,"
+	"rtt,txSeq,txAcked,rxDel,evOvf,evRetx,evTxQ,rxWordN,txFails,busyN,peerUp";
+
+static int count_char(const char* s, size_t n, char c) {
+	int k = 0; for (size_t i = 0; i < n; i++) if (s[i] == c) k++; return k;
+}
+// Column index of `name` in the comma-separated CSV_COLS list (-1 = absent).
+static int col_index(const char* name) {
+	int idx = 0; const char* p = CSV_COLS; size_t nl = strlen(name);
+	for (;;) {
+		const char* comma = strchr(p, ',');
+		size_t len = comma ? (size_t)(comma - p) : strlen(p);
+		if (len == nl && memcmp(p, name, nl) == 0) return idx;
+		if (!comma) return -1;
+		p = comma + 1; idx++;
+	}
+}
+
+// The synthetic row used by TEST 6's parity check and TEST 7's golden compare. Values chosen to
+// exercise every format class: hex columns, -1 "none" sentinels, 0/1 booleans, large decimals.
+static void csv_fill_sample(DiagCsvRow* r) {
+	memset(r, 0, sizeof *r);
+	r->tms = 1234567; r->rf = 42; r->exp = 5;
+	r->ctx = 3; r->cb2 = 0x0800ABCDu;
+	r->px = 12; r->py = 34; r->mapg = 1; r->mapn = 2;
+	r->objx = 13; r->objy = 35; r->face = 4; r->sb1 = 1;
+	r->lstat = 0x1133u; r->lerr = 0; r->lnrecv = 0xC0u;
+	r->lbuf0 = 0xDEADBEEFu; r->lbuf1 = 0u;
+	r->vbl = 987654;
+	r->clSec = 2; r->clSt = 3; r->clBlk = 1; r->clFrm = 4237u; r->clPB = 600u; r->clTC = 1;
+	r->clHP = 0; r->clHS = 1; r->clHC = 0; r->clSelL = -1; r->clSelP = 3;
+	r->clExitP = 0; r->clSessEnd = 0; r->clPCard = 1; r->clIdReal = 1; r->clOutQ = 2;
+	r->gateN = 64; r->cForceN = 21; r->resetN = 1; r->sioMode = 2; r->siocnt = 0x4083u;
+	r->startN = 100; r->injN = 99; r->finN = 98; r->okN = 97; r->toN = 1; r->edgeN = 96; r->forceN = 2;
+	r->round = 10u; r->lastW0 = 0xB9A0u; r->lastW1 = 0x8FFFu; r->lastOk = -1;
+	r->rtt = 23; r->txSeq = 10; r->txAcked = 10; r->rxDel = 10; r->evOvf = 0; r->evRetx = 3;
+	r->evTxQ = 1; r->rxWordN = 5000; r->txFails = 0; r->busyN = 7; r->peerUp = 1;
+}
+
+static void test_csv_header(void) {
+	printf("TEST 6: CSV header golden bytes + header/row field-count parity\n");
+	char buf[1024], want[1024];
+	// Line 1 = the build/role comment (built= is the TU's __DATE__/__TIME__ — diag.c is #included
+	// here, so the test reproduces the exact bytes); line 2 = the column names.
+	int wl = snprintf(want, sizeof want,
+	                  "# 3DGBA csv role=HOST seat=0 built=%s | rf gaps = menu-open frames\n%s\n",
+	                  __DATE__ " " __TIME__, CSV_COLS);
+	int n = diag_csv_header(buf, sizeof buf, 0);
+	CHECK(n == wl, "header length %d want %d\n", n, wl);
+	CHECK(strcmp(buf, want) == 0, "header golden mismatch:\n--- got ---\n%s--- want ---\n%s", buf, want);
+
+	// seat 1 => JOIN (the only per-seat difference).
+	int n1 = diag_csv_header(buf, sizeof buf, 1);
+	CHECK(n1 == wl, "JOIN header length %d want %d\n", n1, wl);
+	CHECK(strncmp(buf, "# 3DGBA csv role=JOIN seat=1 built=", 35) == 0, "JOIN line 1: %.40s\n", buf);
+	const char* nl1 = strchr(buf, '\n');
+	CHECK(nl1 && strcmp(nl1 + 1, want + (strchr(want, '\n') - want) + 1) == 0,
+	      "JOIN column line differs from HOST's\n");
+
+	// PARITY (SPEC D3.8 item 1): the column header and a formatted row must have the SAME field
+	// count, so a future column add can't desync header vs row.
+	char rowBuf[512];
+	DiagCsvRow r; csv_fill_sample(&r);
+	int rl = diag_csv_row(rowBuf, sizeof rowBuf, &r);
+	CHECK(rl > 0 && rl < (int)sizeof rowBuf, "sample row length %d\n", rl);
+	diag_csv_header(buf, sizeof buf, 0);
+	const char* cols = strchr(buf, '\n') + 1;              // line 2
+	size_t colsLen = strlen(cols) - 1;                      // minus its '\n'
+	int hCommas = count_char(cols, colsLen, ',');
+	int rCommas = count_char(rowBuf, (size_t)rl - 1, ',');  // minus the row's '\n'
+	CHECK(hCommas == rCommas, "header has %d commas, row has %d (column desync)\n", hCommas, rCommas);
+	CHECK(hCommas == 61, "column count %d fields (want 62 = 61 commas)\n", hCommas + 1);
+	// No empty fields in either line (a doubled comma = a dropped column).
+	CHECK(strstr(cols, ",,") == NULL, "empty column NAME in the header\n");
+	CHECK(strstr(rowBuf, ",,") == NULL, "empty VALUE in the row\n");
+
+	// Truncation + degenerate args.
+	char tiny[40]; memset(tiny, 0x7F, sizeof tiny);
+	int nt = diag_csv_header(tiny, sizeof tiny, 0);
+	CHECK(nt == wl, "truncated header return %d (want would-be %d)\n", nt, wl);
+	CHECK(strlen(tiny) == sizeof tiny - 1, "truncated header wrote %zu chars (want cap-1)\n", strlen(tiny));
+	CHECK(strncmp(tiny, want, sizeof tiny - 1) == 0, "truncated header prefix mismatch\n");
+	CHECK(diag_csv_header(NULL, 64, 0) < 0, "NULL buf accepted\n");
+	CHECK(diag_csv_header(buf, 0, 0) < 0, "cap 0 accepted\n");
+}
+
+// --------------------------------------------------------------------------------------------
+// TEST 7 — D3 CSV row: golden bytes (hex columns hex, -1 propagated, booleans 0/1), truncation
+// safety, and the "mechanical diff" smoke test (SPEC D3.8 items 1-3).
+// --------------------------------------------------------------------------------------------
+static void test_csv_row(void) {
+	printf("TEST 7: CSV row golden bytes + truncation + one-column diff localization\n");
+	DiagCsvRow r; csv_fill_sample(&r);
+	char buf[512];
+	int n = diag_csv_row(buf, sizeof buf, &r);
+	// Binding D3.3 format rules: decimal counters; %X (no 0x, no zero-pad) for
+	// cb2,lstat,lnrecv,lbuf0,lbuf1,siocnt,lastW0,lastW1; -1 for "none"; booleans 0/1.
+	const char* want =
+	    "1234567,42,5,"
+	    "3,800ABCD,12,34,1,2,13,35,4,1,1133,0,C0,DEADBEEF,0,987654,"
+	    "2,3,1,4237,600,1,0,1,0,-1,3,0,0,1,1,2,64,21,1,2,4083,"
+	    "100,99,98,97,1,96,2,10,B9A0,8FFF,-1,"
+	    "23,10,10,10,0,3,1,5000,0,7,1\n";
+	CHECK(n == (int)strlen(want), "row length %d want %d\n", n, (int)strlen(want));
+	CHECK(strcmp(buf, want) == 0, "row golden mismatch:\n--- got  ---\n%s--- want ---\n%s", buf, want);
+	CHECK(buf[n - 1] == '\n', "row is not '\\n'-terminated\n");
+
+	// A zeroed row (the "nothing captured yet" case main.c memsets before filling) formats too,
+	// and the -1 sentinels are only present where the caller put them.
+	DiagCsvRow z; memset(&z, 0, sizeof z);
+	char zbuf[512];
+	int zn = diag_csv_row(zbuf, sizeof zbuf, &z);
+	CHECK(zn > 0 && zn < (int)sizeof zbuf, "zero row length %d\n", zn);
+	CHECK(strncmp(zbuf, "0,0,0,0,0,0,0,", 14) == 0, "zero row prefix: %.20s\n", zbuf);
+	CHECK(count_char(zbuf, (size_t)zn - 1, ',') == 61, "zero row comma count %d\n",
+	      count_char(zbuf, (size_t)zn - 1, ','));
+	CHECK(strchr(zbuf, '-') == NULL, "zero row invented a -1 sentinel: %s", zbuf);
+
+	// A row of pure -1 sentinels (pre-capture: no celio snapshot, no rounds logged, no RTT) —
+	// every signed column must print -1, never a huge unsigned.
+	DiagCsvRow s; memset(&s, 0, sizeof s);
+	s.ctx = -1; s.px = s.py = -1; s.mapg = s.mapn = -1; s.objx = s.objy = -1; s.face = -1;
+	s.clSec = s.clSt = s.clBlk = -1; s.clSelL = s.clSelP = -1; s.sioMode = -1;
+	s.lastOk = -1; s.rtt = -1;
+	char sbuf[512];
+	int sn = diag_csv_row(sbuf, sizeof sbuf, &s);
+	CHECK(sn > 0, "sentinel row length %d\n", sn);
+	CHECK(strstr(sbuf, "4294967295") == NULL && strstr(sbuf, "FFFFFFFF") == NULL,
+	      "a -1 sentinel printed unsigned: %s", sbuf);
+	CHECK(strncmp(sbuf, "0,0,0,-1,0,-1,-1,-1,-1,-1,-1,-1,0,", 34) == 0,
+	      "sentinel row prefix: %.40s\n", sbuf);
+
+	// Truncation: cap below a full row never overflows, stays NUL-terminated, returns the
+	// would-be length (the diag.h snprintf contract).
+	char tiny[64]; memset(tiny, 0x7F, sizeof tiny);
+	int tn = diag_csv_row(tiny, sizeof tiny, &r);
+	CHECK(tn == n, "truncated row return %d (want would-be %d)\n", tn, n);
+	CHECK(strlen(tiny) == sizeof tiny - 1, "truncated row wrote %zu chars (want cap-1)\n", strlen(tiny));
+	CHECK(strncmp(tiny, want, sizeof tiny - 1) == 0, "truncated row prefix mismatch\n");
+	CHECK(diag_csv_row(NULL, 64, &r) < 0, "NULL buf accepted\n");
+	CHECK(diag_csv_row(buf, 0, &r) < 0, "cap 0 accepted\n");
+	CHECK(diag_csv_row(buf, sizeof buf, NULL) < 0, "NULL row accepted\n");
+
+	// DIFF SMOKE (D3.8 item 3): change exactly ONE column (clHS, a hold flag — the class a
+	// HOST-vs-JOIN diff must localize) and prove the byte diff lands in that column only.
+	DiagCsvRow r2 = r; r2.clHS = 0;
+	char buf2[512];
+	int n2 = diag_csv_row(buf2, sizeof buf2, &r2);
+	CHECK(n2 == n, "one-column change altered the row length (%d vs %d)\n", n2, n);
+	size_t d0 = 0; while (d0 < (size_t)n && buf[d0] == buf2[d0]) d0++;
+	CHECK(d0 < (size_t)n, "one-column change produced NO byte difference\n");
+	size_t d1 = (size_t)n; while (d1 > d0 && buf[d1 - 1] == buf2[d1 - 1]) d1--;
+	CHECK(d1 - d0 == 1, "diff spans %zu bytes (want the single clHS digit)\n", d1 - d0);
+	int idx = count_char(buf, d0, ',');       // commas before the diff = that column's index
+	CHECK(idx == col_index("clHS"), "diff localized to column %d (%s), want clHS at %d\n",
+	      idx, "by comma count", col_index("clHS"));
+	CHECK(buf[d0] == '1' && buf2[d0] == '0', "clHS diff bytes '%c' vs '%c'\n", buf[d0], buf2[d0]);
+
+	// Same check for a HEX column (lastW0) — the hex formatting must not smear into neighbours.
+	DiagCsvRow r3 = r; r3.lastW0 = 0xB9A1u;
+	char buf3[512];
+	int n3 = diag_csv_row(buf3, sizeof buf3, &r3);
+	CHECK(n3 == n, "hex one-column change altered the row length (%d vs %d)\n", n3, n);
+	size_t h0 = 0; while (h0 < (size_t)n && buf[h0] == buf3[h0]) h0++;
+	CHECK(count_char(buf, h0, ',') == col_index("lastW0"),
+	      "hex diff localized to column %d, want lastW0 at %d\n",
+	      count_char(buf, h0, ','), col_index("lastW0"));
+	CHECK(strstr(buf3, ",B9A1,8FFF,") != NULL, "lastW0 hex column: %s", buf3);
+}
+
 int main(void) {
-	printf("=== test_diag: D1 breadcrumbs + watchdog, D2 hang catcher (SPEC-firmware-diag D1.9/D2.7) ===\n");
+	printf("=== test_diag: D1 breadcrumbs + watchdog, D2 hang catcher, D3 CSV telemetry"
+	       " (SPEC-firmware-diag D1.9/D2.7/D3.8) ===\n");
 	test_crumbs();
 	test_watchdog();
 	test_format();
 	test_hang_step();
 	test_hang_format();
+	test_csv_header();
+	test_csv_row();
 	printf("=== %d checks, %d failures ===\n", g_checks, g_fail);
 	return g_fail ? 1 : 0;
 }
