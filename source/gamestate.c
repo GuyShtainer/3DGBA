@@ -228,6 +228,8 @@ typedef struct {
 	float    dFeetMin, dFeetMax, dHeadMin, dHeadMax;
 	int16_t  dTallOk, dTallFail;
 	uint8_t  dOrderOk, dS3d;
+	uint8_t  dTiltLvl;                         // phase 14: effective tilt level on the TOP screen (I6.4)
+	float    dTiltAngT, dTiltAngB;             // ...and the tweened angle per screen, DEGREES
 	uint32_t lstat, lbuf0, lbuf1, lnotrecv;    // link-error diagnostics (gLinkStatus / sLinkErrorBuffer / notRecv)
 	uint8_t  lerr;                             // gLinkErrorOccurred
 } GsLogEntry;
@@ -246,6 +248,13 @@ static uint32_t s_lastTickMs[2]  = { 0, 0 };          // wall-clock of the last 
 #define GS_LSTAT_KEY(s) ((uint32_t)(s) & 0x0007F07Fu)   // 0x7F000 errors | 0x40 established | 0x20 master | 0x1C count | 0x03 id
 static uint32_t s_lastLstatKey[2] = { 0xFFFFFFFFu, 0xFFFFFFFFu };
 static uint32_t s_lastNotRecv[2]  = { 0xFFFFFFFFu, 0xFFFFFFFFu };
+
+// Phase 14 / I5.3 — header-only environment stamp (see gamestate.h). Deliberately NOT reset by
+// gs_log_reset: the model and the 804 MHz probe are properties of the BOOT, not of a play session.
+static int s_envKnown = 0, s_envN3DS = 0, s_envSpeedup = 0;
+void gs_log_set_env(int isN3DS, int speedupActive) {
+	s_envKnown = 1; s_envN3DS = isN3DS ? 1 : 0; s_envSpeedup = speedupActive ? 1 : 0;
+}
 
 void gs_log_reset(void) {
 	s_gsLogN = 0;
@@ -291,6 +300,8 @@ void gs_log_sample(GbaCore* c, const GameProfile* p, const GameState* gs,
 		e->dHeadMin = depth->headMin; e->dHeadMax = depth->headMax;
 		e->dTallOk = depth->tallOk; e->dTallFail = depth->tallFail;
 		e->dOrderOk = depth->orderOk; e->dS3d = depth->s3d;
+		e->dTiltLvl = depth->tiltLvl;                                   // phase 14 (I6.4)
+		e->dTiltAngT = depth->tiltAngTop; e->dTiltAngB = depth->tiltAngBot;
 	}
 	e->lstat = gs->linkStatus; e->lbuf0 = gs->linkErrBuf0; e->lbuf1 = gs->linkErrBuf1;
 	e->lnotrecv = gs->linkNotRecv; e->lerr = gs->linkErr;
@@ -318,7 +329,14 @@ void gamestate_log_dump(const char* path) {
 	fprintf(f, "# geo: px,py=camera tile; objX,objY=true avatar tile; mapG,mapN=which map; face 1=D 2=U 3=L 4=R (NPC-overlay inputs). inj=injected touch key. d_*=3D-effect health (top rows).\n");
 	fprintf(f, "# 3D detail (top rows; px @ FULL slider = the pop_eye disparity unit BEFORE *eyeSl, so slider-independent): d_feetMin/Max=grounded-feet disparity range; d_headMin/Max=head disparity (feet+standup, clamped); d_tallOk/d_tallFail=#sprites whose head exceeds feet by ~standup (tall renders taller) vs not; d_ordOk=1 if the on-screen set is monotonic in screen-y vs feet disparity (lower/closer pops >=); d_s3d=1 stereoscopic engaged this frame.\n");
 	fprintf(f, "# link: lerr=gLinkErrorOccurred (1=game flagged a link error); lstat=gLinkStatus (live); lbuf0/lbuf1=sLinkErrorBuffer 8B LATCHED at error (lbuf0=status word, lbuf1 low bytes=send/recv queue counts+disconnected); lnotrecv=gRemoteLinkPlayersNotReceived. cb2=0800B1A0(EM)/0800AF2C(FR) = CB2_PrintErrorMessage = the red error screen.\n");
-	fprintf(f, "idx,frame,scr,ctx,ctxName,cb1,cb2,sb1V,resolved,px,py,objX,objY,mapG,mapN,face,inj,nTask,t0,t1,t2,t3,t4,t5,t6,t7,d_ow,d_nspr,d_nui,d_nfg,d_maxd,d_camX,d_camY,d_feetMin,d_feetMax,d_headMin,d_headMax,d_tallOk,d_tallFail,d_ordOk,d_s3d,lerr,lstat,lbuf0,lbuf1,lnotrecv\n");
+	// phase 14 (SPEC-integration I6.4/I5.3): the tilt columns + the environment stamp that keeps a
+	// SLOW hardware photo from being blamed on the tilt (tilt is never clamped on the speedup probe).
+	fprintf(f, "# tilt (top rows): d_tiltLvl=effective CLAMPED level 0..3 in force on the top screen (0=flat; the SAVED preference is never rewritten by a clamp); d_tiltAngT/d_tiltAngB=tweened angle in DEGREES per screen. Ladder: 0/10/15/20 deg. A level>0 with angle 0 = the gate is shut (menu/battle/dialog/touch/link/Old-3DS/stereo/frameskip).\n");
+	if (s_envKnown)
+		fprintf(f, "# env: model=%s speedup804=%s%s\n", s_envN3DS ? "New3DS" : "Old3DS",
+		        s_envSpeedup ? "YES" : "NO",
+		        s_envSpeedup ? "" : "  <- NOT running at 804MHz/L2 (.3dsx from the Homebrew Launcher cannot claim it): a low fps here is NOT a tilt cost");
+	fprintf(f, "idx,frame,scr,ctx,ctxName,cb1,cb2,sb1V,resolved,px,py,objX,objY,mapG,mapN,face,inj,nTask,t0,t1,t2,t3,t4,t5,t6,t7,d_ow,d_nspr,d_nui,d_nfg,d_maxd,d_camX,d_camY,d_feetMin,d_feetMax,d_headMin,d_headMax,d_tallOk,d_tallFail,d_ordOk,d_s3d,d_tiltLvl,d_tiltAngT,d_tiltAngB,lerr,lstat,lbuf0,lbuf1,lnotrecv\n");
 	uint32_t n    = (s_gsLogN < GSLOG_N) ? s_gsLogN : GSLOG_N;
 	uint32_t base = (s_gsLogN < GSLOG_N) ? 0u : (s_gsLogN % GSLOG_N);   // oldest retained entry
 	for (uint32_t i = 0; i < n; i++) {
@@ -334,7 +352,11 @@ void gamestate_log_dump(const char* path) {
 			fprintf(f, ",%u,%d,%d,%d,%.2f,%d,%d", e->dOw, e->dNspr, e->dNui, e->dNfg, e->dMaxd, e->dCamX, e->dCamY);
 			fprintf(f, ",%.2f,%.2f,%.2f,%.2f,%d,%d,%u,%u",          // per-sprite disparity detail (px @ full slider)
 			        e->dFeetMin, e->dFeetMax, e->dHeadMin, e->dHeadMax, e->dTallOk, e->dTallFail, e->dOrderOk, e->dS3d);
-		} else fprintf(f, ",,,,,,,,,,,,,,,");   // 7 d_* + 8 detail = 15 empty fields (bottom rows carry no 3D)
+			fprintf(f, ",%u,%.2f,%.2f", e->dTiltLvl, (double)e->dTiltAngT, (double)e->dTiltAngB);   // phase 14 tilt
+			// I6.5: 7 d_* + 8 detail + 3 tilt = 18 empty fields on a non-depth (bottom) row. Getting
+			// this count wrong shifts every LATER column on those rows and silently corrupts the link
+			// columns, which is the one thing this log exists to make readable.
+		} else fprintf(f, ",,,,,,,,,,,,,,,,,,");
 		fprintf(f, ",%u,%08lX,%08lX,%08lX,%08lX\n", e->lerr,                       // link-error diagnostics
 		        (unsigned long)e->lstat, (unsigned long)e->lbuf0, (unsigned long)e->lbuf1, (unsigned long)e->lnotrecv);
 	}

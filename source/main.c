@@ -37,7 +37,9 @@ static u32 dim_color(u32 c, float f);   // fwd (defined near run_splash)
 #include "wireless.h"
 #include "diag.h"     // D1 breadcrumbs + surviving-thread watchdog (docs/phase13-diagnostics/SPEC-firmware-diag.md)
 #include "control.h"  // D4 file-driven tile-exact movement (docs/phase13-diagnostics/SPEC-control-replay.md)
+#include "tilt.h"     // phase 14 HD-2D diorama tilt: pure-C projection + tween (docs/phase14-tilt/)
 #include "warp_shbin.h"   // M2 grid-warp vertex shader (generated from source/warp.v.pica)
+#include "tilt_shbin.h"   // phase 14 tilt vertex shader (generated from source/tilt.v.pica)
 
 #define WORKER_STACKSIZE (512 * 1024)   // mGBA runFrame has deep call chains; 32KB overflows
 #define FRAME_TICKS      4481520ULL    // SYSCLOCK_ARM11 / (16756991/280095) -> 59.826 fps real-time cap
@@ -66,6 +68,15 @@ typedef struct {
 
 static volatile bool g_quit = false;
 static bool s_hasPtm = false;   // ptm:u for battery level (HUD)
+// Phase 14 / SPEC-integration I4.13: run_settings() has no model parameter and must NOT grow one
+// (its signature is shared with the boot-menu call site), so the model lands in a file-scope
+// static the same way s_hasPtm does. Set once in main() next to APT_CheckNew3DS. s_speedupActive
+// is the self-calibrating 804 MHz probe; I5.3 forbids CLAMPING tilt on it (a .3dsx from the
+// Homebrew Launcher can never claim 804 MHz, so clamping would make tilt un-iterable on the whole
+// make-and-3dslink dev loop) — it is recorded so a slow HARDWARE photo is never mistaken for a
+// tilt cost.
+static bool s_isN3DS = false;
+static bool s_speedupActive = false;
 static volatile bool g_appActive = true;   // false while suspended (HOME/sleep) -> idle, free the cores
 static aptHookCookie s_aptCookie;
 static EmuInstance* volatile g_netWorker = NULL;   // the lone wireless worker (emuA); set at link start, cleared on teardown
@@ -1026,6 +1037,249 @@ static void warp_grid_fini(void) {
 	if (warpDvlb) { shaderProgramFree(&warpProg); DVLB_Free(warpDvlb); }
 }
 
+// ---- Phase 14 (HD-2D "diorama" tilt): the perspective mesh draw -----------------------------
+// Spec: docs/phase14-tilt/SPEC-render.md R3 (the pass + budget), R4 (composition), R5 (the
+// shader). ALL the math lives in source/tilt.{c,h} — pure C, host-tested by test/host/test_tilt.c
+// (CLAUDE.md rule #4 / PHASE.md invariant 6). Nothing GPU-shaped is in that module and no
+// projection math is in here: its entire contract with the GPU is (x, y, iq, u, v, rgba) floats
+// (SPEC-render R6.7).
+//
+// WHY ONE ORDINARY TEXTURED DRAW IS THE WHOLE EFFECT. The tilted world is a plane under a pinhole
+// camera, i.e. a planar homography (gen1recomp src/render/Tilt.lua:120-130, read out in
+// docs/kb/external/gen1-render.md finding 1). gen1recomp has to reconstruct the projective divide
+// in a FRAGMENT shader (Renderer.lua:456-471) only because LOVE is a 2D API with no clip-space w.
+// The PICA200 has NO fragment shader at all (docs/kb/hd2d-octopath-3d.md §0.1) and does not need
+// one: emit a real per-vertex clip w = 1/q and the fixed-function rasterizer interpolates attr/w
+// and 1/w linearly in screen space and divides per pixel, which IS their trick (SPEC-render R1.3;
+// agreement with their closed form proven to 6e-14 px in R1.9). verify-on-hw: that argument is
+// asserted by construction on the CPU side (test_tilt TEST 8/10) and unproven until a real frame
+// is rasterized.
+// (Slice T2's temporary `TILT_DEV_LEVEL` compile-time drive is GONE as of slice T4: the real
+// control is now g_prefs.tiltLevel — the ENHANCE-tab PK_SEG row, persisted through Settings.tilt
+// — exactly as T2's decision D8 said it would be. It ships at level 0 (SPEC-integration I5.8), so
+// the default binary is still inert and PHASE.md invariant 1 holds for every existing user.)
+
+// R3.6 / open question O4 — SLICE-T2 DECISION: **SPILL**, i.e. no scissor (the sanctioned
+// fallback, R3.6.2). Two reasons, in order of weight:
+//  1. R2.5.3's argument for the scissor is *stereo-specific*: content present in one eye and
+//     absent in the other at the frame border causes binocular rivalry (main.c:718-719). Under
+//     rule G10 (SPEC-integration I5.6) tilt and stereo are MUTUALLY EXCLUSIVE — when the tilt is
+//     up, both eyes get the identical tilted image — so the rivalry the scissor buys off cannot
+//     occur in the shipped configuration. The argument is vacuous here, not merely outweighed.
+//  2. The logical->physical quarter-turn for C3D_SetScissor is INFERRED, not documented in any
+//     header on this machine, and R3.6.1 says in terms: prove it against a known quadrant first,
+//     "Do not ship it unproven". Slice T2 is PC-green only, so it cannot.
+// Spill also retains more of the frame (99.56 % vs 95.88 % at 15 deg on the top screen, R2.5.3)
+// and costs zero GPU state. Its price: the widened NEAR edge covers the letterbox pillars at the
+// bottom of the frame, so the image is a trapezoid rather than a rectangle. **verify-on-hw** — if
+// that reads badly, prove the mapping in Azahar per R3.6.1 and set TILT_SCISSOR to 1.
+#ifndef TILT_SCISSOR
+#define TILT_SCISSOR 0
+#endif
+
+// R5.3: 36 B. The colour is 4 FLOATS, not 4 GPU_UNSIGNED_BYTEs — whether the PICA normalises
+// integer attributes to 0..1 or hands over the raw 0..255 is not documented in any header here,
+// and guessing wrong yields a silently 255x over-bright frame. 908 verts x 36 B x 3 images is
+// ~100 KB of linearAlloc, which R3.5 budgets.
+typedef struct { float x, y, iq; float u, v; float r, g, b, a; } TiltVert;
+
+// R3.5.1: one slab per GAME IMAGE (0 = top-left eye, 1 = top-right eye, 2 = bottom), never
+// shared — the GPU may read any queued buffer at any point up to C3D_FrameEnd, so rewriting one
+// slab would corrupt an already-queued draw. This is the same "SYNCDRAW-safe" rule warpVbo
+// follows (main.c:996). The per-image capacity is R3.5's worst case: 176 base grid + 512 pop
+// strips + 24 UI pops + 16 DoF band corners + 4 bloom + 176 light mesh = ~908. Slice T2 writes
+// only the first WARP_VERTS of each slab; the rest is headroom for R4.1/R4.3/R4.4/R4.5/R4.6.
+#define TILT_IMAGES     3
+#define TILT_SLAB_VERTS 908
+
+// What render_game needs in order to take the tilt path instead of its flat blit. NULL = flat,
+// and the flat branch is then today's code character for character (PHASE.md invariant 1).
+typedef struct {
+	const TiltView* v;    // this image's projection (tilt_view_init, rebuilt once per frame)
+	u32             mod;  // dim tint, carried as the VERTEX COLOUR (R5.4 MODULATE stage)
+	int             slab; // which per-image vertex slab (0 = top-L, 1 = top-R, 2 = bottom)
+	// FIX PASS (2026-08-04, review finding 2) — geometry reuse. -1 = build this slab from the
+	// projection. >= 0 = "the 176 projected vertices are ALREADY in that slab, built EARLIER THIS
+	// FRAME": copy them and rewrite only the colour, or — when `slab == clone` — draw straight out
+	// of it with no CPU write and no cache flush at all. The right eye is the case this exists for:
+	// it shares the left eye's TiltView, mode and 400x240 rect, so calc_xform and tilt_project can
+	// only produce the identical 176 vertices; rebuilding them cost a second full projection loop
+	// (176 float divides), a second 6.3 KB write and a third GSPGPU_FlushDataCache IPC per tilted
+	// frame, all to reproduce bytes we already had.
+	// CONTRACT (the caller owns it): set `clone >= 0` only when the source slab was written this
+	// frame by a draw with the SAME TiltView pointer, the same scale mode and the same screen rect.
+	// Both current call sites satisfy it by construction (one `&tiltVw`, one `scaleMode[0]`, one
+	// 400x240) and the left eye is always drawn first — and if the left eye bailed out (no core),
+	// render_game's identical `!e->core` early-return means the right eye never reaches the draw.
+	int             clone;
+} TiltDraw;
+
+// ---- slice T3: the GATE's snapshot (SPEC-integration I1.2) ----------------------------------
+// The per-screen gate inputs that come from game RAM, snapshotted in the PARKED WINDOW and read
+// in the render block — exactly the way DepthSnap depth3d already crosses that boundary
+// (declared main.c:1891, filled main.c:2193+, consumed main.c:2810+). Index = SCREEN (0 = top,
+// 1 = bottom), never game slot, because `swapped` maps games to screens and the gate is per
+// screen (I1.8). No new game_read, no new profile_for, no new gbacore_read*: the two GameStates
+// the gs-logger block already reads are reused (I1.1), so the whole gate costs two struct copies
+// and adds no race class. Zero/-1 init means a frame that never fills it gates tilt OFF.
+typedef struct { uint8_t ok, ctx, sb1Valid, textDlg; int16_t px; } TiltSnap;
+
+// I1.4: the ONE place the GameCtx enum crosses into the header-free tilt module. If someone ever
+// inserts a value ahead of GCTX_OVERWORLD in gamestate.h, this is a COMPILE ERROR rather than a
+// tilt that silently engages in the wrong screen.
+_Static_assert(GCTX_OVERWORLD == TILT_CTX_FIELD, "tilt.h TILT_CTX_FIELD drifted from GameCtx");
+
+static DVLB_s*         tiltDvlb;
+static shaderProgram_s tiltProg;
+static int             tiltProjLoc = -1;
+static TiltVert*       tiltVbo;
+static bool            tiltOk;   // false => the flat path, permanently (R3.5.3, invariant 1)
+
+// R5.5.1: mirrors warp_grid_init exactly; any failure leaves tiltOk false and the renderer never
+// looks at the tilt again. Runs AFTER warp_grid_init because the tilt reuses warpIbo (R1.4) —
+// which warp_grid_init is what builds and cache-flushes — so !warpOk also means no tilt, which is
+// the same conclusion R4.2 reaches from the other end ("no shader => no tilt => flat path").
+static void tilt_init(void) {
+	if (!warpOk) return;
+	tiltDvlb = DVLB_ParseFile((u32*)tilt_shbin, tilt_shbin_size);
+	if (!tiltDvlb) return;
+	shaderProgramInit(&tiltProg);
+	shaderProgramSetVsh(&tiltProg, &tiltDvlb->DVLE[0]);
+	tiltProjLoc = shaderInstanceGetUniformLocation(tiltProg.vertexShader, "projection");
+	tiltVbo = (TiltVert*)linearAlloc(sizeof(TiltVert) * TILT_SLAB_VERTS * TILT_IMAGES);
+	if (!tiltVbo || tiltProjLoc < 0) return;   // tiltOk stays false -> flat forever
+	tiltOk = true;
+}
+
+static void tilt_fini(void) {
+	if (tiltVbo) linearFree(tiltVbo);
+	if (tiltDvlb) { shaderProgramFree(&tiltProg); DVLB_Free(tiltDvlb); }
+}
+
+// The base mesh for one game image: the SAME 16x11 grid warp_grid_eye builds (main.c:1059-1067),
+// each vertex pushed through the homography and then through the UNMODIFIED shared screen fit.
+// R1.4: because u*q, w*q and q are affine over the whole plane, ANY tessellation reproduces the
+// identical map — subdividing introduces no seam and no error — so keeping the grid instead of a
+// 4-vertex quad costs nothing and is what will carry the per-vertex stereo displacement when R4.2
+// lands. R1.7: tilt is computed in FRAME space and composed with calc_xform afterwards (affine o
+// homography is still a homography), never baked per screen.
+static void tilt_mesh_base(TiltVert* v, const TiltView* tv, u32 mod,
+                           float ox, float oy, float sx, float sy) {
+	const float mr = (float)( mod        & 0xFF) / 255.0f,   // C2D_Color32 packs r,g,b,a low->high
+	            mg = (float)((mod >>  8) & 0xFF) / 255.0f,   // (c2d/base.h:102-105)
+	            mb = (float)((mod >> 16) & 0xFF) / 255.0f,
+	            ma = (float)((mod >> 24) & 0xFF) / 255.0f;
+	for (int r = 0; r <= WARP_ROWS; r++) for (int c = 0; c <= WARP_COLS; c++) {
+		TiltVert* w = &v[r * (WARP_COLS + 1) + c];
+		float gx = (float)(c * 16), gy = (float)(r * 16);
+		float fx, fy, q;
+		tilt_project(tv, gx, gy, &fx, &fy, &q);   // frame -> frame (R1.6, bottom-anchored cover)
+		w->x  = ox + fx * sx;                     // then calc_xform, untouched (R1.7)
+		w->y  = oy + fy * sy;
+		w->iq = 1.0f / q;                         // R1.3: emit the DEPTH 1/q, NEVER q
+		w->u  = gx / 256.0f;                      // preTex UVs coincide: PRESCALE/PRE_TEX == 1/256
+		w->v  = 1.0f - gy / 256.0f;
+		w->r = mr; w->g = mg; w->b = mb; w->a = ma;
+	}
+}
+
+// FIX PASS (review finding 2): the same mesh under a different dim tint. Geometry is copied
+// verbatim — NOT re-projected — so the two eyes cannot drift by a rounding bit, which is what the
+// stereo pair needs anyway (a right eye whose vertices disagreed with the left by even a float ULP
+// would be a real per-eye difference on the parallax barrier). One pass, no memcpy-then-overwrite.
+static void tilt_mesh_recolor(TiltVert* dst, const TiltVert* src, u32 mod) {
+	const float mr = (float)( mod        & 0xFF) / 255.0f,
+	            mg = (float)((mod >>  8) & 0xFF) / 255.0f,
+	            mb = (float)((mod >> 16) & 0xFF) / 255.0f,
+	            ma = (float)((mod >> 24) & 0xFF) / 255.0f;
+	for (int i = 0; i < WARP_VERTS; i++) {
+		dst[i].x = src[i].x; dst[i].y = src[i].y; dst[i].iq = src[i].iq;
+		dst[i].u = src[i].u; dst[i].v = src[i].v;
+		dst[i].r = mr; dst[i].g = mg; dst[i].b = mb; dst[i].a = ma;
+	}
+}
+
+// ONE raw-C3D escape/return per GAME IMAGE (R3.3) — the sequence proven at main.c:1069-1092, with
+// the tilt program bound and a third (colour) attribute. Slice T2 emits ONE draw inside it: the
+// base mesh, which REPLACES render_game's final blit rather than compositing over it (R3.1). The
+// pop / UI-pop / DoF / bloom / light draws join THIS SAME block in later slices — that merge is
+// where R3.4's "-2 escapes vs today under stereo" comes from, and it is why the escape lives here
+// and not inside each effect. Leaves `tgt` bound for the caller's HUD (R3.1.4).
+static void tilt_draw_image(C3D_RenderTarget* tgt, C3D_Tex* src, const TiltDraw* td,
+                            float screenW, float screenH, int mode) {
+	float ox, oy, sx, sy; calc_xform(mode, screenW, screenH, &ox, &oy, &sx, &sy);
+	TiltVert* v = tiltVbo + (size_t)td->slab * TILT_SLAB_VERTS;
+	// FIX PASS (review finding 2): build, clone-and-recolour, or reuse outright — see TiltDraw.
+	if (td->clone < 0) {
+		tilt_mesh_base(v, td->v, td->mod, ox, oy, sx, sy);
+		GSPGPU_FlushDataCache(v, sizeof(TiltVert) * WARP_VERTS);   // R3.5.2: ONLY the bytes written
+	} else {
+		const TiltVert* s = tiltVbo + (size_t)td->clone * TILT_SLAB_VERTS;
+		if (s != v) {
+			tilt_mesh_recolor(v, s, td->mod);
+			GSPGPU_FlushDataCache(v, sizeof(TiltVert) * WARP_VERTS);
+		}
+		// s == v: the requested slab IS the source — same geometry AND same tint, already written
+		// and already flushed by the earlier draw. Nothing to do; the GPU reads it a second time.
+		// SYNCDRAW-safe (R3.5.1): a slab is written at most once per frame and never rewritten
+		// while a draw referencing it is still queued, which is the only thing that rule forbids.
+	}
+	C2D_Flush();                        // submit citro2d's pending batch (the prescale pass 0)
+	C3D_FrameDrawOn(tgt);
+	C3D_BindProgram(&tiltProg);
+	// R1.5: the ORTHO screen-pixel matrix every other pass already uses — NOT Mtx_PerspTilt. An
+	// ortho P is linear with last row (0,0,0,1), so P*(x*iq, y*iq, 0, iq) = iq*[P*(x,y,0,1)]: the
+	// NDC is exactly the flat screen point and the entire projective content lands in w_clip.
+	C3D_Mtx proj;
+	Mtx_OrthoTilt(&proj, 0.0f, screenW, screenH, 0.0f, 1.0f, -1.0f, true);
+	C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, tiltProjLoc, &proj);
+	C3D_AttrInfo* ai = C3D_GetAttrInfo();
+	AttrInfo_Init(ai);
+	AttrInfo_AddLoader(ai, 0, GPU_FLOAT, 3);   // v0 = (x, y, iq)   screen px + homogeneous scale
+	AttrInfo_AddLoader(ai, 1, GPU_FLOAT, 2);   // v1 = (u, v)
+	AttrInfo_AddLoader(ai, 2, GPU_FLOAT, 4);   // v2 = (r, g, b, a)
+	C3D_BufInfo* bi = C3D_GetBufInfo();
+	BufInfo_Init(bi);
+	BufInfo_Add(bi, v, sizeof(TiltVert), 3, 0x210);   // 3 attrs, permutation nibbles 0/1/2 (R5.3)
+	// R3.2.1: the tilted draw is ALWAYS GPU_LINEAR — gen1's exact split (Renderer.lua:514-521:
+	// warped canvas LINEAR, flat path NEAREST). Set AFTER C2D_Flush so it can never retro-apply to
+	// a still-pending citro2d batch (the prescale pass wants NEAREST). The flat path re-sets its
+	// own filter every frame (main.c:1320/1338), so this never leaks back.
+	C3D_TexSetFilter(src, GPU_LINEAR, GPU_LINEAR);
+	C3D_TexBind(0, src);
+	C3D_TexEnv* env = C3D_GetTexEnv(0);       // R5.4: MODULATE(TEXTURE0, PRIMARY_COLOR)
+	C3D_TexEnvInit(env);
+	C3D_TexEnvSrc(env, C3D_RGB, GPU_TEXTURE0, GPU_PRIMARY_COLOR, 0);
+	C3D_TexEnvFunc(env, C3D_RGB, GPU_MODULATE);   // x vertex colour = the unfocused dim-tint analog
+	C3D_TexEnvSrc(env, C3D_Alpha, GPU_PRIMARY_COLOR, 0, 0);
+	C3D_TexEnvFunc(env, C3D_Alpha, GPU_REPLACE);  // opaque (vertex a = 1) -> src replaces dst
+	C3D_TexEnvInit(C3D_GetTexEnv(1));   // R5.4.1: a stale stage 1 silently poisons the result
+	C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
+	C3D_CullFace(GPU_CULL_NONE);        // the trapezoid's winding varies with the angle
+#if TILT_SCISSOR
+	{   // R3.6.1 expected mapping — the framebuffer is the screen rotated a quarter turn (which is
+		// exactly why Mtx_OrthoTilt exists, c3d/maths.h:530-542). UNPROVEN: see TILT_SCISSOR above.
+		float x0 = ox, y0 = oy, x1 = ox + GBA_W * sx, y1 = oy + GBA_H * sy;
+		if (x0 < 0.0f) x0 = 0.0f;            if (y0 < 0.0f) y0 = 0.0f;
+		if (x1 > screenW) x1 = screenW;      if (y1 > screenH) y1 = screenH;
+		u32 W = (u32)screenW;
+		C3D_SetScissor(GPU_SCISSOR_NORMAL, (u32)y0, W - (u32)x1, (u32)y1, W - (u32)x0);
+	}
+#endif
+	// NOTE on blend state: slice T2 deliberately sets NONE. citro2d's standard alpha blend is live
+	// here (every pass that changes it restores it by hand — bloom_add at main.c:1292-1293,
+	// light_pass at main.c:980 — because C2D_Prepare does NOT, R3.3.1), and with vertex alpha 1.0
+	// that blend is an opaque overwrite, which is what the base mesh wants. The hand-restore
+	// R3.3.1 mandates becomes mandatory the moment the additive bloom / MULTIPLY light draws join
+	// this block (slice 3).
+	C3D_DrawElements(GPU_TRIANGLES, WARP_IDX, C3D_UNSIGNED_SHORT, warpIbo);
+#if TILT_SCISSOR
+	C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);   // citro2d never resets it (R3.3.1)
+#endif
+	C2D_Prepare();                      // hand the GPU back (rebinds citro2d's shader/attrs/texenv)
+	C2D_SceneBegin(tgt);                // R3.1.4: render_game's contract — leave the screen bound
+}
+
 // Standee depth field: a vertex carries the depth of the tile(s) just BELOW it (grid row vr), so a
 // foreground tile's TOP edge pops out while its BOTTOM edge (the next row down) sits at the ground.
 // Every foreground object (pole / thin tree / rock tile) thus STANDS UP all over the map -- not only
@@ -1297,9 +1551,14 @@ static void bloom_add(C3D_RenderTarget* tgt, C3D_Tex* glow, int mode, float lvl,
 // Draw one game to `screen` at the current scale + filter, leaving `screen` bound so the
 // caller can draw overlays (focus bar, toast, menu) on top. `preTgt`/`preTex` are the shared
 // offscreen prescale buffer, reused per screen (sequential on the render thread -> no race).
+// Phase 14: `td` NULL = the flat path, which is then byte-for-byte today's code (PHASE.md
+// invariant 1). Non-NULL = the tilted mesh REPLACES the final blit (SPEC-render R3.1) — the
+// prescale pass 0 survives and becomes its source (R4.7), and the C2D_TargetClear stays in both
+// branches because it paints the letterbox AND the R2.5.2 top-corner wedges (R3.1.1).
 static void render_game(EmuInstance* e, C3D_RenderTarget* screen, C3D_RenderTarget* preTgt,
                         C3D_Tex* preTex, float screenW, float screenH,
-                        int mode, bool smooth, const C2D_ImageTint* tint, u32 clrBg) {
+                        int mode, bool smooth, const C2D_ImageTint* tint, u32 clrBg,
+                        const TiltDraw* td) {
 	if (!e->core) { C2D_TargetClear(screen, clrBg); C2D_SceneBegin(screen); return; }
 
 	float sx, sy;
@@ -1309,8 +1568,11 @@ static void render_game(EmuInstance* e, C3D_RenderTarget* screen, C3D_RenderTarg
 	float x = (screenW - GBA_W * sx) / 2.0f;
 	float y = (screenH - GBA_H * sy) / 2.0f;
 
-	// 1:1 is already pixel-perfect; sharp-bilinear only helps the fractional fits.
-	bool sharpBilinear = !smooth && mode != SCALE_1X && preTgt;
+	// 1:1 is already pixel-perfect; sharp-bilinear only helps the fractional fits. R3.1.2: a tilt
+	// resamples at non-integer rates EVERYWHERE, so GPU_NEAREST on the raw texture shimmers ->
+	// force the 2x NEAREST prescale on even at 1:1 while tilting. (`smooth` still wins: the user
+	// asked for LINEAR on e->tex and gets it.) With td == NULL this is the original expression.
+	bool sharpBilinear = !smooth && (mode != SCALE_1X || td) && preTgt;
 
 	if (sharpBilinear) {
 		// Pass 0: NEAREST integer prescale 240x160 -> 480x320 into the offscreen target.
@@ -1321,6 +1583,10 @@ static void render_game(EmuInstance* e, C3D_RenderTarget* screen, C3D_RenderTarg
 		C2D_TargetClear(preTgt, C2D_Color32(0, 0, 0, 0));
 		C2D_SceneBegin(preTgt);
 		C2D_DrawImageAt(i0, 0.0f, 0.0f, 0.0f, NULL, (float)PRESCALE, (float)PRESCALE);
+
+		// Phase 14 (R3.1): the tilted mesh replaces pass 1, sourcing the crisp prescale exactly as
+		// warp_grid_eye does (main.c:1082) — the UVs need no change because PRESCALE/PRE_TEX == 1/256.
+		if (td) { C2D_TargetClear(screen, clrBg); tilt_draw_image(screen, preTex, td, screenW, screenH, mode); return; }
 
 		// Pass 1: LINEAR draw the prescaled image, fit to the final on-screen rect.
 		Tex3DS_SubTexture s1 = { PRE_W, PRE_H, 0.0f, 1.0f,
@@ -1338,6 +1604,9 @@ static void render_game(EmuInstance* e, C3D_RenderTarget* screen, C3D_RenderTarg
 		GPU_TEXTURE_FILTER_PARAM f = smooth ? GPU_LINEAR : GPU_NEAREST;
 		C3D_TexSetFilter(&e->tex, f, f);
 		C2D_TargetClear(screen, clrBg);
+		// Phase 14 (R3.1/R3.1.2): reached with tilt only when the user chose Smooth (or no preTgt),
+		// i.e. e->tex sampled LINEAR — which is what the tilt wants anyway (R3.2.1).
+		if (td) { tilt_draw_image(screen, &e->tex, td, screenW, screenH, mode); return; }
 		C2D_SceneBegin(screen);
 		C2D_DrawImageAt(img, x, y, 0.0f, tint, sx, sy);
 	}
@@ -1368,7 +1637,16 @@ typedef struct {
 	s32 gameMode;         // 0 = dual, 1 = single
 	s32 padColor;         // gamepad tint index
 	s32 padEdge;          // 0 round / 1 soft / 2 sharp
+	// --- phase 14 (appended; files that end at `padEdge` still load, tiltLevel stays default) ---
+	s32 tilt;             // g_prefs.tiltLevel, 0..TILT_LEVELS-1 (SPEC-integration I4.9)
 } Settings;
+// SPEC-integration I7.6: test/host/test_tilt.c TEST 6 replicates this layout (main.c cannot be
+// host-compiled), so pin the two together. If a field is inserted anywhere above, these fire and
+// the test's copy must be updated in the same edit — the alternative is a silently-shifted
+// offsetof ladder that mis-loads every older settings file.
+_Static_assert(sizeof(Settings)            == 24 * sizeof(s32), "Settings grew/shrank — sync test_tilt TEST 6");
+_Static_assert(offsetof(Settings, tilt)    == 23 * sizeof(s32), "Settings.tilt moved — sync test_tilt TEST 6");
+_Static_assert(offsetof(Settings, padEdge) == 22 * sizeof(s32), "Settings.padEdge moved — sync test_tilt TEST 6");
 
 static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, int* hudMode,
                           int* audioMode, int* volA, int* volB, int* touchMode, bool* fsOn, bool* dofOn, bool* bloomOn, bool* lightOn, bool* vividOn) {
@@ -1383,8 +1661,13 @@ static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, int* 
 	size_t lenLight = offsetof(Settings, light);  // includes bloom
 	size_t lenVivid = offsetof(Settings, vivid);  // includes light
 	size_t lenOld   = offsetof(Settings, theme);  // includes vivid = pre-redesign full struct
-	size_t lenNew   = sizeof s;                    // includes the UI-redesign prefs
-	if ((n != lenNew && n != lenOld && n != lenVivid && n != lenLight && n != lenBloom && n != lenDof)
+	// phase 14 (SPEC-integration I4.10): NO magic bump — SETTINGS_MAGIC identifies the FAMILY and
+	// the length ladder does the versioning. lenPad is the pre-tilt full struct, i.e. exactly what
+	// every file written before this build is, so those files still load everything they had and
+	// simply leave g_prefs.tiltLevel at its default 0. Backward-compatible by construction.
+	size_t lenPad   = offsetof(Settings, tilt);   // includes the UI-redesign prefs (pre-tilt)
+	size_t lenNew   = sizeof s;                    // + tiltLevel
+	if ((n != lenNew && n != lenPad && n != lenOld && n != lenVivid && n != lenLight && n != lenBloom && n != lenDof)
 	    || s.magic != SETTINGS_MAGIC) return;      // tolerate older files
 	scaleMode[0] = ((unsigned)s.scaleMode[0]) % 3;
 	scaleMode[1] = ((unsigned)s.scaleMode[1]) % 3;
@@ -1401,7 +1684,7 @@ static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, int* 
 	if (n >= lenLight) *bloomOn = s.bloom != 0;
 	if (n >= lenVivid) *lightOn = s.light != 0;
 	if (n >= lenOld)   *vividOn = s.vivid != 0;
-	if (n >= lenNew) {                              // the UI-redesign chrome prefs (into the global)
+	if (n >= lenPad) {                              // the UI-redesign chrome prefs (into the global)
 		g_prefs.theme           = ((unsigned)s.theme) % THEME_PRESET_COUNT;
 		g_prefs.customBaseHue   = ((s.customBaseHue % 360) + 360) % 360;
 		g_prefs.customAccentHue = ((s.customAccentHue % 360) + 360) % 360;
@@ -1410,6 +1693,9 @@ static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, int* 
 		g_prefs.padColor        = ((unsigned)s.padColor) % 5;
 		g_prefs.padEdge         = ((unsigned)s.padEdge) % 3;
 	}
+	// Modulo, exactly like padEdge: a corrupt/negative word can never index the angle ladder out
+	// of range (the unsigned cast makes even INT32_MIN land in 0..TILT_LEVELS-1 — TEST 6).
+	if (n >= lenNew) g_prefs.tiltLevel = ((unsigned)s.tilt) % TILT_LEVELS;
 	theme_apply(g_prefs.theme, g_prefs.customBaseHue, g_prefs.customAccentHue, g_prefs.customContrast);
 }
 
@@ -1418,7 +1704,8 @@ static void settings_save(const int scaleMode[2], const bool smooth[2], bool swa
 	Settings s = { SETTINGS_MAGIC, { scaleMode[0], scaleMode[1] },
 	               { smooth[0], smooth[1] }, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn,
 	               g_prefs.theme, g_prefs.customBaseHue, g_prefs.customAccentHue, g_prefs.customContrast,
-	               g_prefs.gameMode, g_prefs.padColor, g_prefs.padEdge };
+	               g_prefs.gameMode, g_prefs.padColor, g_prefs.padEdge,
+	               g_prefs.tiltLevel };   // phase 14, I4.9: appended last, so the file grows by 4 B
 	FILE* f = fopen(SETTINGS_PATH, "wb");
 	if (!f) return;
 	fwrite(&s, 1, sizeof s, f);
@@ -1455,9 +1742,17 @@ enum {
 	ACT_SCALE_TOP = 100, ACT_SCALE_BOT, ACT_FILTER, ACT_THEME, ACT_VOLA, ACT_VOLB,
 	ACT_3D, ACT_PADCOL, ACT_PADEDGE, ACT_CHUE, ACT_CAHUE, ACT_CCON,
 	ACT_PREVIEW_PAD, ACT_PREVIEW_SMART,   // Touch tab: set the mode + resume to see it live
+	ACT_TILT,                             // phase 14 HD-2D diorama tilt (PK_SEG, 4 rungs) — I4.7
 };
 static const char* const MENU_TAB_NAMES[6] = { "SESSION", "DISPLAY", "AUDIO", "ENHANCE", "LINK", "TOUCH" };
 static const char* const PAD_EDGE_NAMES[3] = { "Round", "Soft", "Sharp" };
+// SPEC-integration Q1, RESOLVED: NOT "Off/Soft/Med/Deep". The shipped ladder is a deliberately
+// mild OFF/10/15/20 deg (SPEC-render R2.5.5 — gen1recomp's own OFF/15/35/50 is undefensible for
+// us above its first rung because they render up to 2.56x more world and we have a fixed 240x160
+// composited frame), so "Deep" would over-promise a 20 deg tilt. Low/Mid/Max describes a position
+// on OUR ladder without claiming an absolute. One table, three consumers: the pause seg, the
+// standalone-settings seg, and the status line — so the three can never drift apart.
+static const char* const TILT_NAMES[TILT_LEVELS] = { "Off", "Low", "Mid", "Max" };
 
 enum { PK_TOG, PK_SEG, PK_STEP, PK_BTN, PK_SWATCH };
 typedef struct { unsigned char kind, act, nseg; short x, y, w, h; const char* ov; } PCtl;
@@ -1470,9 +1765,20 @@ static const PCtl PT_DISPLAY[] = {
 static const PCtl PT_AUDIO[] = {
   {PK_SEG,ACT_AUDIOMODE,3, 93,26,216,30,0},{PK_STEP,ACT_VOLA,0, 93,82,216,24,0},
   {PK_STEP,ACT_VOLB,0, 93,132,216,24,0},{PK_TOG,ACT_MUTE,0, 276,171,34,18,0} };
+// Phase 14 adds the TILT row (SPEC-integration I4.1/I4.2). PK_SEG, not PK_TOG, because the
+// feature is a LADDER (PHASE.md invariant 5 tweens between levels; gen1recomp's Tilt.level) and
+// this codebase already models 3-4-way ladders as PK_SEG with nseg (ACT_TOUCHMODE 3, ACT_HUD 4).
+// Coordinates: the five baked toggles end at y=170+18=188 and the pause-bot-enhance plate bakes
+// NOTHING below y~190; the tab rail owns x<86 and the status hint sits at y=231. So 140,198,
+// 170x26 lands in that empty band — right edge 310 (flush with the toggle column's 276+34),
+// bottom edge 224 (7 px above the hint). NO existing row moves and the plate art is unchanged;
+// the label rides the PCtl.ov overlay mechanism that exists for exactly this (precedent: the
+// DISPLAY tab's "Swap"/"Skip" and the TOUCH tab's "EDGES" at the same x=140). Regenerating the
+// plate with a baked "Diorama tilt" label is open question O6 — deferred, not forgotten.
 static const PCtl PT_ENHANCE[] = {
   {PK_TOG,ACT_3D,0, 276,51,34,18,0},{PK_TOG,ACT_DOF,0, 276,83,34,18,0},{PK_TOG,ACT_BLOOM,0, 276,112,34,18,0},
-  {PK_TOG,ACT_LIGHT,0, 276,141,34,18,0},{PK_TOG,ACT_VIVID,0, 276,170,34,18,0} };
+  {PK_TOG,ACT_LIGHT,0, 276,141,34,18,0},{PK_TOG,ACT_VIVID,0, 276,170,34,18,0},
+  {PK_SEG,ACT_TILT,4, 140,198,170,26,"TILT"} };
 static const PCtl PT_LINK[] = {
   {PK_TOG,ACT_LINK,0, 276,16,34,18,0},{PK_TOG,ACT_NETLINK,0, 276,44,34,18,0},
   {PK_BTN,ACT_WIRELESS,0, 93,74,216,35,0},{PK_BTN,ACT_SAVEST,0, 93,118,104,31,0},
@@ -1482,7 +1788,9 @@ static const PCtl PT_TOUCH[] = {
   {PK_BTN,ACT_PREVIEW_SMART,0, 201,109,101,44,0},{PK_SWATCH,ACT_PADCOL,0, 93,192,208,26,0},
   {PK_SEG,ACT_PADEDGE,3, 140,224,172,14,"EDGES"} };
 static const PCtl* const PTABS[6] = { PT_SESSION, PT_DISPLAY, PT_AUDIO, PT_ENHANCE, PT_LINK, PT_TOUCH };
-static const int PTABN[6] = { 3, 6, 4, 5, 6, 5 };
+// I4.4: ENHANCE goes 5 -> 6 for the tilt row. Forgetting this is SILENT — the row would never
+// draw (the draw loop is `for (i < nPd)`) and the touch hit-test loop would never reach it.
+static const int PTABN[6] = { 3, 6, 4, 6, 6, 5 };
 static const char* const PT_PLATE[6] = { "pause-bot-session","pause-bot-display","pause-bot-audio",
                                          "pause-bot-enhance","pause-bot-link","pause-bot-touch" };
 
@@ -1550,6 +1858,7 @@ static int menu_layout(int tab, MenuW* out) {
 		PUSH(W_TOGGLE, ACT_BLOOM, 0, 0);
 		PUSH(W_TOGGLE, ACT_LIGHT, 0, 0);
 		PUSH(W_TOGGLE, ACT_VIVID, 0, 0);
+		PUSH(W_SEG,    ACT_TILT,  0, 0);   // phase 14 (I4.5 — bookkeeping; see the note at the top)
 		break;
 	case 4:   // LINK
 		PUSH(W_TOGGLE, ACT_LINK, 0, 0);
@@ -1587,15 +1896,19 @@ static void draw_paused_summary(C2D_TextBuf buf, const char* nameTop, const char
 	assets_text_c(buf, FNT_SG_MED, nameTop, nameBot ? 122.0f : 200.0f, 96.0f, 14.0f, THEME_ON_DARK);
 	if (nameBot) assets_text_c(buf, FNT_SG_MED, nameBot, 280.0f, 96.0f, 14.0f, THEME_ON_DARK);
 	{	// active-feature pills (manifest x56 y129 w288 h17): fill + baked JBM label, tinted per state
-		const char* labs[7]; u32 fg[7], bg[7]; int n = 0;
+		// I4.15: the arrays were [7] and this pushed up to exactly 7 pills; the Tilt pill makes 8,
+		// so ALL FOUR must widen in the same edit or the 8th push is a stack buffer overrun.
+		const char* labs[8]; u32 fg[8], bg[8]; int n = 0;
 		#define PILL(L, ON, C) do { labs[n] = (L); fg[n] = (ON) ? g_ui.ink : g_ui.dim; \
 		                            bg[n] = (ON) ? (C) : g_ui.panel2; n++; } while (0)
 		PILL("3D", s3d, THEME_GAME_B); PILL("DoF", dof, g_ui.acc); PILL("Bloom", bloom, g_ui.acc);
-		PILL("Light", light, g_ui.acc); if (vivid) PILL("Vivid", 1, g_ui.acc);
+		PILL("Light", light, g_ui.acc);
+		PILL("Tilt", g_prefs.tiltLevel > 0, g_ui.acc);   // right after Light: the enhance pills stay grouped
+		if (vivid) PILL("Vivid", 1, g_ui.acc);
 		PILL(touchMode == 2 ? "Smart" : (touchMode == 1 ? "Pad" : "Touch Off"), touchMode != 0, THEME_GAME_A);
 		PILL(wlOn ? "Wireless" : (netOn ? "Net" : "Link"), (linkOn || netOn || wlOn), g_ui.acc);
 		#undef PILL
-		float pw[7], tw = 0.0f;
+		float pw[8], tw = 0.0f;
 		for (int i = 0; i < n; i++) { pw[i] = assets_text_w(buf, FNT_JBM_MED, labs[i], 8.0f) + 12.0f; tw += pw[i] + 5.0f; }
 		float x = (400.0f - tw) / 2.0f;
 		for (int i = 0; i < n; i++) {
@@ -1681,6 +1994,20 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	bool menuOpen = false;
 	bool workersRunning = false;   // pipeline: a non-link frame is computing while we render the last
 	DepthSnap depth3d = { false };  // top game's overworld state for stereoscopic depth (M2)
+	// ---- phase 14 HD-2D tilt: per-session state (SPEC-integration I2.1/I2.8) ----
+	// One tween per SCREEN, not per game: the gates are per screen, and [1] (the bottom) stays
+	// pinned flat in this slice (R4.8.1 — it is the touch controller). Driven by the WALL CLOCK,
+	// not a frame counter: the render loop is capped to 60 fps but not floored (main.c:2805 only
+	// waits when UNDER budget), so a frame-counted tween would visibly run slow under exactly the
+	// load tilt adds (I2.2 — do NOT "fix" this to match dofLvl's fixed per-frame increments).
+	TiltTween tiltTw[2];
+	tilt_tween_reset(&tiltTw[0]);
+	tilt_tween_reset(&tiltTw[1]);
+	u64 tiltLastMs = osGetTime();
+	// Slice T3: the gate's game-RAM inputs, per SCREEN. Filled in the parked window from the two
+	// GameStates the gs-logger block already reads (I1.1/I1.2); px = -1 and every flag 0 means a
+	// frame that never fills it (or a game with no profile) gates tilt OFF — fail-safe by init.
+	TiltSnap tiltSnap[2] = { { 0, 0, 0, 0, -1 }, { 0, 0, 0, 0, -1 } };
 	gs_log_reset();                 // fresh game-state instrumentation log for this play session
 	touch_log_reset();              // fresh touch-event instrumentation log for this play session
 	diag_wd_session_reset();        // D1: fresh watchdog episode + kill-switch check for this session
@@ -2040,6 +2367,22 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					// re-read"); game_read fills *out (memset + sentinels) even when it returns false.
 					bool gsTopOk = game_read(gsTop, gpTop, &gst);
 					bool gsBotOk = game_read(gsBot, gpBot, &gsb);
+					{   // ---- phase 14 slice T3: the tilt gate's snapshot (SPEC-integration I1.1/I1.2)
+						// Two struct copies off reads that ALREADY happened, in the window where the
+						// workers are parked (main.c:2134 "touch RAM access safe"). gst/gsb are already
+						// screen-mapped by the gsTop/gsBot swap above, so index = SCREEN. game_read fills
+						// *out with memset + sentinels even when it returns false (gamestate.c:87-92), so
+						// the !ok case lands as ctx = GCTX_NONE / px = -1 — belt and braces for G5/G7.
+						const GameState* gsFor2[2] = { &gst, &gsb };
+						const bool       okFor2[2] = { gsTopOk, gsBotOk };
+						for (int sc = 0; sc < 2; sc++) {
+							tiltSnap[sc].ok       = okFor2[sc] ? 1 : 0;
+							tiltSnap[sc].ctx      = (uint8_t)gsFor2[sc]->ctx;
+							tiltSnap[sc].sb1Valid = gsFor2[sc]->sb1Valid ? 1 : 0;
+							tiltSnap[sc].textDlg  = gsFor2[sc]->textDlg ? 1 : 0;
+							tiltSnap[sc].px       = (int16_t)gsFor2[sc]->px;
+						}
+					}
 #if CTL_D4_ENABLE || CTL_D5_ENABLE
 					// ---- D4 file-driven tile-exact movement (SPEC-control-replay.md §D4 / C.4)
 					// + D5 record/replay, which share this one CtlIn snapshot and injection seam.
@@ -2115,6 +2458,15 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 						gd.headMin = depth3d.headMin; gd.headMax = depth3d.headMax;
 						gd.tallOk = depth3d.tallOk; gd.tallFail = depth3d.tallFail; gd.orderOk = depth3d.orderOk ? 1 : 0;
 						gd.s3d = (osGet3DSliderState() > 0.03f && !menuOpen) ? 1 : 0;          // stereoscopic engaged this frame (read-only)
+						// phase 14 (I6.4): the tilt actually in force, so a hardware photo can be read
+						// against the gate. Both screens ride this TOP row (gs_log_sample only gets a
+						// depth block for screen 0). These are the PREVIOUS frame's settled values —
+						// this block runs in the parked window and tilt_tween_step runs later, in the
+						// render phase — i.e. the state of the frame the player just saw, which is
+						// exactly what a photo shows. LOGGING ONLY; nothing reads it back.
+						gd.tiltLvl    = (uint8_t)tiltTw[0].level;
+						gd.tiltAngTop = tiltTw[0].ang;
+						gd.tiltAngBot = tiltTw[1].ang;
 						// injKeys carries the TOP game's script mask so D4 injection shows up in the same
 						// timeline as ctx/geo (D4.14 — free correlation, no new log).
 						gs_log_sample(gsTop, gpTop, &gst, 0, (u16)(swapped ? ckB : ckA), &gd, (uint32_t)nowMs);   // screen 0 = top/3D
@@ -2277,15 +2629,27 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 				int pkind = PT[menuRow].kind;
 				if (pkind == PK_SEG && (segSet >= 0 || adj)) {
 					int cur, n = PT[menuRow].nseg;
+					// I4.6 — THE TRAP: both of these switches end in `default:` reading/WRITING
+					// g_prefs.padEdge, so a new PK_SEG without its own case does not fail loudly, it
+					// silently re-skins the virtual gamepad. ACT_TILT gets an explicit case in all
+					// four (two here, two in run_settings).
 					switch (act) { case ACT_SCALE_TOP: cur=scaleMode[0]; break; case ACT_SCALE_BOT: cur=scaleMode[1]; break;
 						case ACT_FILTER: cur = smooth[swapped?(focused^1):focused]; break; case ACT_HUD: cur=hudMode; break;
 						case ACT_AUDIOMODE: cur=audioMode; break; case ACT_TOUCHMODE: cur=touchMode; break;
+						case ACT_TILT: cur=g_prefs.tiltLevel; break;
 						default: cur=g_prefs.padEdge; break; }
 					cur = (segSet >= 0) ? segSet : ((cur + adj + n) % n);
 					switch (act) { case ACT_SCALE_TOP: scaleMode[0]=cur; break; case ACT_SCALE_BOT: scaleMode[1]=cur; break;
 						case ACT_FILTER: smooth[swapped?(focused^1):focused]=cur; break; case ACT_HUD: hudMode=cur; break;
 						case ACT_AUDIOMODE: audioMode=cur; audio_reset_stream(); break; case ACT_TOUCHMODE: touchMode=cur; break;
+						case ACT_TILT: g_prefs.tiltLevel=cur; break;
 						default: g_prefs.padEdge=cur; break; }
+					// I4.14: name the two things a player cannot see from the row itself — that the
+					// effect is overworld-only (PHASE.md invariant 5), and that an Old 3DS keeps the
+					// SETTING but not the effect (G2 clamps the LIVE level only, I5.1/I5.2).
+					if (act == ACT_TILT)
+						snprintf(status, sizeof status, isN3DS ? "Tilt: %s (overworld only)" : "Tilt: %s — New 3DS only",
+						         TILT_NAMES[cur]);
 					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
 					activate = false;
 				}
@@ -2590,7 +2954,82 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		float slider3d = osGet3DSliderState();
 		bool s3dOn = slider3d > 0.03f && !menuOpen && s3dEnabled;   // 3D engaged AND not in the menu; else plain 2D (gates every 3D effect)
 		bool pop3d = s3dOn && depth3d.overworld && topG->core;
-		bool uipop = s3dOn && depth3d.nui > 0 && topG->core;   // BG0 panels pop in ANY context
+
+		// ---- phase 14 slice T3: the HD-2D tilt GATE + TWEEN (SPEC-integration §1, §2, §3, §5) ----
+		// The gate is now the real G1-G11 predicate, evaluated PER SCREEN by tilt_target_level()
+		// in tilt.c — the ONE place any of those rules lives (I1.11), enumerated exhaustively by
+		// test_tilt TEST 1-3. There is deliberately NO gating logic in this block: it fills a flat
+		// struct of observable state and asks. Per screen and not "the focused game" (I1.8): the
+		// data for both is already in hand from the same parked window, every other display
+		// property here is already per screen (scaleMode[2]/smooth[2]/hudMode), and a shared gate's
+		// failure mode is visible and wrong — game A opens a battle and game B's quietly-overworld
+		// screen snaps flat for no reason the player can see.
+		// Slice T4 lands the LEVEL: g_prefs.tiltLevel, the ENHANCE-tab PK_SEG row, persisted in
+		// Settings.tilt (§4). It ships at 0, so G1 fires and the whole path stays inert until the
+		// user raises it — nothing about the shipped default frame changed with this slice.
+		int tiltLvl[2];
+		{
+			TiltGateIn gi;
+			// tiltOk folds in the no-shader / no-VRAM fallback (R3.5.3): with the shader or the
+			// vertex arena missing, the SAVED level is presented to the gate as 0, so the tween
+			// parks at exactly 0.0f, tilt_active() is false and the frame is the flat path —
+			// PHASE.md invariant 1's "a no-shader / no-VRAM fallback returns to the flat path",
+			// with no second check bolted on further down.
+			gi.userLevel     = tiltOk ? g_prefs.tiltLevel : 0;
+			gi.menuOpen      = menuOpen ? 1 : 0;                 // G3
+			gi.wlOn          = wlOn ? 1 : 0;                     // G4 (linkOn deliberately absent)
+			gi.netOn         = netOn ? 1 : 0;
+			gi.isN3DS        = isN3DS ? 1 : 0;                   // G2 tier clamp (live only, I5.1)
+			gi.fsOn          = fsOn ? 1 : 0;                     // G11
+			gi.focScreen     = focScreen;
+			// G9 — bottom only; invariant 4. FIX PASS (2026-08-04, review finding 5): read the LIVE
+			// touchMode, not the frame-top snapshot tmEff (main.c:2057). The pause menu's preview
+			// buttons (ACT_PREVIEW_PAD / ACT_PREVIEW_SMART) set touchMode AND clear menuOpen later
+			// in the SAME frame, so on that one frame the stale tmEff still said OFF while menuOpen
+			// already said false: G3 had let go and G9 was not yet armed, the target jumped back up
+			// to the user level, and tilt_tween_step RETARGETED the bottom screen upward — turning
+			// the ~100 ms of residual tween into a fresh 250 ms segment of up-to-5-degree tilt with
+			// smart touch already live over it, mapped by the FLAT touch_to_gba inverse. The two
+			// expressions are otherwise identical: tmEff only substitutes TOUCH_PAD for TOUCH_SMART
+			// in single-game mode (main.c:2057), which can neither produce nor consume TOUCH_OFF.
+			// TEST 19 pins the sequence.
+			gi.touchActive   = (touchMode != TOUCH_OFF) ? 1 : 0;
+			gi.stereoEngaged = pop3d ? 1 : 0;                    // G10 — top only; stereo wins
+			for (int sc = 0; sc < 2; sc++) {                     // 0 = top, 1 = bottom (SCREEN)
+				gi.screen   = sc;
+				gi.ok       = tiltSnap[sc].ok;                   // G5 — unmapped game => never tilt
+				gi.ctx      = tiltSnap[sc].ctx;                  // G6 — GCTX_OVERWORLD only
+				gi.sb1Valid = tiltSnap[sc].sb1Valid;             // G7 — CtlIn.fieldValid's predicate
+				gi.px       = tiltSnap[sc].px;
+				gi.textDlg  = tiltSnap[sc].textDlg;              // G8 — a script is talking
+				tiltLvl[sc] = tilt_target_level(&gi);
+			}
+			// Stepped EVERY frame for BOTH screens, gate open or shut — which is what makes every
+			// gate change a 250 ms tween instead of a snap (I2.5, PHASE.md invariant 5). This sits
+			// below the menu split but nowMs (main.c:2014) is read ABOVE it, so the tween keeps
+			// running with the pause menu open and a menu-open tilt tweens DOWN rather than
+			// vanishing. dtMs is clamped to 100 ms inside tilt_tween_step (I2.3) so an apt_hook
+			// suspend/resume steps once instead of teleporting the angle.
+			float dtTilt = (float)(nowMs - tiltLastMs); tiltLastMs = nowMs;
+			for (int sc = 0; sc < 2; sc++)
+				tilt_tween_step(&tiltTw[sc], tiltLvl[sc], tilt_angle_deg_for_level(tiltLvl[sc]), dtTilt);
+		}
+		// THE invariant-1 check, once per screen: level > 0 OR angle > 0 (tween included).
+		bool tiltTop = tilt_active(&tiltTw[0]);
+		bool tiltBot = tilt_active(&tiltTw[1]);
+		TiltView tiltVw, tiltVwB;                 // built only when engaged: a tilt-off frame pays nothing
+		if (tiltTop) tilt_view_init(&tiltVw,  tiltTw[0].ang * TILT_DEG2RAD,
+		                            (float)GBA_W, (float)GBA_H, TILT_COVER_MIX);
+		if (tiltBot) tilt_view_init(&tiltVwB, tiltTw[1].ang * TILT_DEG2RAD,
+		                            (float)GBA_W, (float)GBA_H, TILT_COVER_MIX);
+		// R4.0.1: a pass that is not yet tilt-aware is EXCLUDED while the tilt is active — never
+		// drawn flat over a tilted base (a flat overlay on a tilted ground is visibly mis-registered
+		// and reads as a bug). Slice T2 ships step 5 (the base mesh) only, so all five composites
+		// are excluded. They cannot co-occur with a SETTLED tilt anyway (G10 above, plus every one
+		// of them requires s3dOn) — but they DO overlap during the 250 ms tween-out after the 3D
+		// slider comes up, which is exactly the frame R4.0.1 is about.
+		bool popPass = pop3d && !tiltTop;
+		bool uipop = s3dOn && depth3d.nui > 0 && topG->core && !tiltTop;   // BG0 panels pop in ANY context
 		// Text-aware DoF: kill a band's blur the moment text/UI shows under it (BG0 scan + RAM
 		// signals), ease back in afterwards (fast-out ~3 frames, slow-in ~12 -> no flicker).
 		dofLvlTop += (depth3d.overworld && !depth3d.textTop) ? 0.08f : -0.34f;
@@ -2599,18 +3038,33 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		if (dofLvlBot > 1.0f) dofLvlBot = 1.0f; else if (dofLvlBot < 0.0f) dofLvlBot = 0.0f;
 		bloomLvl += (depth3d.overworld && !depth3d.textTop && !depth3d.textBot) ? 0.08f : -0.34f;
 		if (bloomLvl > 1.0f) bloomLvl = 1.0f; else if (bloomLvl < 0.0f) bloomLvl = 0.0f;
-		bool dofPass = s3dOn && !vividOn && dofOn && dofTgtA && depth3d.overworld && topG->core && (dofLvlTop > 0.01f || dofLvlBot > 0.01f);
+		bool dofPass = s3dOn && !vividOn && dofOn && dofTgtA && depth3d.overworld && topG->core && (dofLvlTop > 0.01f || dofLvlBot > 0.01f) && !tiltTop;
 		bool bloomPass = s3dOn && !vividOn && bloomOn && bloomTgt && dofTgtA && depth3d.overworld && topG->core
-		              && focScreen == 0 && bloomLvl > 0.01f;   // focused top only (study budget rule)
-		bool litPass = s3dOn && !vividOn && lightOn && depth3d.overworld && topG->core;   // time-of-day grade
+		              && focScreen == 0 && bloomLvl > 0.01f && !tiltTop;   // focused top only (study budget rule)
+		bool litPass = s3dOn && !vividOn && lightOn && depth3d.overworld && topG->core && !tiltTop;   // time-of-day grade
 		LightEnv lenv; if (litPass) { time_t _tt = time(NULL); struct tm* _lt = localtime(&_tt);
 			lenv = light_for_hour(_lt ? _lt->tm_hour + _lt->tm_min / 60.0f : 12.0f); }
 		if (dofPass || bloomPass) dof_prepare(&topG->tex, dofTgtA);   // shared half-res copy (DoF + bloom source)
 		if (bloomPass) bloom_bright(&dofTexA, bloomTgt);              // bright-pass glow map, shared by both eyes
 		bool sharpTop = !smooth[0] && scaleMode[0] != SCALE_1X && preTgt;     // matches render_game's two-pass choice
 		u32 topMod = (focScreen == 0) ? 0xFFFFFFFFu : C2D_Color32(0x80, 0x80, 0x80, 0xFF);   // grid analog of dimTint
-		render_game(topG, top, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], topTint, clrBg);
-		if (pop3d) {   // M2: continuous grid warp (stretch, no tile tears); quad-warp fallback if no shader
+		// (sharpTop deliberately does NOT take R3.1.2's tilt clause: its only consumers —
+		//  warp_grid_eye / ui_pop_eye — are excluded while the tilt is up, and render_game makes
+		//  the tilt's own source choice internally.)
+		// Phase 14: BOTH eyes take the same projection. Stereo is off whenever the tilt is up
+		// (G10), so the right eye must be the identical tilted image or the two halves disagree.
+		// The right eye carries no dim tint, mirroring today's flat + warp calls (main.c:2662/2664).
+		// FIX PASS (review finding 2): identical TiltView + identical mode + identical 400x240 rect
+		// => identical geometry, so the right eye CLONES the left eye's slab instead of re-running
+		// the projection. When the tints also match (focused top screen: both 0xFFFFFFFF) the two
+		// slabs would be byte-identical, so the right eye simply draws slab 0 again — no vertex
+		// write and no GSPGPU_FlushDataCache at all for the third game image.
+		int trSlab = (topMod == 0xFFFFFFFFu) ? 0 : 1;
+		TiltDraw tiltTL = { &tiltVw, topMod,      0,      -1 };
+		TiltDraw tiltTR = { &tiltVw, 0xFFFFFFFFu, trSlab,  0 };
+		render_game(topG, top, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], topTint, clrBg,
+		            tiltTop ? &tiltTL : NULL);
+		if (popPass) {   // M2: continuous grid warp (stretch, no tile tears); quad-warp fallback if no shader
 			if (warpOk) warp_grid_eye(top, topG, &depth3d, scaleMode[0], +slider3d, sharpTop, &preTex, topMod, 0);
 			else        warp_scenery_eye(top, topG, &depth3d, scaleMode[0], +slider3d);
 			pop_eye(top, topG, &depth3d, scaleMode[0], +slider3d);   // LEFT eye shifts RIGHT -> pops OUT (ramp+char per sprite)
@@ -2647,7 +3101,29 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					  ui_text_r(txtBuf, fs2, rx, 1.5f, 0.38f, focScreen == 0 ? g_ui.acc : THEME_ON_DARK_DIM);
 					  rx -= ui_text_w(txtBuf, fs2, 0.38f) + 8.0f; }
 					if (s3dEnabled) { float cw = ui_text_w(txtBuf, "3D", 0.32f) + 12.0f;
-					                  ui_chip(txtBuf, "3D", rx - cw, 0.5f, THEME_GAME_B); }
+					                  ui_chip(txtBuf, "3D", rx - cw, 0.5f, THEME_GAME_B);
+					                  rx -= cw + 6.0f; }   // advance so the tilt chip lands to its LEFT
+					// Phase 14 / I6.1: the tilt chip exists so a hardware PHOTO is interpretable.
+					// Unlike the 3D chip (which shows only "enabled"), the COLOUR carries the gate:
+					// accent = engaged on the top screen this frame, dim = the setting is on but the
+					// gate is shut (menu / battle / dialog / touch / link / Old-3DS tier / stereo /
+					// frameskip). A photo of a tilted screen with a DIM chip is self-contradictory
+					// and localises a gate bug immediately. Top screen only (I6.3: the 320-px bottom
+					// bar carries clock+fps and the pause pill already says "is tilt on"), and it
+					// lives in the else branch of the netOn||wlOn split so it never competes with the
+					// net-diag readout — under a link tilt is forced off anyway (G4/I5.5).
+					// Costs nothing while tiltLevel == 0, which is the shipped default (I5.8).
+					if (g_prefs.tiltLevel > 0) {
+						// A table, not snprintf("TILT%d"): the loader already clamps tiltLevel to
+						// 0..3 but the compiler cannot see that, so the format would warn about a
+						// possible truncation into an 8-byte buffer — and this runs every HUD frame.
+						static const char* const TILT_CHIP[TILT_LEVELS] = { "TILT", "TILT1", "TILT2", "TILT3" };
+						int tl = g_prefs.tiltLevel < TILT_LEVELS ? g_prefs.tiltLevel : TILT_LEVELS - 1;
+						const char* tc = TILT_CHIP[tl];
+						float cw = ui_text_w(txtBuf, tc, 0.32f) + 12.0f;
+						rx -= cw;
+						ui_chip(txtBuf, tc, rx, 0.5f, tilt_active(&tiltTw[0]) ? g_ui.acc : THEME_ON_DARK_DIM);
+					}
 				}
 			} else if (focScreen == 0) {
 				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 400.0f, 4.0f, clrHi);
@@ -2659,8 +3135,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 
 		// top RIGHT eye = the SAME (top) game -> single-game stereoscopic depth. Player pops forward
 		// (positive disparity). (Per-eye dual-game retired; can return later as a menu toggle.)
-		render_game(topG, topR, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], NULL, clrBg);
-		if (pop3d) {
+		render_game(topG, topR, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], NULL, clrBg,
+		            tiltTop ? &tiltTR : NULL);
+		if (popPass) {
 			if (warpOk) warp_grid_eye(topR, topG, &depth3d, scaleMode[0], -slider3d, sharpTop, &preTex, 0xFFFFFFFFu, 1);
 			else        warp_scenery_eye(topR, topG, &depth3d, scaleMode[0], -slider3d);
 			pop_eye(topR, topG, &depth3d, scaleMode[0], -slider3d);   // RIGHT eye shifts LEFT
@@ -2672,7 +3149,21 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		if (menuOpen) draw_paused_summary(txtBuf, topName, botName, s3dEnabled, dofOn, bloomOn, lightOn, vividOn, touchMode, linkOn, netOn, wlOn);
 
 		// bottom screen (+ menu overlay when open). render_game leaves `bot` bound.
-		render_game(botG, bot, preTgt, &preTex, 320.0f, 240.0f, scaleMode[1], smooth[1], botTint, clrBg);
+		// Phase 14 slice T3: the bottom screen tilts too — but ONLY while every touch mode is off
+		// (rule G9), which is SPEC-integration §3.2's decision (b) SUPPRESSION, chosen over (a)
+		// "exclude the bottom screen entirely". (a) throws the effect away on half the device for a
+		// conflict that exists in one mode; (b) costs it exactly where the conflict is. touch_to_gba
+		// (main.c:621-631) is consulted only when tmEff == TOUCH_SMART, and G9 pins this screen's
+		// target to 0 whenever tmEff != TOUCH_OFF, so the hardware-validated touch mapping stays
+		// bit-identical to today BY CONSTRUCTION — PHASE.md invariant 4, machine-checked as an
+		// implication in test_tilt TEST 3. Switching touch on mid-session is just another gate
+		// change: the bottom tweens flat over 250 ms and stays there.
+		// The dim tint has to ride the VERTEX COLOUR under tilt (R5.4), exactly as topMod does for
+		// the top eyes — botTint is a citro2d tint and the tilt draw is not a citro2d draw.
+		u32 botMod = (focScreen == 1) ? 0xFFFFFFFFu : C2D_Color32(0x80, 0x80, 0x80, 0xFF);
+		TiltDraw tiltBL = { &tiltVwB, botMod, 2, -1 };   // slab 2 = the bottom image (R3.5.1), built
+		render_game(botG, bot, preTgt, &preTex, 320.0f, 240.0f, scaleMode[1], smooth[1], botTint, clrBg,
+		            tiltBot ? &tiltBL : NULL);
 		if (!menuOpen) {
 			if (hudMode & 2) {
 				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 14.0f, THEME_HUD_BAR);
@@ -2750,6 +3241,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					switch (c->act){case ACT_SCALE_TOP:cur=scaleMode[0];break;case ACT_SCALE_BOT:cur=scaleMode[1];break;
 						case ACT_FILTER:o=S_FILT;cur=smooth[fsd];break;case ACT_HUD:o=S_HUD;cur=hudMode;break;
 						case ACT_AUDIOMODE:o=S_AUD;cur=audioMode;break;case ACT_TOUCHMODE:o=S_TCH;cur=touchMode;break;
+						case ACT_TILT:o=TILT_NAMES;cur=g_prefs.tiltLevel;break;   // phase 14 (I4.6 label table)
 						default:o=S_EDG;cur=g_prefs.padEdge;break;}
 					assets_seg(txtBuf, x, y, w, h, o, c->nseg, cur, g_ui.ink, g_ui.dim);
 					if (sel) ui_border(x, y, w, h, g_ui.acc, 1.5f);
@@ -2927,13 +3419,16 @@ static void run_settings(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextB
 		int act = PT[row].act, pk = PT[row].kind;
 		if (pk == PK_SEG && (segSet >= 0 || adj)) {
 			int cur, ns = PT[row].nseg;
+			// I4.6: the same `default: ... = g_prefs.padEdge` trap as the pause menu, twice more.
 			switch (act) { case ACT_SCALE_TOP: cur=scaleMode[0]; break; case ACT_SCALE_BOT: cur=scaleMode[1]; break;
 				case ACT_FILTER: cur=smooth[0]; break; case ACT_HUD: cur=hudMode; break; case ACT_AUDIOMODE: cur=audioMode; break;
-				case ACT_TOUCHMODE: cur=touchMode; break; default: cur=g_prefs.padEdge; break; }
+				case ACT_TOUCHMODE: cur=touchMode; break; case ACT_TILT: cur=g_prefs.tiltLevel; break;
+				default: cur=g_prefs.padEdge; break; }
 			cur = (segSet >= 0) ? segSet : ((cur + adj + ns) % ns);
 			switch (act) { case ACT_SCALE_TOP: scaleMode[0]=cur; break; case ACT_SCALE_BOT: scaleMode[1]=cur; break;
 				case ACT_FILTER: smooth[0]=smooth[1]=cur; break; case ACT_HUD: hudMode=cur; break; case ACT_AUDIOMODE: audioMode=cur; break;
-				case ACT_TOUCHMODE: touchMode=cur; break; default: g_prefs.padEdge=cur; break; }
+				case ACT_TOUCHMODE: touchMode=cur; break; case ACT_TILT: g_prefs.tiltLevel=cur; break;
+				default: g_prefs.padEdge=cur; break; }
 			SETSAVE();
 		} else if (pk == PK_STEP && adj) { int* v = (act==ACT_VOLA)?&volA:&volB; *v += adj*32; if(*v<0)*v=0; if(*v>256)*v=256; SETSAVE(); }
 		else if (activate) {
@@ -2951,6 +3446,13 @@ static void run_settings(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextB
 		C2D_TargetClear(top, g_ui.bg); C2D_SceneBegin(top);
 		assets_text(txtBuf, FNT_SG_BOLD, "Settings", 20.0f, 20.0f, 20.0f, g_ui.text);
 		assets_text(txtBuf, FNT_JBM_MED, "configure before you pick a game", 22.0f, 48.0f, 9.0f, g_ui.dim);
+		// Phase 14 / I5.2: on an Old 3DS the TILT row stays visible AND adjustable — the preference
+		// must round-trip so a card moved to a New 3DS gives the user what they picked — but the
+		// live level is clamped to 0 by gate rule G2. Say so instead of letting it look broken.
+		// This is the one place s_isN3DS earns its keep (I4.13: run_settings takes no model arg).
+		if (g_prefs.tiltLevel > 0 && !s_isN3DS)
+			assets_text(txtBuf, FNT_JBM_MED, "Tilt is set, but this is an Old 3DS - it stays flat.",
+			            22.0f, 62.0f, 9.0f, C2D_Color32(0xFF, 0x80, 0x40, 0xFF));
 		assets_text(txtBuf, FNT_JBM_MED, "L / R  switch tab", 22.0f, 210.0f, 9.0f, g_ui.dim);
 		assets_text(txtBuf, FNT_JBM_MED, "B  done", 22.0f, 224.0f, 9.0f, g_ui.dim);
 
@@ -2970,7 +3472,8 @@ static void run_settings(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextB
 				static const char* const T[3]={"Off","Gamepad","Smart"};static const char* const E[3]={"Round","Soft","Sharp"};
 				const char* const* o=A; int cur=0; switch(c->act){case ACT_SCALE_TOP:cur=scaleMode[0];break;case ACT_SCALE_BOT:cur=scaleMode[1];break;
 				case ACT_FILTER:o=F;cur=smooth[fsd];break;case ACT_HUD:o=H;cur=hudMode;break;case ACT_AUDIOMODE:o=M;cur=audioMode;break;
-				case ACT_TOUCHMODE:o=T;cur=touchMode;break;default:o=E;cur=g_prefs.padEdge;break;}
+				case ACT_TOUCHMODE:o=T;cur=touchMode;break;case ACT_TILT:o=TILT_NAMES;cur=g_prefs.tiltLevel;break;
+				default:o=E;cur=g_prefs.padEdge;break;}
 				assets_seg(txtBuf,x,y,w,h,o,c->nseg,cur,g_ui.ink,g_ui.dim); if(sel) ui_border(x,y,w,h,g_ui.acc,1.5f); break; }
 			case PK_STEP: { int v=(c->act==ACT_VOLA)?volA:volB; assets_fill9("fill-secondary-r8",x,y+2,20,h-4,7.0f);
 				assets_text_c(txtBuf,FNT_SG_BOLD,"-",x+10,y+2,12.0f,g_ui.text); assets_fill9("fill-secondary-r8",x+w-20,y+2,20,h-4,7.0f);
@@ -3037,6 +3540,10 @@ int main(int argc, char** argv) {
 	APT_SetAppCpuTimeLimit(80);
 	aptHook(&s_aptCookie, apt_hook, NULL);   // pause emulation/render while backgrounded
 	bool speedupActive = (clkOn * 100 < clkOff * 65);   // 2nd run >~1.5x faster => speedup engaged
+	// Phase 14 (I4.13 / I5.3): publish both to the file-scope statics so run_settings — which has
+	// no model parameter and must not grow one — and the gs-log header can read them.
+	s_isN3DS = isN3DS; s_speedupActive = speedupActive;
+	gs_log_set_env(isN3DS, speedupActive);   // stamped into the gs-log header (I5.3)
 
 	char perfWarn[160] = "";
 	if (!isN3DS)
@@ -3053,6 +3560,7 @@ int main(int argc, char** argv) {
 	C2D_Prepare();
 	assets_init();   // device-native art pack (plates/widgets/fonts); code-drawn fallback if absent
 	warp_grid_init();   // M2 grid-warp shader (falls back to the quad warp if it fails)
+	tilt_init();        // phase 14 tilt shader + vertex arena (AFTER warp_grid_init: reuses warpIbo)
 	audio_init();   // ndsp; silently no-ops if dspfirm.cdc isn't present
 	netlink_init(); // wireless link (UDS); no-ops without the .cia's nwm::UDS grant
 	s_hasPtm = R_SUCCEEDED(ptmuInit());   // battery level for the HUD
@@ -3095,6 +3603,7 @@ int main(int argc, char** argv) {
 	audio_exit();
 	if (s_hasPtm) ptmuExit();
 	C2D_TextBufDelete(txtBuf);
+	tilt_fini();
 	warp_grid_fini();
 	C2D_Fini();
 	C3D_Fini();

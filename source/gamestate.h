@@ -144,6 +144,17 @@ typedef struct {
 	short   tallOk, tallFail;              // sprites where head exceeds feet by ~POP3D_STANDUP (tall-is-taller) vs not
 	uint8_t orderOk;                       // 1 = on-screen set is MONOTONIC in screen-y vs feet disparity (front-is-front)
 	uint8_t s3d;                           // 1 = stereoscopic 3D engaged this frame (slider>thresh & not in menu); 0 = flat
+	// --- phase 14 HD-2D tilt (LOGGING ONLY; SPEC-integration I6.4) — the level/angle actually in
+	// force, so a hardware photo of a tilted screen can be read against the gate that allowed it.
+	// BOTH screens ride the TOP row because gs_log_sample is only called with depth != NULL for
+	// screen 0 (main.c). Appended, size-tolerantly, exactly as the header note above licenses.
+	// Values are the previous frame's settled tween (the gs sample runs in the parked window, the
+	// tween is stepped later in the render phase) — i.e. the angle of the frame just displayed.
+	// NOTE: no tilt EDGE trigger was added (I6.6) — the ring is edge-triggered on ctx/cb2/link plus
+	// a 600-frame and a 2 s heartbeat; tilt changes are already correlated with the ctx edges that
+	// cause them, and a tween edge would emit ~15 rows per transition into a 1024-entry ring. ---
+	uint8_t tiltLvl;                       // effective (clamped) level in force on the TOP screen, 0..3
+	float   tiltAngTop, tiltAngBot;        // tweened angle in DEGREES per screen (0 = flat)
 } GsDepth;
 
 // Profile for a core's ROM (by header game code), or NULL if unknown.
@@ -157,6 +168,12 @@ bool game_read(GbaCore* c, const GameProfile* p, GameState* out);
 // gMain.callback2 changes, or a ~10s heartbeat elapses, per screen-slot. Flushed to one SD text file
 // on gamestate_log_dump. Mirrors the netlog ring + one-shot-dump pattern (no per-frame file I/O).
 void        gs_log_reset(void);   // clear the ring + per-slot edge cache (call once when a session starts)
+// Phase 14 / SPEC-integration I5.3: stamp the CONSOLE MODEL and whether the 804 MHz + L2 speedup
+// actually engaged into the dump header. Tilt is deliberately NOT clamped on the speedup probe (a
+// .3dsx from the Homebrew Launcher can never claim it, so clamping would make the effect
+// un-iterable on the whole make-and-3dslink dev loop) — instead the fact is recorded, so a slow
+// hardware photo is never mistaken for a tilt cost. Call once at startup; header-only, no ring row.
+void        gs_log_set_env(int isN3DS, int speedupActive);
 // nowMs = a wall-clock millisecond stamp (osGetTime). Drives a WALL-CLOCK heartbeat so a FROZEN/STUCK game
 // (emulated clock stopped — e.g. FireRed hanging on connect) keeps emitting rows; an emulated-frame heartbeat
 // alone goes silent the instant the game stops advancing, hiding exactly the stuck state we want to capture.

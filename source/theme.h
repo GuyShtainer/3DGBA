@@ -42,6 +42,14 @@ typedef struct {
 	int gameMode;         // 0 = dual (two games), 1 = single (one game + touch controller)
 	int padColor;         // gamepad tint index into PAD_COLORS[]
 	int padEdge;          // 0 = round, 1 = soft, 2 = sharp
+	// phase 14 (HD-2D diorama tilt, SPEC-integration I4.8): the SAVED preference, 0 = Off ..
+	// TILT_LEVELS-1. Lives here rather than in the settings_load/save parameter list for the
+	// documented reason above — zero call-site churn across the ~12 settings_save() calls. The
+	// LIVE level is clamped per tier (Old 3DS / link / frameskip / stereo) inside
+	// tilt_target_level(); this value is NEVER rewritten by a clamp (I5.1, gen1recomp
+	// Game.lua:841-857), so an SD card moved to a New 3DS still has what the user picked.
+	// Ships 0 (I5.8): unlike dofOn/bloomOn/lightOn this effect is not hardware-proven yet.
+	int tiltLevel;
 } UiPrefs;
 
 extern Theme   g_ui;                              // the ACTIVE theme (read by all UI draws)

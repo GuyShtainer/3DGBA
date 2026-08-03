@@ -2,6 +2,18 @@
 
 _Verified design study (2026-06-10). PICA200/cost-checked._
 
+> **SHIPPED (2026-08-04) — the perspective "diorama" tilt is built.** Phase 14 landed the piece
+> this study kept circling: a gated, tweened, presentation-only perspective tilt of the composited
+> GBA frame (`Off / Low / Mid / Max` = 0/10/15/20°, ENHANCE-tab row, **default Off**, hardware-
+> unproven). Source of truth from here on: **`docs/phase14-tilt/PHASE.md`** (contract + the eight
+> binding invariants), `SPEC-render.md` (the draw + the pass budget), `SPEC-integration.md` (the
+> G1–G11 gate, UI, tests), `BUILDLOG.md` (per-slice), and the teardown it is built on,
+> `docs/kb/external/gen1-render.md`. Code: `source/tilt.{c,h}` (pure C, host-tested by
+> `test/host/test_tilt.c`), `source/tilt.v.pica`, and the draw block at `main.c` "Phase 14".
+> **§3 below is corrected by that phase — read the correction note in §3 before quoting its
+> vertex-grid paragraph.** Two of this study's §0 facts survived intact and did all the work: no
+> fragment shader, and no second emulation pass.
+
 I have everything I need. All findings are verified against live code and headers, the existing stereoscopic-depth KB (`emerald-3d-depth.md`) establishes the foundation (sprite-pop + layer-type warp on the single composited texture, no extra emulation pass), and this document layers HD-2D post-FX on top of that. I'll now produce the architecture document as my return value.
 
 ---
@@ -67,6 +79,35 @@ HD-2D decomposed and tagged against **our** inputs (impact ranked by Square Enix
 Building on the existing per-eye + depth-grid code. All passes run on the main thread between `C3D_FrameBegin/End` (`main.c:823`), reusing the offscreen target machinery (`preTex`/`preTgt`, `main.c:448-452`).
 
 **Stereo displacement — vertex-grid warp vs per-tile quad shift.** The studies recommend replacing today's per-quad `warp_scenery_eye`/`pop_eye` (which shift whole 16×16 quads and **tear at edges**) with a **vertex-grid warp**: tessellate the 240×160 frame into a grid (15×10=150 quads, or 30×20=600 at 8px), and in a custom vertex shader offset each vertex X by `sign(eye)·disparity·depth(vertex)`, depth from `tdepth`. Shared verts → depth discontinuities **stretch** the texture instead of leaving a hole → soft stretch, not hard tear. This is strictly better quality at ~0 net GPU cost (vertex work is the PICA200's strong suit). **Important integration cost:** this needs a custom `.v.pica` vertex shader and steps **outside citro2d** (C2D owns its own shader + texenv and resets them on `C2D_Prepare`/`C2D_Flush`) — you draw the warp with raw C3D, then `C2D_Prepare` again for HUD. That sequencing is the real cost, not GPU time. **Verdict: a worthwhile M2, but it's a genuine new render pass alongside C2D, not a flag flip.**
+
+> **CORRECTION (2026-08-04, phase 14 — the shipped finding is simpler than this paragraph).**
+> Two claims above need amending now that the raw-C3D path actually exists in-tree:
+>
+> 1. **A vertex grid is not required for perspective, and never was.** The paragraph above assumes
+>    that any "3D-looking" deformation of the frame needs a tessellated mesh. For a **ground-plane
+>    tilt** that is false: the map is a **planar homography**, and `u·q`, `w·q` and `q` are all
+>    **affine over the whole plane**, so *any* tessellation — 600 quads or **4 vertices** —
+>    reproduces the identical map with no seam and no error (`SPEC-render.md` R1.4, from
+>    `gen1-render.md`'s teardown of `Tilt.groundPoint`). gen1recomp's premultiply-UV-then-divide
+>    GLSL is not a technique we need to copy; it is them **reconstructing** perspective-correct
+>    interpolation because LÖVE is a 2D API. **The PICA200 gives it away free in fixed function the
+>    moment clip-space `w` is real** — which is exactly why the shipped tilt needs no fragment
+>    shader (we have none), no projective texcoords and no extra render target. What shipped
+>    *does* reuse the warp grid, but only because it was already built and already free, and
+>    because those shared vertices are what a future per-vertex stereo displacement will ride.
+> 2. **"That sequencing is the real cost" is now a measured-in-principle known, not a risk.** The
+>    raw-C3D escape/return around citro2d (`C2D_Flush` → `C3D_FrameDrawOn` → `C3D_BindProgram` →
+>    AttrInfo/BufInfo → TexEnv → restore) is proven in-tree and is what both `warp_grid` and the
+>    phase-14 tilt use. The residual cost is **one extra escape per game image**, and with
+>    stereoscopic 3D on that is **three** per frame, not one — the correction is written up in
+>    `SPEC-render.md` R3.4.4. Note also that the tilt needed its **own** `.v.pica`: `warp.v.pica`
+>    emits `z=0, w=1` (affine), and the stereo warp depends on that, so real-`w` perspective is a
+>    sibling shader, never an edit to the existing one.
+>
+> The rest of §3 — the DoF/bloom multi-pass reasoning, the pass table, and the canary — is
+> unchanged and still governs. The one line in the table to read differently is the vertex-grid
+> row: a perspective tilt is **one ordinary textured draw**, so the "~0 net" estimate was right
+> for the wrong reason.
 
 **DoF/bloom — texenv multi-pass, NOT a single trick.** TEV cannot do dependent texture reads (no per-pixel UV offset), so blur = real downsample + separable passes. Cheap fakes that fit: bilinear "free blur" (downscale through a half-res target with `GPU_LINEAR`, upscale back = ~1 extra pass, reusing the `preTex`/`preTgt` machinery + a *new* half-res scratch target — you cannot blur in-place on the one target you own); tilt-shift = blur only top+bottom bands; 2-tap TEV `GPU_INTERPOLATE` "poor man's blur." Convincing depth-graded DoF wants ≥2 blur radii (near AND far) → ~4-6 passes, not 2-3. Bloom = bright-pass (`GPU_SUBTRACT` threshold) → quarter-res separable blur → additive (`C3D_AlphaBlend`) → ~3-4 passes.
 

@@ -15,8 +15,10 @@ Theme g_ui = {
 };
 
 // Persisted UI prefs with shipped defaults (Indigo, dual mode, gold pad, round edges; the custom
-// seed = the "Teal" chip 205,168 + contrast 14).
-UiPrefs g_prefs = { THEME_INDIGO, 205, 168, 14, 0, 0, 0 };
+// seed = the "Teal" chip 205,168 + contrast 14). The trailing 0 is phase 14's tiltLevel = Off
+// (SPEC-integration I5.8: the other HD-2D effects default ON because they are hardware-proven;
+// this one is not, so upgrading changes no existing user's frame budget).
+UiPrefs g_prefs = { THEME_INDIGO, 205, 168, 14, 0, 0, 0, 0 };
 
 const char* const THEME_NAMES[THEME_PRESET_COUNT] = {
 	"Indigo + Gold", "Midnight OLED", "Daylight", "Per-game Duo", "Retro Purple", "Custom",
