@@ -36,7 +36,16 @@ enum {
 	DIAG_SITE_NET_COLLECT      = 1000,   // net_transfer_collect for(;;) 1ms poll (netlink.c ~410-423)
 	DIAG_SITE_NET_CMD_COLLECT  = 1100,   // net_cmd_collect for(;;) — state E only (netlink.c ~465-473)
 	DIAG_SITE_NET_ROUND_WAIT   = 1200,   // net_round_wait joiner pacing barrier (netlink.c ~505-511)
-	DIAG_SITE_NET_RX_PASS      = 1300,   // net_rx_thread outer pass; iter = g_diagRxSeq (netlink.c ~795)
+	DIAG_SITE_NET_RX_PASS      = 1300,   // net_rx_thread outer pass — RESERVED, DELIBERATELY NOT STAMPED
+	                                     // (review fix 2026-08-03): the RX pass runs at ~2 kHz on a
+	                                     // healthy link and is the ONLY unconditional writer of
+	                                     // g_diagNetCrumb, so stamping it here starved the sites this
+	                                     // word exists to name — a worker parked in collect (site 1000,
+	                                     // stamped at ~1 kHz) was overwritten ~2 samples out of 3 and
+	                                     // every STUCK/HANG line read "netC=13xx" (the HEALTHY thread).
+	                                     // The RX heartbeat already has its own dedicated word
+	                                     // (g_diagRxSeq) and the crumb's iteration carried nothing the
+	                                     // seq does not. The ID stays allocated (decode tables, tests).
 	DIAG_SITE_NET_LOBBY_DRAIN  = 1400,   // net_ping_update lobby udsPullPacket drain (netlink.c ~270-285)
 	// g_diagSioCrumb — gbacore.c driver cross-call spin gates (the run-#4 wedge class)
 	DIAG_SITE_SIO_CELIO_GATE   = 2000,   // net_poll_celio link-ready gate; iter = gateHeldN (gbacore.c ~942)
@@ -70,15 +79,31 @@ enum {
 // The crumb words (defined in diag.c). volatile u32: single-word aligned stores/loads; writers
 // are the threads named in the site table above; cross-thread last-writer-wins races are benign
 // telemetry (SPEC D1.2). 0 = never stamped / bracket exited.
-extern volatile uint32_t g_diagNetCrumb;    // netlink.c wait loops   (sites 1000-1499)
-extern volatile uint32_t g_diagSioCrumb;    // gbacore.c driver gates (sites 2000-3299)
-extern volatile uint32_t g_diagMainCrumb;   // render-thread blockers (sites 4000-4299)
+//
+// FALSE SHARING (review fix 2026-08-03): the four words are written from THREE different cores —
+// the emulator worker (g_diagSioCrumb, on the frozen SIO poll path, ~10k-100k stores/s), the RX
+// thread pinned to another core (g_diagRxSeq, ~2k/s) and the render thread (g_diagMainCrumb).
+// Packed contiguously they landed in ONE 32-byte ARM11 L1 line (nm on the 0803 build:
+// 0x0049b628/62c/630/634), so every "benign" telemetry store invalidated the line in the other
+// two cores — an L1 miss + coherency transaction inside the loop whose pacing was tuned at
+// microsecond granularity in runs #6-#8. DIAG_CACHELINE gives each word its own line: the writing
+// core keeps it in Modified state and no other crumb's writer is disturbed.
+#if defined(__GNUC__) || defined(__clang__)
+#define DIAG_CACHELINE __attribute__((aligned(32)))   // ARM11 L1 line = 32 B
+#else
+#define DIAG_CACHELINE
+#endif
+extern volatile uint32_t DIAG_CACHELINE g_diagNetCrumb;    // netlink.c wait loops   (sites 1000-1499)
+extern volatile uint32_t DIAG_CACHELINE g_diagSioCrumb;    // gbacore.c driver gates (sites 2000-3299)
+extern volatile uint32_t DIAG_CACHELINE g_diagMainCrumb;   // render-thread blockers (sites 4000-4299)
 
 // RX-thread loop-seq (SPEC D1.3): incremented once per net_rx_thread outer pass. The RX thread
 // is the radio's heartbeat — g_diagRxSeq frozen while workers live = the radio thread wedged
 // (a distinct failure class from the resolved close-hang). Worker loop-seq = EmuInstance.frame
 // (main.c, pre-existing); render loop-seq = g_renderSeq (static in main.c).
-extern volatile uint32_t g_diagRxSeq;
+// Its own cache line (see DIAG_CACHELINE above): this is the counter a core-2 thread bumps ~2000
+// times a second while the trade worker runs on another core.
+extern volatile uint32_t DIAG_CACHELINE g_diagRxSeq;
 
 // --------------------------------------------------------------------------------------------
 // Watchdog state machine (SPEC D1.4) — pure functions over plain structs, host-tested. The
@@ -90,7 +115,14 @@ typedef struct {
 	uint32_t netCrumb, sioCrumb;                            // crumbs (pass-through to the line)
 	int      gateN, forceN;                                 // celio quick-reads (pass-through)
 	int      wl, seat;                                      // session context for the line (wl 0/1; seat -1/0/1)
+	int      who;                                           // DIAG_WD_WHO_* — which EPISODE emitted this
+	                                                        // line (see the two-episode note below)
 } DiagWdSample;
+
+// Episode owner, printed as the STUCK line's trailing `who=` token. Purely a label: the state
+// machine never reads it (it rides in the sample so the caller needs no extra argument).
+#define DIAG_WD_WHO_WORKER 0   // the emulator worker episode (the run-#4/#6 wedge class)
+#define DIAG_WD_WHO_RX     1   // the radio (RX-thread) episode
 
 typedef struct {
 	DiagWdSample last;       // seqs at the last progress edge
@@ -98,9 +130,18 @@ typedef struct {
 	uint8_t  fired;          // bitmask: bit0=1s bit1=4s bit2=12s emitted for this episode
 } DiagWd;
 
-// watchMask bits — which seqs count as "progress" (SPEC D1.7 arming): under wlOn only the
-// participant worker (+RX); under linkOn/netOn both workers (no RX thread there). mask==0 =
-// not armed: the step resets any episode and emits nothing.
+// watchMask bits — which seqs count as "progress" (SPEC D1.7 arming). mask==0 = not armed: the
+// step resets any episode and emits nothing.
+//
+// ONE EPISODE PER SUBSYSTEM (review fix 2026-08-03 — DEVIATION from SPEC D1.7's single wlOn mask).
+// diag_wd_step treats ANY watched seq advancing as progress, so ORing the free-running RX
+// heartbeat into the worker mask made D1 BLIND in exactly the session it is armed for: the RX
+// thread bumps g_diagRxSeq ~2000x/s on a core pinned away from the worker, so a wedged worker
+// (the run-#4/#6 class) reset the episode ~400 times between two 200 ms samples and no STUCK line
+// could ever be written. The symmetry broke the other way too — a live worker masked an RX wedge,
+// so NEITHER of the two failure classes D1.3 names was detectable. The caller therefore runs TWO
+// independent DiagWd episodes under wlOn (main.c): the participant worker (AF|AVF or BF|BVF) and
+// the radio (RX alone), each with its own escalation clock, tagged by DiagWdSample.who.
 #define DIAG_WD_AF   (1u << 0)   // emuA.frame (worker-A loop-seq)
 #define DIAG_WD_BF   (1u << 1)   // emuB.frame
 #define DIAG_WD_AVF  (1u << 2)   // core A produced-video-frame counter (gbacore_frame_counter)
@@ -115,7 +156,10 @@ int diag_wd_step(DiagWd* wd, uint32_t nowMs, const DiagWdSample* s, uint32_t wat
                  char* lineOut, size_t cap);
 
 // The exact STUCK line (SPEC D1.5, decimal everywhere; crumbs decode via DIAG_CRUMB_SITE/ITER):
-//   STUCK ms=<1000|4000|12000> rseq= aF= bF= aVf= bVf= rx= netC= sioC= gateN= forceN= wl= seat=\n
+//   STUCK ms=<1000|4000|12000> rseq= aF= bF= aVf= bVf= rx= netC= sioC= gateN= forceN= wl= seat= who=\n
+// `who=worker|rx` is APPENDED to the spec's field list (deviation recorded in BUILDLOG 2026-08-03,
+// review fix): both episodes append to the SAME wd file, so without it the artifact cannot say
+// which subsystem froze. Appended at the END, so every existing prefix-parse still works.
 // Exposed separately so the host test can golden-compare the bytes. Returns snprintf's result
 // (would-be length; output truncated to cap-1 + NUL when cap is too small — never overflows).
 int diag_stuck_format(char* out, size_t cap, uint32_t ms, const DiagWdSample* s);
@@ -212,8 +256,9 @@ int diag_hang_format(char* buf, size_t cap, const GbaCpuDump* d, uint32_t vf, ui
 // The HOST and JOIN files diff mechanically — the peer-view columns (clPB/clSelP/clPCard) are
 // the peer's state as locally known; the two-sided truth IS the HOST-vs-JOIN file diff.
 // The struct mirrors the SPEC D3.3 column list ONE FIELD PER COLUMN, in column order; main.c
-// fills it from the exports (gbacore_net_counters / net_event_get_stats / net_link_get_stats /
-// net_event_get_queue / net_link_get_rtt) + the participant GameState + the D2.1 vbl heartbeat.
+// fills it from the exports (gbacore_net_counters / net_event_get_stats_fast [ONE lock-free call —
+// the render thread must not take s_evLock at 60 Hz] / net_link_get_stats / net_link_get_rtt) +
+// the participant GameState + the D2.1 vbl heartbeat.
 // --------------------------------------------------------------------------------------------
 typedef struct {
 	// meta
@@ -260,6 +305,15 @@ typedef struct {
 	int      rxWordN, txFails, busyN;    // WORD plane: received words / send fails / TX-busy retries
 	int      peerUp;                     // unicast peer resolved 0/1
 } DiagCsvRow;
+
+// ROW CAP (review fix 2026-08-03 — a design gap in SPEC D3.5, which specs open-once + flush-256
+// but no bound). A measured row is 222 bytes + newline, one row per non-menu render frame => ~13
+// KB/s, ~800 KB/min, ~48 MB/hour of UNBOUNDED sdmc growth per console, for as long as the session
+// lives. A run-#13 pair sitting in the Cable Club for half an hour would write ~24 MB each. The
+// cap stops the writer (one final "# csv capped" comment line, then the file is closed and the
+// per-frame branch goes dormant) instead of filling the card. 108000 rows ~= 30 min at 60 fps
+// ~= 24 MB — far past any planned run, so a normal session never sees it.
+#define DIAG_CSV_MAX_ROWS 108000u
 
 // Both header lines (SPEC D3.3): line 1 = "# 3DGBA csv role=<HOST|JOIN> seat=<n> built=..." with
 // the D3.4 menu-gap disclosure; line 2 = the column-name header (comma count == DiagCsvRow field

@@ -83,6 +83,12 @@ static bool s_fprintPeerValid  = false;
 // forever. While the peer's surface has NOT arrived we send on every ping tick (~6 Hz, lobby only).
 #define FPRINT_POST_SENDS 3
 static int  s_fprintPost = FPRINT_POST_SENDS;
+// D6 TX refusals get their OWN counter (review fix 2026-08-03). They used to be folded into
+// s_pingSendFails — the counter net_ping_update returns as `sendFails` and wireless.c renders as
+// the lobby's busy/loss readout and gbacore's netlog prints as the ping send-fail column — so a
+// fingerprint that kept failing read as PING trouble and silently changed the meaning of a
+// pre-existing diagnostic. Reported through net_fprint_fails() (netlink.h) for the netlog.
+static int  s_fprintSendFails = 0;
 
 // --- Celio EVENT channel wire layout --------------------------------------------------------------
 // PK_WORD stays a dumb (seat,round)-keyed word pipe (untouched). The EVENT channel is a PARALLEL,
@@ -299,6 +305,7 @@ void net_session_close(void) {
 	// a lie next session). OUR surface is deliberately KEPT: wireless.c re-publishes it before every
 	// host/join, and keeping it means a netlog written after teardown still names our own side.
 	s_fprintPeerValid = false; s_fprintPeerHash = 0; s_fprintPost = FPRINT_POST_SENDS;
+	s_fprintSendFails = 0;                // D6's own TX-refusal counter is per-session, like the ping's
 	memset(s_fprintPeer, 0, sizeof s_fprintPeer);
 }
 
@@ -341,10 +348,11 @@ void net_ping_update(int* rttMs, int* drops, int* sendFails) {
 		}
 		// Throttle to ~6 Hz: keeps the UDS TX buffer unpressured. Unicast to the resolved peer (MAC-ACKed)
 		// once known; broadcast (lossy, best-effort) only before the peer is resolved.
-		if (++s_pingFrame % PING_EVERY_N == 0) {
-			u16 dst   = s_peerResolved ? s_peerNode : UDS_BROADCAST_NETWORKNODEID;
-			u32 flags = s_peerResolved ? UDS_SENDFLAG_Default
-			                           : (UDS_SENDFLAG_Default | UDS_SENDFLAG_Broadcast);
+		u32 pingFrame = ++s_pingFrame;
+		u16 dst   = s_peerResolved ? s_peerNode : UDS_BROADCAST_NETWORKNODEID;
+		u32 flags = s_peerResolved ? UDS_SENDFLAG_Default
+		                           : (UDS_SENDFLAG_Default | UDS_SENDFLAG_Broadcast);
+		if (pingFrame % PING_EVERY_N == 0) {
 			u32 seq = ++s_pingSeq;
 			int slot = (int)(seq % PING_RING);
 			DgbaLinkPkt ping; memset(&ping, 0, sizeof ping);
@@ -356,10 +364,16 @@ void net_ping_update(int* rttMs, int* drops, int* sendFails) {
 			} else {
 				s_pingSendFails++;                               // TX busy/refused: nothing sent, don't arm a phantom drop
 			}
-			// D6: piggyback ONE fingerprint on the same ~6 Hz tick — LOBBY ONLY (!s_rxRun), so the
-			// exchange is strictly BEFORE net_link_start and the in-link path never sees this type.
-			// Repeat until the peer's surface arrives, then FPRINT_POST_SENDS more (loss tolerance
-			// by repetition; no new reliability machinery, no round-trip inside the link).
+		}
+		// D6: ONE fingerprint per ~6 Hz period — LOBBY ONLY (!s_rxRun), so the exchange is strictly
+		// BEFORE net_link_start and the in-link path never sees this type. Repeat until the peer's
+		// surface arrives, then FPRINT_POST_SENDS more (loss tolerance by repetition; no new
+		// reliability machinery, no round-trip inside the link).
+		// ITS OWN TICK, half a period off the ping (review fix 2026-08-03): riding the SAME tick
+		// doubled the lobby's instantaneous TX pressure — two 16/20-byte datagrams back-to-back on
+		// one frame, every frame, until the peer's surface arrived — which can induce the very
+		// TX-busy refusal it then reports. Same total rate, spread out.
+		else if (pingFrame % PING_EVERY_N == PING_EVERY_N / 2) {
 			if (!s_rxRun && s_fprintLocalValid && (!s_fprintPeerValid || s_fprintPost > 0)) {
 				DgbaFprintPkt fp; memset(&fp, 0, sizeof fp);
 				fp.magic = 'G'; fp.type = PK_FPRINT;
@@ -368,7 +382,7 @@ void net_ping_update(int* rttMs, int* drops, int* sendFails) {
 				fp.hash  = s_fprintLocalHash;
 				Result fr = net_send_locked(dst, flags, &fp, sizeof fp);
 				if (R_SUCCEEDED(fr)) { if (s_fprintPeerValid && s_fprintPost > 0) s_fprintPost--; }
-				else s_pingSendFails++;                          // TX busy: counted like any other refused send
+				else s_fprintSendFails++;                        // D6's OWN counter — never the ping's
 			}
 		}
 	}
@@ -389,6 +403,8 @@ void net_fprint_set_local(const void* surface8, u64 hash) {
 	s_fprintLocalValid = true;
 	s_fprintPost       = FPRINT_POST_SENDS;   // fresh surface -> the peer must hear it again
 }
+
+int net_fprint_fails(void) { return s_fprintSendFails; }
 
 int net_fprint_peer(void* out8, u64* hash) {
 	if (!s_fprintPeerValid) return 0;
@@ -777,6 +793,39 @@ int net_event_get_queue(void) {
 	return q;
 }
 
+// D3 per-frame CSV (review fix 2026-08-03): the SAME six numbers as net_event_get_stats +
+// net_event_get_queue, read WITHOUT s_evLock — a pure benign-race telemetry read, the established
+// pattern in this codebase (gbacore_net_counters, the g_diag* crumbs).
+//
+// WHY: the CSV composes a row on the RENDER thread every frame, and it used to take s_evLock TWICE
+// per frame to do it. The RX thread holds that lock across RADIO I/O — it reassembles a fragment
+// and sends the cumulative ACK under the lock, and every ~16 ms it re-transmits the WHOLE un-ACKed
+// tail (one udsSendTo per fragment) under it — so a render frame landing in that window blocked on
+// a radio syscall, and the WORKER's own event path gained a third contender for the lock next to
+// the frozen trade path. Nothing here writes, and each field is one naturally-aligned u32 (single
+// ARM load), so the worst case is a row whose columns come from two adjacent instants — which is
+// exactly the accuracy contract every other CSV counter column already has.
+void net_event_get_stats_fast(int* txSeq, int* txAcked, int* rxDelivered, int* overflow,
+                              int* retransmits, int* queue) {
+	int ts = 0, ta = 0, rd = 0, q = 0;
+	for (int s = 0; s < NET_EV_SEATS; s++) {
+		u32 next = __atomic_load_n(&s_evTx[s].next,      __ATOMIC_RELAXED);
+		u32 base = __atomic_load_n(&s_evTx[s].base,      __ATOMIC_RELAXED);
+		u32 pack = __atomic_load_n(&s_evTx[s].peerAcked, __ATOMIC_RELAXED);
+		u32 exp  = __atomic_load_n(&s_evRx[s].expect,    __ATOMIC_RELAXED);
+		int sent = (int)next - 1;              if (sent > ts) ts = sent;
+		int ack  = (int)pack;                  if (ack  > ta) ta = ack;
+		int del  = (int)exp - 1;               if (del  > rd) rd = del;
+		int d    = (int)(next - base);         if (d    > q)  q  = d;   // un-ACKed outbound backlog
+	}
+	if (txSeq)       *txSeq       = ts;
+	if (txAcked)     *txAcked     = ta;
+	if (rxDelivered) *rxDelivered = rd;
+	if (overflow)    *overflow    = s_evOverflow;
+	if (retransmits) *retransmits = s_evRetransmits;
+	if (queue)       *queue       = q;
+}
+
 // Transmit ONE event (all fragments) to the peer. Caller holds s_evLock. isResend bumps the diag.
 static void net_event_tx_one(int seat, u32 seq, const NetEvent* ev, bool isResend) {
 	int total = (int)ev->len;
@@ -915,11 +964,15 @@ static void net_rx_thread(void* arg) {
 	u8 buf[NET_PKT_BUF]; size_t got; u16 src;
 	int resendTick = 0;
 	while (__atomic_load_n(&s_rxRun, __ATOMIC_ACQUIRE)) {
-		// D1: RX-thread loop-seq (the radio heartbeat the watchdog watches) + site-1300 crumb.
-		// One pass = one drain + one re-send tick; g_diagRxSeq frozen while workers live = the
-		// RX thread wedged (inside udsPullPacket / a send) — SPEC D1.3/D1.1 site 4.
+		// D1: RX-thread loop-seq (the radio heartbeat the watchdog watches). One pass = one drain
+		// + one re-send tick; g_diagRxSeq frozen while workers live = the RX thread wedged
+		// (inside udsPullPacket / a send) — SPEC D1.3/D1.1 site 4.
+		// NO site-1300 crumb here (review fix 2026-08-03): this loop sleeps 0.5 ms, so it stamped
+		// g_diagNetCrumb ~2000x/s on a HEALTHY link and buried the park sites the word exists to
+		// name (a worker parked in net_transfer_collect stamps site 1000 at ~1 kHz — it lost the
+		// race ~2 samples out of 3 and every STUCK/HANG line read netC=13xx). The heartbeat is
+		// already carried, losslessly, by g_diagRxSeq — which the watchdog samples separately.
 		g_diagRxSeq++;
-		DIAG_CRUMB(g_diagNetCrumb, DIAG_SITE_NET_RX_PASS, g_diagRxSeq);
 		LightLock_Lock(&s_rxLock);
 		while (s_up && R_SUCCEEDED(udsPullPacket(&s_bind, buf, sizeof buf, &got, &src)) && got) {
 			if (got < 2 || buf[0] != 'G') continue;          // need at least magic+type; 'G' wire-magic

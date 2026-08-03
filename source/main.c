@@ -142,7 +142,16 @@ static void gs_dump(int seat) {
 }
 
 // ---- D1 watchdog: STUCK-line writer state (SPEC-firmware-diag D1.5-D1.7, S.2-S.3) ------------
-static DiagWd s_wd;                  // escalation state machine (reset at session / wireless-link start)
+static DiagWd s_wd;                  // WORKER episode (reset at session / wireless-link start)
+static DiagWd s_wdRx;                // RADIO episode — its OWN escalation clock (review fix 2026-08-03).
+                                     // The RX thread bumps g_diagRxSeq ~2000x/s on another core, and
+                                     // diag_wd_step treats ANY watched seq advancing as progress, so
+                                     // the single spec'd wlOn mask (worker | RX) could NEVER fire: the
+                                     // radio heartbeat reset the episode ~400 times between two 200 ms
+                                     // samples and D1 was blind in exactly the session it is armed for
+                                     // (and symmetrically, a live worker masked an RX wedge). Two
+                                     // independent episodes detect BOTH classes; the STUCK line's
+                                     // `who=` says which one spoke.
 static FILE*  s_wdFile   = NULL;     // LAZILY created at the first STUCK event — a healthy run writes no
                                      // file and never fopens on the hot path (SPEC D1.5)
 static u64    s_wdLastMs = 0;        // ~200ms sampler cadence anchor (osGetTime ms)
@@ -159,8 +168,13 @@ static FILE*    s_hangFile = NULL;   // LAZILY created at the first dump — a h
 // mp_bridge.cpp:1558 — a hard crash loses <=256 rows ~= 4 s; the wd/hang files carry the crash
 // instant). Closed at every wl teardown site via diag_wd_close (shared lifecycle, zero new call
 // sites on the frozen teardown paths). Kill-switched by the same diag_off.txt (file never opens).
+// ROW CAP (review fix 2026-08-03): D3 is default-on for every wireless link and a row is ~223 B at
+// ~60 rows/s = ~13 KB/s = ~48 MB/hour of unbounded sdmc growth. At DIAG_CSV_MAX_ROWS (~30 min) the
+// writer appends one "# csv capped" line and closes the file — the per-frame branch then sees the
+// NULL and goes dormant, exactly like a kill-switched run.
 static FILE*    s_csvFile  = NULL;
 static uint32_t s_csvRows  = 0;      // rows since the last fflush (256-row cadence)
+static uint32_t s_csvTotal = 0;      // rows written this session (vs DIAG_CSV_MAX_ROWS)
 
 // S.2 netlog path helper: "sdmc:/cias/netlogs/3DGBA_<kind>_<ROLE>_<MMDD>_<HHMMSS>.<ext>".
 // The wl_dump/gs_dump snprintf pattern factored ONCE for the new diagnostic writers (wd now;
@@ -186,6 +200,7 @@ static void diag_wd_close(void) {
 	if (s_hangFile) { fclose(s_hangFile); s_hangFile = NULL; }   // D2: the hang dumps share the wd file lifecycle
 	if (s_csvFile)  { fclose(s_csvFile);  s_csvFile  = NULL; s_csvRows = 0; }   // D3: fclose flushes the
 	                                                             // buffered tail rows (SPEC D3.5)
+	s_csvTotal = 0;                                              // fresh row budget for the next link
 }
 
 // (Re)arm the watchdog for a fresh session: fresh episode state, fresh (lazy) file — so a later
@@ -194,6 +209,7 @@ static void diag_wd_close(void) {
 static void diag_wd_session_reset(void) {
 	diag_wd_close();
 	memset(&s_wd, 0, sizeof s_wd);
+	memset(&s_wdRx, 0, sizeof s_wdRx);   // D1: the radio episode is reset with the worker one
 	memset(&s_hang, 0, sizeof s_hang);   // D2: fresh hang episode (init=0 -> next armed sample re-baselines)
 	s_wdLastMs = 0;
 	struct stat st;
@@ -261,11 +277,17 @@ static void ctl_close(void) {
 	if (s_ctlFile) { fclose(s_ctlFile); s_ctlFile = NULL; }
 }
 
-#if CTL_D4_ENABLE
+// Control-file path builder — shared by BOTH slices, so it lives outside either gate (review fix
+// 2026-08-03: control.h documents CTL_D4_ENABLE / CTL_D5_ENABLE as INDEPENDENT bisect gates, but
+// the D5 glue used to be nested inside the D4 region while being CALLED from D5-only blocks, so
+// `CTL_D4_ENABLE 0` failed to compile — the one gate a reviewer would actually want to flip).
+#if CTL_D4_ENABLE || CTL_D5_ENABLE
 static void ctl_path(char* out, size_t cap, const char* kind, int seat) {
 	snprintf(out, cap, "sdmc:/cias/control/%s_p%d.txt", kind, seat + 1);
 }
+#endif
 
+#if CTL_D4_ENABLE
 // Read a control file whole. Returns the byte count, -1 = missing/unreadable, -2 = larger than
 // the cap (the first CTL_FILE_MAX bytes are still in buf, so a leading '!' abort still works).
 static int ctl_read_file(const char* path, char* buf, int cap) {
@@ -277,6 +299,7 @@ static int ctl_read_file(const char* path, char* buf, int cap) {
 	buf[n] = '\0';
 	return over ? -2 : (int)n;
 }
+#endif
 
 #if CTL_D5_ENABLE
 // ---- D5 input record/replay glue (SPEC-control-replay.md §D5 + C.3-C.5) ---------------------
@@ -382,8 +405,9 @@ static void ctl_rec_feed(int seat, u16 finalMask, GbaCore* core) {
 	}
 	if (s_recFile[seat]) { fwrite(line, 1, (size_t)n, s_recFile[seat]); fflush(s_recFile[seat]); }
 }
-#endif
+#endif   // CTL_D5_ENABLE (the record/replay glue)
 
+#if CTL_D4_ENABLE
 // One seat's idle poll (D4.2): every CTL_POLL_FRAMES render frames, seats STAGGERED so at most
 // one sdmc stat happens on any single frame. The stat is the cheap common case — a fopen only
 // happens on a tick where the operator actually dropped a file. Returns true when go_p<N>.txt was
@@ -445,8 +469,7 @@ static bool ctl_poll_seat(int seat, bool paused) {
 	}
 	return false;
 }
-
-#endif
+#endif   // CTL_D4_ENABLE (the move/go script poll)
 
 // Link callbacks (invoked by mGBA's lockstep). onSleep runs on this core's worker thread
 // during runFrame and must NOT block — it only requests a park; the worker parks (blocks on
@@ -1674,9 +1697,11 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		ctl_publish_rr(i, &s_ctlRec[i], &s_ctlRep[i]);
 	}
 #endif
-#if CTL_D4_ENABLE
+#if CTL_D4_ENABLE || CTL_D5_ENABLE
 	{   // D4.1: the whole feature arms iff sdmc:/cias/control exists — the operator opts in with
 		// one mkdir, ONCE per session. No directory => zero polls, zero injection, no log file.
+		// BOTH slices ride this one stat (D5 shares the opt-in directory), so it is gated on the
+		// OR of the two bisect gates — otherwise CTL_D4_ENABLE 0 would silently disable D5 too.
 		struct stat cst;
 		s_ctlOn = (stat("sdmc:/cias/control", &cst) == 0);
 		if (s_ctlOn) {   // D4.14 session-start mapping echo (the control log's first line)
@@ -1767,11 +1792,16 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		if (!s_diagOff && nowMs - s_wdLastMs >= 200) {
 			s_wdLastMs = nowMs;
 #if DIAG_D1_ENABLE
-			uint32_t wdMask = 0;
-			if (wlOn) {   // watch only the PARTICIPANT worker (the other core is paused) + the RX heartbeat
-				wdMask = DIAG_WD_RX | ((g_netWorker == &emuB) ? (DIAG_WD_BF | DIAG_WD_BVF)
-				                                              : (DIAG_WD_AF | DIAG_WD_AVF));
-			} else if (linkOn || netOn) {   // both workers free-run; no RX thread in these modes
+			// TWO INDEPENDENT EPISODES (review fix 2026-08-03; deviation from SPEC D1.7's single
+			// wlOn mask, reasoned at the s_wdRx declaration and in diag.h). The worker mask must
+			// NOT contain DIAG_WD_RX: diag_wd_step resets the episode when ANY watched seq moves,
+			// and the RX thread's heartbeat moves ~2000x/s no matter how dead the worker is.
+			uint32_t wdMask = 0, wdMaskRx = 0;
+			if (wlOn) {   // watch only the PARTICIPANT worker (the other core is paused)...
+				wdMask   = (g_netWorker == &emuB) ? (DIAG_WD_BF | DIAG_WD_BVF)
+				                                  : (DIAG_WD_AF | DIAG_WD_AVF);
+				wdMaskRx = DIAG_WD_RX;   // ...and the radio thread on its OWN clock (wlOn only: the
+			} else if (linkOn || netOn) {   // other modes have no RX thread)
 				wdMask = DIAG_WD_AF | DIAG_WD_BF | DIAG_WD_AVF | DIAG_WD_BVF;
 			}
 			DiagWdSample wds;
@@ -1790,8 +1820,15 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			  wds.gateN = wdc.celioGateN; wds.forceN = wdc.celioForceN; }
 			wds.wl   = wlOn ? 1 : 0;
 			wds.seat = wlOn ? wlSeat : -1;
+			// Episode 1 = the emulator worker(s), episode 2 = the radio. BOTH are stepped every
+			// tick (each keeps its own escalation clock) and both write to the same wd file; the
+			// line's `who=` names the speaker. A tick where both fire writes two lines — that is
+			// the "everything is dead" case and both facts are worth having.
 			char wdLine[192];
-			if (diag_wd_step(&s_wd, (uint32_t)nowMs, &wds, wdMask, wdLine, sizeof wdLine)) {
+			for (int wdEp = 0; wdEp < 2; wdEp++) {
+				wds.who = wdEp ? DIAG_WD_WHO_RX : DIAG_WD_WHO_WORKER;
+				if (!diag_wd_step(wdEp ? &s_wdRx : &s_wd, (uint32_t)nowMs, &wds,
+				                  wdEp ? wdMaskRx : wdMask, wdLine, sizeof wdLine)) continue;
 				if (!s_wdFile) {   // lazy-create at the FIRST STUCK event (by definition not the healthy hot path)
 					mkdir("sdmc:/cias", 0777);           // ensure the netlog dirs exist (matches gbacore_net_log_dump)
 					mkdir("sdmc:/cias/netlogs", 0777);
@@ -2003,8 +2040,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					// re-read"); game_read fills *out (memset + sentinels) even when it returns false.
 					bool gsTopOk = game_read(gsTop, gpTop, &gst);
 					bool gsBotOk = game_read(gsBot, gpBot, &gsb);
-#if CTL_D4_ENABLE
-					// ---- D4 file-driven tile-exact movement (SPEC-control-replay.md §D4 / C.4).
+#if CTL_D4_ENABLE || CTL_D5_ENABLE
+					// ---- D4 file-driven tile-exact movement (SPEC-control-replay.md §D4 / C.4)
+					// + D5 record/replay, which share this one CtlIn snapshot and injection seam.
 					// Runs HERE, at the existing parked-window read site, because the two
 					// GameState snapshots above are exactly what the closed loop needs — the
 					// player's live tile + map (SaveBlock1 pos/location) — so D4 adds NO game-RAM
@@ -2012,10 +2050,15 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					// core's EMULATED frame counter, so a paused seat / open pause menu /
 					// backgrounded app freezes the script in place instead of blind-firing.
 					// Output = a key mask ORed into the assembly below (the emulated keypad).
+					// The outer gate is the OR of the two bisect gates so either slice can be
+					// compiled out alone (review fix 2026-08-03).
 					if (s_ctlOn) {
 						const GameState* gsFor[2] = { swapped ? &gsb : &gst, swapped ? &gst : &gsb };
 						GbaCore*         coFor[2] = { emuA.core, emuB.core };
 						bool             pzFor[2] = { emuA.paused, emuB.paused };
+#if !CTL_D4_ENABLE
+						(void)pzFor;    // only the D4 move/go poll reports the paused-seat note
+#endif
 						// The seat's NON-script routed mask = the D4.11 abort trigger. It MIRRORS
 						// the assembly at the end of this block, so a key the seat never receives
 						// (3DS-level HUD keys, touch while TOUCH_OFF, the other game's pad) can
@@ -2037,8 +2080,13 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 							ci.mapGroup   = (int16_t)gsFor[sq]->mapGroup;
 							ci.mapNum     = (int16_t)gsFor[sq]->mapNum;
 							ci.realKeys   = rkFor[sq];
+#if CTL_D4_ENABLE
 							ci.goSeen     = ctl_poll_seat(sq, pzFor[sq]);
 							u16 m = ctl_tick(&s_ctl[sq], &ci);
+#else
+							ci.goSeen     = false;   // D4 bisected out: no move/go polling at all
+							u16 m = 0;
+#endif
 #if CTL_D5_ENABLE
 							// D5: a replay mask is a harness mask exactly like a script mask —
 							// same emulated-keypad seam, ORed in the same additive way
@@ -2058,7 +2106,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 #endif
 						}
 					}
-#endif
+#endif   // CTL_D4_ENABLE || CTL_D5_ENABLE (the shared per-frame control tick)
 					if (gsTopOk) {
 						GsDepth gd = { (uint8_t)depth3d.overworld, (uint8_t)depth3d.textTop, (uint8_t)depth3d.textBot,
 						               (short)depth3d.nspr, (short)depth3d.nui, (short)depth3d.nfg,
@@ -2113,10 +2161,17 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 						r.okN = nc.okN; r.toN = nc.toN; r.edgeN = nc.edgeN; r.forceN = nc.forceN;
 						r.round = nc.round; r.lastW0 = nc.lastW0; r.lastW1 = nc.lastW1; r.lastOk = nc.lastOk;
 						{ int rttMs = -1, drops = 0; net_link_get_rtt(&rttMs, &drops); r.rtt = rttMs; }
-						{ int ts = 0, ta = 0, rd = 0, ov = 0, rt = 0;
-						  net_event_get_stats(&ts, &ta, &rd, &ov, &rt);
-						  r.txSeq = ts; r.txAcked = ta; r.rxDel = rd; r.evOvf = ov; r.evRetx = rt; }
-						r.evTxQ = net_event_get_queue();
+						// ONE LOCK-FREE call for all six EVENT-channel columns (review fix
+						// 2026-08-03). This used to be net_event_get_stats + net_event_get_queue,
+						// i.e. TWO s_evLock acquisitions per render frame — and the RX thread holds
+						// that lock across udsSendTo bursts (the ~16 ms un-ACKed-tail re-send), so
+						// per-frame telemetry could block the render loop behind radio I/O and add a
+						// third contender next to the frozen event plane. Benign-race reads now, the
+						// same contract as every other counter column.
+						{ int ts = 0, ta = 0, rd = 0, ov = 0, rt = 0, q = 0;
+						  net_event_get_stats_fast(&ts, &ta, &rd, &ov, &rt, &q);
+						  r.txSeq = ts; r.txAcked = ta; r.rxDel = rd; r.evOvf = ov; r.evRetx = rt;
+						  r.evTxQ = q; }
 						{ int rxW = 0, txF = 0, busy = 0, pUp = 0;
 						  net_link_get_stats(&rxW, &txF, &busy, &pUp, NULL);
 						  r.rxWordN = rxW; r.txFails = txF; r.busyN = busy; r.peerUp = pUp; }
@@ -2124,7 +2179,17 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 						int rl = diag_csv_row(csvBuf, sizeof csvBuf, &r);
 						if (rl > 0) {
 							fwrite(csvBuf, 1, (size_t)rl < sizeof csvBuf ? (size_t)rl : sizeof csvBuf - 1, s_csvFile);
-							if (++s_csvRows >= 256) { fflush(s_csvFile); s_csvRows = 0; }   // flush-256 (PM)
+							// flush-256 = the PM apCsv cadence (an fflush at most every ~4 s); the
+							// 8 KB setvbuf below it means the underlying FS write actually happens
+							// every ~36 rows either way, so this only bounds what a hard crash loses.
+							if (++s_csvRows >= 256) { fflush(s_csvFile); s_csvRows = 0; }
+							// ROW CAP (review fix): stop at ~30 min of rows instead of growing the
+							// file for the whole session. One honest final line, then close.
+							if (++s_csvTotal >= DIAG_CSV_MAX_ROWS) {
+								fprintf(s_csvFile, "# csv capped at %lu rows (DIAG_CSV_MAX_ROWS) - telemetry stops here\n",
+								        (unsigned long)s_csvTotal);
+								fclose(s_csvFile); s_csvFile = NULL; s_csvRows = 0;
+							}
 						}
 					}
 #endif
@@ -2137,7 +2202,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					emuA.keys = ((focused == 0) ? g : 0) | (swapped ? tk : 0) | ckA;
 					emuB.keys = ((focused == 1) ? g : 0) | (swapped ? 0 : tk) | ckB;
 				}
-#if CTL_D4_ENABLE && CTL_D5_ENABLE
+#if CTL_D5_ENABLE
 				// D5.4 RECORD the seat's FINAL assembled mask — real pad + touch + any script or
 				// replay keys, i.e. exactly what the core received; that is the only thing that
 				// replays faithfully. PASSIVE: this READS the word, never writes one, so a
@@ -2401,7 +2466,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 										int hl = diag_csv_header(hdr, sizeof hdr, seat);
 										if (hl > 0) fwrite(hdr, 1, (size_t)hl < sizeof hdr ? (size_t)hl : sizeof hdr - 1, s_csvFile);
 										fflush(s_csvFile);   // the header lands even if the run dies instantly
-										s_csvRows = 0;
+										s_csvRows = 0; s_csvTotal = 0;   // fresh flush cadence + row budget
 									}
 								}
 #endif

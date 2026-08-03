@@ -9,23 +9,28 @@
 #include "diag.h"
 
 // The crumb words (declared extern in diag.h; site table + writer threads documented there).
-volatile uint32_t g_diagNetCrumb  = 0;
-volatile uint32_t g_diagSioCrumb  = 0;
-volatile uint32_t g_diagMainCrumb = 0;
-volatile uint32_t g_diagRxSeq     = 0;
+// DIAG_CACHELINE: one 32-byte ARM11 L1 line EACH — they are written from three different cores and
+// packing them together turned every telemetry store into a coherency transaction on the frozen
+// SIO path (review fix 2026-08-03; the reasoning + the measured pre-fix addresses are in diag.h).
+volatile uint32_t DIAG_CACHELINE g_diagNetCrumb  = 0;
+volatile uint32_t DIAG_CACHELINE g_diagSioCrumb  = 0;
+volatile uint32_t DIAG_CACHELINE g_diagMainCrumb = 0;
+volatile uint32_t DIAG_CACHELINE g_diagRxSeq     = 0;
 
 // One '\n'-terminated STUCK line (SPEC D1.5 — exact format, decimal everywhere; %lu + casts so
 // the format is identical on devkitARM newlib [uint32_t = unsigned long] and the PC host).
+// The trailing `who=` names the EPISODE (worker vs radio) — see diag.h's two-episode note.
 int diag_stuck_format(char* out, size_t cap, uint32_t ms, const DiagWdSample* s) {
 	if (!out || !cap || !s) return -1;
 	return snprintf(out, cap,
-	    "STUCK ms=%lu rseq=%lu aF=%lu bF=%lu aVf=%lu bVf=%lu rx=%lu netC=%lu sioC=%lu gateN=%d forceN=%d wl=%d seat=%d\n",
+	    "STUCK ms=%lu rseq=%lu aF=%lu bF=%lu aVf=%lu bVf=%lu rx=%lu netC=%lu sioC=%lu gateN=%d forceN=%d wl=%d seat=%d who=%s\n",
 	    (unsigned long)ms, (unsigned long)s->renderSeq,
 	    (unsigned long)s->aFrame, (unsigned long)s->bFrame,
 	    (unsigned long)s->aVf, (unsigned long)s->bVf,
 	    (unsigned long)s->rxSeq,
 	    (unsigned long)s->netCrumb, (unsigned long)s->sioCrumb,
-	    s->gateN, s->forceN, s->wl, s->seat);
+	    s->gateN, s->forceN, s->wl, s->seat,
+	    s->who == DIAG_WD_WHO_RX ? "rx" : "worker");
 }
 
 // SPEC D1.4. Compares the WATCHED seqs against the last progress edge; any change (!=, so

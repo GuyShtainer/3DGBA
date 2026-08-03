@@ -144,9 +144,18 @@ void net_event_reset(void);
 void net_event_get_stats(int* txSeq, int* txAcked, int* rxDelivered, int* overflow, int* retransmits);
 
 // net_event_get_queue: the EVENT-channel outbound queue depth — max un-ACKed backlog
-//   (next - base) across seats. The D3 CSV `evTxQ` column (SPEC-firmware-diag D3.2): the live
-//   form of the run-#6 send-queue-overflow X-ray. Lock-guarded like net_event_get_stats.
+//   (next - base) across seats. The live form of the run-#6 send-queue-overflow X-ray.
+//   Lock-guarded like net_event_get_stats. (The per-frame CSV uses the _fast variant below.)
 int  net_event_get_queue(void);
+
+// net_event_get_stats_fast: the same five counters PLUS the queue depth, in ONE call and with NO
+//   lock — the per-frame D3 CSV path (SPEC-firmware-diag D3.2 `evTxQ`). Read-only benign-race
+//   telemetry (the gbacore_net_counters pattern): every field is one aligned u32 load, so the
+//   worst case is a row whose columns come from two adjacent instants. USE THIS from the render
+//   thread; the locked getters above are for the once-per-session netlog dump. Rationale (why the
+//   render thread must not take s_evLock at 60 Hz) is at the definition in netlink.c.
+void net_event_get_stats_fast(int* txSeq, int* txAcked, int* rxDelivered, int* overflow,
+                              int* retransmits, int* queue);
 
 // --- D6 LINK-SURFACE FINGERPRINT (lobby stage, strictly BEFORE net_link_start) -----------------
 // "Can these two consoles link at all?" — answered in the LOBBY, where the answer is still useful,
@@ -180,3 +189,8 @@ int  net_fprint_peer(void* out8, u64* hash);
 // Returns strlen, or <=0 if nothing to say (no local surface set). gbacore.c calls this through a
 // forward declaration so its translation unit stays libctru-free (the net_mono_ticks precedent).
 int  net_fprint_log(char* buf, int max);
+
+// D6's OWN TX-refusal count for this session (lobby udsSendTo refusals of the fingerprint packet).
+// Deliberately NOT folded into net_ping_update's `sendFails`: that counter is the lobby's ping
+// busy/loss readout, and a failing fingerprint used to masquerade as ping trouble.
+int  net_fprint_fails(void);

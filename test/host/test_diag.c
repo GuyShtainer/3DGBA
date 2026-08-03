@@ -165,6 +165,87 @@ static void test_watchdog(void) {
 }
 
 // --------------------------------------------------------------------------------------------
+// TEST 2b — THE TWO-EPISODE ARRANGEMENT (review fix 2026-08-03). The bug this pins: main.c used to
+// arm ONE episode under wlOn with `DIAG_WD_RX | <participant worker bits>`, and diag_wd_step calls
+// ANY watched seq advancing "progress" — so the free-running RX thread (g_diagRxSeq, ~2000 bumps/s
+// on another core) reset the episode forever and a wedged worker could never produce a STUCK line.
+// The old suite could not see it: it only covered "unwatched seq frozen" and "frozen seq not
+// watched", never "one WATCHED seq frozen while another WATCHED seq advances".
+// --------------------------------------------------------------------------------------------
+static void test_wd_episodes(void) {
+	printf("TEST 2b: two independent episodes (worker vs radio) — the OR-mask blind spot\n");
+	char line[192];
+
+	// (1) The DEFECT, reproduced: one episode watching worker|RX, worker frozen, rx advancing.
+	{
+		DiagWd wd; memset(&wd, 0, sizeof wd);
+		int n = 0;
+		for (uint32_t t = 200; t <= 60000; t += 200) {
+			DiagWdSample s = mk_sample(4242, t / 200);   // aFrame pinned; rxSeq advancing every tick
+			s.aVf = 999;                                  // the core's video seq is pinned too
+			n += diag_wd_step(&wd, t, &s, DIAG_WD_AF | DIAG_WD_AVF | DIAG_WD_RX, line, sizeof line);
+		}
+		CHECK(n == 0, "the combined mask emitted %d lines over a 60 s worker freeze "
+		              "(0 is the DEFECT this test documents — do not compose the mask that way)\n", n);
+	}
+
+	// (2) The FIX: two episodes. The worker one fires (3 lines, who=worker) while the radio one
+	//     stays quiet, because each has its own escalation clock.
+	{
+		DiagWd wdW, wdR; memset(&wdW, 0, sizeof wdW); memset(&wdR, 0, sizeof wdR);
+		int nW = 0, nR = 0, taggedW = 0;
+		for (uint32_t t = 200; t <= 20000; t += 200) {
+			DiagWdSample s = mk_sample(4242, t / 200);   // worker frozen, radio healthy
+			s.aVf = 999;
+			s.who = DIAG_WD_WHO_WORKER;
+			if (diag_wd_step(&wdW, t, &s, DIAG_WD_AF | DIAG_WD_AVF, line, sizeof line)) {
+				nW++;
+				if (strstr(line, " who=worker\n")) taggedW++;
+			}
+			s.who = DIAG_WD_WHO_RX;
+			nR += diag_wd_step(&wdR, t, &s, DIAG_WD_RX, line, sizeof line);
+		}
+		CHECK(nW == 3, "worker episode emitted %d lines over a worker freeze (want 3)\n", nW);
+		CHECK(taggedW == nW, "%d/%d worker lines carried who=worker\n", taggedW, nW);
+		CHECK(nR == 0, "radio episode emitted %d lines while the radio was HEALTHY (want 0)\n", nR);
+	}
+
+	// (3) The converse — the failure class diag.h promises and the old mask equally hid: the RX
+	//     thread wedges while the worker keeps running.
+	{
+		DiagWd wdW, wdR; memset(&wdW, 0, sizeof wdW); memset(&wdR, 0, sizeof wdR);
+		int nW = 0, nR = 0, taggedR = 0;
+		for (uint32_t t = 200; t <= 20000; t += 200) {
+			DiagWdSample s = mk_sample(t / 200, 5);       // worker healthy, rxSeq pinned at 5
+			s.aVf = t / 200;
+			s.who = DIAG_WD_WHO_WORKER;
+			nW += diag_wd_step(&wdW, t, &s, DIAG_WD_AF | DIAG_WD_AVF, line, sizeof line);
+			s.who = DIAG_WD_WHO_RX;
+			if (diag_wd_step(&wdR, t, &s, DIAG_WD_RX, line, sizeof line)) {
+				nR++;
+				if (strstr(line, " who=rx\n")) taggedR++;
+			}
+		}
+		CHECK(nR == 3, "radio episode emitted %d lines over an RX freeze (want 3)\n", nR);
+		CHECK(taggedR == nR, "%d/%d radio lines carried who=rx\n", taggedR, nR);
+		CHECK(nW == 0, "worker episode emitted %d lines while the worker was HEALTHY (want 0)\n", nW);
+	}
+
+	// (4) Not armed (no wireless session): the radio episode's mask is 0 and stays silent even
+	//     though rxSeq is frozen — the linkOn/netOn modes have no RX thread at all.
+	{
+		DiagWd wdR; memset(&wdR, 0, sizeof wdR);
+		int n = 0;
+		for (uint32_t t = 200; t <= 20000; t += 200) {
+			DiagWdSample s = mk_sample(t / 200, 5);
+			s.who = DIAG_WD_WHO_RX;
+			n += diag_wd_step(&wdR, t, &s, 0, line, sizeof line);
+		}
+		CHECK(n == 0, "unarmed radio episode emitted %d lines (want 0)\n", n);
+	}
+}
+
+// --------------------------------------------------------------------------------------------
 // TEST 3 — STUCK line golden bytes + cap-truncation safety (SPEC D1.9 item 3, D1.5 format).
 // --------------------------------------------------------------------------------------------
 static void test_format(void) {
@@ -174,14 +255,21 @@ static void test_format(void) {
 	char buf[192];
 	int n = diag_stuck_format(buf, sizeof buf, 1000, &s);
 	const char* want =
-	    "STUCK ms=1000 rseq=42 aF=1000 bF=2000 aVf=500 bVf=600 rx=77 netC=1005 sioC=3010 gateN=3 forceN=1 wl=1 seat=0\n";
+	    "STUCK ms=1000 rseq=42 aF=1000 bF=2000 aVf=500 bVf=600 rx=77 netC=1005 sioC=3010 gateN=3 forceN=1 wl=1 seat=0 who=worker\n";
 	CHECK(n == (int)strlen(want), "format length %d want %d\n", n, (int)strlen(want));
 	CHECK(strcmp(buf, want) == 0, "golden mismatch:\n  got:  %s  want: %s", buf, want);
+
+	// who= names the EPISODE (the two-episode fix): worker vs radio, APPENDED at the end so every
+	// existing prefix-parse still works.
+	s.who = DIAG_WD_WHO_RX;
+	diag_stuck_format(buf, sizeof buf, 1000, &s);
+	CHECK(strstr(buf, " who=rx\n") != NULL, "who=rx rendering: %s", buf);
+	s.who = DIAG_WD_WHO_WORKER;
 
 	// seat=-1 (no wireless role) renders as a signed -1, wl=0.
 	s.wl = 0; s.seat = -1;
 	diag_stuck_format(buf, sizeof buf, 4000, &s);
-	CHECK(strstr(buf, "wl=0 seat=-1\n") != NULL, "wl/seat rendering: %s", buf);
+	CHECK(strstr(buf, "wl=0 seat=-1 who=worker\n") != NULL, "wl/seat rendering: %s", buf);
 
 	// Truncation: a tiny cap never overflows and stays NUL-terminated; return = would-be length.
 	char tiny[16];
@@ -573,6 +661,7 @@ int main(void) {
 	       " (SPEC-firmware-diag D1.9/D2.7/D3.8) ===\n");
 	test_crumbs();
 	test_watchdog();
+	test_wd_episodes();
 	test_format();
 	test_hang_step();
 	test_hang_format();

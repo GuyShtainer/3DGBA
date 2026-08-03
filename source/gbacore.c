@@ -326,6 +326,7 @@ void net_link_get_stats(int* rxWordN, int* wordSendFails, int* busyN, int* peerU
 void net_link_get_rtt(int* rttMs, int* drops);   // PURE-NETWORK ping round-trip (no game) — splits radio vs our per-round overhead
 bool net_round_next_parent(uint32_t afterRound, uint32_t* outRound);   // M3: child adopts the parent's wire round
 int  net_fprint_log(char* buf, int max);       // D6: the '# fprint' link-surface line (lobby-stage exchange)
+int  net_fprint_fails(void);                   // D6: its OWN lobby TX-refusal count (never the ping's)
 // Celio EVENT channel (netlink.c): reliable, in-order semantic ClEvents (party/select/confirm) for state F.
 int  net_event_send(int seat, const void* clEvent);
 int  net_event_recv(int seat, void* clEventOut);
@@ -973,8 +974,11 @@ void gbacore_net_log_dump(const char* path, int seat) {
 	// one-line diagnosis for a run that would otherwise be a mystery; none of it is refuse-grade
 	// (EM<->FR and FR rev0<->rev1 trade legitimately — over-hashing would reject compatible peers,
 	// gen1recomp #511). Absent entirely = no lobby exchange ran (e.g. a loopback/one-console run).
+	// `txFails=` is D6's OWN refusal counter (review fix 2026-08-03) — the fingerprint's lobby sends
+	// used to be counted into the PING's sendFails, which quietly changed what that column meant.
 	{ char fpline[224];
-	  if (net_fprint_log(fpline, (int)sizeof fpline) > 0) fprintf(f, "%s\n", fpline); }
+	  if (net_fprint_log(fpline, (int)sizeof fpline) > 0)
+	      fprintf(f, "%s txFails=%d\n", fpline, net_fprint_fails()); }
 	// PURE-NETWORK latency (the decisive split): the PING round-trip runs alongside the trade with NO game in the
 	// loop. If pingRtt << the per-round rtt_us below, the ~21ms-over-floor is OUR per-round turnaround (worker
 	// poll/emulate/reply), NOT the radio -> a router/socket won't help, but tightening the loop would. If

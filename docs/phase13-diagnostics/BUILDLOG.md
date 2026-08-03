@@ -2,6 +2,268 @@
 
 Dated entry per slice (PHASE.md invariant 7). Newest first.
 
+## 2026-08-03 — FINAL GATE (PHASE.md invariant 8): all suites + both build targets + HANDOFF
+
+The phase's exit gate, run from a clean shell (`export DEVKITPRO=/opt/devkitpro
+DEVKITARM=$DEVKITPRO/devkitARM`) on the post-fix-pass tree. Nothing was edited in `source/` by this
+step — it is a verification pass plus the two docs the gate owns (this entry + `docs/HANDOFF.md`).
+
+**Suites — all five, all PASS, every count ≥ the fix pass's:**
+
+| Suite | Compile line (from the file's own header) | Result |
+|---|---|---|
+| celiolink | `clang -std=c11 -Wall -Wextra -O0 -g -I source test/test_celiolink.c` | **1259 checks, 0 failures** |
+| netlink reliability | `… -O2 -I test/host -I source test/host/test_netlink_reliability.c` | **66 checks, 0 failures** |
+| diag (D1/D2/D3) | `… -O2 -I source test/host/test_diag.c` | **369 checks, 0 failures** |
+| control (D4/D5) | `… -O0 -g -I source test/host/test_control.c` | **6897 checks, 0 failures** |
+| trace replay (D7c) | `… -O2 -I source test/host/test_trace_replay.c` | **58 checks, 0 failures, 4 loud SKIPs** |
+
+Total **8649 checks**. The 4 skips are the deliberate tier-R "no blessed golden yet" SKIPs on the
+four pre-run-#12 fixtures (they are loud by design and become real replays when run #13 blesses one).
+
+**Builds — both targets, from `make clean`:**
+
+- `make -j8` → **`3DGBA.3dsx`** (3,778,184 B). Full from-scratch compile, 19 s.
+- `make cia` → **`3DGBA.cia`** (1,907,648 B) + `banner.bnr`, exit 0. `makerom`/`bannertool` were
+  auto-discovered from the toolkit's `tools/bin/` with no PATH help, exactly as CLAUDE.md documents;
+  **no cia failure to report.**
+
+**Warning discipline, verified mechanically on the clean build** (`grep -c warning:` over the whole
+log, then the non-`external/mgba` subset): 35 total, of which **every one is pre-existing** —
+15 in `main.c`, 1 in `netlink.c`, 1 in `celiolink.c` (the known `cl_partner_party`), plus
+`rompicker.c`/`touch.c`/`theme.c`/`ui.c`/`wireless.c` and the LTO serial-compile note. The four
+files this phase CREATED — `diag.c`, `control.c`, `fingerprint.c` and their headers — emit
+**zero warnings** under the devkitARM build and zero under `-Wall -Wextra` on the host.
+
+**Slice coverage check (invariant 7):** all seven scoped systems have a dated entry above —
+D1, D2, D3 (partial + RESUMED/COMPLETE), D4, D5, D6, D7 (partial + the D7b-e completion entry,
+whose "Correction to the previous entry" section is where D7a's landing is recorded, verified by
+reading the code rather than trusting the killed session's note). Plus the fix-pass entry.
+
+**HANDOFF updated** (`docs/HANDOFF.md`): Current status gained a diagnostics-phase paragraph
+(what shipped, the five suite counts, everything flag-gated/additive, trade path untouched);
+Next steps #2 (the run-#13 checklist) gained the setup line (wipe `sdmc:/cias/netlogs/` **and**
+`mkdir sdmc:/cias/control`), **both example move scripts inlined verbatim** from
+`SPEC-control-replay.md` Appendix, the collect-afterwards artifact list, and the `tools/verdict.sh
+<folder>` grading step; the session log gained a dated entry. Header date → 2026-08-03.
+
+**Nothing here is "done" (invariant 8):** PC-green + build-green is this phase's exit gate only.
+Every one of D1-D7 is hardware-unproven until run #13 exercises it.
+
+## 2026-08-03 — FIX PASS on the adversarial reviews (diff vs `a8764c0`)
+
+Twelve findings arrived (1 blocker, 5 major, 6 minor; two pairs were the same defect reported
+twice). **Every one was verified against the code before being touched — all twelve are real**;
+none was rejected. Outcome per finding below, then the deviations they forced.
+
+**Files changed:** `source/diag.h`, `source/diag.c`, `source/main.c`, `source/netlink.c`,
+`source/netlink.h`, `source/gbacore.c`, `test/host/test_diag.c`, `tools/verdict.sh`.
+
+### Findings and outcomes
+
+1. **BLOCKER — `main.c:1772` D1 watchdog blind under `wlOn`** (also reported as a major).
+   CONFIRMED by reading `diag.c:45-50` (progress = OR across every watched seq) against
+   `netlink.c:921` + `:987` (`g_diagRxSeq++` per RX pass, 0.5 ms sleep ⇒ ~2 kHz on the other
+   core): ORing `DIAG_WD_RX` into the worker mask meant the radio reset the episode ~400× between
+   two 200 ms samples, so a wedged worker could never escalate — and symmetrically a live worker
+   masked an RX wedge, so *neither* class D1.3 names was detectable. **FIXED with two independent
+   episodes**: `s_wd` (participant worker: `AF|AVF` or `BF|BVF`, RX removed) and the new `s_wdRx`
+   (`DIAG_WD_RX` alone, armed only under `wlOn`), each with its own escalation clock, both stepped
+   every tick and both writing the same wd file. `DiagWdSample.who` + the line's new `who=` token
+   say which episode spoke. New host test **TEST 2b** pins all four cases, including the reviewer's
+   exact scenario (a WATCHED seq frozen while another WATCHED seq advances — the case the old
+   suite never covered, which is why it stayed green through the bug).
+2. **MAJOR — `diag.c:12` all four crumb globals share one 32-byte cache line.** CONFIRMED with
+   `arm-none-eabi-nm` on the pre-fix ELF: `0049b628/62c/630/634`, i.e. 16 contiguous bytes inside
+   the line at `0x49b620` (ARM11 L1 line = 32 B), written from three different cores with the
+   hottest writer on the frozen SIO poll path. **FIXED** with `DIAG_CACHELINE`
+   (`__attribute__((aligned(32)))`) on each of the four; post-fix nm: `0049b640 / 660 / 680 / 6a0`
+   — one line each, so a store no longer invalidates any other crumb's line in another core.
+   *Partial by choice:* the reviewer also suggested deleting the site-2200 PACE crumb. **Kept**,
+   with reason: once each word owns its line the store is a private L1 hit (~1 cycle) and carries
+   no coherency traffic, and the site is not signal-free — if the emulated clock stops advancing
+   the pacing gate is exactly where the driver last was, and `sioC=2200` names it.
+3. **MAJOR — `main.c:2127` D3 CSV unbounded.** CONFIRMED: `s_csvFile` is opened for every wireless
+   link unless `diag_off.txt` exists, one row per non-menu render frame, no cap anywhere (SPEC D3.5
+   specifies open-once + flush-256 and no bound — a design gap, not a deviation). **FIXED**:
+   `DIAG_CSV_MAX_ROWS` (108000 ≈ 30 min at 60 fps ≈ 24 MB); on reaching it the writer appends one
+   `# csv capped …` line, closes the file and goes dormant (`s_csvFile == NULL` is already the
+   dormant state everywhere else). The reviewer's second point — that the 8 KB `setvbuf` means the
+   real FS write happens every ~36 rows, not every 256 — was also correct; **the misleading comment
+   is fixed** (flush-256 now documented as bounding what a hard crash loses, not the write cadence).
+4. **MAJOR/minor (same defect, twice) — `netlink.c:922` site-1300 crumb starves `g_diagNetCrumb`.**
+   CONFIRMED: the RX pass stamped it unconditionally at ~2 kHz while the parked-worker sites stamp
+   at ~1 kHz, so the sampled word named the HEALTHY thread ~2 samples out of 3 and sites
+   1000/1100/1200/1400 — the entire reason the word exists — were unreadable. **FIXED by deleting
+   the stamp**: the RX heartbeat is already carried losslessly by `g_diagRxSeq`, which the watchdog
+   samples separately, and the crumb's iteration added nothing. Site ID 1300 stays allocated
+   (decode tables, TEST 1) and now documents why it is deliberately never stamped.
+5. **MINOR (twice) — `main.c:2117` per-frame `s_evLock` acquisitions on the render thread.**
+   CONFIRMED: `net_event_get_stats` + `net_event_get_queue` each take `s_evLock` (`netlink.c:749`/
+   `:770`), and the RX thread holds that lock across `udsSendTo` bursts (ACK under lock,
+   `netlink.c:927-932`; whole un-ACKed-tail re-send every ~16 ms, `:972-982`) — a new coupling
+   between the render loop and the frozen event plane, and a third contender for the worker.
+   **FIXED**: new `net_event_get_stats_fast()` returns all six columns in ONE lock-free call
+   (`__atomic_load_n` relaxed reads of aligned u32s — the `gbacore_net_counters` benign-race
+   pattern the CSV already uses for every other counter column). The render thread now takes no
+   transport lock at all; the locked getters remain for the once-per-session netlog dump.
+6. **MINOR — `netlink.c:371` D6 send failures folded into `s_pingSendFails` + doubled lobby TX.**
+   CONFIRMED on both counts (same counter as the ping's own failure path and the one
+   `net_ping_update` returns as `sendFails`; and the extra send was issued on the same tick with
+   the same dst/flags every period until the peer's surface arrived). **FIXED**: dedicated
+   `s_fprintSendFails` (reset in `net_session_close`, exposed as `net_fprint_fails()` and printed
+   as `txFails=` on the netlog's `# fprint` line), and the fingerprint moved to its own tick half a
+   period off the ping — same total rate, no doubled instantaneous pressure.
+7. **MAJOR — `tools/verdict.sh:266` fails every legitimate EM↔FR run.** CONFIRMED against
+   `fingerprint.h:17-20/41-46` (no ROM CRC in the surface *by design*; `gameCode`/`gameRev` diffs
+   are explicitly never refuse-grade) and the allow-with-warning implementations in
+   `wireless.c:145-162` / `gbacore.c:1007-1012` — and the user's own run-#13 setup is Emerald ↔
+   FireRed rev1, so the tool would have scored the successful trade a FAIL and exited 1. **FIXED**:
+   FAIL now keys on the refuse-grade fields only (`clProtoRev|netProto|modeFlags`); a game-side-only
+   DIFF is PASS with the reason spelled out. Smoke-tested both ways with synthetic `# fprint` lines
+   (EM↔FR ⇒ PASS, exit 0; `clProtoRev(1!=2)` ⇒ FAIL, exit 1).
+8. **MINOR — `CTL_D4_ENABLE 0` does not build.** CONFIRMED (the D5 glue was defined inside the D4
+   `#if` but called from D5-only blocks). **FIXED properly rather than by documenting a dependency**:
+   `ctl_path` moved to `#if CTL_D4_ENABLE || CTL_D5_ENABLE`, the D5 glue block lifted to its own
+   top-level `#if CTL_D5_ENABLE`, the arming stat and the shared per-frame tick gated on the OR of
+   the two, and the D4-only bits (`ctl_poll_seat`/`ctl_tick`) gated inside it. **All five bisect
+   gates now build**: verified `CTL_D4_ENABLE=0`, `CTL_D5_ENABLE=0`, both off, `DIAG_D1=0`,
+   `DIAG_D2=0`, `DIAG_D3=0` — each produces `3DGBA.3dsx`.
+
+### Deviations forced by the fixes (recorded per PHASE.md invariant 1/7)
+
+- **SPEC D1.7 mask composition** — the spec pins ONE `wlOn` mask of "participant worker + rxSeq".
+  That composition is the blocker; it is replaced by two independent episodes. The spec text is now
+  wrong on this point and `diag.h` says so at the definition.
+- **SPEC D1.5 STUCK line** — one field APPENDED at the end (`who=worker|rx`). Required: both
+  episodes append to the same file, so without it the artifact cannot name the frozen subsystem.
+  Appended last, so every prefix-parse (and `verdict.sh`, which only counts wd files) is unaffected.
+  Golden updated in `test_diag` TEST 3.
+- **SPEC D3.5** — gains a row cap it never specified (finding 3). Passive-logging invariant is
+  unchanged: still open-once, buffered, no per-frame heap.
+- **Trade path** — untouched. Every edit is a delete of a store, an alignment attribute, a
+  lock-free read replacing a locked one, a counter split, preprocessor structure, or render-thread
+  bookkeeping. No FSM transition, pacing constant, round/ack rule or SIO fill was modified.
+
+### Gate
+
+Suites (all PASS, all ≥ their previous counts): celiolink **1259**, netlink **66**, diag **369**
+(was 360 — TEST 2b adds 9), control **6897**, trace_replay **58** (4 skips, unchanged).
+`make -j8` → `3DGBA.3dsx` built. Warning discipline verified mechanically: the warning set for
+`main.c`/`netlink.c`/`diag.c`/`gbacore.c` was captured before (via `git stash` of just these files)
+and after — **identical, 16 warnings, all pre-existing**; zero new warnings in the edited files.
+`make cia` still not run (the phase's final gate owns it).
+
+## 2026-08-03 — Slice D7b-e (COMPLETE): mirror asserts, replay harness, verdict tool, ledger
+
+Completes D7 (SPEC-suite-hardening §D7a-e). **D7a and, as it turns out, most of D7b were already
+in the tree** from the killed session — see "Correction to the previous entry" below.
+
+**Landed**
+
+- **D7b (completed)** — `test/test_celiolink.c`. The per-pump mirror machinery (`Pair`,
+  `mirror_sample`, `section_pair_legal`, the violation accumulators, the byte-exact PARTY_CHUNK
+  check in `lag_deliver`) was ALREADY present and correct; what was missing were the two
+  **convergence-point** rows of the SPEC §D7b.2 mirror table:
+  - `tradeComplete` **converges equal on both sides** (a one-sided complete is the "one console
+    kept my Pokémon" failure) + **all three holds clear** at convergence, per lag combo;
+  - both sides hold the peer's **FULL 600-byte party** — sampled **before the close**, because the
+    post-trade re-arm deliberately zeroes `partnerPartyBytes` (`source/celiolink.c:854`); asserting
+    it after the close was a false invariant and failed 12× on the first run (fixed by moving the
+    sample, not by weakening the check).
+  - **Not implemented, deliberately (SPEC §D7b.1):** cross-instance CRC equality. Under local
+    termination the two consoles run different game↔dongle conversations by design, so equal CRCs
+    is a FALSE invariant; per-instance CRC correctness is already asserted every frame by
+    `CrcTracker`. This is the charter's "per-round hash agreement" resolved against the source.
+- **TEST 12L (NEW)** — the one genuine D7a gap: SPEC §D7a.3 mandates a lagged TEST-12 variant and
+  the tree had none. Sweeps the peer's `CL_EV_PARTY_CHUNK` through the lag shim at k=0..4 pumps
+  while driving a **real INIT_BLOCK evaluation every single frame**, and asserts the PARTY0 hold
+  stands for exactly the in-flight frames and releases on the frame the chunk lands. Measured:
+  in-flight frames 0/0/1/2/3 for k=0..4, release delay **0 frames** every time — so the release
+  bound is pinned TIGHT at ≤2. This is the run-#8 edge-vs-level defect class at its smallest scale
+  (an edge-triggered hold would consume its only edges while the event was still in the air).
+- **D7c (NEW)** — `test/host/test_trace_replay.c` (+ `test/fixtures/`, 4 real hardware netlogs,
+  names kept). **Tier S (structural, build-independent, always runs):** parse/self-description
+  (role↔seat, CSV shape, all-state-F rows, monotone rounds) · pre-framing dongle words ∈
+  {B9A0,8FFF,D15E} · **framing + CRC arithmetic** re-derived from the recorded columns · header
+  consistency · `# celio-trace` legality (monotone f, sec/st/blk range, legal section edges,
+  blockSeq never walks backwards, a SETUP edge must be corroborated by `resetN`) · `# event`
+  counter sanity. **Tier R (exact replay): SKIPS loudly on all four fixtures** — every one predates
+  the run-#12 FSM fixes, so word-exact equality would legitimately fail where behavior intentionally
+  changed. It is **not** dead code: `tier_r_selftest()` generates a trace from the LIVE FSM, replays
+  it through the same comparator (0 mismatches), then flips one word and requires the comparator to
+  catch it. Bless = drop a run-#13 round-0 log into `test/fixtures/` and set `blessed=1`.
+  - **Framing walk design (the honest part).** The handshake-exit rule is BUILD-DEPENDENT — the
+    0703 fixture's dongle drove 0x8FFF forever and never framed — so the walk never assumes where
+    framing starts. It **searches for an alignment the arithmetic itself validates** (≥2 CRC slots
+    verified, zero mismatches; two chained 16-bit sums agreeing by chance is ~2⁻³²), allows an
+    unverifiable opening slot for a mid-ring window, and requires every framing break to be
+    explained by a re-handshake run or end-of-log.
+  - **Result on the corpus:** JOIN_0703 = no framing run ⇔ header `frames=0` ✓; HOST_0706_114305 =
+    17 frames, 18 CRC slots, **equals the FSM's own `frames=17`** ✓; both 0715 logs = a mid-stream
+    window of 113 frames with **113 CRC slots verified and zero mismatches** across 1018/1024 rows.
+  - **Deviation (in the harness's favour):** SPEC §D7c.2 tiered the two 0715 fixtures as "header +
+    trace-legality (ring not replayable)". They ARE framing-checkable — the LOUNGE keepalive frames
+    `[CAFE,0011]` verify arithmetically without any seed — so the harness checks them too. Verified
+    self-falsifying: flipping ONE word in a copy of HOST_0706 produces `1 unexplained break` + a
+    frames mismatch (16 vs 17) and exits 1.
+- **D7d (NEW)** — `tools/verdict.sh <run-folder>`: one line per run-#13 checklist item (13a trade,
+  13b card, 13c room-exit, 13d re-link) plus health lines (event-channel overflow, wedge-escape
+  `forceN`, the GAME's own `lerr`/red-screen `cb2` from the gs log, the D6 link-surface verdict, and
+  the mere existence of a D1 watchdog / D2 hang dump). POSIX sh + grep/awk, macOS-native, **never
+  writes**. Every pattern was read out of the actual writer (`gbacore.c:936/977/1003/1027/1031`,
+  `gamestate.c:320-321`, `main.c:106-138`) — **note the SPEC's line cites had drifted by ~95 lines**
+  from the D1-D6 work; the tool and the harness both cite the CURRENT lines. gs columns are located
+  **by name** from the CSV header so a future column cannot shift the check.
+  - **UNKNOWN discipline, mechanised:** a missing log, an absent field, or a feature that postdates
+    the log's build ⇒ **UNKNOWN, never PASS** (the run-#11 lost-log lesson). 13b never auto-passes
+    the "card renders" half — it prints `needs-eyes`. 13d cannot distinguish "not attempted" from
+    "failed" and says so (SPEC Open Question 6 — answered in the tool's own output rather than by
+    adding a `# session` counter to the frozen-adjacent TU).
+  - **Smoke tests:** `netlogs/` (the mixed run-#9..#12 folder) ⇒ 13a PASS, 4 UNKNOWNs where the
+    fields postdate those builds, exit 0. An EMPTY folder ⇒ 8 UNKNOWN, exit 0. A synthetic broken
+    run ⇒ 6 FAIL, exit 1.
+- **D7e (NEW)** — `docs/kb/celio/KNOWN-DIFFERENCES.md`: the tri-ledger's middle file, seeded with
+  the SPEC's 10 entries, each with a Celio/pret cite, OUR file:line, the why, and a status ∈
+  {hw-validated (run #N) / PC-only (TEST N) / unmeasured}. **All line cites re-verified against the
+  current tree** (the SPEC's had drifted). Entry 6 (room-exit close) and entry 10 (trainer card) are
+  the two `PC-only — awaiting HW run #13` rows; entry 7 (post-handshake CRC word timing) is the one
+  honest `unmeasured`. Header states the coupling rule (wire-visible change ⇒ ledger entry +
+  `CL_PROTO_REV` bump + re-pinned golden, one commit) and the ratchet (entries are never deleted).
+- `.gitignore`: `netlogs/` + `3DGBA_net_*.txt` were silently swallowing the new fixtures (verified
+  with `git check-ignore`); added a negation for `test/fixtures/3DGBA_net_*.txt` only. The fixtures
+  are recorded link words + counters — **user gameplay data, no ROM code**; flagged here for the
+  `release-legal-audit` gate, same class as the netlogs the repo already carried.
+- Removed three now-dead test helpers (`relay_events`, `relay_until_event`, `supply_peer_party`) —
+  the D7a lag shim superseded them and they were emitting `-Wunused-function` under the suite's
+  `-Wall -Wextra`. The suite now compiles with **only** the one pre-existing `celiolink.c`
+  (`cl_partner_party`) warning.
+
+**Suites** (all PASS): celiolink **1259** (was 1171: +40 from TEST 12L, +6 convergence-mirror
+checks per the 8 TEST-5 lag combos) · netlink **66** (byte-untouched) · diag **360** · control
+**6897** · **NEW** trace-replay **58 checks, 0 failures, 4 loud SKIPs**.
+
+**Build:** `make -j8` → `3DGBA.3dsx` (20:56). **`source/` is byte-untouched by this slice** —
+`git status` shows only `.gitignore`, `test/`, `tools/`, `docs/`. Acceptance gate 5 ("git diff
+source/celiolink.c is EMPTY") holds trivially: the whole frozen path is untouched.
+
+**Correction to the previous entry.** The killed session's BUILDLOG note said "D7b — TODO". That
+was wrong: the D7a agent landed the mirror machinery together with the shim (the code is labelled
+`D7a/D7b`) and died before writing its entry. Verified by reading the code, not by trusting the
+note — and D7a itself was re-read against SPEC §D7a and found complete except for the TEST-12
+variant, which is now TEST 12L. Nothing was re-done.
+
+**Open questions resolved by this slice** (SPEC Open Questions): **#4** (tier-R bless mechanics) —
+the harness takes any log path as argv and the fixture table has a `blessed` flag, so blessing is a
+copy + a one-line edit; raising `NETLOG_N` is NOT needed for a short run-#13 session (HOST_0706
+proves a whole 412-round session fits the 1024-entry ring). **#6** (13d ambiguity) — answered in the
+tool's output rather than by touching the frozen-adjacent TU. **#7** (paired event logs) stays
+deferred: tier R's "never replayable" list names it explicitly.
+
+**Not done here** (belongs to later steps): the two adversarial reviews, the fix pass, `make cia`,
+and the full HANDOFF rewrite. One spec-mandated HANDOFF line WAS added (§D7e.3: run `verdict.sh` on
+run #13's folder and copy its PASS lines into the ledger's status column).
+
 ## 2026-08-03 — Slice D6: link-surface fingerprint at connect (SPEC-suite-hardening §D6)
 
 **Landed**

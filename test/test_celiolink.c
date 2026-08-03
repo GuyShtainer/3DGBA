@@ -498,28 +498,12 @@ static void test_scripted_trade(void)
 //   (f) both sides reach a consistent (iA,jB) and close out trade-complete.
 // --------------------------------------------------------------------------------------------
 
-// Cross-feed every queued outgoing event from `from` into `to` (the UDS transport, modelled as a
-// perfect in-process relay). Returns how many events were relayed.
-static int relay_events(CelioLink* from, CelioLink* to)
-{
-	int n = 0;
-	ClEvent ev;
-	while (cl_take_outgoing(from, &ev)) { cl_put_incoming(to, &ev); n++; }
-	return n;
-}
-
-// Drain `from`'s outgoing queue looking for a specific event type; if found, copy it to *out and
-// return 1 (also relays it to `to` if `to` != NULL). Non-matching events are relayed to `to`.
-static int relay_until_event(CelioLink* from, CelioLink* to, uint8_t want, ClEvent* out)
-{
-	int found = 0;
-	ClEvent ev;
-	while (cl_take_outgoing(from, &ev)) {
-		if (ev.type == want && !found) { *out = ev; found = 1; }
-		if (to) cl_put_incoming(to, &ev);
-	}
-	return found;
-}
+// NOTE (D7): the original instant relays — `relay_events()` / `relay_until_event()`, a bare
+// `while (cl_take_outgoing(from,&ev)) cl_put_incoming(to,&ev)` — were REPLACED by their lagged
+// twins below (relay_events_lagged / relay_until_event_lagged) and deleted, because a lag of 0
+// reproduces them exactly and dead code that "documents history" is what git is for. The instant
+// relay was never a faithful model in the first place: "loopbackPair delivers instantly, which is
+// the one thing the real relay never does" (link_desync_fuzz.lua:65-91 via gen1-parity.md §7).
 
 // ============================================================================================
 // D7a — THE laggyPair DELAY SHIM (SPEC-suite-hardening.md §D7a; design source gen1recomp's
@@ -799,10 +783,8 @@ static void supply_peer_party_q(CelioLink* cl, uint8_t fill, LagQ* q)
 	if (q) lag_drain(q, cl);      // the party must be in before the block stream is driven
 }
 
-static void supply_peer_party(CelioLink* cl, uint8_t fill)
-{
-	supply_peer_party_q(cl, fill, NULL);
-}
+// (the no-lag wrapper `supply_peer_party(cl, fill)` was folded into supply_peer_party_q(...,NULL)
+//  in D7 — a NULL queue IS the instant path.)
 
 // Get a freshly-inited dongle out of handshake and into CONNECTION's block exchange, parked just
 // before PartyPart0 (blockSeq == CL_BLK_PARTY0). Returns with the CrcTracker primed.
@@ -1010,6 +992,19 @@ static void run_two_instance_coordination(int lagAB, int lagBA, int rndMax, uint
 		CHECK(A.confirmHeld == 0, "A cleared the confirm hold after release\n");
 	}
 
+	// D7b: the PARTY half of the mirror set, sampled HERE — before the close. The post-trade
+	// re-arm deliberately zeroes partnerPartyBytes (celiolink.c:854: "the peer re-captures +
+	// re-sends its post-trade party"), so asserting it after the close would be a FALSE invariant.
+	// Each side must be holding the peer's FULL party at the moment the trade is agreed; the
+	// byte-exactness of every chunk was already checked as it landed (lag_deliver).
+	{
+		ClStatus sa, sb;
+		cl_get_status(&A, &sa); cl_get_status(&B, &sb);
+		CHECK(sa.partnerPartyBytes == CL_PARTY_BYTES && sb.partnerPartyBytes == CL_PARTY_BYTES,
+		      "D7b: both sides hold the peer's FULL party at agreement (A=%u B=%u of %u; lag %d/%d seed %u)\n",
+		      sa.partnerPartyBytes, sb.partnerPartyBytes, (unsigned)CL_PARTY_BYTES, lagAB, lagBA, seed);
+	}
+
 	// ---- (f) close out: both reach trade-complete consistently. The trade flows
 	// CONNECTION -> DISCONNECT (close) -> re-handshake -> finish -> close -> tradeComplete. ----
 	// The DISCONNECT close deliberately RE-ARMS the whole negotiation for the next trade round
@@ -1040,6 +1035,27 @@ static void run_two_instance_coordination(int lagAB, int lagBA, int rndMax, uint
 
 	CHECK(ctA.crc_mismatches == 0, "A: no CRC mismatch across coordination (%d)\n", ctA.crc_mismatches);
 	CHECK(ctB.crc_mismatches == 0, "B: no CRC mismatch across coordination (%d)\n", ctB.crc_mismatches);
+
+	// ---- D7b, the CONVERGENCE-POINT half of the mirror set (SPEC §D7b.2 rows "tradeComplete"
+	// and "holds") ---------------------------------------------------------------------------
+	// The per-pump mirror above compares the facts that must track each other DURING the flow.
+	// These two are only meaningful once the flow has finished, so they are asserted here, at the
+	// point where nothing is in flight: the trade either converged on BOTH consoles or on neither
+	// (a one-sided tradeComplete is the "one console kept my Pokemon" failure), and no hold may be
+	// left standing — a hold that survives convergence is a partner that will never speak again.
+	CHECK(cl_trade_complete(&A) == cl_trade_complete(&B),
+	      "D7b: tradeComplete CONVERGED on both sides (A=%d B=%d; lag %d/%d rnd %d seed %u)\n",
+	      cl_trade_complete(&A), cl_trade_complete(&B), lagAB, lagBA, rndMax, seed);
+	{
+		ClStatus sa, sb;
+		cl_get_status(&A, &sa); cl_get_status(&B, &sb);
+		CHECK(sa.partnerPartyHeld == 0 && sa.selectHeld == 0 && sa.confirmHeld == 0,
+		      "D7b: A holds all clear at convergence (party=%u select=%u confirm=%u; lag %d/%d seed %u)\n",
+		      sa.partnerPartyHeld, sa.selectHeld, sa.confirmHeld, lagAB, lagBA, seed);
+		CHECK(sb.partnerPartyHeld == 0 && sb.selectHeld == 0 && sb.confirmHeld == 0,
+		      "D7b: B holds all clear at convergence (party=%u select=%u confirm=%u; lag %d/%d seed %u)\n",
+		      sb.partnerPartyHeld, sb.selectHeld, sb.confirmHeld, lagAB, lagBA, seed);
+	}
 
 	// ---- D7b VERDICT: one CHECK per mirrored fact, each naming the field + pump + seed ----
 	#define MIRROR_OK(counter, what) CHECK((counter) == 0, \
@@ -1424,6 +1440,75 @@ static void test_capture_under_hold(void)
 	for (int i = 0; i < 20; i++) frame_drive(&cl, &ct, init, tx);
 	CHECK(cl.blockSeq == CL_BLK_PARTY1 && cl.partnerPartyHeld, "12c: PARTY1 holds until the peer's chunk 1\n");
 	CHECK(ct.crc_mismatches == 0, "12: no CRC mismatch across the pipeline\n");
+	printf("  ok\n");
+}
+
+// --------------------------------------------------------------------------------------------
+// TEST 12L (D7a.3, second bullet) — THE PARTY0 HOLD UNDER RADIO LAG.
+//
+// TEST 12 above proves the capture-under-hold pipeline with the peer's chunk poked straight into
+// the FSM. TEST 5 runs the two-instance flow through the lag shim. Neither one proves the thing
+// the SPEC asks for here: that the PARTY0 hold survives a DELAYED chunk for exactly as long as
+// the chunk is in flight and releases on the next evaluation once it lands.
+//
+// This is the LEVEL-TRIGGER proof at the smallest possible scale. The run-#8 defect class was
+// holds released by an EDGE: with an edge-triggered release the game's INIT_BLOCK frames that
+// arrive WHILE the event is still in the air consume the only edges there will ever be, and the
+// hold then never lifts. We therefore drive a real INIT_BLOCK frame on EVERY lagged frame (each
+// one an evaluation the FSM must decline) and require the release to come from the arrival alone.
+//
+// Sweep k = 0..4 one-way delay in pumps (~0..67ms; the measured UDS radio is 1-2 pumps).
+// --------------------------------------------------------------------------------------------
+static void test_capture_under_hold_lagged(void)
+{
+	printf("TEST 12L (D7a): the PARTY0 hold under modelled radio lag (level-trigger proof)\n");
+	for (int k = 0; k <= 4; k++) {
+		CelioLink cl; cl_init(&cl, CL_MASTER, LINKTYPE_TRADE);
+		cl_transfer(&cl, LINK_SLAVE_HANDSHAKE); cl_transfer(&cl, LINK_SLAVE_HANDSHAKE);   // establish
+		cl.section = CL_SEC_CONNECTION; cl.blockSeq = CL_BLK_LINKPLAYER;
+		CrcTracker ct; memset(&ct, 0, sizeof ct); ct.first_crc = 1;
+		uint16_t init[8] = { LINKCMD_INIT_BLOCK, 0,0,0,0,0,0,0 }, tx[8];
+
+		for (int i = 0; i < 30 && cl.blockSeq == CL_BLK_LINKPLAYER; i++) frame_drive(&cl, &ct, init, tx);
+		frame_drive(&cl, &ct, init, tx);                       // one INIT evaluates PARTY0 -> hold
+		CHECK(cl.blockSeq == CL_BLK_PARTY0 && cl.partnerPartyHeld == 1,
+		      "12L(k=%d): the PARTY0 hold engaged before the chunk was sent (seq=%d held=%u)\n",
+		      k, cl.blockSeq, cl.partnerPartyHeld);
+
+		// The peer ships party chunk 0 — into the modelled radio, not into the FSM.
+		LagQ q; lag_init(&q, k, 0, 1);
+		ClEvent ev; ev.type = CL_EV_PARTY_CHUNK; ev.arg = 0; ev.len = 200;
+		for (int i = 0; i < 200; i++) ev.data[i] = (uint8_t)(0x80 + i);
+		lag_put(&q, &ev, lag_next_delay(&q));
+
+		// Drive INIT frames; the chunk lands on pump max(k,1) (lag_pump advances the clock, THEN
+		// delivers everything due — so delay 0 still costs one pump).
+		int deliveredAt = -1, heldViolations = 0, releaseFrames = -1;
+		for (int pump = 1; pump <= k + 40; pump++) {
+			if (lag_pump(&q, &cl) > 0 && deliveredAt < 0) deliveredAt = pump;
+			frame_drive(&cl, &ct, init, tx);                   // a real evaluation edge, every frame
+			if (deliveredAt < 0) {                             // still in flight: the hold MUST stand
+				if (cl.blockSeq != CL_BLK_PARTY0 || cl.partnerPartyHeld != 1) heldViolations++;
+			} else if (releaseFrames < 0 && cl.blockSeq == CL_BLK_PARTY1) {
+				releaseFrames = pump - deliveredAt;             // frames from arrival to the serve
+			}
+		}
+		CHECK(deliveredAt == (k > 0 ? k : 1),
+		      "12L(k=%d): the shim delivered on the expected pump (got %d)\n", k, deliveredAt);
+		CHECK(heldViolations == 0,
+		      "12L(k=%d): the hold stood for EVERY in-flight frame despite %d INIT evaluations (%d violations)\n",
+		      k, deliveredAt - 1, heldViolations);
+		CHECK(releaseFrames >= 0,
+		      "12L(k=%d): the hold RELEASED after the delayed chunk landed (level-triggered, no new edge)\n", k);
+		// Measured: 0 for every k — the evaluation on the very frame the chunk lands releases the
+		// serve. The bound is deliberately TIGHT (<=2): a level-triggered hold has nothing to wait
+		// for once the data is in, so a creeping delay here would be a real regression, not noise.
+		CHECK(releaseFrames < 0 || releaseFrames <= 2,
+		      "12L(k=%d): the release followed the arrival immediately (%d frames)\n", k, releaseFrames);
+		CHECK(cl.partnerPartyBytes >= 200,
+		      "12L(k=%d): the delayed chunk landed in the partner window (%u bytes)\n", k, cl.partnerPartyBytes);
+		CHECK(ct.crc_mismatches == 0, "12L(k=%d): no CRC mismatch while holding (%d)\n", k, ct.crc_mismatches);
+	}
 	printf("  ok\n");
 }
 
@@ -1884,6 +1969,7 @@ int main(int argc, char** argv)
 	test_room_keepalive();
 	test_cancel_routes_to_lounge();
 	test_capture_under_hold();
+	test_capture_under_hold_lagged();   // D7a.3: the same hold, with the chunk delayed 0..4 pumps
 	test_lounge_reentry();
 	test_room_exit_close();
 	test_trainer_card_exchange();
