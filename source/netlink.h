@@ -137,3 +137,8 @@ void net_event_reset(void);
 //   overflow     = inbound events we could NOT enqueue (ring full) — must stay 0 (never silent-drop)
 //   retransmits  = cumulative fragment re-sends (loss/latency indicator)
 void net_event_get_stats(int* txSeq, int* txAcked, int* rxDelivered, int* overflow, int* retransmits);
+
+// net_event_get_queue: the EVENT-channel outbound queue depth — max un-ACKed backlog
+//   (next - base) across seats. The D3 CSV `evTxQ` column (SPEC-firmware-diag D3.2): the live
+//   form of the run-#6 send-queue-overflow X-ray. Lock-guarded like net_event_get_stats.
+int  net_event_get_queue(void);

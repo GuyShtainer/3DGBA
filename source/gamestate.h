@@ -73,6 +73,19 @@ typedef struct {
 	uint32_t linkErr;       // gLinkErrorOccurred (u8; 1 once the game's link layer flagged an error)
 	uint32_t linkErrBuf;    // sLinkErrorBuffer (8B latched at error: status u32 + send/recv queue counts)
 	uint32_t linkNotRecv;   // gRemoteLinkPlayersNotReceived (u32 player bitmask we stopped hearing from)
+	// --- D2 game-heartbeat hang catcher (phase 13-prep, SPEC-firmware-diag D2.1; LOGGING ONLY) ---
+	// gMain.vblankCounter1 (u32 @ gMain+0x20): incremented UNCONDITIONALLY in VBlankIntr (pret
+	// pokeemerald src/main.c VBlankIntr(): "gMain.vblankCounter1++"; pokefirered same) — the game's
+	// own IRQ-delivery heartbeat. Frozen while the core still produces video frames => the game's
+	// interrupt path is dead (the D2 Tier-B watch; diag.h DiagHang). Derivation (no re-verified sym
+	// map on this machine — SPEC D2.1): gMain base = the VERIFIED mainCb2 - 4 (gamestate.c game_read:
+	// "gMain+0 = mainCb2-4"); offset 0x20 per pret include/main.h struct Main layout: callbacks
+	// 0x00-0x18 (7 x MainCallback/IntrCallback ptrs), intrCheck u16 @0x1C (+2 pad), vblankCounter1
+	// u32 @0x20, vblankCounter2 u32 @0x24, heldKeysRaw @0x28 ... newKeys u16 @0x2E — the layout
+	// through 0x20 is cross-checked by the hw-exercised newKeys anchor (BPEE 0x030022EE = gMain+0x2E).
+	// Status: derived-from-verified-anchors, VERIFY-ON-HW-PENDING (self-verifying once the D3 CSV
+	// shows it ticking ~60/s); BPGE is FR-derived/unverified per the house rule (HANDOFF Gotchas).
+	uint32_t vblankCtr;     // gMain.vblankCounter1 (u32); 0 = not mapped -> D2 Tier B stays disarmed
 } GameProfile;
 
 // One-pass snapshot of the live game.

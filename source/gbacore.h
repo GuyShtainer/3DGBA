@@ -6,6 +6,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>   // size_t
+#include "diag.h"     // GbaCpuDump (pure C, no mGBA/libctru types) — the D2 hang catcher's
+                      // register-dump snapshot filled by gbacore_dump_cpu below
 
 #define GBA_W          240   // GBA visible width
 #define GBA_H          160   // GBA visible height
@@ -78,11 +80,39 @@ void     gbacore_net_diag(int* startN, int* injectN, int* okN, int* toN, unsigne
 void     gbacore_net_peak(unsigned* peakSentP, unsigned* peakSentC,
                           unsigned* peakRxP, unsigned* peakRxC, int* stallO);   // M3 peak-word watch
 void     gbacore_net_pace(unsigned* vblMax, int* blkN, unsigned* capK);   // M3 joiner pacing diag (HUD+log)
+void     gbacore_net_wd_counters(int* gateN, int* forceN);   // D1 watchdog quick-reads (celio gate/force; STUCK line)
+
+// D3 per-frame CSV telemetry (SPEC-firmware-diag D3.2): the FULL read-only counters snapshot the
+// render thread turns into CSV columns each frame. Pure copies of gbacore.c's worker-captured
+// statics (the same seam the HUD's gbacore_net_diag uses) — NO new logic on the FROZEN trade
+// path; net_celio_capture (LOGGING ONLY) now additionally snapshots the whole ClStatus + the
+// outgoing-event queue depth worker-side. Each field is a single aligned-word read; CROSS-FIELD
+// TEARING between worker writes and this render-thread copy is accepted, disclosed telemetry
+// (SPEC Open Q5) — no lock is taken.
+typedef struct {
+	// celio FSM (worker-captured snapshot; single-word reads, benign race)
+	int clSection, clState, clBlk;  unsigned clFrames, clPartyBytes;
+	int clTradeC, clHeldParty, clHeldSel, clHeldConf, clSelLocal, clSelPeer;
+	int clExitP, clSessEnd, clPCard, clIdReal, clOutQ;
+	int celioGateN, celioForceN, celioResetN, celioSioMode; unsigned celioSiocnt;
+	// SIO driver
+	int startN, injN, finN, okN, toN, edgeN, forceN, paceBlkN;
+	unsigned round, vblMax;
+	unsigned pWord, cWord, rxP, rxC, peakSentP, peakSentC, peakRxP, peakRxC;
+	// netlog ring tail (per-round facts without waiting for the dump; lastOk = -1 until a round logs)
+	unsigned logN, lastRound, lastW0, lastW1; int lastOk;
+} GbaNetCounters;
+void     gbacore_net_counters(GbaNetCounters* out);
 void     gbacore_net_set_exp(int exp);   // live A/B/C pacing experiment (0=A baseline,1=B free-run,2=C capped)
 int      gbacore_net_get_exp(void);      // current experiment state (for the HUD letter)
 void     gbacore_net_log_dump(const char* path, int seat);   // M3: dump the per-round link log to SD (0=HOST,1=JOIN)
 
 uint32_t gbacore_frame_counter(GbaCore* c);   // bumps once per produced video frame
+
+// D2 hang catcher (SPEC-firmware-diag D2.4): read-only snapshot of the core's ARM registers
+// (gprs/CPSR/SPSR/banked), the GBA IE/IF/IME words, and a 32-word stack window into `out`.
+// NULL-safe; false if the core isn't up. Sampled, not stopped: see the race note in gbacore.c.
+bool     gbacore_dump_cpu(GbaCore* c, GbaCpuDump* out);
 
 // --- Live RAM access + game id (v1.1 game-aware touch) ---
 // Read the running game's bus (EWRAM 0x02000000, IWRAM 0x03000000, ROM 0x08000000, ...).

@@ -15,6 +15,9 @@
 #include <mgba/internal/gba/sio/lockstep.h> // GBASIOLockstepCoordinator / Driver
 #include <mgba/internal/gba/sio.h>         // GBASIO, GBASIOTransferCycles, GBASIOMode (net link driver)
 #include <mgba/internal/gba/gba.h>         // struct GBA (memory.io, timing)
+#include <mgba/internal/arm/arm.h>         // struct ARMCore (gprs/cpsr/banked) — D2 gbacore_dump_cpu
+                                           // READS through the public header only (mGBA files never
+                                           // modified; MPL note in SPEC-firmware-diag D2 order gates)
 #include <mgba/core/timing.h>              // mTimingSchedule / mTimingDeschedule
 #include <mgba/gba/interface.h>            // mPERIPH_GBA_LINK_PORT
 #include <mgba-util/vfs.h>
@@ -25,6 +28,9 @@
                // here to avoid a redefinition warning when gbacore.h defines GBA_H = 160.
 #include "gbacore.h"
 #include "celiolink.h"   // Celio-style local-termination link partner (state F)
+#include "diag.h"        // D1 breadcrumbs: pure-C header (no mGBA/libctru types) — one volatile
+                         // store per gated return names WHERE the driver's clock parked
+                         // (SPEC-firmware-diag D1.1 sites 2000-3000; the run-#4 wedge class)
 
 // FIXED_ROM_BUFFER: libmgba's 3DS build (ctru-heap.c, compiled into libmgba.a) DEFINES these
 // and allocates one boot romBuffer (~32 MB). The GBA core points gba->memory.rom at romBuffer,
@@ -586,12 +592,22 @@ static int s_celioResetN = 0;            // full session restarts (long no-trans
 static int s_celioForceN = 0;            // edge-gate wedge escapes (IE.SIO masked or ceiling) — should stay ~0
 static int s_celioExitP = 0, s_celioSessEnd = 0;   // run-#12 room-exit progress (exit seen / close answered)
 static int s_celioPCard = 0, s_celioIdReal = 0;    // peer's real trainer card cached / real identity served
+// D3 per-frame CSV (SPEC-firmware-diag D3.2): the FULL ClStatus snapshot + the outgoing ClEvent
+// queue depth, captured WORKER-side in net_celio_capture (LOGGING ONLY, same seam as the s_celio*
+// ints above, which stay — the netlog header keeps using them). The render thread copies these out
+// via gbacore_net_counters; single-word reads, cross-field tearing accepted (telemetry).
+static ClStatus s_celioStatus;
+static int      s_celioOutQ = 0;
 static struct NetDriver* s_celioNdForTrace = NULL;   // the attached participant (for the trace dump)
 #define NET_CELIO_RESTART_MS 3000        // no transfers for this long => the game left + restarted the club
                                          // (the legit 0x1144 trade-anim reopen gap can reach ~1.7s: fade 15f
                                          // + close + 60f settle + 30f master wait — keep well above it)
 static void net_celio_capture(struct NetDriver* nd) {
 	ClStatus cs; cl_get_status(&nd->cl, &cs);
+	s_celioStatus = cs;   // D3: full FSM snapshot for the CSV columns (holds/select slots included)
+	// D3: outgoing-event queue depth (outTail = producer, outHead = consumer; celiolink.c
+	// cl_emit/cl_take_outgoing) — how many semantic events are queued but not yet shipped over UDS.
+	s_celioOutQ = (nd->cl.outTail - nd->cl.outHead + CL_EVENT_QUEUE_DEPTH) % CL_EVENT_QUEUE_DEPTH;
 	s_celioSection = cs.section; s_celioState = cs.state; s_celioBlk = cs.blockSeq;
 	s_celioFrames = (int)cs.frameCount; s_celioPartyB = (int)cs.partnerPartyBytes; s_celioTradeC = cs.tradeComplete;
 	s_celioExitP = cs.exitPending; s_celioSessEnd = cs.sessionEnded;
@@ -642,6 +658,10 @@ static bool net_celio_fill(struct NetDriver* nd, uint16_t data[4]) {
 // one-transfer-stale word — exactly the bug. Both seats only RENDEZVOUS on collect (full needMask).
 static void net_finishMulti(struct GBASIODriver* d, uint16_t data[4]) {
 	struct NetDriver* nd = (struct NetDriver*)d;
+	// D1 site 3000 ENTRY bracket: the worker parks INSIDE this call for the whole collect. A wedged
+	// collect shows site 1000 in g_diagNetCrumb; this bracket says WHICH round (iter = pendingRound).
+	// Cleared to 0 at function exit — sioCrumb pinned at 3000+r == currently parked in round r's collect.
+	DIAG_CRUMB(g_diagSioCrumb, DIAG_SITE_SIO_FINISH, nd->pendingRound);
 	s_netFinishN++;   // DIAG: net_finishMulti ENTERED (completeEvent fired). finishN==0 while edge>0 => the
 	                  // completeEvent never fired (worker not running run_loop after inject); finishN>okN+toN
 	                  // => entered but collect is BLOCKED (stuck waiting for a word). Pins the joiner round-0 stall.
@@ -718,6 +738,7 @@ static void net_finishMulti(struct GBASIODriver* d, uint16_t data[4]) {
 		nd->irqArmTime   = (uint32_t)mTimingCurrentTime(&gba->timing);
 		nd->phase        = NET_IDLE;                // ready to notice the next parent round
 	}
+	g_diagSioCrumb = 0;   // D1 site 3000 EXIT bracket (both seats): nonzero == currently inside
 }
 
 static uint8_t  net_finishN8 (struct GBASIODriver* d) { (void)d; return 0xFF; }
@@ -744,6 +765,8 @@ void gbacore_net_attach(GbaCore* g, int seat, int peers) {
 	nd->clMyWord = nd->clPartnerWord = 0;
 	s_celioSection = s_celioState = s_celioBlk = -1;
 	s_celioFrames = s_celioPartyB = s_celioTradeC = 0; s_celioGateN = 0; s_celioResetN = 0; s_celioForceN = 0; s_celioSioMode = -1; s_celioSiocnt = 0;
+	cl_get_status(&nd->cl, &s_celioStatus);   // D3 (LOGGING ONLY): truthful baseline from the freshly
+	s_celioOutQ = 0;                          // cl_init'd FSM (select slots -1, holds 0) for row 0
 	net_event_reset();
 	s_netExp = 5; s_netExpSeen = 32; s_netRoundPaceUs = 0;   // DEFAULT = state F (Celio local termination); D/A/B/C/E via KEY_Y.    // DEFAULT = state D (host-rate-follow + edge-strict) — the
 	                                                        // PROVEN trade recipe: every link uses it from round 0 (no
@@ -812,6 +835,80 @@ void gbacore_net_pace(unsigned* vblMax, int* blkN, unsigned* capK) {
 	if (vblMax) *vblMax = s_netVblMax;
 	if (blkN)   *blkN   = s_netPaceBlkN;
 	if (capK)   *capK   = NET_ACTIVE_MS;
+}
+
+// D1 watchdog quick-reads: the two celio gate-health counters the STUCK line carries (SPEC D1.5).
+// Minimal forward of what D3's full gbacore_net_counters will also expose — pure copies of the
+// s_celio* statics (single aligned-word reads from the render thread; same benign-race class as
+// gbacore_net_diag). gateN pinned+rising while frozen = the link-ready gate never opened;
+// forceN rising = the ISR-edge wedge escape is firing (run-#4 class).
+void gbacore_net_wd_counters(int* gateN, int* forceN) {
+	if (gateN)  *gateN  = s_celioGateN;
+	if (forceN) *forceN = s_celioForceN;
+}
+
+// D3 per-frame CSV telemetry (SPEC-firmware-diag D3.2): the full read-only counters snapshot.
+// Pure copies of the statics above — NO logic change, NO lock. Called at ~60 Hz from the render
+// thread; every field is a single aligned-word read (the gbacore_net_diag benign-race class);
+// cross-field tearing between a worker write and this copy is accepted, disclosed telemetry
+// (SPEC Open Q5 — a seqlock would add worker-side cost to the FROZEN path's logging call).
+void gbacore_net_counters(GbaNetCounters* out) {
+	if (!out) return;
+	// celio FSM: the -1-sentinel ints (pre-capture truthful) + the full worker-captured ClStatus
+	out->clSection    = s_celioSection;
+	out->clState      = s_celioState;
+	out->clBlk        = s_celioBlk;
+	out->clFrames     = (unsigned)s_celioStatus.frameCount;
+	out->clPartyBytes = (unsigned)s_celioStatus.partnerPartyBytes;
+	out->clTradeC     = s_celioTradeC;
+	out->clHeldParty  = s_celioStatus.partnerPartyHeld;   // the logical parks CSV exists to expose
+	out->clHeldSel    = s_celioStatus.selectHeld;         // (SPEC D1.1: celiolink wedges are diagnosed
+	out->clHeldConf   = s_celioStatus.confirmHeld;        //  by CSV hold columns, not crumbs)
+	out->clSelLocal   = s_celioStatus.localSelectSlot;    // int8 -1 = not yet
+	out->clSelPeer    = s_celioStatus.partnerSelectSlot;
+	out->clExitP      = s_celioExitP;
+	out->clSessEnd    = s_celioSessEnd;
+	out->clPCard      = s_celioPCard;
+	out->clIdReal     = s_celioIdReal;
+	out->clOutQ       = s_celioOutQ;
+	out->celioGateN   = s_celioGateN;
+	out->celioForceN  = s_celioForceN;
+	out->celioResetN  = s_celioResetN;
+	out->celioSioMode = s_celioSioMode;
+	out->celioSiocnt  = (unsigned)(uint16_t)s_celioSiocnt;
+	// SIO driver
+	out->startN   = s_netStartN;
+	out->injN     = s_netInjectN;
+	out->finN     = s_netFinishN;
+	out->okN      = s_netOkN;
+	out->toN      = s_netToN;
+	out->edgeN    = s_netEdgeN;
+	out->forceN   = s_netForceN;
+	out->paceBlkN = s_netPaceBlkN;
+	out->round    = (unsigned)s_netRound;
+	out->vblMax   = (unsigned)s_netVblMax;
+	out->pWord    = s_netPWord;
+	out->cWord    = s_netCWord;
+	out->rxP      = s_netRxP;
+	out->rxC      = s_netRxC;
+	out->peakSentP = s_peakSentP;
+	out->peakSentC = s_peakSentC;
+	out->peakRxP   = s_peakRxP;
+	out->peakRxC   = s_peakRxC;
+	// netlog ring tail: the last retired round's facts WITHOUT waiting for the dump. The worker
+	// appends while we read — a torn in-progress entry is possible and accepted (telemetry).
+	uint32_t n = s_netLogN;
+	out->logN = (unsigned)n;
+	if (n > 0) {
+		const NetLogEntry* e = &s_netLog[(n - 1u) % NETLOG_N];
+		out->lastRound = (unsigned)e->round;
+		out->lastW0    = e->w0;
+		out->lastW1    = e->w1;
+		out->lastOk    = e->ok;
+	} else {
+		out->lastRound = 0; out->lastW0 = 0; out->lastW1 = 0;
+		out->lastOk    = -1;   // "none" sentinel (SPEC D3.3 format rule)
+	}
 }
 
 // EXPERIMENT STATE (live A/B/C pacing sweep). set_exp is called from the wireless HUD (KEY_Y); it records the
@@ -942,6 +1039,7 @@ static void net_poll_celio(struct NetDriver* nd, GbaCore* g) {
 	if (sio->mode != GBA_SIO_MULTI || !(sio->siocnt & 0x4000)) {
 		s_celioGateN++;
 		nd->gateHeldN++;
+		DIAG_CRUMB(g_diagSioCrumb, DIAG_SITE_SIO_CELIO_GATE, nd->gateHeldN);   // D1 site 2000: link-ready gate held
 		nd->isrWaitRound = 0xFFFFFFFFu;                    // no stale ISR wait across the gap
 		return;
 	}
@@ -962,7 +1060,10 @@ static void net_poll_celio(struct NetDriver* nd, GbaCore* g) {
 	// a frame's words, ~13ms between frames — in EMULATED time, so the game's ISR + main-loop link task
 	// run at the cadence the protocol was designed for (run #2 clocked at raw poll speed).
 	uint32_t nowCyc = (uint32_t)mTimingCurrentTime(&gba->timing);
-	if (nd->clkPaceValid && (int32_t)(nowCyc - nd->nextClockCyc) < 0) return;
+	if (nd->clkPaceValid && (int32_t)(nowCyc - nd->nextClockCyc) < 0) {
+		DIAG_CRUMB(g_diagSioCrumb, DIAG_SITE_SIO_CELIO_PACE, 0);   // D1 site 2200: master-clock pacing gate
+		return;                                                    // (benign/high-frequency; a stuck
+	}                                                              // nextClockCyc would pin this value)
 	uint32_t round = nd->lastInjectedRound + 1;
 	if (nd->isrWaitRound != 0xFFFFFFFFu) {
 		uint32_t now     = (uint32_t)mTimingCurrentTime(&gba->timing);
@@ -980,7 +1081,10 @@ static void net_poll_celio(struct NetDriver* nd, GbaCore* g) {
 		bool cantRun = (gba->memory.io[IO_IE] & SIO_IRQ_BIT) == 0;
 		bool ceiling = elapsed >= NET_CELIO_GATE_CEIL;
 		if (!((acked && fired) && guarded)) {
-			if (!((cantRun && guarded) || ceiling)) return;   // no escape yet: re-poll (CPU advances)
+			if (!((cantRun && guarded) || ceiling)) {         // no escape yet: re-poll (CPU advances)
+				DIAG_CRUMB(g_diagSioCrumb, DIAG_SITE_SIO_CELIO_ISR, elapsed >> 10);   // D1 site 2100:
+				return;                                       // the run-#4 silent-freeze site (iter ~= wait depth)
+			}
 			s_celioForceN++;                                  // escaped the wedge (diag; should stay ~0)
 		} else {
 			s_netEdgeN++;
@@ -1029,7 +1133,10 @@ void gbacore_net_poll(GbaCore* g) {
 	// reached it while a round were still in flight it would starve run_loop and the in-flight round's completion
 	// would never fire — okN stalls and the joiner sticks at the handshake (0616 18:40: edge=529 injects but
 	// okN=3 completed). Also prevents injecting round N+1 before round N completes. net_finishMulti -> phase=IDLE.
-	if (nd->phase != NET_IDLE) return;
+	if (nd->phase != NET_IDLE) {
+		DIAG_CRUMB(g_diagSioCrumb, DIAG_SITE_SIO_ROUND_OPEN, 0);   // D1 site 2400: pinned here = the
+		return;                                                    // round's completeEvent never fired
+	}
 	if (s_netExp == 5) { net_poll_celio(nd, g); return; }   // STATE F: local termination -- no wire rendezvous/pacing
 
 	// M3 RELIABLE: process rounds STRICTLY in order (next == lastInjected+1) — NEVER skip a gap. UDS reorders
@@ -1115,7 +1222,10 @@ void gbacore_net_poll(GbaCore* g) {
 		// emulated cycles between rounds, so it blew past the ceiling and grabbed stale words. Gen-3 is
 		// interrupt-driven (the edge always comes; run_loop advances on each re-poll), so waiting can't wedge.
 		bool ceiling = (s_netExp != 3) && (elapsed >= NET_ISR_GUARD_CEIL);
-		if (!ceiling && !((acked && fired) && guarded)) return;   // not yet — re-poll next slice (CPU advances)
+		if (!ceiling && !((acked && fired) && guarded)) {         // not yet — re-poll next slice (CPU advances)
+			DIAG_CRUMB(g_diagSioCrumb, DIAG_SITE_SIO_ISR_GATE, elapsed >> 10);   // D1 site 2300: stale-word /
+			return;                                               // edge-never-comes class (A-E states)
+		}
 		if (ceiling && !(acked && fired)) s_netForceN++;          // captured on the time floor, not a proven edge
 		else                              s_netEdgeN++;           // captured behind the proven ISR-ran edge (good)
 		nd->isrWaitRound = 0xFFFFFFFFu;                           // satisfied for this round
@@ -1145,6 +1255,54 @@ void gbacore_net_poll(GbaCore* g) {
 
 uint32_t gbacore_frame_counter(GbaCore* g) {
 	return g->core->frameCounter(g->core);
+}
+
+// D2 hang catcher (SPEC-firmware-diag D2.4): read-only ARM CPU snapshot for the auto register
+// dump. Struct paths verified against external/mgba/include (today's tree):
+//   - struct mCore's FIRST member is `void* cpu` (core.h) -> `(struct ARMCore*)g->core->cpu`
+//     (the documented seam; equivalently ((struct GBA*)g->core->board)->cpu, gba.h).
+//   - struct ARMCore embeds ARM_REGISTER_FILE (arm.h): gprs[16] (13=SP 14=LR 15=PC) +
+//     cpsr/spsr as union PSR (.packed int32).
+//   - bankedRegisters[6][7] / bankedSPSRs[6] (arm.h); bank order = enum RegisterBank
+//     (NONE,FIQ,IRQ,SVC,ABT,UND); slot 0 = that mode's r13, slot 1 = r14 (arm.c
+//     ARMSetPrivilegeMode's swap; FIQ additionally banks r8-r12 in slots 2-6). The CURRENT
+//     mode's live SP/LR are gprs[13..14] and its bank slots are STALE — dumped raw, offline
+//     analysis interprets via cpsr's low 5 mode bits (diag.h CAVEAT).
+//   - IE/IF/IME via bus reads of 0x4000200/0x4000202/0x4000208 (the melonDS hang-dump columns,
+//     pm-bridge-forensics.md §12 EmuThread.cpp:525-528).
+//   - stack: 32 words at (sp & ~3) - 32 .. +92 (8 below SP, 24 above — callee frames sit above),
+//     only when SP points into EWRAM/IWRAM (0x02/0x03 — PM's "must point into main RAM" guard,
+//     mp_bridge.cpp:1157); else stackValid=0 and the words stay zero.
+// RACE DISCLOSURE: this runs on the RENDER thread while the wedged worker may still be
+// executing — the registers are a sampled instant, not a stopped core (PM's samplers accept the
+// same). For a truly parked worker (collect/gate wedge) the values are stable. Forensics, not a
+// debugger. LOGGING ONLY: zero writes to the core or the game bus.
+bool gbacore_dump_cpu(GbaCore* g, GbaCpuDump* out) {
+	if (!out) return false;
+	memset(out, 0, sizeof *out);
+	if (!g || !g->core) return false;
+	struct ARMCore* cpu = (struct ARMCore*)g->core->cpu;
+	if (!cpu) return false;
+	for (int i = 0; i < 16; i++) out->gprs[i] = (uint32_t)cpu->gprs[i];
+	out->cpsr = (uint32_t)cpu->cpsr.packed;
+	out->spsr = (uint32_t)cpu->spsr.packed;
+	for (int b = 0; b < 6; b++) {
+		out->bankedR13[b]  = (uint32_t)cpu->bankedRegisters[b][0];   // that mode's r13/SP
+		out->bankedR14[b]  = (uint32_t)cpu->bankedRegisters[b][1];   // that mode's r14/LR
+		out->bankedSPSR[b] = (uint32_t)cpu->bankedSPSRs[b];
+	}
+	out->ie  = gbacore_read16(g, 0x04000200u);
+	out->if_ = gbacore_read16(g, 0x04000202u);
+	out->ime = gbacore_read16(g, 0x04000208u);
+	out->sp  = out->gprs[13];
+	uint8_t region = (uint8_t)(out->sp >> 24);
+	if (region == 0x02 || region == 0x03) {              // EWRAM/IWRAM only (PM main-RAM guard)
+		out->stackValid = 1;
+		uint32_t base = out->sp & ~3u;
+		for (int i = 0; i < 32; i++)                     // stack[0]=sp-32 ... stack[8]=sp ... [31]=sp+92
+			out->stack[i] = gbacore_read32(g, base + 4u * (uint32_t)i - 32u);
+	}
+	return true;
 }
 
 // ---- Live RAM access + game id (game-aware touch) --------------------------

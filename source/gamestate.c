@@ -22,7 +22,10 @@ static const GameProfile PROFILES[] = {
             0x08038420u, 0x02037350u,
             0x020375BCu, 0x080D487Cu, 0x03005DD0u,
             /* link diag (EM): gLinkStatus gLinkErrorOccurred sLinkErrorBuffer gRemoteLinkPlayersNotReceived */
-            0x030030E0u, 0x0300306Cu, 0x02022B00u, 0x03003078u },
+            0x030030E0u, 0x0300306Cu, 0x02022B00u, 0x03003078u,
+            /* D2 vblankCtr (EM): gMain.vblankCounter1 = gMain+0x20 = mainCb2(0x030022C4)-4+0x20;
+               derived-from-verified-anchors (newKeys 0x030022EE = gMain+0x2E), verify-on-hw-pending */
+            0x030022E0u },
   { "BPRE", 0x03005008u, 0x02022B4Cu, 0x02023FF8u, 0x02023FFCu, 0x02023BE4u, 0x02022976u,
             0x0203B0A0u, 0x02024029u, 0x030030F4u, 0x0811EBA0u, 0x0811EBD0u, 0x0303011Eu,
             0x03004FE0u, 0x0802E674u, 0x03004FF4u, 0x02023BD6u, 0x02023BCCu, 0x02023D70u, 0x02023BC4u, 0x03005040u,
@@ -31,7 +34,11 @@ static const GameProfile PROFILES[] = {
             0x08011100u, 0x02036E38u,
             0x0203709Cu, 0x080981ACu, 0x03005050u,
             /* link diag (FRLG): gLinkStatus gLinkErrorOccurred sLinkErrorBuffer gRemoteLinkPlayersNotReceived */
-            0x03003F20u, 0x03003EACu, 0x02022854u, 0x03003EB8u },
+            0x03003F20u, 0x03003EACu, 0x02022854u, 0x03003EB8u,
+            /* D2 vblankCtr (FR): gMain.vblankCounter1 = gMain+0x20 = mainCb2(0x030030F4)-4+0x20;
+               derived-from-verified-anchors, verify-on-hw-pending (user's FR = rev1; gMain is IWRAM
+               and mainCb2 matched rev0/rev1 — SPEC D2.1/Open Q3) */
+            0x03003110u },
   { "BPGE", 0x03005008u, 0x02022B4Cu, 0x02023FF8u, 0x02023FFCu, 0x02023BE4u, 0x02022976u,
             0x0203B0A0u, 0x02024029u, 0x030030F4u, 0x0811EBA0u, 0x0811EBD0u, 0x0303011Eu,
             0x03004FE0u, 0x0802E674u, 0x03004FF4u, 0x02023BD6u, 0x02023BCCu, 0x02023D70u, 0x02023BC4u, 0x03005040u,
@@ -40,7 +47,9 @@ static const GameProfile PROFILES[] = {
             0x08011100u, 0x02036E38u,
             0x0203709Cu, 0x080981ACu, 0x03005050u,
             /* link diag (FRLG): gLinkStatus gLinkErrorOccurred sLinkErrorBuffer gRemoteLinkPlayersNotReceived */
-            0x03003F20u, 0x03003EACu, 0x02022854u, 0x03003EB8u },
+            0x03003F20u, 0x03003EACu, 0x02022854u, 0x03003EB8u,
+            /* D2 vblankCtr (LG): FR-derived per the house rule (BPGE addrs unverified; HANDOFF Gotchas) */
+            0x03003110u },
 };
 
 const GameProfile* profile_for(GbaCore* c) {

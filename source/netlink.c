@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include "netlink.h"
+#include "diag.h"    // D1 breadcrumbs: pure-C header (no libctru leak) — one volatile store per
+                     // wait-loop iteration names WHERE a thread is parked (SPEC-firmware-diag D1.1-D1.2)
 
 // Our app's UDS identity — the scan filter, so we only ever see other 3DGBA lobbies.
 #define DGBA_WLANCOMMID 0x44474241u   // 'DGBA'
@@ -267,7 +269,9 @@ void net_ping_update(int* rttMs, int* drops, int* sendFails) {
 	if (s_inited && s_up) {
 		if (!s_rxRun) {   // LOBBY only: the RX thread isn't pulling, so we do (sole UDS user here)
 			u8 buf[NET_PKT_BUF]; size_t got = 0; u16 src = 0;   // sized for a PK_EVENT fragment too (EVENT flows in-game)
+			uint32_t wdIt = 0;   // D1 crumb iteration (lobby drain depth this frame)
 			while (R_SUCCEEDED(udsPullPacket(&s_bind, buf, sizeof buf, &got, &src)) && got >= sizeof(DgbaLinkPkt)) {
+				DIAG_CRUMB(g_diagNetCrumb, DIAG_SITE_NET_LOBBY_DRAIN, wdIt++);   // D1 site 1400 (main thread, lobby only)
 				const DgbaLinkPkt* pk = (const DgbaLinkPkt*)buf;
 				if (pk->magic != 'G') continue;
 				if (pk->type == PK_PING) {                       // a peer pinged us -> unicast a pong straight back
@@ -407,6 +411,7 @@ bool net_transfer_collect(u32 round, int mode, u16 out[4], u32 needMask, u64 dea
 	net_rounds_init();
 	NetRound* r = &s_rounds[round % NET_ROUNDS];
 	u64 deadlineTick = svcGetSystemTick() + (u64)deadline_ms * (SYSCLOCK_ARM11 / 1000ull);
+	uint32_t wdIt = 0;   // D1 crumb iteration (wait-loop passes; only stamped when NOT done)
 	for (;;) {
 		bool done = false;
 		LightLock_Lock(&r->lock);
@@ -418,6 +423,7 @@ bool net_transfer_collect(u32 round, int mode, u16 out[4], u32 needMask, u64 dea
 		if (done) return true;
 		if (s_collectAbort || !s_up) return false;                         // teardown / link down
 		if ((s64)deadlineTick - (s64)svcGetSystemTick() <= 0) return false; // genuine link-lost
+		DIAG_CRUMB(g_diagNetCrumb, DIAG_SITE_NET_COLLECT, wdIt++);         // D1 site 1000: parked in collect
 		svcSleepThread(1000000ll);                                         // 1ms poll (the RX thread re-sends our word)
 	}
 }
@@ -462,12 +468,14 @@ bool net_cmd_collect(int seat, u32 base, u16 out[8], u64 deadline_ms) {
 	net_rounds_init();
 	if (seat < 0 || seat >= DGBA_MAX_SEATS) return false;
 	u64 deadlineTick = svcGetSystemTick() + (u64)deadline_ms * (SYSCLOCK_ARM11 / 1000ull);
+	uint32_t wdIt = 0;   // D1 crumb iteration
 	for (;;) {
 		int present = 0;
 		for (int i = 0; i < 8; i++) { out[i] = 0; if (net_round_peek_word(base + (u32)i, seat, &out[i])) present++; }
 		if (present == 8) return true;
 		if (s_collectAbort || !s_up) return false;                          // teardown / link down
 		if ((s64)deadlineTick - (s64)svcGetSystemTick() <= 0) return false; // timeout -> caller idle-substitutes
+		DIAG_CRUMB(g_diagNetCrumb, DIAG_SITE_NET_CMD_COLLECT, wdIt++);      // D1 site 1100: parked in cmd-collect (state E)
 		svcSleepThread(1000000ll);                                          // 1ms poll (RX thread merges/re-sends)
 	}
 }
@@ -502,9 +510,11 @@ bool net_round_wait(u32 round, u32 needMask, u64 deadline_ms) {
 	net_rounds_init();
 	if (net_round_ready(round, needMask)) return true;
 	u64 deadlineTick = svcGetSystemTick() + (u64)deadline_ms * (SYSCLOCK_ARM11 / 1000ull);
+	uint32_t wdIt = 0;   // D1 crumb iteration
 	for (;;) {
 		if (s_collectAbort || !s_up) return false;                          // teardown / link down
 		if ((s64)deadlineTick - (s64)svcGetSystemTick() <= 0) return false; // genuine link-lost
+		DIAG_CRUMB(g_diagNetCrumb, DIAG_SITE_NET_ROUND_WAIT, wdIt++);       // D1 site 1200: parked at the pacing barrier
 		svcSleepThread(1000000ll);                                          // 1ms poll (RX thread merges/re-sends)
 		if (net_round_ready(round, needMask)) return true;
 	}
@@ -655,6 +665,23 @@ void net_event_get_stats(int* txSeq, int* txAcked, int* rxDelivered, int* overfl
 	if (retransmits) *retransmits = s_evRetransmits;
 }
 
+// D3 per-frame CSV (SPEC-firmware-diag D3.2/D3.3 `evTxQ`): the EVENT-channel OUTBOUND queue depth
+// — max un-ACKed backlog (next - base) across seats. This is the live form of the run-#6
+// send-queue-overflow X-ray (98 frames of key 0x1C before the FR error): a climbing evTxQ column
+// shows the drain falling behind the fill LONG before the game errors. Same s_evLock discipline
+// as net_event_get_stats; called at ~60 Hz from the render thread — negligible.
+int net_event_get_queue(void) {
+	net_event_locks_init();
+	int q = 0;
+	LightLock_Lock(&s_evLock);
+	for (int s = 0; s < NET_EV_SEATS; s++) {
+		int d = (int)(s_evTx[s].next - s_evTx[s].base);
+		if (d > q) q = d;
+	}
+	LightLock_Unlock(&s_evLock);
+	return q;
+}
+
 // Transmit ONE event (all fragments) to the peer. Caller holds s_evLock. isResend bumps the diag.
 static void net_event_tx_one(int seat, u32 seq, const NetEvent* ev, bool isResend) {
 	int total = (int)ev->len;
@@ -793,6 +820,11 @@ static void net_rx_thread(void* arg) {
 	u8 buf[NET_PKT_BUF]; size_t got; u16 src;
 	int resendTick = 0;
 	while (__atomic_load_n(&s_rxRun, __ATOMIC_ACQUIRE)) {
+		// D1: RX-thread loop-seq (the radio heartbeat the watchdog watches) + site-1300 crumb.
+		// One pass = one drain + one re-send tick; g_diagRxSeq frozen while workers live = the
+		// RX thread wedged (inside udsPullPacket / a send) — SPEC D1.3/D1.1 site 4.
+		g_diagRxSeq++;
+		DIAG_CRUMB(g_diagNetCrumb, DIAG_SITE_NET_RX_PASS, g_diagRxSeq);
 		LightLock_Lock(&s_rxLock);
 		while (s_up && R_SUCCEEDED(udsPullPacket(&s_bind, buf, sizeof buf, &got, &src)) && got) {
 			if (got < 2 || buf[0] != 'G') continue;          // need at least magic+type; 'G' wire-magic
@@ -895,7 +927,9 @@ void net_transfer_abort(void) {
 void net_link_stop(void) {
 	if (s_rxThread) {
 		__atomic_store_n(&s_rxRun, false, __ATOMIC_RELEASE);   // the RX poll notices this within ~0.5ms
+		DIAG_CRUMB(g_diagMainCrumb, DIAG_SITE_MAIN_RX_JOIN, 0);   // D1 site 4200: render thread parked in threadJoin
 		threadJoin(s_rxThread, U64_MAX);                       // never held under s_txLock/s_rxLock -> no inversion
+		g_diagMainCrumb = 0;                                   // bracket exit (nonzero == currently parked)
 		threadFree(s_rxThread); s_rxThread = NULL;
 	}
 	net_transfer_abort();   // release any worker still parked in collect

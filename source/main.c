@@ -35,6 +35,7 @@ static u32 dim_color(u32 c, float f);   // fwd (defined near run_splash)
 #include "audio.h"
 #include "netlink.h"
 #include "wireless.h"
+#include "diag.h"     // D1 breadcrumbs + surviving-thread watchdog (docs/phase13-diagnostics/SPEC-firmware-diag.md)
 #include "warp_shbin.h"   // M2 grid-warp vertex shader (generated from source/warp.v.pica)
 
 #define WORKER_STACKSIZE (512 * 1024)   // mGBA runFrame has deep call chains; 32KB overflows
@@ -67,6 +68,10 @@ static bool s_hasPtm = false;   // ptm:u for battery level (HUD)
 static volatile bool g_appActive = true;   // false while suspended (HOME/sleep) -> idle, free the cores
 static aptHookCookie s_aptCookie;
 static EmuInstance* volatile g_netWorker = NULL;   // the lone wireless worker (emuA); set at link start, cleared on teardown
+// D1 render loop-seq (SPEC D1.3): bumped once per run_session frame-loop iteration. The render
+// thread is the watchdog's own thread, so this is pass-through context in the STUCK line, not a
+// watched seq (renderSeq frozen == no STUCK lines at all — the accepted D1.8 blind spot).
+static volatile uint32_t g_renderSeq = 0;
 static void apt_hook(APT_HookType t, void* p) {
 	(void)p;
 	if (t == APTHOOK_ONSUSPEND || t == APTHOOK_ONSLEEP) {
@@ -133,6 +138,65 @@ static void gs_dump(int seat) {
 		         lt ? lt->tm_mon + 1 : 0, lt ? lt->tm_mday : 0,
 		         lt ? lt->tm_hour : 0, lt ? lt->tm_min : 0, lt ? lt->tm_sec : 0);
 	touch_log_dump(tp);
+}
+
+// ---- D1 watchdog: STUCK-line writer state (SPEC-firmware-diag D1.5-D1.7, S.2-S.3) ------------
+static DiagWd s_wd;                  // escalation state machine (reset at session / wireless-link start)
+static FILE*  s_wdFile   = NULL;     // LAZILY created at the first STUCK event — a healthy run writes no
+                                     // file and never fopens on the hot path (SPEC D1.5)
+static u64    s_wdLastMs = 0;        // ~200ms sampler cadence anchor (osGetTime ms)
+static bool   s_diagOff  = false;    // runtime kill switch: sdmc:/cias/control/diag_off.txt exists
+                                     // (checked once per session/link start, NEVER per frame — SPEC S.3)
+// ---- D2 hang catcher: episode state + dump writer (SPEC-firmware-diag D2.2-D2.5) -------------
+// Shares the wd lifecycle: reset in diag_wd_session_reset, file closed in diag_wd_close (same
+// teardown sites), kill-switched by the same diag_off.txt, sampled on the same ~200ms tick.
+static DiagHang s_hang;              // >180-frozen-render-frames detector (participant core, wlOn only)
+static FILE*    s_hangFile = NULL;   // LAZILY created at the first dump — a healthy run writes no file
+// ---- D3 per-frame CSV telemetry: writer state (SPEC-firmware-diag D3.4-D3.5) -----------------
+// Opened ONCE at wireless link start (the `wlOn = true` site — NEVER on the frame path), fully
+// buffered (a row = one buffered memcpy), fflushed every 256 rows (DeSmuME-PM apCsv discipline,
+// mp_bridge.cpp:1558 — a hard crash loses <=256 rows ~= 4 s; the wd/hang files carry the crash
+// instant). Closed at every wl teardown site via diag_wd_close (shared lifecycle, zero new call
+// sites on the frozen teardown paths). Kill-switched by the same diag_off.txt (file never opens).
+static FILE*    s_csvFile  = NULL;
+static uint32_t s_csvRows  = 0;      // rows since the last fflush (256-row cadence)
+
+// S.2 netlog path helper: "sdmc:/cias/netlogs/3DGBA_<kind>_<ROLE>_<MMDD>_<HHMMSS>.<ext>".
+// The wl_dump/gs_dump snprintf pattern factored ONCE for the new diagnostic writers (wd now;
+// hang/csv in slices D2/D3). seat 0 -> HOST, 1 -> JOIN, <0 -> no role tag (gs_dump's seat<0 branch).
+// Refactoring wl_dump/gs_dump onto this is optional per the spec and deliberately NOT done (no
+// behavior-change risk on the frozen trade path's teardown).
+static void diag_log_path(char* out, size_t cap, const char* kind, const char* ext, int seat) {
+	time_t tt = time(NULL); struct tm* lt = localtime(&tt);
+	if (seat >= 0)
+		snprintf(out, cap, "sdmc:/cias/netlogs/3DGBA_%s_%s_%02d%02d_%02d%02d%02d.%s",
+		         kind, seat == 0 ? "HOST" : "JOIN",
+		         lt ? lt->tm_mon + 1 : 0, lt ? lt->tm_mday : 0,
+		         lt ? lt->tm_hour : 0, lt ? lt->tm_min : 0, lt ? lt->tm_sec : 0, ext);
+	else
+		snprintf(out, cap, "sdmc:/cias/netlogs/3DGBA_%s_%02d%02d_%02d%02d%02d.%s",
+		         kind,
+		         lt ? lt->tm_mon + 1 : 0, lt ? lt->tm_mday : 0,
+		         lt ? lt->tm_hour : 0, lt ? lt->tm_min : 0, lt ? lt->tm_sec : 0, ext);
+}
+
+static void diag_wd_close(void) {
+	if (s_wdFile)   { fclose(s_wdFile);   s_wdFile   = NULL; }
+	if (s_hangFile) { fclose(s_hangFile); s_hangFile = NULL; }   // D2: the hang dumps share the wd file lifecycle
+	if (s_csvFile)  { fclose(s_csvFile);  s_csvFile  = NULL; s_csvRows = 0; }   // D3: fclose flushes the
+	                                                             // buffered tail rows (SPEC D3.5)
+}
+
+// (Re)arm the watchdog for a fresh session: fresh episode state, fresh (lazy) file — so a later
+// link gets its own timestamped wd file — and re-read the kill switch. Called at run_session
+// entry AND at the wireless link-start site (the SPEC S.3/D1.5 `wlOn = true` site).
+static void diag_wd_session_reset(void) {
+	diag_wd_close();
+	memset(&s_wd, 0, sizeof s_wd);
+	memset(&s_hang, 0, sizeof s_hang);   // D2: fresh hang episode (init=0 -> next armed sample re-baselines)
+	s_wdLastMs = 0;
+	struct stat st;
+	s_diagOff = (stat("sdmc:/cias/control/diag_off.txt", &st) == 0);
 }
 
 // Link callbacks (invoked by mGBA's lockstep). onSleep runs on this core's worker thread
@@ -1347,6 +1411,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	DepthSnap depth3d = { false };  // top game's overworld state for stereoscopic depth (M2)
 	gs_log_reset();                 // fresh game-state instrumentation log for this play session
 	touch_log_reset();              // fresh touch-event instrumentation log for this play session
+	diag_wd_session_reset();        // D1: fresh watchdog episode + kill-switch check for this session
 	int  menuSel = 0;
 	int  menuTab = 0, menuRow = 0;   // tabbed pause menu (UI redesign)
 	int  menuScroll = 0;             // content scroll offset (tall tabs scroll; see menu_layout)
@@ -1396,6 +1461,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	while (aptMainLoop()) {
 		if (!g_appActive) { svcSleepThread(16 * 1000 * 1000); continue; }   // backgrounded: don't hog the cores
 		u64 wfStart = svcGetSystemTick();
+		g_renderSeq++;   // D1 render loop-seq (one store; SPEC D1.3)
 		hidScanInput();
 		u32 kDown = hidKeysDown();
 		u32 kHeld = hidKeysHeld();
@@ -1410,6 +1476,89 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		                            showMs = (int)(worstMs + 0.5f); worstMs = 0.0f; }
 		if (s_hasPtm && --batTimer <= 0) { PTMU_GetBatteryLevel(&batLvl); batTimer = 60; }
 
+#if DIAG_D1_ENABLE || DIAG_D2_ENABLE
+		// ---- D1 watchdog + D2 hang-catcher sampler (~200ms; SPEC D1.6/D2.3) — BEFORE the menuOpen
+		// split so it keeps sampling with the pause menu open (under wlOn the workers free-run
+		// through the menu; the gs block below is non-menu-branch only and would go blind exactly
+		// mid-wedge). All reads are plain loads / struct reads (gbacore_frame_counter,
+		// gbacore_net_wd_counters) plus D2's ONE gbacore_read32 heartbeat read — the same
+		// benign-race class as the HUD's gbacore_net_diag reads and the gs block's game_read.
+		// D1 armed in the free-run modes (linkOn/netOn/wlOn — D1.7), where e->frame is a true
+		// loop-seq; in plain unlinked play workers park between frames by design, so a frozen seq
+		// means nothing there. D2 armed under wlOn only (D2.2 — the participant core).
+		if (!s_diagOff && nowMs - s_wdLastMs >= 200) {
+			s_wdLastMs = nowMs;
+#if DIAG_D1_ENABLE
+			uint32_t wdMask = 0;
+			if (wlOn) {   // watch only the PARTICIPANT worker (the other core is paused) + the RX heartbeat
+				wdMask = DIAG_WD_RX | ((g_netWorker == &emuB) ? (DIAG_WD_BF | DIAG_WD_BVF)
+				                                              : (DIAG_WD_AF | DIAG_WD_AVF));
+			} else if (linkOn || netOn) {   // both workers free-run; no RX thread in these modes
+				wdMask = DIAG_WD_AF | DIAG_WD_BF | DIAG_WD_AVF | DIAG_WD_BVF;
+			}
+			DiagWdSample wds;
+			wds.renderSeq = g_renderSeq;
+			wds.aFrame    = emuA.frame;
+			wds.bFrame    = emuB.frame;
+			wds.aVf       = emuA.core ? gbacore_frame_counter(emuA.core) : 0;   // emulated-video seq: "worker
+			wds.bVf       = emuB.core ? gbacore_frame_counter(emuB.core) : 0;   // spinning but game frozen" X-ray
+			wds.rxSeq     = g_diagRxSeq;
+			wds.netCrumb  = g_diagNetCrumb;
+			wds.sioCrumb  = g_diagSioCrumb;
+			gbacore_net_wd_counters(&wds.gateN, &wds.forceN);
+			wds.wl   = wlOn ? 1 : 0;
+			wds.seat = wlOn ? wlSeat : -1;
+			char wdLine[192];
+			if (diag_wd_step(&s_wd, (uint32_t)nowMs, &wds, wdMask, wdLine, sizeof wdLine)) {
+				if (!s_wdFile) {   // lazy-create at the FIRST STUCK event (by definition not the healthy hot path)
+					mkdir("sdmc:/cias", 0777);           // ensure the netlog dirs exist (matches gbacore_net_log_dump)
+					mkdir("sdmc:/cias/netlogs", 0777);
+					char wp[96]; diag_log_path(wp, sizeof wp, "wd", "txt", wlOn ? wlSeat : -1);
+					s_wdFile = fopen(wp, "w");
+				}
+				if (s_wdFile) { fputs(wdLine, s_wdFile); fflush(s_wdFile); }   // append + fflush per line (crash-safe)
+			}
+#endif
+#if DIAG_D2_ENABLE
+			// ---- D2 game-heartbeat hang catcher (SPEC D2.2-D2.5; pm-bridge-forensics §6/§12).
+			// Armed ONLY while the wireless session wants the participant core (wlOn + g_netWorker;
+			// under wlOn the OTHER core is deliberately paused and would false-trigger instantly).
+			// Tier A = the core's produced-video-frame counter (struct read); Tier B = the game's
+			// gMain.vblankCounter1 (ONE gbacore_read32 per tick; armed only when the profile maps
+			// it — GameProfile.vblankCtr, verify-on-hw-pending). Frozen >180 render frames =>
+			// diag_hang_step returns a dump action per tick (cap 24/episode, reset on advance) and
+			// gbacore_dump_cpu's read-only ARM snapshot is appended to the lazy hang netlog.
+			if (wlOn && g_netWorker && g_netWorker->core) {
+				GbaCore* hangCore = g_netWorker->core;
+				const GameProfile* hangProf = profile_for(hangCore);   // 4 ROM-header reads/tick — negligible
+				uint32_t hvf  = gbacore_frame_counter(hangCore);
+				uint32_t hvbl = (hangProf && hangProf->vblankCtr) ? gbacore_read32(hangCore, hangProf->vblankCtr) : 0;
+				int harm = DIAG_HANG_ARM_CORE | ((hangProf && hangProf->vblankCtr) ? DIAG_HANG_ARM_GAME : 0);
+				DiagHangAction hact = diag_hang_step(&s_hang, harm, g_renderSeq, hvf, hvbl);
+				if (hact != DIAG_HANG_NONE) {
+					GbaCpuDump cd;
+					if (gbacore_dump_cpu(hangCore, &cd)) {
+						static char hangBuf[2048];   // one whole dump (~16 lines); static = no per-dump stack/heap
+						diag_hang_format(hangBuf, sizeof hangBuf, &cd, hvf, hvbl, (int)hact,
+						                 (uint32_t)nowMs, g_diagNetCrumb, g_diagSioCrumb);
+						if (!s_hangFile) {   // lazy-create at the FIRST dump (a healthy run writes no file)
+							mkdir("sdmc:/cias", 0777);           // ensure the netlog dirs exist (matches gbacore_net_log_dump)
+							mkdir("sdmc:/cias/netlogs", 0777);
+							char hp[96]; diag_log_path(hp, sizeof hp, "hang", "txt", wlSeat);
+							s_hangFile = fopen(hp, "w");
+						}
+						if (s_hangFile) { fputs(hangBuf, s_hangFile); fflush(s_hangFile); }   // append + fflush per dump
+					}
+				}
+			} else if (s_hang.init) {
+				// Session gone mid-episode (D2.2 disarm): clear the state so a stale freeze can't
+				// leak into the next link even if diag_wd_session_reset were ever skipped.
+				diag_hang_step(&s_hang, 0, g_renderSeq, 0, 0);
+			}
+#endif
+		}
+#endif
+
 		if (!menuOpen) {
 			bool combo = (kHeld & KEY_START) && (kHeld & KEY_SELECT);
 			// With the virtual gamepad on, the touchscreen drives the game, so the menu opens
@@ -1417,7 +1566,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			if ((touchMode == TOUCH_OFF && (kDown & KEY_TOUCH)) || combo) {
 				menuOpen = true; menuSel = 0; menuTab = 0; menuRow = 0; menuScroll = 0; status[0] = '\0';
 				if (!linkOn && !netOn && !wlOn && workersRunning) {   // finish the in-flight frame before pausing into the menu
+					DIAG_CRUMB(g_diagMainCrumb, DIAG_SITE_MAIN_PIPE_WAIT, 0);   // D1 site 4000 bracket (post-mortem only)
 					LightEvent_Wait(&emuA.done); LightEvent_Wait(&emuB.done);
+					g_diagMainCrumb = 0;
 					if (emuA.core) upload_frame(&emuA); if (emuB.core) upload_frame(&emuB);
 					workersRunning = false;
 				}
@@ -1426,7 +1577,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 				// snapshot it. We render N-1 while N computes -> render isn't chained to the slower core,
 				// so non-link is as smooth as the link path. Workers are parked here -> touch RAM access safe.
 				if (!linkOn && !netOn && !wlOn && workersRunning) {
+					DIAG_CRUMB(g_diagMainCrumb, DIAG_SITE_MAIN_PIPE_WAIT, 0);   // D1 site 4000 bracket (post-mortem only)
 					LightEvent_Wait(&emuA.done); LightEvent_Wait(&emuB.done);
+					g_diagMainCrumb = 0;
 					if (emuA.core) upload_frame(&emuA); if (emuB.core) upload_frame(&emuB);
 					workersRunning = false;
 				}
@@ -1564,7 +1717,11 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					const GameProfile* gpTop = profile_for(gsTop);
 					const GameProfile* gpBot = profile_for(gsBot);
 					GameState gst, gsb;
-					if (game_read(gsTop, gpTop, &gst)) {
+					// D3: the read results are reused for the CSV row below (SPEC D3.4 "do NOT
+					// re-read"); game_read fills *out (memset + sentinels) even when it returns false.
+					bool gsTopOk = game_read(gsTop, gpTop, &gst);
+					bool gsBotOk = game_read(gsBot, gpBot, &gsb);
+					if (gsTopOk) {
 						GsDepth gd = { (uint8_t)depth3d.overworld, (uint8_t)depth3d.textTop, (uint8_t)depth3d.textBot,
 						               (short)depth3d.nspr, (short)depth3d.nui, (short)depth3d.nfg,
 						               depth3d.maxd, (short)depth3d.camX, (short)depth3d.camY };
@@ -1574,8 +1731,63 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 						gd.s3d = (osGet3DSliderState() > 0.03f && !menuOpen) ? 1 : 0;          // stereoscopic engaged this frame (read-only)
 						gs_log_sample(gsTop, gpTop, &gst, 0, 0, &gd, (uint32_t)nowMs);     // screen 0 = top/3D
 					}
-					if (game_read(gsBot, gpBot, &gsb))
+					if (gsBotOk)
 						gs_log_sample(gsBot, gpBot, &gsb, 1, tk, NULL, (uint32_t)nowMs);   // screen 1 = bottom/touch (with injected key)
+#if DIAG_D3_ENABLE
+					// ---- D3 per-frame CSV telemetry row (SPEC-firmware-diag D3.3-D3.6; LOGGING
+					// ONLY — reads + one buffered fwrite, zero heap, zero writes to game RAM).
+					// Armed like D2.2: wlOn + the participant core (s_csvFile is non-NULL only when
+					// the wireless link opened it and the diag_off.txt kill switch was absent).
+					// Menu-open frames emit no row (this block is non-menu-branch) — the resulting
+					// GAP in the rf column IS the menu marker, disclosed in the file header.
+					if (s_csvFile && wlOn && g_netWorker && g_netWorker->core) {
+						GbaCore* csvCore = g_netWorker->core;
+						// The participant's GameState is ALREADY in hand: top/bottom mapping per the
+						// gsTop/gsBot swap above (SPEC D3.4). game_read filled the struct either way.
+						const GameState*   pg = (csvCore == gsTop) ? &gst  : &gsb;
+						const GameProfile* pp = (csvCore == gsTop) ? gpTop : gpBot;
+						GbaNetCounters nc; gbacore_net_counters(&nc);
+						DiagCsvRow r;
+						memset(&r, 0, sizeof r);
+						r.tms  = (uint32_t)nowMs; r.rf = g_renderSeq; r.exp = gbacore_net_get_exp();
+						r.ctx  = (int)pg->ctx;  r.cb2 = pg->cb2;
+						r.px   = pg->px;        r.py  = pg->py;
+						r.mapg = pg->mapGroup;  r.mapn = pg->mapNum;
+						r.objx = pg->objX;      r.objy = pg->objY;  r.face = pg->facing;
+						r.sb1  = pg->sb1Valid ? 1 : 0;
+						r.lstat = pg->linkStatus; r.lerr = pg->linkErr; r.lnrecv = pg->linkNotRecv;
+						r.lbuf0 = pg->linkErrBuf0; r.lbuf1 = pg->linkErrBuf1;
+						// game heartbeat: ONE gbacore_read32/frame (gs-block benign-race class). The
+						// D2.1 vblankCtr address is verify-on-hw-PENDING — this column ticking ~60/s
+						// in the run-#13 CSV is exactly its promotion to verified.
+						r.vbl = (pp && pp->vblankCtr) ? gbacore_read32(csvCore, pp->vblankCtr) : 0;
+						r.clSec = nc.clSection; r.clSt = nc.clState; r.clBlk = nc.clBlk;
+						r.clFrm = nc.clFrames;  r.clPB = nc.clPartyBytes; r.clTC = nc.clTradeC;
+						r.clHP  = nc.clHeldParty; r.clHS = nc.clHeldSel;  r.clHC = nc.clHeldConf;
+						r.clSelL = nc.clSelLocal; r.clSelP = nc.clSelPeer;
+						r.clExitP = nc.clExitP; r.clSessEnd = nc.clSessEnd;
+						r.clPCard = nc.clPCard; r.clIdReal = nc.clIdReal; r.clOutQ = nc.clOutQ;
+						r.gateN = nc.celioGateN; r.cForceN = nc.celioForceN; r.resetN = nc.celioResetN;
+						r.sioMode = nc.celioSioMode; r.siocnt = nc.celioSiocnt;
+						r.startN = nc.startN; r.injN = nc.injN; r.finN = nc.finN;
+						r.okN = nc.okN; r.toN = nc.toN; r.edgeN = nc.edgeN; r.forceN = nc.forceN;
+						r.round = nc.round; r.lastW0 = nc.lastW0; r.lastW1 = nc.lastW1; r.lastOk = nc.lastOk;
+						{ int rttMs = -1, drops = 0; net_link_get_rtt(&rttMs, &drops); r.rtt = rttMs; }
+						{ int ts = 0, ta = 0, rd = 0, ov = 0, rt = 0;
+						  net_event_get_stats(&ts, &ta, &rd, &ov, &rt);
+						  r.txSeq = ts; r.txAcked = ta; r.rxDel = rd; r.evOvf = ov; r.evRetx = rt; }
+						r.evTxQ = net_event_get_queue();
+						{ int rxW = 0, txF = 0, busy = 0, pUp = 0;
+						  net_link_get_stats(&rxW, &txF, &busy, &pUp, NULL);
+						  r.rxWordN = rxW; r.txFails = txF; r.busyN = busy; r.peerUp = pUp; }
+						static char csvBuf[512];   // static = no per-frame stack/heap (SPEC D3.5)
+						int rl = diag_csv_row(csvBuf, sizeof csvBuf, &r);
+						if (rl > 0) {
+							fwrite(csvBuf, 1, (size_t)rl < sizeof csvBuf ? (size_t)rl : sizeof csvBuf - 1, s_csvFile);
+							if (++s_csvRows >= 256) { fflush(s_csvFile); s_csvRows = 0; }   // flush-256 (PM)
+						}
+					}
+#endif
 				}
 				if (single) { emuA.keys = g | tk; emuB.keys = 0; }   // one game: pad + touch both drive it
 				else {
@@ -1591,9 +1803,13 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 						if (!net_session_active()) {             // peer/session dropped (e.g. resumed after HOME) -> tear down
 							EmuInstance* part = g_netWorker ? g_netWorker : &emuA;   // the participant (focused game at link start)
 							EmuInstance* other = (part == &emuA) ? &emuB : &emuA;
-							part->netLinked = false; LightEvent_Wait(&part->done);
+							part->netLinked = false;
+							DIAG_CRUMB(g_diagMainCrumb, DIAG_SITE_MAIN_WL_TEARDOWN, 0);   // D1 site 4100 bracket
+							LightEvent_Wait(&part->done);
+							g_diagMainCrumb = 0;
 							wl_dump(wlSeat);   // dump the per-round link log to a timestamped SD file
 							gs_dump(wlSeat);   // + the game-state log (HOST/JOIN-tagged; captures the link-error reason)
+							diag_wd_close();   // D1/D3: close the wd/hang logs + the CSV (flushes its buffered tail)
 							gbacore_net_detach(part->core); net_link_stop();
 							g_netWorker = NULL; other->paused = false; wlOn = false;
 							snprintf(status, sizeof status, "Wireless link closed");
@@ -1784,9 +2000,13 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					if (wlOn) {                                  // already linked -> stop the wireless link
 						EmuInstance* part = g_netWorker ? g_netWorker : &emuA;   // the participant (focused game at link start)
 						EmuInstance* other = (part == &emuA) ? &emuB : &emuA;
-						part->netLinked = false; LightEvent_Wait(&part->done);
+						part->netLinked = false;
+						DIAG_CRUMB(g_diagMainCrumb, DIAG_SITE_MAIN_WL_TEARDOWN, 0);   // D1 site 4100 bracket
+						LightEvent_Wait(&part->done);
+						g_diagMainCrumb = 0;
 						wl_dump(wlSeat);   // dump the per-round link log to a timestamped SD file
 						gs_dump(wlSeat);   // + the game-state log (HOST/JOIN-tagged; captures the link-error reason)
+						diag_wd_close();   // D1/D3: close the wd/hang logs + the CSV (flushes its buffered tail)
 						gbacore_net_detach(part->core); net_link_stop(); net_session_close();
 						g_netWorker = NULL; other->paused = false; wlOn = false;
 						snprintf(status, sizeof status, "Wireless: off");
@@ -1810,6 +2030,27 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 								part->netLinked = true;            // the other stays FALSE (parked, core freed)
 								g_netWorker = part;                // the apt hook can now stop this worker on HOME/suspend
 								wlOn = true; wlSeat = seat;        // remember our seat for the SD log filename
+								diag_wd_session_reset();           // D1 (SPEC S.3/D1.5): kill-switch check + fresh
+								                                   // episode + fresh (lazy) wd-file timestamp
+#if DIAG_D3_ENABLE
+								// D3 (SPEC D3.5): open the per-run CSV ONCE, here — never on the frame
+								// path. diag_wd_session_reset above closed any stale file + re-read the
+								// kill switch; s_csvFile == NULL is the "D3 dormant" state everywhere else.
+								if (!s_diagOff) {
+									mkdir("sdmc:/cias", 0777);           // ensure the netlog dirs exist
+									mkdir("sdmc:/cias/netlogs", 0777);   // (matches gbacore_net_log_dump)
+									char cp[96]; diag_log_path(cp, sizeof cp, "csv", "csv", seat);
+									s_csvFile = fopen(cp, "w");
+									if (s_csvFile) {
+										setvbuf(s_csvFile, NULL, _IOFBF, 8192);   // one-time buffer; a row = a memcpy
+										char hdr[768];
+										int hl = diag_csv_header(hdr, sizeof hdr, seat);
+										if (hl > 0) fwrite(hdr, 1, (size_t)hl < sizeof hdr ? (size_t)hl : sizeof hdr - 1, s_csvFile);
+										fflush(s_csvFile);   // the header lands even if the run dies instantly
+										s_csvRows = 0;
+									}
+								}
+#endif
 								LightEvent_Signal(&part->go);      // kick ONLY the participant into the net free-run
 								menuOpen = false;
 								char pn[24]; rom_display_name(part == &emuA ? pathA : pathB, pn, sizeof pn);
@@ -2153,7 +2394,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		EmuInstance* other = (part == &emuA) ? &emuB : &emuA;
 		part->netLinked = false;              // the worker leaves the net free-run once its collect returns
 		net_link_stop();                      // join the RX thread + abort rounds (any blocked collect returns now)
+		DIAG_CRUMB(g_diagMainCrumb, DIAG_SITE_MAIN_WL_TEARDOWN, 0);   // D1 site 4100 bracket
 		LightEvent_Wait(&part->done);         // wait for the participant's worker to exit the net loop before detaching
+		g_diagMainCrumb = 0;
 		wl_dump(wlSeat);   // dump the per-round link log to a timestamped SD file
 		gbacore_net_detach(part->core);
 		net_session_close();
@@ -2161,6 +2404,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		other->paused = false;
 		wlOn = false;
 	}
+	diag_wd_close();                          // D1/D3: session over — close the wd/hang logs + the CSV
 	emuA.linked = emuB.linked = false;        // stop the free-run loop
 	emuA.netLinked = emuB.netLinked = false;  // ...and the net free-run loop (symmetric teardown)
 	g_quit = true;
