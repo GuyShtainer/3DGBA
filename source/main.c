@@ -20,11 +20,16 @@
 #include <time.h>
 #include <math.h>
 #include <stdlib.h>
+#include <stddef.h>   // offsetof — settings length-tolerance
 #include <sys/stat.h>
 
 #include "gbacore.h"
 #include "rompicker.h"
 #include "theme.h"
+#include "ui.h"
+#include "assets.h"
+
+static u32 dim_color(u32 c, float f);   // fwd (defined near run_splash)
 #include "gamestate.h"
 #include "touch.h"
 #include "audio.h"
@@ -116,6 +121,18 @@ static void gs_dump(int seat) {
 		         lt ? lt->tm_mon + 1 : 0, lt ? lt->tm_mday : 0,
 		         lt ? lt->tm_hour : 0, lt ? lt->tm_min : 0, lt ? lt->tm_sec : 0);
 	gamestate_log_dump(lp);
+	// + the touch-event log (same netlogs folder, role-/timestamp-named so it pairs with the gs log).
+	char tp[96];
+	if (seat >= 0)
+		snprintf(tp, sizeof tp, "sdmc:/cias/netlogs/3DGBA_touch_%s_%02d%02d_%02d%02d%02d.txt",
+		         seat == 0 ? "HOST" : "JOIN",
+		         lt ? lt->tm_mon + 1 : 0, lt ? lt->tm_mday : 0,
+		         lt ? lt->tm_hour : 0, lt ? lt->tm_min : 0, lt ? lt->tm_sec : 0);
+	else
+		snprintf(tp, sizeof tp, "sdmc:/cias/netlogs/3DGBA_touch_%02d%02d_%02d%02d%02d.txt",
+		         lt ? lt->tm_mon + 1 : 0, lt ? lt->tm_mday : 0,
+		         lt ? lt->tm_hour : 0, lt ? lt->tm_min : 0, lt ? lt->tm_sec : 0);
+	touch_log_dump(tp);
 }
 
 // Link callbacks (invoked by mGBA's lockstep). onSleep runs on this core's worker thread
@@ -318,6 +335,11 @@ typedef struct {
 	int  nfg;                       // foreground/solid tiles in view (HUD diagnostic)
 	float maxd;                     // strongest tdepth in view (HUD diagnostic)
 	int  camX, camY;                // gFieldCamera sub-tile scroll (px, -15..15) -> depth scroll-align
+	// --- per-sprite stereoscopic-disparity detail (LOGGING ONLY; filled by depth_disparity_stats, which
+	// mirrors pop_eye's feet base=RAMP_AT(fy)+floorD and head=base+POP3D_STANDUP). px @ FULL slider. ---
+	float feetMin, feetMax, headMin, headMax;   // grounded-feet / head disparity range across on-screen sprites
+	short tallOk, tallFail;                     // #sprites whose head exceeds feet by ~standup (tall renders taller) vs not
+	bool  orderOk;                              // on-screen set monotonic in screen-y vs feet disparity (front-is-front)
 } DepthSnap;
 #define POP3D_PLAYER_GX 112   // player tile (7,5) -> sprite rect (16x32, head 16px above the tile)
 #define POP3D_PLAYER_GY 64
@@ -416,6 +438,42 @@ static void pop_eye(C3D_RenderTarget* tgt, EmuInstance* g, const DepthSnap* d, i
 			draw_pop(&g->tex, x0, yy, w, hh, ox, oy, sx, sy, disp);
 		}
 	}
+}
+
+// LOGGING ONLY: compute the per-sprite feet/head disparity STATS that pop_eye would render, so the gs log
+// proves the 3D effect (not just sprite counts). Mirrors pop_eye EXACTLY: feet base = RAMP_AT(fy)+floorD
+// (raised to the sprite's own elevation plane when matched), head = clamp(base+POP3D_STANDUP). All values
+// are px @ FULL slider (the unit BEFORE pop_eye multiplies by eyeSl), so they're slider-independent.
+// 'tall-is-taller': head must exceed feet by ~POP3D_STANDUP per sprite (after clamping; a sprite already at
+// the comfort ceiling can't stand taller, counted as fail). 'front-is-front': sorting sprites by screen-y
+// (lower = closer) the feet disparity must be non-decreasing (closer pops >=). Never gates rendering.
+static void depth_disparity_stats(DepthSnap* d) {
+	d->feetMin = d->feetMax = d->headMin = d->headMax = 0.0f;
+	d->tallOk = d->tallFail = 0; d->orderOk = true;
+	if (d->nspr <= 0) return;
+	float feet[DEPTH_MAX_SPR]; int fy[DEPTH_MAX_SPR];
+	for (int i = 0; i < d->nspr; i++) {
+		int x0 = d->spr[i].x, y0 = d->spr[i].y, w = d->spr[i].w, h = d->spr[i].h;
+		int cx = x0 + w / 2, feetY = y0 + h;
+		float floorD = floor_at(d, cx, feetY);
+		if (d->spr[i].elev != 0xFF) { float pl = elev_plane(d->spr[i].elev); if (pl > floorD) floorD = pl; }
+		float base = RAMP_AT(feetY) + floorD;                 // disparity at the grounded feet (px @ full slider)
+		float footDisp = clamp_disp(base);                    // pop_eye clamps each strip; feet strip = base
+		float headDisp = clamp_disp(base + POP3D_STANDUP);    // head strip (tmid->0)
+		feet[i] = footDisp; fy[i] = feetY;
+		if (i == 0 || footDisp < d->feetMin) d->feetMin = footDisp;
+		if (i == 0 || footDisp > d->feetMax) d->feetMax = footDisp;
+		if (i == 0 || headDisp < d->headMin) d->headMin = headDisp;
+		if (i == 0 || headDisp > d->headMax) d->headMax = headDisp;
+		if (headDisp - footDisp >= POP3D_STANDUP * 0.5f) d->tallOk++; else d->tallFail++;   // tall renders taller
+	}
+	// front-is-front: a sprite lower on screen (larger feet screen-y => closer) must pop >= one above it.
+	// Insertion-sort indices by feetY ascending (cheap, n<=32), then check feet disparity is non-decreasing.
+	int idx[DEPTH_MAX_SPR]; for (int i = 0; i < d->nspr; i++) idx[i] = i;
+	for (int i = 1; i < d->nspr; i++) { int v = idx[i], j = i - 1;
+		while (j >= 0 && fy[idx[j]] > fy[v]) { idx[j + 1] = idx[j]; j--; } idx[j + 1] = v; }
+	for (int i = 1; i < d->nspr; i++)
+		if (feet[idx[i]] + 0.01f < feet[idx[i - 1]]) { d->orderOk = false; break; }   // closer popped LESS -> ordering broke
 }
 
 // M4: metatile id -> layer type (0 NORMAL=foreground / 1 COVERED=ground / 2 SPLIT=mid) via the
@@ -966,6 +1024,14 @@ typedef struct {
 	s32 bloom;
 	s32 light;
 	s32 vivid;
+	// --- UI redesign additions (appended; older files that end at `vivid` still load) ---
+	s32 theme;            // ThemeId
+	s32 customBaseHue;    // custom-theme builder params
+	s32 customAccentHue;
+	s32 customContrast;
+	s32 gameMode;         // 0 = dual, 1 = single
+	s32 padColor;         // gamepad tint index
+	s32 padEdge;          // 0 round / 1 soft / 2 sharp
 } Settings;
 
 static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, int* hudMode,
@@ -975,8 +1041,15 @@ static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, int* 
 	Settings s;
 	size_t n = fread(&s, 1, sizeof s, f);
 	fclose(f);
-	size_t noVivid = sizeof s - sizeof s.vivid, noLight = noVivid - sizeof s.light, noBloom = noLight - sizeof s.bloom, noDof = noBloom - sizeof s.dof;
-	if ((n != sizeof s && n != noVivid && n != noLight && n != noBloom && n != noDof) || s.magic != SETTINGS_MAGIC) return;   // tolerate older files
+	// Accepted file lengths, oldest → newest (offsetof keeps this robust as the struct grows).
+	size_t lenDof   = offsetof(Settings, dof);    // pre-dof (ends at frameskip)
+	size_t lenBloom = offsetof(Settings, bloom);  // includes dof
+	size_t lenLight = offsetof(Settings, light);  // includes bloom
+	size_t lenVivid = offsetof(Settings, vivid);  // includes light
+	size_t lenOld   = offsetof(Settings, theme);  // includes vivid = pre-redesign full struct
+	size_t lenNew   = sizeof s;                    // includes the UI-redesign prefs
+	if ((n != lenNew && n != lenOld && n != lenVivid && n != lenLight && n != lenBloom && n != lenDof)
+	    || s.magic != SETTINGS_MAGIC) return;      // tolerate older files
 	scaleMode[0] = ((unsigned)s.scaleMode[0]) % 3;
 	scaleMode[1] = ((unsigned)s.scaleMode[1]) % 3;
 	smooth[0] = s.smooth[0] != 0;
@@ -988,16 +1061,28 @@ static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, int* 
 	*volB = s.volB < 0 ? 0 : (s.volB > 256 ? 256 : s.volB);
 	*touchMode = ((unsigned)s.touchMode) % 3;
 	*fsOn = s.frameskip != 0;
-	if (n >= noBloom)  *dofOn   = s.dof != 0;     // older files keep the defaults
-	if (n >= noLight)  *bloomOn = s.bloom != 0;
-	if (n >= noVivid)  *lightOn = s.light != 0;
-	if (n == sizeof s) *vividOn = s.vivid != 0;
+	if (n >= lenBloom) *dofOn   = s.dof != 0;      // older files keep the defaults
+	if (n >= lenLight) *bloomOn = s.bloom != 0;
+	if (n >= lenVivid) *lightOn = s.light != 0;
+	if (n >= lenOld)   *vividOn = s.vivid != 0;
+	if (n >= lenNew) {                              // the UI-redesign chrome prefs (into the global)
+		g_prefs.theme           = ((unsigned)s.theme) % THEME_PRESET_COUNT;
+		g_prefs.customBaseHue   = ((s.customBaseHue % 360) + 360) % 360;
+		g_prefs.customAccentHue = ((s.customAccentHue % 360) + 360) % 360;
+		g_prefs.customContrast  = s.customContrast < 6 ? 6 : (s.customContrast > 24 ? 24 : s.customContrast);
+		g_prefs.gameMode        = s.gameMode ? 1 : 0;
+		g_prefs.padColor        = ((unsigned)s.padColor) % 5;
+		g_prefs.padEdge         = ((unsigned)s.padEdge) % 3;
+	}
+	theme_apply(g_prefs.theme, g_prefs.customBaseHue, g_prefs.customAccentHue, g_prefs.customContrast);
 }
 
 static void settings_save(const int scaleMode[2], const bool smooth[2], bool swapped, int hudMode,
                           int audioMode, int volA, int volB, int touchMode, bool fsOn, bool dofOn, bool bloomOn, bool lightOn, bool vividOn) {
 	Settings s = { SETTINGS_MAGIC, { scaleMode[0], scaleMode[1] },
-	               { smooth[0], smooth[1] }, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn };
+	               { smooth[0], smooth[1] }, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn,
+	               g_prefs.theme, g_prefs.customBaseHue, g_prefs.customAccentHue, g_prefs.customContrast,
+	               g_prefs.gameMode, g_prefs.padColor, g_prefs.padEdge };
 	FILE* f = fopen(SETTINGS_PATH, "wb");
 	if (!f) return;
 	fwrite(&s, 1, sizeof s, f);
@@ -1006,11 +1091,6 @@ static void settings_save(const int scaleMode[2], const bool smooth[2], bool swa
 
 // ---- Pause menu ----
 enum { SESSION_CHANGE, SESSION_QUIT };
-static const char* MENU_ITEMS[] = {
-	"Resume", "Link", "Audio", "Touch", "Frameskip", "Toggle HUD", "Swap screens",
-	"Save state", "Load state", "Load .sav (focused)", "Mute", "Pause", "DoF",
-	"Bloom", "Light", "Vivid", "Wireless", "Change games", "Quit", "Net link"
-};
 #define MENU_N 20
 #define MENU_LINK_IDX  1   // dynamic label ("Link: off/on")
 #define MENU_AUDIO_IDX 2   // dynamic label ("Audio: <mode>")
@@ -1027,10 +1107,176 @@ static const char* MENU_ITEMS[] = {
 #define MENU_NETLINK_IDX  19  // M2.5 net link (loopback) toggle — dynamic label
 static const char* const HUD_NAMES[4] = { "off", "top", "bottom", "both" };
 
+// ---- Tabbed pause menu (UI redesign) ----
+// The 6 tabs re-group the SAME actions the old 2x10 grid had; legacy ids (0..19) feed the original
+// menuSel dispatch untouched (incl. the wireless block). Ids >= 100 are redesign-only controls
+// handled in a small pre-dispatch block.
+enum {
+	ACT_RESUME = 0, ACT_LINK = 1, ACT_AUDIOMODE = 2, ACT_TOUCHMODE = 3, ACT_FS = 4,
+	ACT_HUD = 5, ACT_SWAP = 6, ACT_SAVEST = 7, ACT_LOADST = 8, ACT_LOADSAV = 9,
+	ACT_MUTE = 10, ACT_PAUSEG = 11, ACT_DOF = 12, ACT_BLOOM = 13, ACT_LIGHT = 14,
+	ACT_VIVID = 15, ACT_WIRELESS = 16, ACT_CHANGE = 17, ACT_QUIT = 18, ACT_NETLINK = 19,
+	ACT_SCALE_TOP = 100, ACT_SCALE_BOT, ACT_FILTER, ACT_THEME, ACT_VOLA, ACT_VOLB,
+	ACT_3D, ACT_PADCOL, ACT_PADEDGE, ACT_CHUE, ACT_CAHUE, ACT_CCON,
+	ACT_PREVIEW_PAD, ACT_PREVIEW_SMART,   // Touch tab: set the mode + resume to see it live
+};
+static const char* const MENU_TAB_NAMES[6] = { "SESSION", "DISPLAY", "AUDIO", "ENHANCE", "LINK", "TOUCH" };
+static const char* const PAD_EDGE_NAMES[3] = { "Round", "Soft", "Sharp" };
+
+enum { PK_TOG, PK_SEG, PK_STEP, PK_BTN, PK_SWATCH };
+typedef struct { unsigned char kind, act, nseg; short x, y, w, h; const char* ov; } PCtl;
+static const PCtl PT_SESSION[] = {
+  {PK_BTN,ACT_RESUME,0, 93,10,216,40,0},{PK_BTN,ACT_CHANGE,0, 93,59,216,40,0},{PK_BTN,ACT_QUIT,0, 93,108,216,43,0} };
+static const PCtl PT_DISPLAY[] = {
+  {PK_SEG,ACT_SCALE_TOP,3, 93,26,208,30,0},{PK_SEG,ACT_SCALE_BOT,3, 93,81,208,30,0},
+  {PK_SEG,ACT_FILTER,2, 93,136,208,30,0},{PK_SEG,ACT_HUD,4, 93,191,208,30,0},
+  {PK_TOG,ACT_SWAP,0, 150,224,34,14,"Swap"},{PK_TOG,ACT_FS,0, 284,224,34,14,"Skip"} };
+static const PCtl PT_AUDIO[] = {
+  {PK_SEG,ACT_AUDIOMODE,3, 93,26,216,30,0},{PK_STEP,ACT_VOLA,0, 93,82,216,24,0},
+  {PK_STEP,ACT_VOLB,0, 93,132,216,24,0},{PK_TOG,ACT_MUTE,0, 276,171,34,18,0} };
+static const PCtl PT_ENHANCE[] = {
+  {PK_TOG,ACT_3D,0, 276,51,34,18,0},{PK_TOG,ACT_DOF,0, 276,83,34,18,0},{PK_TOG,ACT_BLOOM,0, 276,112,34,18,0},
+  {PK_TOG,ACT_LIGHT,0, 276,141,34,18,0},{PK_TOG,ACT_VIVID,0, 276,170,34,18,0} };
+static const PCtl PT_LINK[] = {
+  {PK_TOG,ACT_LINK,0, 276,16,34,18,0},{PK_TOG,ACT_NETLINK,0, 276,44,34,18,0},
+  {PK_BTN,ACT_WIRELESS,0, 93,74,216,35,0},{PK_BTN,ACT_SAVEST,0, 93,118,104,31,0},
+  {PK_BTN,ACT_LOADST,0, 204,118,104,31,0},{PK_BTN,ACT_LOADSAV,0, 93,156,216,31,0} };
+static const PCtl PT_TOUCH[] = {
+  {PK_SEG,ACT_TOUCHMODE,3, 93,26,208,30,0},{PK_BTN,ACT_PREVIEW_PAD,0, 93,109,101,44,0},
+  {PK_BTN,ACT_PREVIEW_SMART,0, 201,109,101,44,0},{PK_SWATCH,ACT_PADCOL,0, 93,192,208,26,0},
+  {PK_SEG,ACT_PADEDGE,3, 140,224,172,14,"EDGES"} };
+static const PCtl* const PTABS[6] = { PT_SESSION, PT_DISPLAY, PT_AUDIO, PT_ENHANCE, PT_LINK, PT_TOUCH };
+static const int PTABN[6] = { 3, 6, 4, 5, 6, 5 };
+static const char* const PT_PLATE[6] = { "pause-bot-session","pause-bot-display","pause-bot-audio",
+                                         "pause-bot-enhance","pause-bot-link","pause-bot-touch" };
+
+// ---- Pause-menu widget layout (v2, 1:1): each tab is a list of typed widgets. ----
+// Kinds: SECTION label / SEG segmented / TOGGLE (opt. sublabel) / BUTTON (full or half row) /
+// STEPPER (bar = volume, val = theme+custom params) / HEADER pill / TEXT explainer / SWATCH row.
+enum { W_SECTION, W_SEG, W_TOGGLE, W_BUTTON, W_STEPPER_BAR, W_STEPPER_VAL,
+       W_HEADER, W_TEXT, W_SWATCH, W_GAP };
+typedef struct { u8 kind, act, half, aux; } MenuW;   // half: 1 = left half-button, 2 = right
+
+static int menu_w_h(const MenuW* w) {
+	switch (w->kind) {
+	case W_SECTION: return 13;
+	case W_SEG:     return 26;
+	case W_TOGGLE:  return w->aux ? 28 : 24;
+	case W_BUTTON:  return (w->half == 1) ? 0 : 30;   // half-pairs share one 30px row
+	case W_STEPPER_BAR:
+	case W_STEPPER_VAL: return 36;
+	case W_HEADER:  return 20;
+	case W_TEXT:    return (int)w->aux;                // aux = explainer height
+	case W_SWATCH:  return 26;
+	default:        return 6;                          // W_GAP
+	}
+}
+static int menu_w_sel(u8 kind) {
+	return kind == W_SEG || kind == W_TOGGLE || kind == W_BUTTON ||
+	       kind == W_STEPPER_BAR || kind == W_STEPPER_VAL || kind == W_SWATCH;
+}
+#define PUSH(k,a,hf,ax) do { out[n].kind=(k); out[n].act=(a); out[n].half=(hf); out[n].aux=(ax); n++; } while (0)
+static int menu_layout(int tab, MenuW* out) {
+	int n = 0;
+	switch (tab) {
+	case 0:   // SESSION
+		PUSH(W_GAP, 0, 0, 0);
+		PUSH(W_BUTTON, ACT_RESUME, 0, 1);              // aux 1 = gold primary
+		PUSH(W_BUTTON, ACT_CHANGE, 0, 0);
+		PUSH(W_BUTTON, ACT_PAUSEG, 0, 0);
+		PUSH(W_BUTTON, ACT_QUIT,   0, 2);              // aux 2 = destructive
+		break;
+	case 1:   // DISPLAY
+		PUSH(W_SECTION, ACT_SCALE_TOP, 0, 0); PUSH(W_SEG, ACT_SCALE_TOP, 0, 0);
+		PUSH(W_SECTION, ACT_SCALE_BOT, 0, 0); PUSH(W_SEG, ACT_SCALE_BOT, 0, 0);
+		PUSH(W_SECTION, ACT_FILTER, 0, 0);    PUSH(W_SEG, ACT_FILTER, 0, 0);
+		PUSH(W_SECTION, ACT_HUD, 0, 0);       PUSH(W_SEG, ACT_HUD, 0, 0);
+		PUSH(W_TOGGLE, ACT_SWAP, 0, 0);
+		PUSH(W_TOGGLE, ACT_FS, 0, 0);
+		PUSH(W_SECTION, ACT_THEME, 0, 0);     PUSH(W_STEPPER_VAL, ACT_THEME, 0, 0);
+		if (g_prefs.theme == THEME_CUSTOM) {
+			PUSH(W_STEPPER_VAL, ACT_CHUE, 0, 0);
+			PUSH(W_STEPPER_VAL, ACT_CAHUE, 0, 0);
+			PUSH(W_STEPPER_VAL, ACT_CCON, 0, 0);
+		}
+		break;
+	case 2:   // AUDIO
+		PUSH(W_SECTION, ACT_AUDIOMODE, 0, 0); PUSH(W_SEG, ACT_AUDIOMODE, 0, 0);
+		PUSH(W_STEPPER_BAR, ACT_VOLA, 0, 0);
+		PUSH(W_STEPPER_BAR, ACT_VOLB, 0, 0);
+		PUSH(W_GAP, 0, 0, 0);
+		PUSH(W_TOGGLE, ACT_MUTE, 0, 0);
+		break;
+	case 3:   // ENHANCE
+		PUSH(W_HEADER, 0, 0, 0);
+		PUSH(W_TOGGLE, ACT_3D, 0, 1);                  // aux 1 = "top screen" sublabel
+		PUSH(W_TOGGLE, ACT_DOF, 0, 0);
+		PUSH(W_TOGGLE, ACT_BLOOM, 0, 0);
+		PUSH(W_TOGGLE, ACT_LIGHT, 0, 0);
+		PUSH(W_TOGGLE, ACT_VIVID, 0, 0);
+		break;
+	case 4:   // LINK
+		PUSH(W_TOGGLE, ACT_LINK, 0, 0);
+		PUSH(W_TOGGLE, ACT_NETLINK, 0, 0);
+		PUSH(W_GAP, 0, 0, 0);
+		PUSH(W_BUTTON, ACT_WIRELESS, 0, 1);
+		PUSH(W_BUTTON, ACT_SAVEST, 1, 0);
+		PUSH(W_BUTTON, ACT_LOADST, 2, 0);
+		PUSH(W_BUTTON, ACT_LOADSAV, 0, 0);
+		break;
+	default:  // TOUCH
+		PUSH(W_SECTION, ACT_TOUCHMODE, 0, 0); PUSH(W_SEG, ACT_TOUCHMODE, 0, 0);
+		PUSH(W_TEXT, ACT_TOUCHMODE, 0, 46);
+		PUSH(W_BUTTON, ACT_PREVIEW_PAD, 1, 0);
+		PUSH(W_BUTTON, ACT_PREVIEW_SMART, 2, 0);
+		PUSH(W_SECTION, ACT_PADCOL, 0, 0);    PUSH(W_SWATCH, ACT_PADCOL, 0, 0);
+		PUSH(W_SECTION, ACT_PADEDGE, 0, 0);   PUSH(W_SEG, ACT_PADEDGE, 0, 0);
+		break;
+	}
+	return n;
+}
+#undef PUSH
+
+
+// Top-screen summary while the pause menu is open (draws to whichever top target is bound):
+// "|| PAUSED", the two game names, a row of active-feature pills, and a pointer to the bottom screen.
+static void draw_paused_summary(C2D_TextBuf buf, const char* nameTop, const char* nameBot,
+                                bool s3d, bool dof, bool bloom, bool light, bool vivid,
+                                int touchMode, bool linkOn, bool netOn, bool wlOn) {
+	// Screen 05 top: the pause-top PLATE (PAUSED + swap arrow + hint, over a light dim of the game)
+	// is the chrome; we composite the two game names (manifest x56/x216 y95) + the feature pills.
+	if (!assets_ready()) { C2D_DrawRectSolid(0, 0, 0, 400, 240, C2D_Color32(0, 0, 0, 0x78));
+	                       ui_text_c(buf, "PAUSED", 200.0f, 92.0f, 0.42f, g_ui.acc); return; }
+	assets_draw_plate("pause-top");
+	assets_text_c(buf, FNT_SG_MED, nameTop, nameBot ? 122.0f : 200.0f, 96.0f, 14.0f, THEME_ON_DARK);
+	if (nameBot) assets_text_c(buf, FNT_SG_MED, nameBot, 280.0f, 96.0f, 14.0f, THEME_ON_DARK);
+	{	// active-feature pills (manifest x56 y129 w288 h17): fill + baked JBM label, tinted per state
+		const char* labs[7]; u32 fg[7], bg[7]; int n = 0;
+		#define PILL(L, ON, C) do { labs[n] = (L); fg[n] = (ON) ? g_ui.ink : g_ui.dim; \
+		                            bg[n] = (ON) ? (C) : g_ui.panel2; n++; } while (0)
+		PILL("3D", s3d, THEME_GAME_B); PILL("DoF", dof, g_ui.acc); PILL("Bloom", bloom, g_ui.acc);
+		PILL("Light", light, g_ui.acc); if (vivid) PILL("Vivid", 1, g_ui.acc);
+		PILL(touchMode == 2 ? "Smart" : (touchMode == 1 ? "Pad" : "Touch Off"), touchMode != 0, THEME_GAME_A);
+		PILL(wlOn ? "Wireless" : (netOn ? "Net" : "Link"), (linkOn || netOn || wlOn), g_ui.acc);
+		#undef PILL
+		float pw[7], tw = 0.0f;
+		for (int i = 0; i < n; i++) { pw[i] = assets_text_w(buf, FNT_JBM_MED, labs[i], 8.0f) + 12.0f; tw += pw[i] + 5.0f; }
+		float x = (400.0f - tw) / 2.0f;
+		for (int i = 0; i < n; i++) {
+			ui_fill(x, 129.0f, pw[i], 15.0f, bg[i], 5.0f);
+			assets_text_c(buf, FNT_JBM_MED, labs[i], x + pw[i] / 2.0f, 132.0f, 8.0f, fg[i]);
+			x += pw[i] + 5.0f;
+		}
+	}
+	(void)buf;
+}
+
+
+
 // Run one play session with the two chosen ROMs. Returns SESSION_CHANGE (re-pick) or
 // SESSION_QUIT. Creates/destroys the cores + worker threads itself.
 static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderTarget* topR,
-                       C2D_TextBuf txtBuf, bool isN3DS, s32 mainPrio, const char* pathA, const char* pathB) {
+                       C2D_TextBuf txtBuf, bool isN3DS, s32 mainPrio, const char* pathA, const char* pathB, bool startLinked) {
 	const u32 clrBg     = THEME_LETTERBOX;
 	const u32 clrHi     = THEME_GOLD;
 	const u32 clrTxt    = THEME_TEXT;
@@ -1042,7 +1288,11 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	emu_start(&emuA, 0, 0,              mainPrio + 1);
 	emu_start(&emuB, 1, isN3DS ? 2 : 1, mainPrio + 1);
 	setup_core(&emuA, pathA);
-	setup_core(&emuB, pathB);
+	// 1-game mode (UI redesign): no game B — the bottom screen becomes the touch controller.
+	// The PATHS are the source of truth (the picker returns pathB=="" exactly for a 1-game start);
+	// a stale gameMode pref must NOT override an explicitly resumed/chosen dual pairing.
+	bool single = !pathB[0];
+	if (!single) setup_core(&emuB, pathB);
 
 	// Shared offscreen target for sharp-bilinear's NEAREST prescale pass (reused per screen).
 	C3D_Tex preTex;
@@ -1096,7 +1346,11 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	bool workersRunning = false;   // pipeline: a non-link frame is computing while we render the last
 	DepthSnap depth3d = { false };  // top game's overworld state for stereoscopic depth (M2)
 	gs_log_reset();                 // fresh game-state instrumentation log for this play session
+	touch_log_reset();              // fresh touch-event instrumentation log for this play session
 	int  menuSel = 0;
+	int  menuTab = 0, menuRow = 0;   // tabbed pause menu (UI redesign)
+	int  menuScroll = 0;             // content scroll offset (tall tabs scroll; see menu_layout)
+	bool s3dEnabled = true;          // Enhance-tab master 3D toggle (the slider still gates depth)
 	int  result = SESSION_QUIT;
 	gfxSet3D(true);   // enable stereoscopic top screen; the right eye is driven below (slider-gated)
 	char status[48] = "";   // last save/load result, shown in the menu (fits "Wireless: ON (join, <game>)")
@@ -1124,6 +1378,18 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	int volA = 256, volB = 256;
 
 	settings_load(scaleMode, smooth, &swapped, &hudMode, &audioMode, &volA, &volB, &touchMode, &fsOn, &dofOn, &bloomOn, &lightOn, &vividOn);   // restore prefs
+	if (single) swapped = false;   // 1-game: the game is ALWAYS on top (a stale swapped would blank it)
+	settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);   // persist picker-side g_prefs changes (mode/theme)
+	if (startLinked && emuA.core && emuB.core && link) {   // picker's "START - LINKED": attach the cable now
+		gbacore_link_attach(emuA.core, link, 0, link_cb_sleep, link_cb_wake, &emuA);
+		gbacore_link_attach(emuB.core, link, 1, link_cb_sleep, link_cb_wake, &emuB);
+		emuA.linked = emuB.linked = true;
+		linkOn = true;
+		LightEvent_Signal(&emuA.go);   // kick both workers into the linked free-run
+		LightEvent_Signal(&emuB.go);
+		snprintf(toast, sizeof toast, "Link cable: ON");
+		toastTimer = 120;
+	}
 	gbacore_set_frameskip(emuA.core, (fsOn && focused != 0) ? 2 : 0);   // unfocused-frameskip
 	gbacore_set_frameskip(emuB.core, (fsOn && focused != 1) ? 2 : 0);
 
@@ -1135,6 +1401,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		u32 kHeld = hidKeysHeld();
 		u16 tk = 0;             // touch-injected keys for the bottom game this frame
 		TouchSmart sm = { 0 };   // bottom game live state for SMART touch
+		int tmEff = (single && touchMode == TOUCH_SMART) ? TOUCH_PAD : touchMode;   // SMART needs a bottom-screen game
 
 		// HUD stats: FPS (0.5s window) + battery (throttled).
 		fpsFrames++;
@@ -1148,7 +1415,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			// With the virtual gamepad on, the touchscreen drives the game, so the menu opens
 			// only via the combo; otherwise a tap opens the menu (the original behaviour).
 			if ((touchMode == TOUCH_OFF && (kDown & KEY_TOUCH)) || combo) {
-				menuOpen = true; menuSel = 0; status[0] = '\0';
+				menuOpen = true; menuSel = 0; menuTab = 0; menuRow = 0; menuScroll = 0; status[0] = '\0';
 				if (!linkOn && !netOn && !wlOn && workersRunning) {   // finish the in-flight frame before pausing into the menu
 					LightEvent_Wait(&emuA.done); LightEvent_Wait(&emuB.done);
 					if (emuA.core) upload_frame(&emuA); if (emuB.core) upload_frame(&emuB);
@@ -1167,18 +1434,18 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					if (wlOn) {   // WIRELESS LINK: Y cycles the A/B/C pacing EXPERIMENT (focus-switch is a no-op here
 						// — the peer game is paused). The active state is stamped per-round into the netlog (exp col),
 						// so one hardware run sweeps strategies. A=baseline(paced) B=free-run C=capped free-run.
-						static const char* const EXP_NAMES[4] = { "A baseline (paced)", "B free-run", "C capped free-run", "D host-rate (walk+sync)" };
-						int ex = (gbacore_net_get_exp() + 1) % 4;
+						static const char* const EXP_NAMES[5] = { "A baseline (paced)", "B free-run", "C capped free-run", "D host-rate (walk+sync)", "E BRIDGE (cmd-framed)" };
+						int ex = (gbacore_net_get_exp() + 1) % 6;   // A..F (F = Celio local termination)
 						gbacore_net_set_exp(ex);
 						snprintf(toast, sizeof toast, "Link exp: %s", EXP_NAMES[ex]);
 						toastTimer = 120;
-					} else {                                                 // switch focus (non-link)
+					} else if (!single) {                                    // switch focus (non-link)
 						focused ^= 1; audio_reset_stream();
 						gbacore_set_frameskip(emuA.core, (fsOn && focused != 0) ? 2 : 0);
 						gbacore_set_frameskip(emuB.core, (fsOn && focused != 1) ? 2 : 0);
 					}
 				}
-				if (kDown & KEY_X) {                                         // swap which game is on which screen
+				if (!single && (kDown & KEY_X)) {                                         // swap which game is on which screen
 					swapped = !swapped;
 					snprintf(toast, sizeof toast, "Layout: %s", swapped ? "B top / A bottom" : "A top / B bottom");
 					toastTimer = 90;
@@ -1203,12 +1470,12 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 				// Touchscreen drives the BOTTOM game (A is on bottom iff swapped) as a POINTER on the
 				// real game UI. touch_update is stateful (menu-cursor driver + tap-to-walk) -> run it
 				// every gameplay frame when enabled.
-				if (touchMode != TOUCH_OFF) {
+				if (tmEff != TOUCH_OFF) {
 					bool touching = (kHeld & KEY_TOUCH) != 0;
 					touchPosition tp = { 0, 0 };
 					if (touching) hidTouchRead(&tp);
 					int gx = -1, gy = -1; bool gvalid = false;
-					if (touchMode == TOUCH_SMART) {   // game-aware touch works even during a link (benign EWRAM race)
+					if (tmEff == TOUCH_SMART) {   // game-aware touch works even during a link (benign EWRAM race)
 						gvalid = touch_to_gba(tp.px, tp.py, scaleMode[1], &gx, &gy);
 						GbaCore* botCore = swapped ? emuA.core : emuB.core;
 						const GameProfile* gp = profile_for(botCore);
@@ -1224,9 +1491,11 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 							sm.battlersCount = gsr.battlersCount; sm.absentMask = gsr.absentMask;
 							for (int i = 0; i < 4; i++) sm.battlerPos[i] = gsr.battlerPos[i];
 							sm.bagListTaskBase = gsr.bagListTaskBase;
+							sm.cb2 = gsr.cb2; sm.ctxResolved = gsr.ctxResolved; sm.nTask = gsr.nTask;   // touch-log fingerprint (LOGGING ONLY)
+							for (int i = 0; i < 8; i++) sm.taskFp[i] = gsr.taskFp[i];
 						}
 					}
-					tk = touch_update(touchMode, touching, tp.px, tp.py, gx, gy, gvalid, &sm);
+					tk = touch_update(tmEff, touching, tp.px, tp.py, gx, gy, gvalid, &sm);
 				}
 				{   // stereoscopic depth: TOP game overworld state + on-screen OAM rects (cores parked)
 					GbaCore* topCore = swapped ? emuB.core : emuA.core;
@@ -1235,6 +1504,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					depth3d.textTop = ts.textBanner;   // map-name banner lives in the top band
 					depth3d.textBot = ts.textDlg;      // dialog textbox lives in the bottom band
 					depth3d.nspr = 0; depth3d.nui = 0; depth3d.nfg = 0; depth3d.maxd = 0.0f; depth3d.camX = depth3d.camY = 0; memset(depth3d.tdepth, 0, sizeof depth3d.tdepth);
+					depth3d.feetMin = depth3d.feetMax = depth3d.headMin = depth3d.headMax = 0.0f; depth3d.tallOk = depth3d.tallFail = 0; depth3d.orderOk = true;   // 3D disparity-detail (LOGGING ONLY)
 					if (topCore) bg0_scan(topCore, tprof, depth3d.overworld, &depth3d);   // text flags + gen-3 UI panel rects
 					if (depth3d.overworld && topCore) {
 						static const unsigned char SW[3][4] = {{8,16,32,64},{16,32,32,64},{8,8,16,32}};
@@ -1283,6 +1553,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 								if (best >= 0) depth3d.spr[s].elev = oel[best];
 							}
 						}
+						depth_disparity_stats(&depth3d);   // LOGGING ONLY: per-sprite feet/head disparity stats for the gs log
 					}
 				}
 				{   // ---- game-state instrumentation log (READ-ONLY; both games; edge-triggered) ----
@@ -1297,13 +1568,20 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 						GsDepth gd = { (uint8_t)depth3d.overworld, (uint8_t)depth3d.textTop, (uint8_t)depth3d.textBot,
 						               (short)depth3d.nspr, (short)depth3d.nui, (short)depth3d.nfg,
 						               depth3d.maxd, (short)depth3d.camX, (short)depth3d.camY };
+						gd.feetMin = depth3d.feetMin; gd.feetMax = depth3d.feetMax;            // per-sprite disparity detail (3D-effect proof)
+						gd.headMin = depth3d.headMin; gd.headMax = depth3d.headMax;
+						gd.tallOk = depth3d.tallOk; gd.tallFail = depth3d.tallFail; gd.orderOk = depth3d.orderOk ? 1 : 0;
+						gd.s3d = (osGet3DSliderState() > 0.03f && !menuOpen) ? 1 : 0;          // stereoscopic engaged this frame (read-only)
 						gs_log_sample(gsTop, gpTop, &gst, 0, 0, &gd, (uint32_t)nowMs);     // screen 0 = top/3D
 					}
 					if (game_read(gsBot, gpBot, &gsb))
 						gs_log_sample(gsBot, gpBot, &gsb, 1, tk, NULL, (uint32_t)nowMs);   // screen 1 = bottom/touch (with injected key)
 				}
-				emuA.keys = ((focused == 0) ? g : 0) | (swapped ? tk : 0);
-				emuB.keys = ((focused == 1) ? g : 0) | (swapped ? 0 : tk);
+				if (single) { emuA.keys = g | tk; emuB.keys = 0; }   // one game: pad + touch both drive it
+				else {
+					emuA.keys = ((focused == 0) ? g : 0) | (swapped ? tk : 0);
+					emuB.keys = ((focused == 1) ? g : 0) | (swapped ? 0 : tk);
+				}
 				if (linkOn || netOn || wlOn) {
 					// Workers free-run + pump their own audio rings; main just samples the latest frames
 					// and stays responsive. Audio keeps playing during a link (rings are worker-private).
@@ -1332,39 +1610,69 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 				audio_set_params(focused, audioMode, volA, volB);
 			}
 		} else {
-			bool onAudio = (menuSel == MENU_AUDIO_IDX);
-			if (kDown & (KEY_DDOWN | KEY_CPAD_DOWN)) { if (menuSel + 2 < MENU_N) menuSel += 2; else if ((menuSel & 1) && menuSel + 1 < MENU_N) menuSel = MENU_N - 1; }
-			if (kDown & (KEY_DUP   | KEY_CPAD_UP))   { if (menuSel - 2 >= 0)      menuSel -= 2; }
-			if (!onAudio && (kDown & (KEY_DRIGHT | KEY_CPAD_RIGHT))) { if (menuSel + 1 < MENU_N) menuSel++; }
-			if (!onAudio && (kDown & (KEY_DLEFT  | KEY_CPAD_LEFT)))  { if (menuSel - 1 >= 0)      menuSel--; }
-			if (menuSel == MENU_AUDIO_IDX && (kDown & (KEY_DLEFT | KEY_CPAD_LEFT | KEY_DRIGHT | KEY_CPAD_RIGHT))) {
-					int* v = (focused == 0) ? &volA : &volB;   // adjust the focused game's volume
-					*v += (kDown & (KEY_DRIGHT | KEY_CPAD_RIGHT)) ? 32 : -32;
-					if (*v < 0) *v = 0; else if (*v > 256) *v = 256;
-					snprintf(status, sizeof status, "Vol %c: %d%%", focused == 0 ? 'A' : 'B', *v * 100 / 256);
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
-				}
-				if (kDown & KEY_B) menuOpen = false;                 // resume
-			bool activate = (kDown & KEY_A) != 0;
-			if (kDown & KEY_TOUCH) {   // tap a button to select it
-				touchPosition mtp; hidTouchRead(&mtp);
-				for (int i = 0; i < MENU_N; i++) {
-					float bx = 4.0f + (i & 1) * 160.0f, by = 2.0f + (i >> 1) * 22.0f;
-					if (mtp.px >= bx && mtp.px < bx + 152 && mtp.py >= by && mtp.py < by + 20) {
-						menuSel = i;
-						if (i == MENU_AUDIO_IDX) {   // 3 sub-buttons: A vol | B vol | mode (no full-cell activate)
-							int j = (int)((mtp.px - bx) / 50.5f); if (j < 0) j = 0; if (j > 2) j = 2;
-							if      (j == 0) { volA += 64; if (volA > 256) volA = 0; }
-							else if (j == 1) { volB += 64; if (volB > 256) volB = 0; }
-							else            { audioMode = (audioMode + 1) % 3; audio_reset_stream(); }
-							settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
-						} else {
-							activate = true;
-						}
+				// ---- Pause menu (v3, plate-composited): PCtl controls at manifest coords. L/R tab,
+				// up/down focus, left/right adjust, A/tap activate. Buttons + link toggles route to the
+				// legacy menuSel dispatch; segs/steppers/swatch/3D/preview handled inline.
+				if (kDown & KEY_L) { menuTab = (menuTab + 5) % 6; menuRow = 0; }
+				if (kDown & KEY_R) { menuTab = (menuTab + 1) % 6; menuRow = 0; }
+				const PCtl* PT = PTABS[menuTab]; int nP = PTABN[menuTab];
+				if (menuRow >= nP) menuRow = 0;
+				if (kDown & (KEY_DDOWN | KEY_CPAD_DOWN)) menuRow = (menuRow + 1) % nP;
+				if (kDown & (KEY_DUP   | KEY_CPAD_UP))   menuRow = (menuRow - 1 + nP) % nP;
+				if (kDown & KEY_B) menuOpen = false;
+				bool activate = (kDown & KEY_A) != 0;
+				int adj = (kDown & (KEY_DRIGHT | KEY_CPAD_RIGHT)) ? 1 : ((kDown & (KEY_DLEFT | KEY_CPAD_LEFT)) ? -1 : 0);
+				int segSet = -1;
+				if (kDown & KEY_TOUCH) {
+					touchPosition mtp; hidTouchRead(&mtp);
+					if (mtp.px < 86) { int t2 = ((int)mtp.py - 8) / 30; if (t2 < 0) t2 = 0; if (t2 > 5) t2 = 5;
+					                   if (t2 != menuTab) { menuTab = t2; menuRow = 0; PT = PTABS[menuTab]; nP = PTABN[menuTab]; } }
+					else for (int i2 = 0; i2 < nP; i2++) {
+						const PCtl* c2 = &PT[i2];
+						if (mtp.px < c2->x || mtp.px >= c2->x + c2->w || mtp.py < c2->y || mtp.py >= c2->y + c2->h) continue;
+						menuRow = i2;
+						if (c2->kind == PK_SEG)   segSet = ui_seg_hit(c2->x, c2->w, c2->nseg, (float)mtp.px);
+						else if (c2->kind == PK_STEP) adj = (mtp.px < c2->x + 24) ? -1 : (mtp.px > c2->x + c2->w - 24 ? 1 : 0);
+						else if (c2->kind == PK_SWATCH) { int cc = ((int)mtp.px - c2->x) / 30; if (cc<0)cc=0; if (cc>4)cc=4;
+							g_prefs.padColor = cc; settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn); }
+						else activate = true;
 						break;
 					}
 				}
-			}
+				int act = PT[menuRow].act;
+				int pkind = PT[menuRow].kind;
+				if (pkind == PK_SEG && (segSet >= 0 || adj)) {
+					int cur, n = PT[menuRow].nseg;
+					switch (act) { case ACT_SCALE_TOP: cur=scaleMode[0]; break; case ACT_SCALE_BOT: cur=scaleMode[1]; break;
+						case ACT_FILTER: cur = smooth[swapped?(focused^1):focused]; break; case ACT_HUD: cur=hudMode; break;
+						case ACT_AUDIOMODE: cur=audioMode; break; case ACT_TOUCHMODE: cur=touchMode; break;
+						default: cur=g_prefs.padEdge; break; }
+					cur = (segSet >= 0) ? segSet : ((cur + adj + n) % n);
+					switch (act) { case ACT_SCALE_TOP: scaleMode[0]=cur; break; case ACT_SCALE_BOT: scaleMode[1]=cur; break;
+						case ACT_FILTER: smooth[swapped?(focused^1):focused]=cur; break; case ACT_HUD: hudMode=cur; break;
+						case ACT_AUDIOMODE: audioMode=cur; audio_reset_stream(); break; case ACT_TOUCHMODE: touchMode=cur; break;
+						default: g_prefs.padEdge=cur; break; }
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
+					activate = false;
+				}
+				else if (pkind == PK_STEP && adj) {
+					int* v = (act == ACT_VOLA) ? &volA : &volB;
+					*v += adj * 32; if (*v < 0) *v = 0; else if (*v > 256) *v = 256;
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
+					activate = false;
+				}
+				else if (activate && act == ACT_3D) {
+					s3dEnabled = !s3dEnabled;
+					snprintf(status, sizeof status, "3D %s (slider gates depth)", s3dEnabled ? "on" : "off");
+					activate = false;
+				}
+				else if (activate && (act == ACT_PREVIEW_PAD || act == ACT_PREVIEW_SMART)) {
+					touchMode = (act == ACT_PREVIEW_PAD) ? TOUCH_PAD : TOUCH_SMART;
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
+					menuOpen = false; activate = false;
+				}
+				
+			if (activate) menuSel = act;   // route the legacy action into the original dispatch below
 			if (activate) {
 				if      (menuSel == 0) menuOpen = false;         // Resume
 				else if (menuSel == 1) {                         // Link cable (experimental)
@@ -1414,6 +1722,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					hudMode = (hudMode + 1) & 3;
 					snprintf(status, sizeof status, "HUD: %s", HUD_NAMES[hudMode]);
 					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
+				}
+				else if (menuSel == 6 && single) {               // Swap: meaningless with one game
+					snprintf(status, sizeof status, "No swap in 1-game mode");
 				}
 				else if (menuSel == 6) {                         // Swap screens
 					swapped = !swapped; menuOpen = false;
@@ -1547,12 +1858,13 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 
 		// ---- text for this frame (single buffer; cleared once) ----
 		C2D_TextBufClear(txtBuf);
-		C2D_Text items[MENU_N], tHint, tStatus, tToast;
+		C2D_Text tHint, tStatus, tToast;
 
 		// HUD text: per-screen game label + a top-screen stat line (FPS / clock / battery).
 		C2D_Text tHudTop, tHudBot, tHudStat;
 		const char* topName = swapped ? nameB : nameA;
 		const char* botName = swapped ? nameA : nameB;
+		if (single) botName = "CONTROLLER";
 		char hudStat[72];
 		if (hudMode) {
 			time_t tt = time(NULL);
@@ -1584,58 +1896,19 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			C2D_TextParse(&tHudStat, txtBuf, hudStat);  C2D_TextOptimize(&tHudStat);
 		}
 		if (menuOpen) {
-			char alabel[40], llabel[24];
-			for (int i = 0; i < MENU_N; i++) {
-				const char* label = MENU_ITEMS[i];
-				if (i == MENU_AUDIO_IDX) {   // dynamic: "Audio: Mixed  A100 B80"
-					snprintf(alabel, sizeof alabel, "Audio: %s  A%d B%d",
-					         AUDIO_NAMES[audioMode], volA * 100 / 256, volB * 100 / 256);
-					label = alabel;
-				} else if (i == MENU_LINK_IDX) {   // dynamic: "Link: off/ON (beta)"
-					snprintf(llabel, sizeof llabel, "Link: %s", linkOn ? "ON (beta)" : "off");
-					label = llabel;
-				} else if (i == MENU_NETLINK_IDX) {   // dynamic: "Net link: off/ON"
-					snprintf(llabel, sizeof llabel, "Net link: %s", netOn ? "ON" : "off");
-					label = llabel;
-				
-				} else if (i == MENU_TOUCH_IDX) {
-					snprintf(llabel, sizeof llabel, "Touch: %s", TOUCH_NAMES[touchMode]);
-					label = llabel;
-				} else if (i == MENU_FS_IDX) {
-					snprintf(llabel, sizeof llabel, "Frameskip: %s", fsOn ? "on" : "off");
-					label = llabel;
-				} else if (i == MENU_MUTE_IDX) {
-					snprintf(llabel, sizeof llabel, "Mute: %s", muted ? "on" : "off");
-					label = llabel;
-				} else if (i == MENU_PAUSE_IDX) {
-					bool fp = (focused == 0) ? emuA.paused : emuB.paused;
-					snprintf(llabel, sizeof llabel, "Pause %c: %s", focused == 0 ? 'A' : 'B', fp ? "on" : "off");
-					label = llabel;
-				} else if (i == MENU_HUD_IDX) {
-					snprintf(llabel, sizeof llabel, "HUD: %s", HUD_NAMES[hudMode]);
-					label = llabel;
-				} else if (i == MENU_DOF_IDX) {
-					snprintf(llabel, sizeof llabel, "DoF: %s", dofOn ? "on" : "off");
-					label = llabel;
-				} else if (i == MENU_BLOOM_IDX) {
-					snprintf(llabel, sizeof llabel, "Bloom: %s", bloomOn ? "on" : "off");
-					label = llabel;
-				} else if (i == MENU_LIGHT_IDX) {
-					snprintf(llabel, sizeof llabel, "Light: %s", lightOn ? "on" : "off");
-					label = llabel;
-				} else if (i == MENU_VIVID_IDX) {
-					snprintf(llabel, sizeof llabel, "Vivid: %s", vividOn ? "on" : "off");
-					label = llabel;
-				}
-				C2D_TextParse(&items[i], txtBuf, label); C2D_TextOptimize(&items[i]);
-			}
 			// Footer: last action result, or a controls cheat-sheet when idle.
 			C2D_TextParse(&tStatus, txtBuf,
-			              status[0] ? status : "Y focus  X swap  ZL/ZR filter/scale  L/R = GBA");
+			              status[0] ? status : "L/R tab  A select  B resume  (or tap)");
 			C2D_TextOptimize(&tStatus);
 		} else {
-			C2D_TextParse(&tHint, txtBuf, touchMode != TOUCH_OFF ? "START+SELECT: menu  (touch drives bottom game)"
-			                                      : "tap / START+SELECT: menu");
+			char hintBuf[96];
+			if (single)
+				snprintf(hintBuf, sizeof hintBuf, "3D on top · %s · START+SELECT = menu", TOUCH_NAMES[tmEff]);
+			else
+				snprintf(hintBuf, sizeof hintBuf, "%s", touchMode != TOUCH_OFF ? "START+SELECT → pause menu"
+				                                      : "tap screen → pause menu");
+			C2D_TextParse(&tHint, txtBuf, hintBuf);
+
 			C2D_TextOptimize(&tHint);
 			if (toastTimer > 0) { C2D_TextParse(&tToast, txtBuf, toast); C2D_TextOptimize(&tToast); }
 		}
@@ -1655,7 +1928,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 
 		// top screen (sharp-bilinear two-pass when applicable). render_game leaves `top` bound.
 		float slider3d = osGet3DSliderState();
-		bool s3dOn = slider3d > 0.03f && !menuOpen;   // 3D engaged AND not in the menu; else plain 2D (gates every 3D effect)
+		bool s3dOn = slider3d > 0.03f && !menuOpen && s3dEnabled;   // 3D engaged AND not in the menu; else plain 2D (gates every 3D effect)
 		bool pop3d = s3dOn && depth3d.overworld && topG->core;
 		bool uipop = s3dOn && depth3d.nui > 0 && topG->core;   // BG0 panels pop in ANY context
 		// Text-aware DoF: kill a band's blur the moment text/UI shows under it (BG0 scan + RAM
@@ -1690,13 +1963,38 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			if (hudMode & 1) {
 				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 400.0f, 14.0f, THEME_HUD_BAR);
 				if (focScreen == 0) C2D_DrawRectSolid(0.0f, 14.0f, 0.0f, 400.0f, 2.0f, clrHi);
-				C2D_DrawText(&tHudTop, C2D_WithColor, 4.0f, 1.0f, 0.0f, 0.4f, 0.4f, clrTxt);
-				float sw, sh; C2D_TextGetDimensions(&tHudStat, 0.4f, 0.4f, &sw, &sh);
-				C2D_DrawText(&tHudStat, C2D_WithColor, 396.0f - sw, 1.0f, 0.0f, 0.4f, 0.4f, clrTxt);
+				ui_dot(6.0f, 4.5f, swapped ? THEME_GAME_B : THEME_GAME_A);
+				C2D_DrawText(&tHudTop, C2D_WithColor, 15.0f, 1.0f, 0.0f, 0.4f, 0.4f, THEME_ON_DARK);
+				if (focScreen == 0) {
+					float nw; float nh; C2D_TextGetDimensions(&tHudTop, 0.4f, 0.4f, &nw, &nh);
+					ui_chip(txtBuf, "●FOCUS", 21.0f + nw, 0.5f, g_ui.acc);
+				}
+				if (netOn || wlOn) {   // net-diag stat line (dev): keep the dense readout
+					float sw, sh; C2D_TextGetDimensions(&tHudStat, 0.4f, 0.4f, &sw, &sh);
+					C2D_DrawText(&tHudStat, C2D_WithColor, 396.0f - sw, 1.0f, 0.0f, 0.4f, 0.4f, THEME_ON_DARK);
+				} else {               // 1:1: [3D] 59fps 14:32 [battery]
+					float rx = 394.0f;
+					ui_border(rx - 13.0f, 3.5f, 12.0f, 7.5f, THEME_ON_DARK_DIM, 1.0f);
+					C2D_DrawRectSolid(rx - 0.5f, 5.5f, 0.0f, 1.5f, 3.5f, THEME_ON_DARK_DIM);
+					{ float bl = 8.0f * (batLvl > 5 ? 5 : batLvl) / 5.0f;
+					  if (bl > 0.5f) C2D_DrawRectSolid(rx - 11.0f, 5.5f, 0.0f, bl, 3.5f, THEME_GAME_A); }
+					rx -= 19.0f;
+					{ time_t tt2 = time(NULL); struct tm* lt2 = localtime(&tt2);
+					  char clk[8]; snprintf(clk, sizeof clk, "%02d:%02d", lt2 ? lt2->tm_hour : 0, lt2 ? lt2->tm_min : 0);
+					  ui_text_r(txtBuf, clk, rx, 1.5f, 0.38f, THEME_ON_DARK);
+					  rx -= ui_text_w(txtBuf, clk, 0.38f) + 7.0f; }
+					{ char fs2[12]; snprintf(fs2, sizeof fs2, "%dfps", fps);
+					  ui_text_r(txtBuf, fs2, rx, 1.5f, 0.38f, focScreen == 0 ? g_ui.acc : THEME_ON_DARK_DIM);
+					  rx -= ui_text_w(txtBuf, fs2, 0.38f) + 8.0f; }
+					if (s3dEnabled) { float cw = ui_text_w(txtBuf, "3D", 0.32f) + 12.0f;
+					                  ui_chip(txtBuf, "3D", rx - cw, 0.5f, THEME_GAME_B); }
+				}
 			} else if (focScreen == 0) {
 				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 400.0f, 4.0f, clrHi);
 			}
 			if (toastTimer > 0) C2D_DrawText(&tToast, C2D_WithColor, 8.0f, (hudMode & 1) ? 20.0f : 8.0f, 0.0f, 0.5f, 0.5f, clrHi);
+		} else {
+			draw_paused_summary(txtBuf, topName, botName, s3dEnabled, dofOn, bloomOn, lightOn, vividOn, touchMode, linkOn, netOn, wlOn);
 		}
 
 		// top RIGHT eye = the SAME (top) game -> single-game stereoscopic depth. Player pops forward
@@ -1711,6 +2009,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		if (bloomPass) bloom_add(topR, &bloomTex, scaleMode[0], bloomLvl, 1);
 		if (uipop) ui_pop_eye(topR, topG, &depth3d, scaleMode[0], -UIPOP3D_PX * slider3d, sharpTop, &preTex);
 		if (litPass) light_pass(topR, &depth3d, scaleMode[0], &lenv);
+		if (menuOpen) draw_paused_summary(txtBuf, topName, botName, s3dEnabled, dofOn, bloomOn, lightOn, vividOn, touchMode, linkOn, netOn, wlOn);
 
 		// bottom screen (+ menu overlay when open). render_game leaves `bot` bound.
 		render_game(botG, bot, preTgt, &preTex, 320.0f, 240.0f, scaleMode[1], smooth[1], botTint, clrBg);
@@ -1718,16 +2017,33 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			if (hudMode & 2) {
 				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 14.0f, THEME_HUD_BAR);
 				if (focScreen == 1) C2D_DrawRectSolid(0.0f, 14.0f, 0.0f, 320.0f, 2.0f, clrHi);
-				C2D_DrawText(&tHudBot, C2D_WithColor, 4.0f, 1.0f, 0.0f, 0.4f, 0.4f, clrTxt);
-				float bsw, bsh; C2D_TextGetDimensions(&tHudStat, 0.4f, 0.4f, &bsw, &bsh);
-				C2D_DrawText(&tHudStat, C2D_WithColor, 316.0f - bsw, 1.0f, 0.0f, 0.4f, 0.4f, clrTxt);
+				ui_dot(6.0f, 4.5f, single ? THEME_GAME_A : (swapped ? THEME_GAME_A : THEME_GAME_B));
+				C2D_DrawText(&tHudBot, C2D_WithColor, 15.0f, 1.0f, 0.0f, 0.4f, 0.4f, THEME_ON_DARK);
+				{
+					float nw, nh; C2D_TextGetDimensions(&tHudBot, 0.4f, 0.4f, &nw, &nh);
+					float chx = 21.0f + nw;
+					if (focScreen == 1) chx += ui_chip(txtBuf, "●FOCUS", chx, 0.5f, g_ui.acc) + 5.0f;
+					if (linkOn || netOn || wlOn) ui_chip(txtBuf, "⚡LINK", chx, 0.5f, g_ui.acc);
+				}
+				if (netOn || wlOn) {
+					float bsw, bsh; C2D_TextGetDimensions(&tHudStat, 0.4f, 0.4f, &bsw, &bsh);
+					C2D_DrawText(&tHudStat, C2D_WithColor, 316.0f - bsw, 1.0f, 0.0f, 0.4f, 0.4f, THEME_ON_DARK);
+				} else {
+					float rx = 314.0f;
+					{ time_t tt2 = time(NULL); struct tm* lt2 = localtime(&tt2);
+					  char clk[8]; snprintf(clk, sizeof clk, "%02d:%02d", lt2 ? lt2->tm_hour : 0, lt2 ? lt2->tm_min : 0);
+					  ui_text_r(txtBuf, clk, rx, 1.5f, 0.38f, THEME_ON_DARK);
+					  rx -= ui_text_w(txtBuf, clk, 0.38f) + 7.0f; }
+					{ char fs2[12]; snprintf(fs2, sizeof fs2, "%dfps", fps);
+					  ui_text_r(txtBuf, fs2, rx, 1.5f, 0.38f, focScreen == 1 ? g_ui.acc : THEME_ON_DARK_DIM); }
+				}
 			} else if (focScreen == 1) {
 				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 4.0f, clrHi);
 			}
-			if (touchMode == TOUCH_PAD) {   // virtual gamepad overlay (SMART draws nothing -> real UI)
-				touch_draw(touchMode, tk, &sm);
+			if (tmEff == TOUCH_PAD) {   // virtual gamepad overlay (SMART draws nothing -> real UI)
+				touch_draw(tmEff, tk, &sm, txtBuf);
 			}
-			if (touchMode == TOUCH_SMART && sm.valid) {   // TEMP debug: confirm RAM reads on device
+			if (tmEff == TOUCH_SMART && sm.valid) {   // TEMP debug: confirm RAM reads on device
 				static const char* const CTXN[] = { "none", "field", "b.act", "b.move", "b.tgt", "party", "fmenu", "bag", "b.oth" };
 				char kb[8]; int ki = 0;   // decode the key touch is injecting this frame (on-device diagnostic)
 				if (tk & (1 << GBAKEY_UP))    kb[ki++] = 'U';
@@ -1745,28 +2061,81 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		}
 		if (menuOpen) {
 			C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 240.0f, clrDim);
-			for (int i = 0; i < MENU_N; i++) {   // 2x10 grid of buttons (D-pad or tap to select)
-				float bx = 4.0f + (i & 1) * 160.0f, by = 2.0f + (i >> 1) * 22.0f;
-				bool s = (i == menuSel);
-				if (i == MENU_AUDIO_IDX) {   // split cell: A vol | B vol | mode
-					char vlab[3][12];
-					snprintf(vlab[0], 12, "A%d%%", volA * 100 / 256);
-					snprintf(vlab[1], 12, "B%d%%", volB * 100 / 256);
-					snprintf(vlab[2], 12, "%s", AUDIO_NAMES[audioMode]);
-					for (int j = 0; j < 3; j++) {
-						float sx = bx + j * 50.5f;
-						C2D_DrawRectSolid(sx, by, 0.0f, 49.0f, 20.0f, s ? clrHi : clrPanel);
-						C2D_Text st; C2D_TextParse(&st, txtBuf, vlab[j]); C2D_TextOptimize(&st);
-						C2D_DrawText(&st, C2D_WithColor, sx + 4.0f, by + 5.0f, 0.0f, 0.36f, 0.36f, s ? clrSelTxt : clrTxt);
-					}
-					continue;
+			// ---- Pause menu (v3): the pause-bot-<tab> PLATE (rail + highlight + labels baked) + the
+			// interactive widget states at manifest coords, drawn on top. ----
+			const PCtl* PTd = PTABS[menuTab]; int nPd = PTABN[menuTab];
+			assets_draw_plate(PT_PLATE[menuTab]);
+			int fsd = swapped ? (focused ^ 1) : focused;
+			for (int i = 0; i < nPd; i++) {
+				const PCtl* c = &PTd[i]; float x = c->x, y = c->y, w = c->w, h = c->h;
+				bool sel = (i == menuRow);
+				if (c->ov) assets_text_r(txtBuf, FNT_JBM_MED, c->ov, x - 6.0f, y + h / 2.0f - 4.0f, 8.0f, g_ui.dim);
+				switch (c->kind) {
+				case PK_TOG: {
+					int on = 0;
+					switch (c->act) { case ACT_SWAP: on=swapped; break; case ACT_FS: on=fsOn; break; case ACT_MUTE: on=muted; break;
+						case ACT_3D: on=s3dEnabled; break; case ACT_DOF: on=dofOn; break; case ACT_BLOOM: on=bloomOn; break;
+						case ACT_LIGHT: on=lightOn; break; case ACT_VIVID: on=vividOn; break; case ACT_LINK: on=linkOn; break;
+						case ACT_NETLINK: on=netOn; break; }
+					assets_toggle(on, x, y);
+					if (sel) ui_border(x - 2.0f, y - 2.0f, w + 4.0f, h + 4.0f, g_ui.acc, 1.5f);
+					break;
 				}
-				C2D_DrawRectSolid(bx, by, 0.0f, 152.0f, 20.0f, s ? clrHi : clrPanel);
-				C2D_DrawText(&items[i], C2D_WithColor, bx + 6.0f, by + 5.0f, 0.0f, 0.4f, 0.4f, s ? clrSelTxt : clrTxt);
+				case PK_SEG: {
+					static const char* const S_SCALE[3]={"1:1","Aspect-fit","Stretch"};
+					static const char* const S_FILT[2]={"Sharp","Smooth"}; static const char* const S_HUD[4]={"off","top","bottom","both"};
+					static const char* const S_AUD[3]={"Solo","Mixed","Split"}; static const char* const S_TCH[3]={"Off","Gamepad","Smart"};
+					static const char* const S_EDG[3]={"Round","Soft","Sharp"};
+					const char* const* o=S_SCALE; int cur=0;
+					switch (c->act){case ACT_SCALE_TOP:cur=scaleMode[0];break;case ACT_SCALE_BOT:cur=scaleMode[1];break;
+						case ACT_FILTER:o=S_FILT;cur=smooth[fsd];break;case ACT_HUD:o=S_HUD;cur=hudMode;break;
+						case ACT_AUDIOMODE:o=S_AUD;cur=audioMode;break;case ACT_TOUCHMODE:o=S_TCH;cur=touchMode;break;
+						default:o=S_EDG;cur=g_prefs.padEdge;break;}
+					assets_seg(txtBuf, x, y, w, h, o, c->nseg, cur, g_ui.ink, g_ui.dim);
+					if (sel) ui_border(x, y, w, h, g_ui.acc, 1.5f);
+					break;
+				}
+				case PK_STEP: {
+					int v = (c->act == ACT_VOLA) ? volA : volB;
+					assets_fill9("fill-secondary-r8", x, y+2, 20, h-4, 7.0f);
+					assets_text_c(txtBuf, FNT_SG_BOLD, "-", x+10, y+2, 12.0f, g_ui.text);
+					assets_fill9("fill-secondary-r8", x+w-20, y+2, 20, h-4, 7.0f);
+					assets_text_c(txtBuf, FNT_SG_BOLD, "+", x+w-10, y+2, 12.0f, g_ui.text);
+					float bx=x+28, bw=w-56; ui_fill(bx, y+h/2-3, bw, 6, g_ui.line, 3.0f);
+					if (v>0) ui_fill(bx, y+h/2-3, bw*v/256.0f, 6, g_ui.acc, 3.0f);
+					assets_text_r(txtBuf, FNT_JBM_MED, (c->act==ACT_VOLA)?"A":"B", x+26, y-1, 8.0f, g_ui.dim);
+					if (sel) ui_border(x, y, w, h, g_ui.acc, 1.5f);
+					break;
+				}
+				case PK_BTN: {
+					const char* spr="btn-secondary"; const char* lab=""; u32 col=g_ui.text;
+					switch (c->act){
+					case ACT_RESUME: spr="btn-primary"; lab="Resume"; col=g_ui.ink; break;
+					case ACT_CHANGE: lab="Change games"; break;
+					case ACT_QUIT: spr="btn-destructive"; lab="Quit"; col=THEME_QUIT_TEXT; break;
+					case ACT_WIRELESS: spr="btn-primary"; lab=wlOn?"Wireless: ON":"Wireless lobby..."; col=g_ui.ink; break;
+					case ACT_SAVEST: lab="Save state"; break; case ACT_LOADST: lab="Load state"; break;
+					case ACT_LOADSAV: lab="Load .sav"; break;
+					case ACT_PREVIEW_PAD: lab="Preview Gamepad"; break; case ACT_PREVIEW_SMART: lab="Preview Smart"; break; }
+					assets_button(txtBuf, spr, x, y, w, h, lab, FNT_SG_BOLD, 13.0f, col, 0);
+					if (sel) ui_border(x, y, w, h, g_ui.acc, 1.5f);
+					break;
+				}
+				case PK_SWATCH: {
+					const u32 pc[5]={PAD_COLOR_0,PAD_COLOR_1,PAD_COLOR_2,PAD_COLOR_3,PAD_COLOR_4};
+					for (int cc=0; cc<5; cc++){ float sx=x+cc*30;
+						if (cc==g_prefs.padColor) ui_border(sx-2, y, 26, h, g_ui.text, 1.5f);
+						ui_fill(sx, y+3, 22, h-6, pc[cc], 4.0f); }
+					if (sel) ui_border(x-3, y-2, 156, h+4, g_ui.acc, 1.5f);
+					break;
+				}
+				}
 			}
-			C2D_DrawText(&tStatus, C2D_WithColor, 4.0f, 228.0f, 0.0f, 0.35f, 0.35f, clrTxt);
+			{ float sw2, sh2; C2D_TextGetDimensions(&tStatus, 0.3f, 0.3f, &sw2, &sh2);
+			  C2D_DrawText(&tStatus, C2D_WithColor, 314.0f - sw2, 231.0f, 0.0f, 0.3f, 0.3f, g_ui.dim); }
 		} else {
-			C2D_DrawText(&tHint, C2D_WithColor, 6.0f, 224.0f, 0.0f, 0.4f, 0.4f, clrTxt);
+			{ float hw, hh2; C2D_TextGetDimensions(&tHint, 0.34f, 0.34f, &hw, &hh2);
+			  C2D_DrawText(&tHint, C2D_WithColor, (320.0f - hw) / 2.0f, 229.0f, 0.0f, 0.34f, 0.34f, dim_color(g_ui.acc, 0.85f)); }
 		}
 
 		{ float wms = (svcGetSystemTick() - wfStart) * 1000.0f / SYSCLOCK_ARM11; if (wms > worstMs) worstMs = wms; }
@@ -1841,58 +2210,143 @@ static u64 busy_ticks(void) {
 	return svcGetSystemTick() - t0;
 }
 
-static void run_splash(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txtBuf, const char* warn) {
-	const u32 bg   = THEME_BG;
-	const u32 gold = THEME_GOLD;
-	const u32 grn  = THEME_GAME_A;
-	const u32 blu  = THEME_GAME_B;
-	const int DUR  = 150;   // ~2.5s at 60fps; A/START/touch skips
+// Standalone settings, reachable from the boot menu WITHOUT a game (ZR on the game-select).
+// Reuses the pause-menu plates + PCtl tables for the pre-game-relevant tabs (Display / Audio /
+// Enhance / Touch); persists via settings_load/save. B or the on-screen Done exits.
+static void run_settings(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txtBuf) {
+	int scaleMode[2] = { SCALE_FIT, SCALE_FIT }; bool smooth[2] = { false, false };
+	bool swapped = false; int hudMode = 3, audioMode = AUD_SOLO, volA = 256, volB = 256, touchMode = TOUCH_OFF;
+	bool fsOn = false, dofOn = true, bloomOn = true, lightOn = true, vividOn = false, muted = false, s3dEnabled = true;
+	int focused = 0;
+	settings_load(scaleMode, smooth, &swapped, &hudMode, &audioMode, &volA, &volB, &touchMode, &fsOn, &dofOn, &bloomOn, &lightOn, &vividOn);
+	#define SETSAVE() settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn)
+	static const int TABS[4] = { 1, 2, 3, 5 };   // Display, Audio, Enhance, Touch (indices into PTABS/PT_PLATE)
+	int ti = 0, row = 0;
 
+	while (aptMainLoop()) {
+		hidScanInput();
+		u32 k = hidKeysDown();
+		int tab = TABS[ti]; const PCtl* PT = PTABS[tab]; int nP = PTABN[tab];
+		if (k & KEY_L) { ti = (ti + 3) % 4; row = 0; }
+		if (k & KEY_R) { ti = (ti + 1) % 4; row = 0; }
+		tab = TABS[ti]; PT = PTABS[tab]; nP = PTABN[tab];
+		if (row >= nP) row = 0;
+		if (k & (KEY_DDOWN | KEY_CPAD_DOWN)) row = (row + 1) % nP;
+		if (k & (KEY_DUP   | KEY_CPAD_UP))   row = (row - 1 + nP) % nP;
+		if (k & (KEY_B | KEY_START)) break;
+		bool activate = (k & KEY_A) != 0;
+		int adj = (k & (KEY_DRIGHT | KEY_CPAD_RIGHT)) ? 1 : ((k & (KEY_DLEFT | KEY_CPAD_LEFT)) ? -1 : 0);
+		int segSet = -1;
+		if (k & KEY_TOUCH) {
+			touchPosition mtp; hidTouchRead(&mtp);
+			if (mtp.py >= 224 && mtp.px >= 240) break;   // "Done" corner
+			else if (mtp.px < 86) { int t2 = ((int)mtp.py - 8) / 30;   // rail: map to the 4 exposed tabs
+				for (int j = 0; j < 4; j++) if (TABS[j] == (t2 < 0 ? 0 : t2 > 5 ? 5 : t2)) { ti = j; row = 0; } }
+			else for (int i2 = 0; i2 < nP; i2++) { const PCtl* c2 = &PT[i2];
+				if (mtp.px < c2->x || mtp.px >= c2->x + c2->w || mtp.py < c2->y || mtp.py >= c2->y + c2->h) continue;
+				row = i2;
+				if (c2->kind == PK_SEG) segSet = ui_seg_hit(c2->x, c2->w, c2->nseg, (float)mtp.px);
+				else if (c2->kind == PK_STEP) adj = (mtp.px < c2->x + 24) ? -1 : 1;
+				else if (c2->kind == PK_SWATCH) { int cc = ((int)mtp.px - c2->x) / 30; g_prefs.padColor = cc<0?0:cc>4?4:cc; SETSAVE(); }
+				else activate = true;
+				break; }
+		}
+		int act = PT[row].act, pk = PT[row].kind;
+		if (pk == PK_SEG && (segSet >= 0 || adj)) {
+			int cur, ns = PT[row].nseg;
+			switch (act) { case ACT_SCALE_TOP: cur=scaleMode[0]; break; case ACT_SCALE_BOT: cur=scaleMode[1]; break;
+				case ACT_FILTER: cur=smooth[0]; break; case ACT_HUD: cur=hudMode; break; case ACT_AUDIOMODE: cur=audioMode; break;
+				case ACT_TOUCHMODE: cur=touchMode; break; default: cur=g_prefs.padEdge; break; }
+			cur = (segSet >= 0) ? segSet : ((cur + adj + ns) % ns);
+			switch (act) { case ACT_SCALE_TOP: scaleMode[0]=cur; break; case ACT_SCALE_BOT: scaleMode[1]=cur; break;
+				case ACT_FILTER: smooth[0]=smooth[1]=cur; break; case ACT_HUD: hudMode=cur; break; case ACT_AUDIOMODE: audioMode=cur; break;
+				case ACT_TOUCHMODE: touchMode=cur; break; default: g_prefs.padEdge=cur; break; }
+			SETSAVE();
+		} else if (pk == PK_STEP && adj) { int* v = (act==ACT_VOLA)?&volA:&volB; *v += adj*32; if(*v<0)*v=0; if(*v>256)*v=256; SETSAVE(); }
+		else if (activate) {
+			switch (act) {
+			case ACT_SWAP: swapped=!swapped; break; case ACT_FS: fsOn=!fsOn; break; case ACT_MUTE: muted=!muted; break;
+			case ACT_3D: s3dEnabled=!s3dEnabled; break; case ACT_DOF: dofOn=!dofOn; break; case ACT_BLOOM: bloomOn=!bloomOn; break;
+			case ACT_LIGHT: lightOn=!lightOn; break; case ACT_VIVID: vividOn=!vividOn; break;
+			case ACT_PREVIEW_PAD: touchMode=TOUCH_PAD; break; case ACT_PREVIEW_SMART: touchMode=TOUCH_SMART; break;
+			default: break; }
+			SETSAVE();
+		}
+
+		C2D_TextBufClear(txtBuf);
+		C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
+		C2D_TargetClear(top, g_ui.bg); C2D_SceneBegin(top);
+		assets_text(txtBuf, FNT_SG_BOLD, "Settings", 20.0f, 20.0f, 20.0f, g_ui.text);
+		assets_text(txtBuf, FNT_JBM_MED, "configure before you pick a game", 22.0f, 48.0f, 9.0f, g_ui.dim);
+		assets_text(txtBuf, FNT_JBM_MED, "L / R  switch tab", 22.0f, 210.0f, 9.0f, g_ui.dim);
+		assets_text(txtBuf, FNT_JBM_MED, "B  done", 22.0f, 224.0f, 9.0f, g_ui.dim);
+
+		C2D_TargetClear(bot, g_ui.bg); C2D_SceneBegin(bot);
+		assets_draw_plate(PT_PLATE[tab]);
+		int fsd = focused;
+		for (int i = 0; i < nP; i++) {
+			const PCtl* c = &PT[i]; float x=c->x, y=c->y, w=c->w, h=c->h; bool sel=(i==row);
+			if (c->ov) assets_text_r(txtBuf, FNT_JBM_MED, c->ov, x-6.0f, y+h/2.0f-4.0f, 8.0f, g_ui.dim);
+			switch (c->kind) {
+			case PK_TOG: { int on=0; switch(c->act){case ACT_SWAP:on=swapped;break;case ACT_FS:on=fsOn;break;case ACT_MUTE:on=muted;break;
+				case ACT_3D:on=s3dEnabled;break;case ACT_DOF:on=dofOn;break;case ACT_BLOOM:on=bloomOn;break;case ACT_LIGHT:on=lightOn;break;
+				case ACT_VIVID:on=vividOn;break;}
+				assets_toggle(on,x,y); if(sel) ui_border(x-2,y-2,w+4,h+4,g_ui.acc,1.5f); break; }
+			case PK_SEG: { static const char* const A[3]={"1:1","Aspect-fit","Stretch"};static const char* const F[2]={"Sharp","Smooth"};
+				static const char* const H[4]={"off","top","bottom","both"};static const char* const M[3]={"Solo","Mixed","Split"};
+				static const char* const T[3]={"Off","Gamepad","Smart"};static const char* const E[3]={"Round","Soft","Sharp"};
+				const char* const* o=A; int cur=0; switch(c->act){case ACT_SCALE_TOP:cur=scaleMode[0];break;case ACT_SCALE_BOT:cur=scaleMode[1];break;
+				case ACT_FILTER:o=F;cur=smooth[fsd];break;case ACT_HUD:o=H;cur=hudMode;break;case ACT_AUDIOMODE:o=M;cur=audioMode;break;
+				case ACT_TOUCHMODE:o=T;cur=touchMode;break;default:o=E;cur=g_prefs.padEdge;break;}
+				assets_seg(txtBuf,x,y,w,h,o,c->nseg,cur,g_ui.ink,g_ui.dim); if(sel) ui_border(x,y,w,h,g_ui.acc,1.5f); break; }
+			case PK_STEP: { int v=(c->act==ACT_VOLA)?volA:volB; assets_fill9("fill-secondary-r8",x,y+2,20,h-4,7.0f);
+				assets_text_c(txtBuf,FNT_SG_BOLD,"-",x+10,y+2,12.0f,g_ui.text); assets_fill9("fill-secondary-r8",x+w-20,y+2,20,h-4,7.0f);
+				assets_text_c(txtBuf,FNT_SG_BOLD,"+",x+w-10,y+2,12.0f,g_ui.text); float bx=x+28,bw=w-56; ui_fill(bx,y+h/2-3,bw,6,g_ui.line,3.0f);
+				if(v>0)ui_fill(bx,y+h/2-3,bw*v/256.0f,6,g_ui.acc,3.0f);
+				assets_text_r(txtBuf,FNT_JBM_MED,(c->act==ACT_VOLA)?"A":"B",x+26,y-1,8.0f,g_ui.dim); if(sel)ui_border(x,y,w,h,g_ui.acc,1.5f); break; }
+			case PK_BTN: { const char* lab=(c->act==ACT_PREVIEW_PAD)?"Preview Gamepad":"Preview Smart";
+				assets_button(txtBuf,"btn-secondary",x,y,w,h,lab,FNT_SG_BOLD,13.0f,g_ui.text,0); if(sel)ui_border(x,y,w,h,g_ui.acc,1.5f); break; }
+			case PK_SWATCH: { const u32 pc[5]={PAD_COLOR_0,PAD_COLOR_1,PAD_COLOR_2,PAD_COLOR_3,PAD_COLOR_4};
+				for(int cc=0;cc<5;cc++){float sx=x+cc*30; if(cc==g_prefs.padColor)ui_border(sx-2,y,26,h,g_ui.text,1.5f); ui_fill(sx,y+3,22,h-6,pc[cc],4.0f);}
+				if(sel)ui_border(x-3,y-2,156,h+4,g_ui.acc,1.5f); break; }
+			}
+		}
+		ui_fill(244.0f, 224.0f, 72.0f, 14.0f, g_ui.acc, 5.0f);
+		assets_text_c(txtBuf, FNT_SG_BOLD, "Done", 280.0f, 225.0f, 11.0f, g_ui.ink);
+		C3D_FrameEnd(0);
+	}
+	#undef SETSAVE
+}
+
+static void run_splash(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txtBuf, const char* warn) {
+	const int DUR = 170;   // ~2.8s at 60fps; A/START/touch skips
 	for (int f = 0; f < DUR && aptMainLoop(); f++) {
 		hidScanInput();
 		if (hidKeysDown() & (KEY_A | KEY_B | KEY_START | KEY_TOUCH)) break;
 		float t = (float)f / DUR;
+		float fade  = t > 0.94f ? (t - 0.94f) / 0.06f : 0.0f;
+		float pulse = 0.6f + 0.4f * ((f / 20) % 2);
 
-		float slide = ease_out(t < 0.5f ? t / 0.5f : 1.0f);          // panels glide in
-		float titleA = t < 0.4f ? 0.0f : (t < 0.7f ? (t - 0.4f) / 0.3f : 1.0f);
-		float fade   = t > 0.92f ? (t - 0.92f) / 0.08f : 0.0f;       // fade out at the end
-		float pulse  = 0.6f + 0.4f * ((f / 8) % 2);                  // link "blink"
-
-		const float pw = 150.0f, ph = 100.0f;
-		C2D_Text tTitle, tSub;
 		C2D_TextBufClear(txtBuf);
-		C2D_TextParse(&tTitle, txtBuf, "DUAL GBA");                   C2D_TextOptimize(&tTitle);
-		C2D_TextParse(&tSub,   txtBuf, "two games  -  one link cable"); C2D_TextOptimize(&tSub);
-		float twT, thT, twS, thS;
-		C2D_TextGetDimensions(&tTitle, 1.0f, 1.0f, &twT, &thT);
-		C2D_TextGetDimensions(&tSub,   0.5f, 0.5f, &twS, &thS);
-
 		C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
 
-		// top screen: Game-A panel drops in from above + title
-		C2D_TargetClear(top, bg);
-		C2D_SceneBegin(top);
-		float ax = (400.0f - pw) / 2.0f, ay = -ph + (28.0f + ph) * slide;
-		splash_panel(ax, ay, pw, ph, grn, C2D_Color32(0xF0, 0xDC, 0x40, 0xFF));
-		C2D_DrawText(&tTitle, C2D_WithColor, (400.0f - twT) / 2.0f, 196.0f, 0.0f, 1.0f, 1.0f,
-		             C2D_Color32(0xF5, 0xD0, 0x42, (u8)(titleA * 255)));
-		// link plug reaching down toward the hinge
-		C2D_DrawRectSolid(196.0f, ay + ph, 0.0f, 8.0f, 12.0f * slide, dim_color(gold, pulse));
-		if (fade > 0.0f) C2D_DrawRectSolid(0, 0, 0, 400, 240, C2D_Color32(0x18, 0x11, 0x28, (u8)(fade * 255)));
+		// TOP: the full splash chrome plate is the art (logo glyph + wordmark + divider + tagline).
+		C2D_TargetClear(top, g_ui.bg); C2D_SceneBegin(top);
+		assets_draw_plate("splash-top");
+		if (fade > 0.0f) C2D_DrawRectSolid(0, 0, 0, 400, 240, C2D_Color32(0x0A, 0x07, 0x12, (u8)(fade * 255)));
 
-		// bottom screen: Game-B panel rises in from below + subtitle
-		C2D_TargetClear(bot, bg);
-		C2D_SceneBegin(bot);
-		float bx = (320.0f - pw) / 2.0f, by = 240.0f - (28.0f + ph) * slide;
-		C2D_DrawRectSolid(156.0f, by - 12.0f * slide, 0.0f, 8.0f, 12.0f * slide, dim_color(gold, pulse));
-		splash_panel(bx, by, pw, ph, blu, C2D_Color32(0xE6, 0x4B, 0x41, 0xFF));
-		C2D_DrawText(&tSub, C2D_WithColor, (320.0f - twS) / 2.0f, 220.0f, 0.0f, 0.5f, 0.5f,
-		             C2D_Color32(0xBE, 0xB4, 0xD7, (u8)(titleA * 255)));
-		if (warn && warn[0]) {   // perf warning (Old 3DS, or New 3DS not at full speed)
-			C2D_Text tw; C2D_TextParse(&tw, txtBuf, warn); C2D_TextOptimize(&tw);
-			C2D_DrawText(&tw, C2D_WithColor, 6.0f, 4.0f, 0.0f, 0.42f, 0.42f, C2D_Color32(0xFF, 0x80, 0x40, 0xFF));
+		// BOTTOM: chrome plate + the pulsing primary button; label drawn in the baked font.
+		C2D_TargetClear(bot, g_ui.bg); C2D_SceneBegin(bot);
+		assets_draw_plate("splash-bot");
+		{	// manifest splash-bot: btn-primary at x72 y101 w175 h42
+			C2D_Image b = assets_wgt("btn-primary");
+			if (b.tex) C2D_DrawImageAt(b, 72.0f, 101.0f, 0.6f, NULL,
+			           175.0f / (b.subtex ? b.subtex->width : 175.0f), 42.0f / (b.subtex ? b.subtex->height : 42.0f));
+			(void)pulse;
+			assets_text_c(txtBuf, FNT_SG_BOLD, "TAP TO START", 159.0f, 113.0f, 15.0f, g_ui.ink);
 		}
-		if (fade > 0.0f) C2D_DrawRectSolid(0, 0, 0, 320, 240, C2D_Color32(0x18, 0x11, 0x28, (u8)(fade * 255)));
+		if (warn && warn[0]) assets_text(txtBuf, FNT_JBM_MED, warn, 6.0f, 4.0f, 8.0f, C2D_Color32(0xFF, 0x80, 0x40, 0xFF));
+		if (fade > 0.0f) C2D_DrawRectSolid(0, 0, 0, 320, 240, C2D_Color32(0x0A, 0x07, 0x12, (u8)(fade * 255)));
 
 		C3D_FrameEnd(0);
 	}
@@ -1924,6 +2378,7 @@ int main(int argc, char** argv) {
 	C3D_Init(C3D_DEFAULT_CMDBUF_SIZE);
 	C2D_Init(C2D_DEFAULT_MAX_OBJECTS);
 	C2D_Prepare();
+	assets_init();   // device-native art pack (plates/widgets/fonts); code-drawn fallback if absent
 	warp_grid_init();   // M2 grid-warp shader (falls back to the quad warp if it fails)
 	audio_init();   // ndsp; silently no-ops if dspfirm.cdc isn't present
 	netlink_init(); // wireless link (UDS); no-ops without the .cia's nwm::UDS grant
@@ -1936,18 +2391,29 @@ int main(int argc, char** argv) {
 	s32 mainPrio = 0x30;
 	svcGetThreadPriority(&mainPrio, CUR_THREAD_HANDLE);
 
+	{   // early prefs read: apply the persisted THEME (+ gameMode etc) before any UI draws.
+		// The full read happens again in run_session; this one only wants the g_prefs side effects.
+		int sm[2] = { 0, 0 }; bool sm2[2] = { false, false }; bool sw = false;
+		int hm = 3, am = 0, va = 256, vb = 256, tm = 0;
+		bool f1 = false, f2 = true, f3 = true, f4 = true, f5 = false;
+		settings_load(sm, sm2, &sw, &hm, &am, &va, &vb, &tm, &f1, &f2, &f3, &f4, &f5);
+	}
 	run_splash(top, bot, txtBuf, perfWarn);   // animated boot splash (skippable) + perf warning
 
 	// Session loop: pick two ROMs, play, and on "Change games" pick again.
 	while (aptMainLoop()) {
 		char pathA[256], pathB[256];
-		if (!rompicker_run(top, bot, txtBuf, pathA, pathB, sizeof pathA)) {
+		bool startLinked = false;
+		if (!rompicker_run(top, bot, txtBuf, pathA, pathB, sizeof pathA, &startLinked)) {
 			strcpy(pathA, "sdmc:/3DGBA/gameA.gba");
 			strcpy(pathB, "sdmc:/3DGBA/gameB.gba");
+		} else if (!strcmp(pathA, "__SETTINGS__")) {
+			run_settings(top, bot, txtBuf);   // configure without a game, then back to the picker
+			continue;
 		} else {
 			rompicker_save_recent(pathA, pathB);   // remember for next boot's resume prompt
 		}
-		int r = run_session(top, bot, topR, txtBuf, isN3DS, mainPrio, pathA, pathB);
+		int r = run_session(top, bot, topR, txtBuf, isN3DS, mainPrio, pathA, pathB, startLinked);
 		if (r == SESSION_QUIT) break;
 		// SESSION_CHANGE -> loop back to the picker
 	}

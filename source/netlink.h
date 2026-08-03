@@ -59,6 +59,9 @@ void net_transfer_reset(void);
 void net_transfer_send_word(int seat, int mode, u32 round, u16 send);
 bool net_transfer_collect(u32 round, int mode, u16 out[4], u32 needMask, u64 deadline_ms);
 bool net_round_ready(u32 round, u32 needMask);   // non-blocking: is `round` present with needMask seats in?
+bool net_round_peek_word(u32 round, int seat, u16* out);  // STATE E bridge: non-blocking copy of one seat's word (false if absent)
+bool net_cmd_collect(int seat, u32 base, u16 out[8], u64 deadline_ms);   // STATE E bridge: atomic 8-word command wait (false=timeout)
+bool net_seat_max_round(int seat, u32* out);              // STATE E bridge: highest round with this seat's word (lead bound)
 // JOINER PACING BARRIER: block until `round` is present (needMask seats) or an escape fires
 // (s_collectAbort / link-down / deadline_ms link-lost). Copies no words — gates the joiner's emulated
 // clock to the parent's transfer pace so the Gen-3 SLAVE VBlank watchdog can't trip. Returns readiness.
@@ -92,3 +95,45 @@ void net_link_get_stats(int* rxWordN, int* wordSendFails, int* busyN, int* peerU
 // the parent's word present. Returns true + *round when one exists (the child injects THAT exact
 // wire round). Transport-agnostic: loopback's local parent-merge satisfies it the same way.
 bool net_round_next_parent(u32 afterRound, u32* outRound);
+
+// --- Celio EVENT channel: reliable, in-order, exactly-once SEMANTIC events ----------------------
+// A PARALLEL channel to the PK_WORD byte plane (above), added for the Celio local-termination port:
+// the link FSM (celiolink.c) answers every SIO transfer LOCALLY and only a handful of SEMANTIC
+// events ever cross the radio (the one-shot ~700 B party + 60 B trainer block, plus a few tiny
+// control events). This channel carries those — reliable, IN ORDER, EXACTLY-ONCE per seat — over the
+// same single RX thread + net_send_locked TX path, WITHOUT disturbing the proven PK_WORD plane (which
+// stays the bisection fallback). It is latency-tolerant (no per-frame dependency).
+//
+// The transported unit is one opaque ClEvent {u8 type; u8 arg; u16 len; u8 data[256]} blob (the FSM's
+// CL_EV_* message). Transport treats it as {type,arg,len,data[len]} and never interprets it — so this
+// header stays free of celiolink.h. The driver-wiring agent passes a pointer to its own ClEvent; the
+// two structs are ABI-identical (the size is asserted in netlink.c at first use).
+//
+// A FUTURE soc:U / online backend implements these same three calls (the reliable-ordering + seq/ack
+// machinery lives ABOVE the transport, so any lossy path inherits it for free).
+
+#define NET_CLEVENT_SIZE 260   // sizeof(ClEvent): u8 type + u8 arg + u16 len + u8 data[256]
+
+// net_event_send: enqueue one ClEvent for reliable send to `seat`'s peer. The single RX thread
+//   fragments it, stamps a per-seat monotonically-increasing seq, transmits, and re-sends the
+//   un-acked tail until the peer cumulatively ACKs it. Returns 0 on success, <0 on backpressure
+//   (the bounded outbound queue is full — the caller should retry the same event later; nothing is
+//   ever silently dropped). `clEvent` points to a NET_CLEVENT_SIZE-byte ClEvent blob.
+int  net_event_send(int seat, const void* clEvent);
+
+// net_event_recv: pop the next IN-ORDER received ClEvent for `seat` into *clEventOut (a
+//   NET_CLEVENT_SIZE-byte buffer). Returns 1 if one was delivered, 0 if none are ready. A gap in the
+//   seq stream BLOCKS delivery (returns 0) until the missing seq's re-send arrives — events are NEVER
+//   reordered and NEVER dropped.
+int  net_event_recv(int seat, void* clEventOut);   // seat = the SENDER's seat (poll the PEER's stream!)
+
+// net_event_reset: clear all event queues + per-seat seq/ack state. Call at link start and teardown.
+void net_event_reset(void);
+
+// net_event_get_stats: EVENT-channel diagnostics for the netlog (any out-param may be NULL):
+//   txSeq        = highest per-seat seq we have queued for send (events we've sent)
+//   txAcked      = highest per-seat seq the peer has cumulatively ACKed
+//   rxDelivered  = highest contiguous seq we have handed to net_event_recv
+//   overflow     = inbound events we could NOT enqueue (ring full) — must stay 0 (never silent-drop)
+//   retransmits  = cumulative fragment re-sends (loss/latency indicator)
+void net_event_get_stats(int* txSeq, int* txAcked, int* rxDelivered, int* overflow, int* retransmits);

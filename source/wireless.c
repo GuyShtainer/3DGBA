@@ -1,12 +1,22 @@
 // wireless.c — M1 wireless lobby: host a link / scan + join one / show the live seat map.
 // Pure libctru + citro2d on top of the netlink UDS transport; no mGBA. The emulation link
 // itself lands in a later milestone (M2.5+). See docs/kb/wireless-link-architecture.md.
+//
+// UI redesign v2 (1:1, screenshots 08 / wireless-connected / wireless-online):
+// TOP = "Wireless Link" + a mono status line, a 2x2 bordered SEAT MAP (gold host / blue seat /
+// dim open; name + role + game code + a match flag), and RTT/LOSS stat tiles (green when live).
+// BOTTOM = "LOCAL · SAME ROOM (UDS)" Host/Scan, an "OR · OVER THE INTERNET" divider with the
+// online button (the relay transport doesn't exist yet -> disabled), per-state screens, and
+// "« back to menu". The session LOGIC (host/join/close, canStart, the APT-suspend fallback,
+// the startLink return contract) is byte-for-byte the pre-redesign behaviour.
 #include <string.h>
 #include <stdio.h>
 #include <3ds.h>
 #include "wireless.h"
 #include "netlink.h"
 #include "theme.h"
+#include "ui.h"
+#include "assets.h"
 
 static const char* game_name(const char* code) {
 	if (!strncmp(code, "BPEE", 4)) return "Emerald";
@@ -15,11 +25,6 @@ static const char* game_name(const char* code) {
 	if (!strncmp(code, "AXVE", 4)) return "Ruby";
 	if (!strncmp(code, "AXPE", 4)) return "Sapphire";
 	return code[0] ? code : "?";
-}
-
-static void draw_text(C2D_TextBuf buf, const char* s, float x, float y, float sz, u32 col) {
-	C2D_Text t; C2D_TextParse(&t, buf, s); C2D_TextOptimize(&t);
-	C2D_DrawText(&t, C2D_WithColor, x, y, 0.0f, sz, sz, col);
 }
 
 int wireless_lobby_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txtBuf,
@@ -33,6 +38,7 @@ int wireless_lobby_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 	int sel = 0;
 	DgbaLobby lobbies[8]; int nLob = 0; int rescan = 0;
 	char status[64] = "";
+	char peerCode[5] = { 0 };   // the joined host's game code (captured at join; "" when hosting)
 	int  startLink = 0;     // 0 = none yet; 1 = start as host (seat 0); 2 = start as joiner (seat 1)
 	bool canStart = false;  // true while phase 1/3 has 2 connected nodes (set from net_lobby_status below)
 
@@ -48,14 +54,20 @@ int wireless_lobby_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 			if (kd & (KEY_DUP   | KEY_CPAD_UP))   sel = (sel + 2) % 3;
 			int act = -1;
 			if (kd & KEY_A) act = sel;
-			if (kd & KEY_TOUCH) for (int i = 0; i < 3; i++) {
-				float by = 70.0f + i * 44.0f;
-				if (tp.px >= 40 && tp.px < 280 && tp.py >= by && tp.py < by + 40) { sel = i; act = i; }
+			if (kd & KEY_TOUCH) {
+				// button rects mirror the phase-0 draw below
+				if (tp.px >= 12 && tp.px < 308) {
+					if      (tp.py >= 22  && tp.py < 56)  { sel = 0; act = 0; }   // Host
+					else if (tp.py >= 64  && tp.py < 98)  { sel = 1; act = 1; }   // Scan
+					else if (tp.py >= 126 && tp.py < 156)                          // Online (not yet)
+						snprintf(status, sizeof status, "Online server: not yet — UDS local only");
+					else if (tp.py >= 188 && tp.py < 210) { sel = 2; act = 2; }   // back to menu
+				}
 			}
 			if (kd & KEY_B) break;
 			if (act == 0) {                                  // Host
 				if (!avail) snprintf(status, sizeof status, "Wireless off — install + run the .CIA");
-				else if (net_session_host(myCode, 0, 4)) { phase = 1; status[0] = '\0'; }
+				else if (net_session_host(myCode, 0, 4)) { phase = 1; peerCode[0] = '\0'; status[0] = '\0'; }
 				else snprintf(status, sizeof status, "Host failed");
 			} else if (act == 1) {                           // Join -> scan
 				if (!avail) snprintf(status, sizeof status, "Wireless off — install + run the .CIA");
@@ -64,6 +76,11 @@ int wireless_lobby_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 		} else if (phase == 1) {                            // ---- hosting ----
 			if (kd & KEY_B) { net_session_close(); phase = 0; sel = 0; }
 			else if ((kd & KEY_X) && canStart) { startLink = 1; break; }   // host = seat 0; leave session UP
+			else if (kd & KEY_TOUCH) {
+				if (canStart && tp.px >= 24 && tp.px < 296 && tp.py >= 96 && tp.py < 132) { startLink = 1; break; }
+				if (tp.px >= 24 && tp.px < 296 && tp.py >= 140 && tp.py < 162) { net_session_close(); phase = 0; sel = 0; }
+				else if (tp.px >= 12 && tp.px < 308 && tp.py >= 214 && tp.py < 236) break;   // back to menu
+			}
 		} else if (phase == 2) {                            // ---- scan list ----
 			if (--rescan <= 0) { nLob = net_lobby_scan(lobbies, 8); rescan = 60; if (sel >= nLob) sel = nLob ? nLob - 1 : 0; }
 			if (nLob > 0) {
@@ -72,26 +89,38 @@ int wireless_lobby_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 			}
 			int join = -1;
 			if ((kd & KEY_A) && nLob > 0) join = sel;
-			if (kd & KEY_TOUCH) for (int i = 0; i < nLob; i++) {
-				float by = 46.0f + i * 30.0f;
-				if (tp.py >= by && tp.py < by + 28) { sel = i; join = i; }
+			if (kd & KEY_TOUCH) {
+				if (tp.px >= 12 && tp.px < 308 && tp.py >= 210 && tp.py < 236) { phase = 0; sel = 1; }   // back FIRST
+				else if (tp.px >= 12 && tp.px < 308) {
+					int visLob = nLob > 4 ? 4 : nLob;             // 4 cards fit above the back button
+					for (int i = 0; i < visLob; i++) {
+						float by = 40.0f + i * 38.0f;
+						if (tp.py >= by && tp.py < by + 34.0f) { sel = i; join = i; }
+					}
+				}
 			}
 			if (kd & KEY_B) { phase = 0; sel = 1; }
 			if (join >= 0) {
+				memcpy(peerCode, lobbies[join].gameCode, 5);   // remember the host's code for the seat map
 				if (net_session_join(join)) { phase = 3; status[0] = '\0'; }
 				else snprintf(status, sizeof status, "Join failed");
 			}
 		} else {                                            // ---- joined ----
 			if (kd & KEY_B) { net_session_close(); phase = 0; sel = 1; }
 			else if ((kd & KEY_X) && canStart) { startLink = 2; break; }   // joiner = seat 1; leave session UP
+			else if (kd & KEY_TOUCH) {
+				if (canStart && tp.px >= 24 && tp.px < 296 && tp.py >= 96 && tp.py < 132) { startLink = 2; break; }
+				if (tp.px >= 24 && tp.px < 296 && tp.py >= 140 && tp.py < 162) { net_session_close(); phase = 0; sel = 1; }
+				else if (tp.px >= 12 && tp.px < 308 && tp.py >= 214 && tp.py < 236) break;   // back to menu
+			}
 		}
 
-		DgbaConn conn; bool haveConn = false;
+		DgbaConn conn2; bool haveConn = false;
 		int rtt = -1, drops = 0, busy = 0;
 		canStart = false;
 		if (phase == 1 || phase == 3) {
-			haveConn = net_lobby_status(&conn);
-			if (haveConn && conn.totalNodes >= 2) { net_ping_update(&rtt, &drops, &busy); canStart = true; }   // M2 RTT + arm Start-link
+			haveConn = net_lobby_status(&conn2);
+			if (haveConn && conn2.totalNodes >= 2) { net_ping_update(&rtt, &drops, &busy); canStart = true; }   // M2 RTT + arm Start-link
 		}
 		// The APT suspend hook drops the UDS session on any HOME press; if it did, fall back to the menu so
 		// a resumed lobby doesn't show a phantom HOSTING/JOINED for a dead link.
@@ -101,69 +130,85 @@ int wireless_lobby_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 		}
 
 		C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
-		C2D_TextBufClear(txtBuf);   // reuse the shared text buffer every frame, else it fills and text vanishes
+		C2D_TextBufClear(txtBuf);
+		bool conn = (phase == 1 || phase == 3) && canStart;
 
-		// ---- top screen: title + seat map ----
-		C2D_TargetClear(top, THEME_BG); C2D_SceneBegin(top);
-		draw_text(txtBuf, "WIRELESS LINK", 16.0f, 12.0f, 0.8f, THEME_GOLD);
-		char line[80];
-		if (!avail) {
-			draw_text(txtBuf, "Wireless unavailable.", 16.0f, 62.0f, 0.6f, THEME_TEXT);
-			draw_text(txtBuf, "Install + run the .CIA (needs nwm::UDS).", 16.0f, 88.0f, 0.46f, THEME_DIM);
-		} else if (phase == 1 || phase == 3) {
-			int maxN = haveConn ? conn.maxNodes : 4, tot = haveConn ? conn.totalNodes : 1;
-			snprintf(line, sizeof line, "%s  %s  -  %d/%d players", phase == 1 ? "HOSTING" : "JOINED",
-			         game_name(myCode), tot, maxN);
-			draw_text(txtBuf, line, 16.0f, 48.0f, 0.55f, THEME_TEXT);
-			if (maxN < 1 || maxN > 4) maxN = 4;
-			for (int i = 0; i < maxN; i++) {
-				bool occ = haveConn && conn.names[i][0];
-				bool me  = haveConn && (conn.myNode == i + 1);
-				snprintf(line, sizeof line, "P%d  %s%s", i + 1, occ ? conn.names[i] : "(open)",
-				         me ? "  <- you" : (i == 0 ? "  (host)" : ""));
-				draw_text(txtBuf, line, 28.0f, 80.0f + i * 26.0f, 0.5f, occ ? THEME_TEXT : THEME_DIM);
-			}
-			if (haveConn && conn.totalNodes >= 2) {
-				snprintf(line, sizeof line, "RTT: %d ms  loss: %d  busy: %d", rtt, drops, busy);
-				draw_text(txtBuf, line, 16.0f, 190.0f, 0.6f, THEME_GOLD);
-			} else {
-				draw_text(txtBuf, "Waiting for a peer to measure the link...", 16.0f, 190.0f, 0.46f, THEME_DIM);
-			}
-		} else {
-			draw_text(txtBuf, game_name(myCode), 16.0f, 48.0f, 0.55f, THEME_DIM);
-			draw_text(txtBuf, "Host a link, or join one nearby.", 16.0f, 76.0f, 0.5f, THEME_DIM);
-			draw_text(txtBuf, "Both consoles must run the same game.", 16.0f, 100.0f, 0.44f, THEME_DIM);
+		// =============== TOP: plate (title + RTT/LOSS tiles) + seat cards + values ===============
+		C2D_TargetClear(top, g_ui.bg); C2D_SceneBegin(top);
+		assets_draw_plate(conn ? "wless-conn-top" : "wless-idle-top");
+		{	// transport + status, right-aligned (manifest ~x226..384 y16)
+			const char* st = (phase == 1) ? (canStart ? "2 seats linked" : "hosting...")
+			               : (phase == 3) ? (canStart ? "2 seats linked" : "connecting...")
+			               : (phase == 2) ? "scanning" : "standalone";
+			char line[64]; snprintf(line, sizeof line, "UDS · local · %s", st);
+			float w = assets_text_w(txtBuf, FNT_JBM_MED, line, 9.0f);
+			assets_draw_wgt(canStart ? "dot-green" : "dot-dim", 384.0f - w - 12.0f, 17.0f);
+			assets_text_r(txtBuf, FNT_JBM_MED, line, 384.0f, 16.0f, 9.0f, g_ui.acc);
 		}
-		if (status[0]) draw_text(txtBuf, status, 16.0f, 214.0f, 0.45f, THEME_GOLD);
+		if (!avail) {
+			assets_text(txtBuf, FNT_SG_MED, "Wireless unavailable — install + run the .CIA", 20.0f, 70.0f, 12.0f, g_ui.text);
+		} else {	// 2x2 seat cards in the map region (x14 y41 w371 h113)
+			int maxN = 4, myNode = -1; bool inLobby = (phase == 1 || phase == 3);
+			DgbaConn* c = haveConn ? &conn2 : NULL;
+			if (inLobby && c) { maxN = (c->maxNodes>=1 && c->maxNodes<=4)?c->maxNodes:4; myNode = c->myNode; }
+			for (int i = 0; i < 4; i++) {
+				float sx = 14.0f + (i % 2) * 190.0f, sy = 41.0f + (i / 2) * 61.0f;
+				bool occ = inLobby && c && i < maxN && c->names[i][0];
+				bool me  = occ && (myNode == i + 1);
+				bool dis = i >= maxN;
+				u32 bd = occ ? (i == 0 ? g_ui.acc : THEME_GAME_B) : g_ui.line;
+				assets_fill9("fill-card-r8", sx, sy, 181.0f, 52.0f, 8.0f);
+				ui_border(sx, sy, 181.0f, 52.0f, bd, 1.5f);
+				assets_draw_wgt(occ ? (i==0?"dot-gold":"dot-blue") : "dot-dim", sx + 10.0f, sy + 9.0f);
+				assets_text(txtBuf, FNT_SG_MED, occ ? (me?"You":c->names[i]) : "—", sx + 22.0f, sy + 6.0f, 12.0f, occ?g_ui.text:g_ui.dim);
+				assets_text_r(txtBuf, FNT_JBM_MED, i==0?"HOST":(dis?"":(occ?"SEAT":"OPEN")), sx + 172.0f, sy + 8.0f, 8.0f, g_ui.dim);
+				const char* code = occ ? (me ? myCode : (phase==3 && i==0 ? peerCode : NULL)) : NULL;
+				assets_text(txtBuf, FNT_JBM_MED, (code&&code[0])?code:(occ?"—":"open"), sx + 10.0f, sy + 30.0f, 8.5f, g_ui.dim);
+				if (occ && code && code[0] && myCode[0]) {
+					bool m = !strncmp(code, myCode, 4);
+					assets_text_r(txtBuf, FNT_JBM_MED, m?"○ match":"× diff", sx + 172.0f, sy + 30.0f, 8.5f, m?THEME_GAME_A:THEME_QUIT_TEXT);
+				}
+			}
+			// RTT / LOSS values inside the baked tiles (manifest x25/x215 y182)
+			bool live = inLobby && haveConn && conn2.totalNodes >= 2;
+			char v[24];
+			if (live) snprintf(v, sizeof v, "%d ms", rtt); else snprintf(v, sizeof v, "—");
+			assets_text(txtBuf, FNT_JBM_BOLD, v, 25.0f, 184.0f, 13.0f, live?THEME_GAME_A:g_ui.dim);
+			if (live) snprintf(v, sizeof v, "%d %%", drops); else snprintf(v, sizeof v, "—");
+			assets_text(txtBuf, FNT_JBM_BOLD, v, 215.0f, 184.0f, 13.0f, live?THEME_GAME_A:g_ui.dim);
+		}
+		if (status[0]) assets_text(txtBuf, FNT_JBM_MED, status, 20.0f, 226.0f, 8.5f, g_ui.acc);
 
-		// ---- bottom screen: actions / scan list ----
-		C2D_TargetClear(bot, THEME_BG); C2D_SceneBegin(bot);
+		// =============== BOTTOM: idle actions / scan cards / connected ===============
+		C2D_TargetClear(bot, g_ui.bg); C2D_SceneBegin(bot);
 		if (phase == 0) {
-			static const char* const opts[3] = { "Host a game", "Join a game", "Back" };
-			for (int i = 0; i < 3; i++) {
-				float by = 70.0f + i * 44.0f; bool s = (i == sel);
-				C2D_DrawRectSolid(40.0f, by, 0.0f, 240.0f, 40.0f, s ? THEME_GOLD : THEME_PANEL);
-				draw_text(txtBuf, opts[i], 54.0f, by + 12.0f, 0.55f, s ? THEME_SELTXT : THEME_TEXT);
-			}
-			draw_text(txtBuf, "A select   B back", 8.0f, 224.0f, 0.42f, THEME_DIM);
+			assets_draw_plate("wless-idle-bot");
+			assets_button(txtBuf, "btn-primary",   13.0f, 33.0f,  293.0f, 40.0f, "Host a session",   FNT_SG_BOLD, 13.0f, g_ui.ink, sel==0);
+			assets_button(txtBuf, "btn-secondary", 13.0f, 83.0f,  293.0f, 42.0f, "Scan for lobbies",    FNT_SG_BOLD, 13.0f, g_ui.text, sel==1);
+			assets_button(txtBuf, "btn-secondary", 13.0f, 160.0f, 293.0f, 42.0f, "Connect online (soon)", FNT_SG_MED, 12.0f, g_ui.dim, 0);
 		} else if (phase == 2) {
-			draw_text(txtBuf, "Nearby games:", 8.0f, 8.0f, 0.5f, THEME_GOLD);
-			if (nLob == 0) draw_text(txtBuf, "scanning...", 16.0f, 44.0f, 0.5f, THEME_DIM);
-			for (int i = 0; i < nLob; i++) {
-				float by = 46.0f + i * 30.0f; bool s = (i == sel);
-				bool match = !strncmp(lobbies[i].gameCode, myCode, 4);
-				C2D_DrawRectSolid(8.0f, by, 0.0f, 304.0f, 28.0f, s ? THEME_GOLD : THEME_PANEL);
-				snprintf(line, sizeof line, "%s  -  %s  %s", lobbies[i].host[0] ? lobbies[i].host : "host",
-				         game_name(lobbies[i].gameCode), match ? "[ok]" : "[x]");
-				draw_text(txtBuf, line, 14.0f, by + 7.0f, 0.46f, s ? THEME_SELTXT : THEME_TEXT);
+			assets_text(txtBuf, FNT_JBM_MED, "NEARBY SESSIONS", 13.0f, 10.0f, 9.0f, g_ui.dim);
+			if (nLob == 0) assets_text_c(txtBuf, FNT_SG_MED, "scanning...", 160.0f, 60.0f, 12.0f, g_ui.dim);
+			int vis = nLob > 4 ? 4 : nLob;
+			for (int i = 0; i < vis; i++) {
+				float by = 40.0f + i * 38.0f; bool s = (i == sel);
+				bool m = !strncmp(lobbies[i].gameCode, myCode, 4);
+				assets_fill9("fill-card-r8", 12.0f, by, 296.0f, 34.0f, 8.0f);
+				if (s) ui_border(12.0f, by, 296.0f, 34.0f, g_ui.acc, 1.5f);
+				C2D_DrawRectSolid(12.0f, by, 0.0f, 3.0f, 34.0f, m?THEME_GAME_A:THEME_QUIT);
+				char line[64]; snprintf(line, sizeof line, "%s · %s", lobbies[i].host[0]?lobbies[i].host:"host", game_name(lobbies[i].gameCode));
+				assets_text(txtBuf, FNT_SG_MED, line, 24.0f, by + 4.0f, 12.0f, g_ui.text);
+				assets_text(txtBuf, FNT_JBM_MED, m?"○ match":"× different game", 24.0f, by + 20.0f, 8.0f, m?THEME_GAME_A:THEME_QUIT_TEXT);
 			}
-			draw_text(txtBuf, "A join   B back", 8.0f, 224.0f, 0.42f, THEME_DIM);
-		} else {   // hosting / joined
-			draw_text(txtBuf, phase == 1 ? "Waiting for players..." : "Connected.", 8.0f, 8.0f, 0.5f, THEME_GOLD);
-			draw_text(txtBuf, canStart ? "Both in. Press X to start the link" : "Waiting for the other console...",
-			          8.0f, 44.0f, 0.44f, canStart ? THEME_GOLD : THEME_DIM);
-			draw_text(txtBuf, "Then open the in-game Cable Club to trade.", 8.0f, 66.0f, 0.44f, THEME_DIM);
-			draw_text(txtBuf, canStart ? "X start link   B leave" : "B leave", 8.0f, 224.0f, 0.42f, THEME_DIM);
+			assets_button(txtBuf, "btn-ghost", 13.0f, 210.0f, 293.0f, 26.0f, "« back", FNT_SG_MED, 12.0f, g_ui.dim, 0);
+		} else {
+			assets_draw_plate("wless-conn-bot");
+			char line[48];
+			if (canStart && rtt >= 0) snprintf(line, sizeof line, "RTT %d ms · loss %d %%", rtt, drops);
+			else snprintf(line, sizeof line, "then open the in-game Cable Club to trade");
+			assets_text_c(txtBuf, FNT_JBM_MED, line, 160.0f, 44.0f, 9.0f, g_ui.dim);
+			assets_button(txtBuf, "btn-accent-outline", 13.0f, 73.0f,  293.0f, 42.0f, "Start linked trade", FNT_SG_BOLD, 13.0f, canStart?g_ui.acc:g_ui.dim, 0);
+			assets_button(txtBuf, "btn-ghost",          13.0f, 124.0f, 293.0f, 32.0f, "Leave", FNT_SG_MED, 12.0f, g_ui.dim, 0);
 		}
 
 		C3D_FrameEnd(0);

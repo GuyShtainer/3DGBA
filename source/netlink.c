@@ -43,6 +43,41 @@ typedef struct __attribute__((packed)) {
 #define PK_PING 5
 #define PK_PONG 6
 #define PK_WORD 7   // M3: one seat's SIO word for a round (pk->seat / pk->round / pk->d.send)
+#define PK_EVENT     8   // Celio EVENT channel: a fragment of a reliable, in-order ClEvent (DgbaEventPkt)
+#define PK_EVENT_ACK 9   // cumulative ACK for the EVENT channel (reuses DgbaLinkPkt: seat + round=ackSeq)
+
+// --- Celio EVENT channel wire layout --------------------------------------------------------------
+// PK_WORD stays a dumb (seat,round)-keyed word pipe (untouched). The EVENT channel is a PARALLEL,
+// reliable-ordered datagram service for the handful of SEMANTIC ClEvents the Celio FSM ships (party
+// chunks + trainer block + tiny control events). A ClEvent (260 B) exceeds the 16-byte DgbaLinkPkt, so
+// events get their OWN datagram, fragmented to fit one UDS packet. The RX read buffer (NET_PKT_BUF)
+// caps a fragment; with a 12-byte header that leaves NET_EVENT_FRAG_MAX payload bytes per fragment.
+//
+// DgbaEventPkt header is a fixed 12 bytes; payload[] follows. Every fragment of an event carries the
+// FULL descriptor (seq/evType/evArg/evLen/fragCount) so reassembly is idempotent and order-independent
+// within an event. A fragment's wire size = NET_EVENT_HDR + (bytes in this fragment); we send only the
+// used prefix, so an empty-payload control event is a 12-byte datagram.
+#define NET_PKT_BUF        256   // RX/TX packet buffer (was a bare u8[64]); >= one PK_EVENT fragment.
+#define NET_EVENT_HDR      12    // DgbaEventPkt header bytes (magic..evLen), before payload[]
+#define NET_EVENT_FRAG_MAX (NET_PKT_BUF - NET_EVENT_HDR)   // 244 payload bytes / fragment
+typedef struct __attribute__((packed)) {
+	u8  magic;      // 'G'   (shared wire magic; type disambiguates from DgbaLinkPkt)
+	u8  type;       // PK_EVENT
+	u8  seat;       // SENDER's seat (the stream this event belongs to)
+	u8  evType;     // ClEvent.type
+	u32 seq;        // per-seat monotonically-increasing event sequence (1-based; 0 = none)
+	u8  evArg;      // ClEvent.arg
+	u8  fragIdx;    // 0..fragCount-1
+	u8  fragCount;  // total fragments for this event (>=1)
+	u8  rsv;        // reserved/align (0)
+	// --- 12 bytes (NET_EVENT_HDR) above; evLen is the first 2 payload-area bytes ---
+	u16 evLen;      // ClEvent.len (TOTAL payload length across all fragments)
+	u8  payload[NET_EVENT_FRAG_MAX - 2];   // this fragment's payload bytes (evLen counts the WHOLE event)
+} DgbaEventPkt;
+// Wire offset of the per-fragment payload byte 0 = NET_EVENT_HDR + 2 (after evLen). A fragment carrying
+// F payload bytes is (NET_EVENT_HDR + 2 + F) bytes on the wire; F <= NET_EVENT_PAY_MAX.
+#define NET_EVENT_PAY_OFF  (NET_EVENT_HDR + 2)              // = 14
+#define NET_EVENT_PAY_MAX  (NET_PKT_BUF - NET_EVENT_PAY_OFF)// 242 payload bytes / fragment
 
 #define PING_RING 32
 #define PING_EVERY_N 10   // send one ping every 10 frames (~6 Hz @60fps): ample for a latency HUD,
@@ -231,7 +266,7 @@ void net_session_close(void) {
 void net_ping_update(int* rttMs, int* drops, int* sendFails) {
 	if (s_inited && s_up) {
 		if (!s_rxRun) {   // LOBBY only: the RX thread isn't pulling, so we do (sole UDS user here)
-			u8 buf[64]; size_t got = 0; u16 src = 0;
+			u8 buf[NET_PKT_BUF]; size_t got = 0; u16 src = 0;   // sized for a PK_EVENT fragment too (EVENT flows in-game)
 			while (R_SUCCEEDED(udsPullPacket(&s_bind, buf, sizeof buf, &got, &src)) && got >= sizeof(DgbaLinkPkt)) {
 				const DgbaLinkPkt* pk = (const DgbaLinkPkt*)buf;
 				if (pk->magic != 'G') continue;
@@ -398,6 +433,64 @@ bool net_round_ready(u32 round, u32 needMask) {
 	return ready;
 }
 
+// BRIDGE (state E) non-blocking single-seat read: if the ring slot currently holds `round` and
+// `seat`'s word has arrived, copy it to *out and return true; else leave *out untouched, return
+// false. Lets the bridge answer a transfer from already-arrived words without parking the worker
+// (the collect-block is only used for a REAL round whose peer word hasn't landed yet).
+bool net_round_peek_word(u32 round, int seat, u16* out) {
+	net_rounds_init();
+	if (seat < 0 || seat >= DGBA_MAX_SEATS) return false;
+	NetRound* r = &s_rounds[round % NET_ROUNDS];
+	bool ok = false;
+	LightLock_Lock(&r->lock);
+	if (r->used && r->round == round && (r->arrivedMask & (1u << seat))) {
+		if (out) *out = r->words[seat];
+		ok = true;
+	}
+	LightLock_Unlock(&r->lock);
+	return ok;
+}
+
+// BRIDGE (state E) COMMAND collect: a Gen-3 link command is 8 words (one per MULTI transfer) protected
+// by a checksum, so the bridge must deliver it ATOMICALLY — a half-real/half-idle command poisons the
+// sum (desync-fatal). This waits (bounded) until all 8 rounds [base..base+7] hold `seat`'s word, then
+// copies them to out[8]. Returns true on a fully-assembled command, false on timeout (the caller then
+// substitutes a whole IDLE command = 8 zeros, which the game reads as receivedNothing and skips —
+// recoverable, because the RX thread keeps re-sending our word so a genuinely-late command still lands).
+// Polls (the RX thread merges + re-sends our word meanwhile). Abortable via s_collectAbort (teardown).
+bool net_cmd_collect(int seat, u32 base, u16 out[8], u64 deadline_ms) {
+	net_rounds_init();
+	if (seat < 0 || seat >= DGBA_MAX_SEATS) return false;
+	u64 deadlineTick = svcGetSystemTick() + (u64)deadline_ms * (SYSCLOCK_ARM11 / 1000ull);
+	for (;;) {
+		int present = 0;
+		for (int i = 0; i < 8; i++) { out[i] = 0; if (net_round_peek_word(base + (u32)i, seat, &out[i])) present++; }
+		if (present == 8) return true;
+		if (s_collectAbort || !s_up) return false;                          // teardown / link down
+		if ((s64)deadlineTick - (s64)svcGetSystemTick() <= 0) return false; // timeout -> caller idle-substitutes
+		svcSleepThread(1000000ll);                                          // 1ms poll (RX thread merges/re-sends)
+	}
+}
+
+// BRIDGE (state E) lead-bound probe: the highest round for which `seat`'s word is present in the ring,
+// + whether any is (the bridge caps how far it free-runs ahead of the peer so the ring/FIFO never
+// overflows — the 26df69a "joiner raced 90s ahead -> desync" lesson, bounded). *out unchanged if none.
+bool net_seat_max_round(int seat, u32* out) {
+	net_rounds_init();
+	if (seat < 0 || seat >= DGBA_MAX_SEATS) return false;
+	bool found = false; u32 best = 0;
+	for (int i = 0; i < NET_ROUNDS; i++) {
+		NetRound* r = &s_rounds[i];
+		LightLock_Lock(&r->lock);
+		if (r->used && (r->arrivedMask & (1u << seat)) && (!found || (s32)(r->round - best) > 0)) {
+			best = r->round; found = true;
+		}
+		LightLock_Unlock(&r->lock);
+	}
+	if (found && out) *out = best;
+	return found;
+}
+
 // PACING BARRIER (joiner side): block until `round` is present with needMask seats, OR an escape
 // fires. Mirrors net_transfer_collect's escapes exactly (s_collectAbort, !s_up, deadline) so a gone
 // peer / HOME-close never hangs and the RX thread's re-send delivers a dropped word while we wait.
@@ -451,19 +544,271 @@ bool net_round_next_parent(u32 afterRound, u32* outRound) {
 	return found;
 }
 
+// ==================================================================================================
+// Celio EVENT channel — reliable, in-order, exactly-once SEMANTIC events (a PARALLEL plane to PK_WORD).
+// ==================================================================================================
+// The transport carries opaque ClEvent {u8 type; u8 arg; u16 len; u8 data[256]} blobs (NET_CLEVENT_SIZE
+// bytes) — netlink.c never includes celiolink.h; a local NetEvent mirror IS the ClEvent ABI.
+//
+// GUARANTEES (per seat / per sender stream):
+//   * exactly-once  — each event is assigned a strictly-increasing seq; the receiver delivers a given
+//                     seq AT MOST once (a duplicate fragment/full event for an already-delivered or
+//                     already-buffered seq is ignored).
+//   * in-order      — the receiver exposes events ONLY in contiguous seq order; a gap blocks delivery
+//                     (net_event_recv returns 0) until the missing seq's re-send arrives. Never reorder.
+//   * reliable      — the sender re-transmits the un-acked tail on the RX thread's cadence until the
+//                     peer's cumulative PK_EVENT_ACK (highest contiguous seq received) clears it.
+// The whole machinery lives ABOVE the datagram, so a future soc:U backend inherits it unchanged.
+//
+// CONCURRENCY: all state is guarded by s_evLock. net_event_send (caller thread) appends to the TX
+// queue; the RX thread transmits/re-transmits + reassembles + ACKs; net_event_recv (caller thread)
+// pops the in-order delivery ring. The single RX thread remains the only udsPullPacket owner.
+
+// One event in transit — a local mirror of celiolink.h's ClEvent (ABI-identical; see the size assert).
+// Kept here (not via celiolink.h) so netlink.c stays free of FSM types — the public API takes a void*.
+typedef struct {
+	u8  type;
+	u8  arg;
+	u16 len;            // bytes valid in data[]
+	u8  data[256];
+} NetEvent;             // 260 bytes == NET_CLEVENT_SIZE (the ClEvent ABI)
+_Static_assert(sizeof(NetEvent) == NET_CLEVENT_SIZE, "NetEvent must match ClEvent (NET_CLEVENT_SIZE)");
+
+#define NET_EV_TXQ    64    // outbound queue depth (events are few; 64 is ample headroom)
+#define NET_EV_RXWIN  64    // inbound reassembly + delivery window (>= the bounded inbound ring)
+#define NET_EV_SEATS  DGBA_MAX_SEATS
+
+// Per-seat outbound stream: a ring of pending events [txBase..txNext). txBase = lowest un-acked seq;
+// everything < txBase has been peer-ACKed and freed. seq is 1-based (0 = "none").
+typedef struct {
+	NetEvent q[NET_EV_TXQ];   // q[seq % NET_EV_TXQ] holds the event with that seq while base<=seq<next
+	u32      base;            // lowest un-acked seq (== peerAcked+1)
+	u32      next;            // next seq to assign (highest queued = next-1)
+	u32      peerAcked;       // highest seq the peer has cumulatively ACKed (0 = none)
+} NetEvTx;
+
+// Reassembly slot: one per (seq % NET_EV_RXWIN); collects fragments until fragGotMask is complete.
+typedef struct {
+	u32  seq;             // 0 = empty slot
+	u8   evType, evArg;
+	u16  evLen;
+	u8   fragCount;
+	u32  fragGotMask;     // bit i set once fragment i landed (<=32 frags; 256B/242B-per-frag => <=2)
+	u8   data[256];
+} NetEvAsm;
+
+// Per-seat inbound stream: reassembly slots keyed by seq, a contiguous-delivery cursor, and a small
+// in-order delivery ring drained by net_event_recv.
+typedef struct {
+	NetEvAsm asm_[NET_EV_RXWIN];
+	NetEvent deliver[NET_EV_RXWIN];   // fully-reassembled, NOT-yet-popped events keyed by seq
+	u32      deliverSeq[NET_EV_RXWIN];// the seq held in deliver[i] (0 = empty)
+	u32      expect;         // next seq to DELIVER in order (1-based; the contiguous cursor)
+	u32      rxContig;       // highest contiguous seq fully RECEIVED (drives the cumulative ACK)
+} NetEvRx;
+
+static NetEvTx s_evTx[NET_EV_SEATS];
+static NetEvRx s_evRx[NET_EV_SEATS];
+static LightLock s_evLock;
+static bool s_evLockInit = false;
+// diagnostics (read by net_event_get_stats for the netlog)
+static int s_evOverflow    = 0;   // inbound events that could NOT be buffered (window full) — must stay 0
+static int s_evRetransmits = 0;   // cumulative fragment re-sends
+static int s_evResendTick  = 0;   // RX-thread cadence divider for the un-acked-tail re-send
+
+static void net_event_locks_init(void) {
+	if (s_evLockInit) return;
+	LightLock_Init(&s_evLock);
+	s_evLockInit = true;
+}
+
+void net_event_reset(void) {
+	net_event_locks_init();
+	LightLock_Lock(&s_evLock);
+	memset(s_evTx, 0, sizeof s_evTx);
+	memset(s_evRx, 0, sizeof s_evRx);
+	for (int s = 0; s < NET_EV_SEATS; s++) {
+		s_evTx[s].base = s_evTx[s].next = 1;   // seq is 1-based; nothing queued yet
+		s_evRx[s].expect = 1;                  // waiting for the first event (seq 1)
+		s_evRx[s].rxContig = 0;                // nothing received contiguously yet
+	}
+	s_evOverflow = 0; s_evRetransmits = 0; s_evResendTick = 0;
+	LightLock_Unlock(&s_evLock);
+}
+
+// EVENT-channel diagnostics for the netlog (declared in netlink.h). Reports the highest sent/acked/
+// delivered seq across seats + the overflow/retransmit counters. rxDelivered>0 => peer events arrived.
+void net_event_get_stats(int* txSeq, int* txAcked, int* rxDelivered, int* overflow, int* retransmits) {
+	net_event_locks_init();
+	int ts = 0, ta = 0, rd = 0;
+	LightLock_Lock(&s_evLock);
+	for (int s = 0; s < NET_EV_SEATS; s++) {
+		int sent = (int)s_evTx[s].next - 1;       if (sent > ts) ts = sent;
+		int ack  = (int)s_evTx[s].peerAcked;       if (ack  > ta) ta = ack;
+		int del  = (int)s_evRx[s].expect - 1;      if (del  > rd) rd = del;
+	}
+	LightLock_Unlock(&s_evLock);
+	if (txSeq)       *txSeq       = ts;
+	if (txAcked)     *txAcked     = ta;
+	if (rxDelivered) *rxDelivered = rd;
+	if (overflow)    *overflow    = s_evOverflow;
+	if (retransmits) *retransmits = s_evRetransmits;
+}
+
+// Transmit ONE event (all fragments) to the peer. Caller holds s_evLock. isResend bumps the diag.
+static void net_event_tx_one(int seat, u32 seq, const NetEvent* ev, bool isResend) {
+	int total = (int)ev->len;
+	int frags = (total + NET_EVENT_PAY_MAX - 1) / NET_EVENT_PAY_MAX;
+	if (frags < 1) frags = 1;   // a zero-payload control event is still ONE fragment
+	for (int f = 0; f < frags; f++) {
+		DgbaEventPkt pk;
+		memset(&pk, 0, sizeof pk);
+		pk.magic = 'G'; pk.type = PK_EVENT; pk.seat = (u8)seat;
+		pk.evType = ev->type; pk.evArg = ev->arg;
+		pk.seq = seq; pk.fragIdx = (u8)f; pk.fragCount = (u8)frags; pk.evLen = ev->len;
+		int off = f * NET_EVENT_PAY_MAX;
+		int n   = total - off; if (n > NET_EVENT_PAY_MAX) n = NET_EVENT_PAY_MAX; if (n < 0) n = 0;
+		if (n > 0) memcpy(pk.payload, ev->data + off, (size_t)n);
+		size_t wire = (size_t)NET_EVENT_PAY_OFF + (size_t)n;
+		// Unicast to the resolved peer (MAC-ACKed). Single non-blocking try; loss is covered by the
+		// RX-thread re-send of the whole un-acked tail until the peer's cumulative ACK clears it.
+		u16 dst = s_peerResolved ? s_peerNode : UDS_BROADCAST_NETWORKNODEID;
+		u32 fl  = s_peerResolved ? UDS_SENDFLAG_Default : (UDS_SENDFLAG_Default | UDS_SENDFLAG_Broadcast);
+		net_send_locked(dst, fl, &pk, wire);   // benign TX-busy: re-send covers it; never counted as delivered
+		if (isResend) s_evRetransmits++;
+	}
+}
+
+// Send the cumulative ACK for `seat`'s stream (highest contiguous seq received). Caller holds s_evLock.
+static void net_event_send_ack(int seat) {
+	DgbaLinkPkt ack; memset(&ack, 0, sizeof ack);
+	ack.magic = 'G'; ack.type = PK_EVENT_ACK; ack.seat = (u8)seat; ack.round = s_evRx[seat].rxContig;
+	u16 dst = s_peerResolved ? s_peerNode : UDS_BROADCAST_NETWORKNODEID;
+	u32 fl  = s_peerResolved ? UDS_SENDFLAG_Default : (UDS_SENDFLAG_Default | UDS_SENDFLAG_Broadcast);
+	net_send_locked(dst, fl, &ack, sizeof ack);
+}
+
+// PUBLIC: enqueue a ClEvent for reliable send. Returns 0 ok / <0 backpressure (queue full).
+int net_event_send(int seat, const void* clEvent) {
+	if (seat < 0 || seat >= NET_EV_SEATS || !clEvent) return -1;
+	net_event_locks_init();
+	const NetEvent* ev = (const NetEvent*)clEvent;
+	int rc = 0;
+	LightLock_Lock(&s_evLock);
+	NetEvTx* tx = &s_evTx[seat];
+	if (tx->next - tx->base >= NET_EV_TXQ) {        // bounded queue full -> backpressure (never drop)
+		rc = -1;
+	} else {
+		u32 seq = tx->next++;
+		NetEvent* slot = &tx->q[seq % NET_EV_TXQ];
+		*slot = *ev;
+		if (slot->len > 256) slot->len = 256;       // clamp to the carried buffer (defensive)
+		net_event_tx_one(seat, seq, slot, false);   // first transmit now; the RX thread re-sends until ACKed
+	}
+	LightLock_Unlock(&s_evLock);
+	return rc;
+}
+
+// PUBLIC: pop the next in-order received ClEvent for `seat`. Returns 1 if delivered, 0 if none ready.
+int net_event_recv(int seat, void* clEventOut) {
+	if (seat < 0 || seat >= NET_EV_SEATS || !clEventOut) return 0;
+	net_event_locks_init();
+	int got = 0;
+	LightLock_Lock(&s_evLock);
+	NetEvRx* rx = &s_evRx[seat];
+	u32 want = rx->expect;
+	int idx  = (int)(want % NET_EV_RXWIN);
+	if (rx->deliverSeq[idx] == want && want != 0) {   // the in-order next event is reassembled+ready
+		memcpy(clEventOut, &rx->deliver[idx], sizeof(NetEvent));
+		rx->deliverSeq[idx] = 0;                      // consume (exactly-once: cleared so a re-send is ignored)
+		rx->expect = want + 1;
+		got = 1;
+	}
+	LightLock_Unlock(&s_evLock);
+	return got;
+}
+
+// RX-side: ingest one PK_EVENT fragment. Caller holds s_evLock (called from the RX thread). Reassembles
+// into the (seq%RXWIN) slot; on completion, stores the event in the delivery ring and advances rxContig
+// over any newly-contiguous run. A fragment for an already-delivered/old seq is ignored (exactly-once).
+static void net_event_rx_fragment(const DgbaEventPkt* pk, size_t got) {
+	int seat = pk->seat;
+	if (seat < 0 || seat >= NET_EV_SEATS) return;
+	if (got < (size_t)NET_EVENT_PAY_OFF) return;            // malformed (shorter than header+evLen)
+	NetEvRx* rx = &s_evRx[seat];
+	u32 seq = pk->seq;
+	if (seq == 0) return;
+	if ((s32)(seq - rx->expect) < 0) {                      // already delivered -> just (re)ACK, drop frag
+		return;
+	}
+	if (seq - rx->expect >= NET_EV_RXWIN) { s_evOverflow++; return; }  // beyond the window: never silently lose
+	int frags = pk->fragCount ? pk->fragCount : 1;
+	if (frags > 32) return;                                 // mask is 32-bit; >242*32B events can't occur (max 2)
+	int fi = pk->fragIdx;
+	if (fi < 0 || fi >= frags) return;
+	int slot = (int)(seq % NET_EV_RXWIN);
+	NetEvAsm* as = &rx->asm_[slot];
+	if (as->seq != seq) {                                   // (re)claim the reassembly slot for this seq
+		// If the slot is occupied by a DIFFERENT live seq, the window invariant (seq-expect<RXWIN) means
+		// it must be the same residue from an older expect window already delivered -> safe to overwrite.
+		memset(as, 0, sizeof *as);
+		as->seq = seq; as->evType = pk->evType; as->evArg = pk->evArg;
+		as->evLen = pk->evLen; as->fragCount = (u8)frags;
+	}
+	int payN = (int)got - NET_EVENT_PAY_OFF;
+	if (payN > NET_EVENT_PAY_MAX) payN = NET_EVENT_PAY_MAX;
+	int off = fi * NET_EVENT_PAY_MAX;
+	if (off + payN > 256) payN = 256 - off; if (payN < 0) payN = 0;
+	if (payN > 0) memcpy(as->data + off, pk->payload, (size_t)payN);
+	as->fragGotMask |= (1u << fi);
+	u32 fullMask = (frags >= 32) ? 0xFFFFFFFFu : ((1u << frags) - 1u);
+	if ((as->fragGotMask & fullMask) != fullMask) return;   // not all fragments yet
+	// Event fully reassembled -> publish into the delivery ring (idempotent if already present).
+	if (rx->deliverSeq[slot] != seq) {
+		NetEvent* d = &rx->deliver[slot];
+		d->type = as->evType; d->arg = as->evArg;
+		d->len  = as->evLen > 256 ? 256 : as->evLen;
+		memset(d->data, 0, sizeof d->data);
+		if (d->len) memcpy(d->data, as->data, d->len);
+		rx->deliverSeq[slot] = seq;
+	}
+	// Recompute the contiguous-RECEIVED high-water mark (drives the cumulative ACK). Everything below
+	// `expect` was already delivered+consumed (definitely received); then extend over the contiguous run
+	// of reassembled-but-not-yet-popped events sitting in the delivery ring.
+	u32 contig = rx->expect - 1;   // expect>=1, so this is >=0; [1..expect-1] are delivered = received
+	for (;;) {
+		u32 nxt = contig + 1;
+		if (nxt - rx->expect >= NET_EV_RXWIN) break;                 // past the window
+		if (rx->deliverSeq[(int)(nxt % NET_EV_RXWIN)] == nxt) contig = nxt;
+		else break;
+	}
+	rx->rxContig = contig;
+}
+
 // --- M3 RX thread: the ONE udsPullPacket owner. Drains to empty, dispatches every packet, THEN
 // waits on the bind event (drain-first => a missed edge is harmless; the next pass re-drains). No
 // svcClearEvent (it would drop a frame signal). net_link_stop wakes it via svcSignalEvent. --------
 static void net_rx_thread(void* arg) {
 	(void)arg;
-	u8 buf[64]; size_t got; u16 src;
+	u8 buf[NET_PKT_BUF]; size_t got; u16 src;
 	int resendTick = 0;
 	while (__atomic_load_n(&s_rxRun, __ATOMIC_ACQUIRE)) {
 		LightLock_Lock(&s_rxLock);
 		while (s_up && R_SUCCEEDED(udsPullPacket(&s_bind, buf, sizeof buf, &got, &src)) && got) {
-			if (got < sizeof(DgbaLinkPkt)) continue;
+			if (got < 2 || buf[0] != 'G') continue;          // need at least magic+type; 'G' wire-magic
+			u8 ptype = buf[1];
+			if (ptype == PK_EVENT) {                         // EVENT channel fragment (own datagram layout)
+				if (got < (size_t)NET_EVENT_PAY_OFF) continue;
+				const DgbaEventPkt* ev = (const DgbaEventPkt*)buf;
+				int evseat = ev->seat;
+				LightLock_Lock(&s_evLock);
+				net_event_rx_fragment(ev, got);              // reassemble + advance rxContig
+				if (evseat >= 0 && evseat < NET_EV_SEATS) net_event_send_ack(evseat);  // cumulative ACK back
+				LightLock_Unlock(&s_evLock);
+				continue;
+			}
+			if (got < sizeof(DgbaLinkPkt)) continue;         // PING/PONG/WORD/EVENT_ACK ride the 16-B pkt
 			const DgbaLinkPkt* pk = (const DgbaLinkPkt*)buf;
-			if (pk->magic != 'G') continue;
 			if (pk->type == PK_PING) {                       // echo a pong straight back (unicast to sender)
 				DgbaLinkPkt pong; memset(&pong, 0, sizeof pong);
 				pong.magic = 'G'; pong.type = PK_PONG; pong.round = pk->round;
@@ -476,6 +821,17 @@ static void net_rx_thread(void* arg) {
 			} else if (pk->type == PK_WORD) {                // peer's SIO word -> merge + wake any collect
 				s_rxWordN++;                                 // diag: a peer WORD actually arrived (RX-empty if this stays 0)
 				net_round_merge(pk->seat, pk->round, pk->d.send);
+			} else if (pk->type == PK_EVENT_ACK) {           // peer's cumulative ACK -> free our un-acked tail
+				int aseat = pk->seat;
+				if (aseat >= 0 && aseat < NET_EV_SEATS) {
+					LightLock_Lock(&s_evLock);
+					NetEvTx* tx = &s_evTx[aseat];
+					if ((s32)(pk->round - tx->peerAcked) > 0) tx->peerAcked = pk->round;   // monotonic
+					// Cumulative: everything <= peerAcked is delivered -> base = peerAcked+1 (capped at next).
+					u32 nb = tx->peerAcked + 1;
+					if ((s32)(nb - tx->base) > 0) tx->base = (nb > tx->next) ? tx->next : nb;
+					LightLock_Unlock(&s_evLock);
+				}
 			}
 		}
 		LightLock_Unlock(&s_rxLock);
@@ -484,6 +840,20 @@ static void net_rx_thread(void* arg) {
 		// reaches the peer even when neither side is blocked in collect (the side that completed its round
 		// locally still must keep re-sending its reply until the peer advances).
 		if (++resendTick >= 8) { resendTick = 0; net_resend_current(); }
+		// EVENT channel: re-transmit the whole un-acked tail every ~16ms (resend cadence) so a dropped
+		// fragment/event eventually lands; the peer's cumulative PK_EVENT_ACK frees it. Re-ACK the last
+		// contiguous seq too, so a dropped ACK doesn't strand the sender (idempotent).
+		if (++s_evResendTick >= 32) {
+			s_evResendTick = 0;
+			LightLock_Lock(&s_evLock);
+			for (int s = 0; s < NET_EV_SEATS; s++) {
+				NetEvTx* tx = &s_evTx[s];
+				for (u32 seq = tx->base; seq < tx->next; seq++)
+					net_event_tx_one(s, seq, &tx->q[seq % NET_EV_TXQ], true);   // un-acked tail re-send
+				if (s_evRx[s].rxContig != 0) net_event_send_ack(s);             // re-ACK (covers a lost ACK)
+			}
+			LightLock_Unlock(&s_evLock);
+		}
 		// Poll the radio at ~2 kHz instead of blocking on the bind event: re-drains promptly AND notices
 		// s_rxRun==false within ~0.5ms on teardown — no event-wait means no lost-wake hang (the close-hang
 		// we're fixing) and no sticky-event busy-spin. Runs on core 2 (freed when emuB pauses).
@@ -496,6 +866,7 @@ bool net_link_start(int seat, int rxCore) {
 	if (!s_inited || !s_up) return false;
 	net_rounds_init();                     // (also arms s_txLock/s_rxLock)
 	net_transfer_reset();
+	net_event_reset();                     // EVENT channel: fresh seq/ack + queues for this link
 	s_loopback = false;
 	if (!net_resolve_peer()) return false; // REFUSE to start without a unicast peer (no lossy broadcast WORDs)
 	if (!s_rxThread) {

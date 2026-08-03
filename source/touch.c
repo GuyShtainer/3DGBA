@@ -1,13 +1,23 @@
 // touch.c — see touch.h.
 #include <stdlib.h>     // abs
+#include <stdio.h>      // FILE / fprintf (the touch-event SD log dump)
+#include <string.h>     // memset
+#include <sys/stat.h>   // mkdir (ensure the netlogs dir exists)
 #include <citro2d.h>
 #include "gbacore.h"    // GBAKEY_*
 #include "touch.h"
+#include "theme.h"     // pad color/edge prefs (g_prefs) + the fixed PAD_COLOR_* tints
+#include "ui.h"        // shared widget kit (borders, chips, centered text)
 
 const char* const TOUCH_NAMES[3] = { "Off", "Gamepad", "Smart" };
 
-#define COL_FAINT  C2D_Color32(0xF5, 0xD0, 0x42, 0x40)   // faint gold (idle zone)
-#define COL_LIT    C2D_Color32(0xF5, 0xD0, 0x42, 0xB0)   // bright gold (pressed)
+// Pad tint comes from g_prefs.padColor (5 options, theme.h); idle zones draw at alpha 0x40,
+// pressed at 0xB0 — the same alphas the old fixed-gold overlay used.
+static u32 pad_tint(u8 alpha) {
+	const u32 cols[5] = { PAD_COLOR_0, PAD_COLOR_1, PAD_COLOR_2, PAD_COLOR_3, PAD_COLOR_4 };
+	u32 c = cols[((unsigned)g_prefs.padColor) % 5];
+	return (c & 0x00FFFFFFu) | ((u32)alpha << 24);
+}
 
 // =============================== PAD (virtual gamepad) ======================
 static u16 pad_keys(int px, int py) {
@@ -27,14 +37,56 @@ static u16 pad_keys(int px, int py) {
 	return 0;
 }
 
-static void pad_overlay(u16 held) {
-	#define ZONE(x,y,w,h,k) C2D_DrawRectSolid((x),(y),0.0f,(w),(h),(held & (1<<(k))) ? COL_LIT : COL_FAINT)
-	ZONE(33, 138, 44, 30, GBAKEY_UP);   ZONE(33, 192, 44, 30, GBAKEY_DOWN);
-	ZONE(7, 162, 32, 36, GBAKEY_LEFT);  ZONE(71, 162, 32, 36, GBAKEY_RIGHT);
-	ZONE(252, 150, 60, 60, GBAKEY_A);   ZONE(198, 176, 50, 44, GBAKEY_B);
-	ZONE(128, 214, 64, 22, GBAKEY_START);
-	ZONE(4, 4, 52, 22, GBAKEY_L);       ZONE(264, 4, 52, 22, GBAKEY_R);
+// Fake-rounded rect: two overlapping rects cut the corners by r (Round=4 / Soft=2 / Sharp=0).
+static void pad_zone(float x, float y, float w, float h, u32 col, float r) {
+	if (r <= 0.0f) { C2D_DrawRectSolid(x, y, 0.0f, w, h, col); return; }
+	// three NON-overlapping rects: overlapping translucent rects double-blend and the zone
+	// interior renders visibly more opaque than its edge strips.
+	C2D_DrawRectSolid(x + r, y, 0.0f, w - 2.0f * r, h, col);              // full-height center
+	C2D_DrawRectSolid(x, y + r, 0.0f, r, h - 2.0f * r, col);              // left strip
+	C2D_DrawRectSolid(x + w - r, y + r, 0.0f, r, h - 2.0f * r, col);      // right strip
+}
+
+// Centered glyph label on a zone (buf may be NULL -> zones only).
+static void pad_label(C2D_TextBuf buf, const char* s, float x, float y, float w, float h, u32 col) {
+	if (!buf) return;
+	C2D_Text t; C2D_TextParse(&t, buf, s); C2D_TextOptimize(&t);
+	float tw, th; C2D_TextGetDimensions(&t, 0.42f, 0.42f, &tw, &th);
+	C2D_DrawText(&t, C2D_WithColor, x + (w - tw) / 2.0f, y + (h - th) / 2.0f, 0.0f, 0.42f, 0.42f, col);
+}
+
+static void pad_overlay(u16 held, C2D_TextBuf buf) {
+	// 1:1 (screenshot 06): each zone = a translucent tint fill + a brighter tint OUTLINE + a
+	// tint glyph; a dark "TOUCH · GAMEPAD" chip top-center and a dark "≡ menu" chip bottom-right.
+	static const float EDGE_R[3] = { 6.0f, 3.0f, 1.0f };   // Round / Soft / Sharp
+	float r = EDGE_R[((unsigned)g_prefs.padEdge) % 3];
+	u32 faint = pad_tint(0x36), lit = pad_tint(0x92);
+	u32 line  = pad_tint(0xB8), glyph = pad_tint(0xE6);
+	#define ZONE(x,y,w,h,k,g) do { \
+		pad_zone((x), (y), (w), (h), (held & (1 << (k))) ? lit : faint, r); \
+		ui_border((x), (y), (w), (h), line, 1.5f); \
+		pad_label(buf, (g), (x), (y), (w), (h), glyph); \
+	} while (0)
+	#define DZONE(x,y,w,h,k,d) do { \
+		pad_zone((x), (y), (w), (h), (held & (1 << (k))) ? lit : faint, r); \
+		ui_border((x), (y), (w), (h), line, 1.5f); \
+		ui_tri((x) + (w) / 2.0f, (y) + (h) / 2.0f, 5.0f, (d), glyph); \
+	} while (0)
+	DZONE(33, 138, 44, 30, GBAKEY_UP, 2);    DZONE(33, 192, 44, 30, GBAKEY_DOWN, 3);
+	DZONE(7, 162, 32, 36, GBAKEY_LEFT, 1);   DZONE(71, 162, 32, 36, GBAKEY_RIGHT, 0);
+	#undef DZONE
+	ZONE(252, 150, 60, 60, GBAKEY_A, "A");    ZONE(198, 176, 50, 44, GBAKEY_B, "B");
+	ZONE(128, 214, 64, 22, GBAKEY_START, "START");
+	ZONE(4, 4, 52, 22, GBAKEY_L, "L");        ZONE(264, 4, 52, 22, GBAKEY_R, "R");
 	#undef ZONE
+	if (buf) {
+		float w = ui_text_w(buf, "TOUCH · GAMEPAD", 0.32f) + 14.0f;
+		ui_fill((320.0f - w) / 2.0f, 4.0f, w, 14.0f, C2D_Color32(0x00, 0x00, 0x00, 0x96), 4.0f);
+		ui_text_c(buf, "TOUCH · GAMEPAD", 160.0f, 6.0f, 0.32f, glyph);
+		float mw = ui_text_w(buf, "≡ menu", 0.32f) + 12.0f;
+		ui_fill(314.0f - mw, 222.0f, mw, 14.0f, C2D_Color32(0x00, 0x00, 0x00, 0x96), 4.0f);
+		ui_text(buf, "≡ menu", 320.0f - mw, 224.0f, 0.32f, pad_tint(0xC8));
+	}
 }
 
 // ============= SMART: deterministic "write cursor, pulse A" select ===========
@@ -329,6 +381,147 @@ static u16 bag_update(const TouchSmart* sm, bool touching, bool newPress, bool g
 	return 0;
 }
 
+// ===================== touch-event instrumentation log =======================
+// Decode a GBA key mask to a short string (bit order A0 B1 Sel2 St3 Right4 Left5 Up6 Down7 R8 L9).
+static void touch_keystr(uint16_t k, char* out, int cap) {
+	static const char* const N[] = { "A","B","s","S",">","<","^","v","R","L" };
+	int n = 0;
+	for (int i = 0; i < 10 && n < cap - 2; i++) if (k & (1u << i)) { const char* t = N[i]; while (*t && n < cap - 1) out[n++] = *t++; }
+	if (n == 0) out[n++] = '-';
+	out[n] = '\0';
+}
+// LOGGING ONLY — records each touch EVENT (press / drag-step / hold / release) with the ctx fingerprint
+// and the context-relevant game cursor read BEFORE and AFTER the dispatch (so a row shows old->new = the
+// proof the cursor tracks touch). Edge-ish: a new press / release always logs; a hold or drag logs when
+// the injected key OR the cursor changes, plus a slow heartbeat, so a steady hold doesn't flood the ring.
+// In-memory ring + ONE SD dump on session close (the gs_log pattern); no per-frame file I/O.
+
+// Map the current ctx to its authoritative game cursor (addr, byte-size). size 0 = no cursor (overworld
+// has none -> we log the injected walk key; undetected screens have none -> we log cb2/tasks only).
+//   BATTLE_ACTION -> actionAddr (u8) ; BATTLE_MOVE -> moveAddr (u8) ; BATTLE_TARGET -> multiCursor (u8) ;
+//   PARTY -> partyMenu+0x09 (u8) ; FIELDMENU -> sMenuBase+2 (u8) ; BAG -> bagListTaskBase+26 (u16).
+static void touch_cursor_addr(const TouchSmart* sm, uint32_t* addr, int* size) {
+	*addr = 0; *size = 0;
+	if (!sm) return;
+	const GameProfile* p = sm->prof;
+	switch (sm->ctx) {
+	case GCTX_BATTLE_ACTION: *addr = sm->actionAddr; *size = 1; break;
+	case GCTX_BATTLE_MOVE:   *addr = sm->moveAddr;   *size = 1; break;
+	case GCTX_BATTLE_TARGET: if (p) { *addr = p->multiCursor;       *size = 1; } break;
+	case GCTX_PARTY:         if (p) { *addr = p->partyMenu + 0x09u; *size = 1; } break;
+	case GCTX_FIELDMENU:     if (p) { *addr = p->sMenuBase + 2u;    *size = 1; } break;
+	case GCTX_BAG:           if (sm->bagListTaskBase) { *addr = sm->bagListTaskBase + 26u; *size = 2; } break;
+	default: break;   // OVERWORLD / NONE / BATTLE_OTHER: no cursor -> the injected key tells the story
+	}
+}
+static uint32_t touch_cursor_read(const TouchSmart* sm, uint32_t addr, int size) {
+	if (!sm || !sm->core || !addr || size == 0) return 0xFFFFFFFFu;   // 0xFFFFFFFF = "no cursor for this ctx"
+	if (size == 2) return gbacore_read16(sm->core, addr);
+	return gbacore_read8(sm->core, addr);
+}
+
+#define TLOG_N 1024
+#define TLOG_HEARTBEAT 30u     // while holding, still emit a row every ~0.5s even if nothing changed
+typedef struct {
+	uint32_t frame, ms;
+	uint32_t cb2;
+	uint32_t cursAddr;         // the ctx cursor addr (0 = none)
+	uint32_t before, after;    // cursor value before/after the handler (0xFFFFFFFF = no cursor for this ctx)
+	uint32_t taskFp[8];
+	int16_t  sx, sy, gx, gy;
+	uint16_t ret;              // injected GBA key mask (the action: A-pulse / D-pad walk dir / etc.)
+	uint8_t  ctx, evt;         // evt: 0=press 1=drag/hold 2=release 3=heartbeat
+	uint8_t  gvalid, touching, drag, resolved, nTask, cursSize;
+} TLogEntry;
+static TLogEntry s_tLog[TLOG_N];
+static uint32_t  s_tLogN = 0;
+// per-touch gesture tracking (also used to set the drag flag the log records).
+static bool s_tWasTouch = false, s_tDrag = false;
+static int  s_tDownSx = 0, s_tDownSy = 0;
+static uint32_t s_tLastRet = 0xFFFFFFFFu, s_tLastCurs = 0xFFFFFFFFu, s_tLastBeat = 0;
+
+void touch_log_reset(void) {
+	s_tLogN = 0; s_tWasTouch = false; s_tDrag = false;
+	s_tDownSx = s_tDownSy = 0;
+	s_tLastRet = 0xFFFFFFFFu; s_tLastCurs = 0xFFFFFFFFu; s_tLastBeat = 0;
+}
+
+// Record a row. Called from touch_update with the before/after cursor reads bracketing the dispatch.
+static void touch_log_sample(const TouchSmart* sm, bool touching, bool newPress, int sx, int sy,
+                             int gx, int gy, bool gvalid, uint16_t ret,
+                             uint32_t cursAddr, int cursSize, uint32_t before, uint32_t after) {
+	if (!sm || !sm->core) return;
+	uint32_t frame = gbacore_frame_counter(sm->core);
+	bool release = (!touching && s_tWasTouch);
+	// gesture drag flag: movement since the press (mirrors the bag/walk move thresholds, generic 6px).
+	if (newPress) { s_tDownSx = sx; s_tDownSy = sy; s_tDrag = false; }
+	if (touching && (abs(sx - s_tDownSx) > 6 || abs(sy - s_tDownSy) > 6)) s_tDrag = true;
+
+	// What makes a frame loggable: a fresh press, a release, the injected key changing, the cursor
+	// changing, or a heartbeat while a hold/drag is sustained. (A steady hold with no change -> no row.)
+	bool keyEdge  = touching && ((uint32_t)ret != s_tLastRet);
+	bool cursEdge = touching && (after != s_tLastCurs);
+	bool beat     = touching && (frame - s_tLastBeat >= TLOG_HEARTBEAT);
+	bool loggable = newPress || release || keyEdge || cursEdge || beat;
+	if (!loggable) { s_tWasTouch = touching; return; }
+
+	s_tLastRet = touching ? (uint32_t)ret : 0xFFFFFFFFu;
+	s_tLastCurs = touching ? after : 0xFFFFFFFFu;
+	if (newPress || beat) s_tLastBeat = frame;
+
+	uint8_t evt = newPress ? 0 : release ? 2 : (beat && !keyEdge && !cursEdge) ? 3 : 1;
+	TLogEntry* e = &s_tLog[s_tLogN % TLOG_N];
+	memset(e, 0, sizeof *e);
+	e->frame = frame; e->ms = (uint32_t)osGetTime();
+	e->cb2 = sm->cb2; e->resolved = sm->ctxResolved ? 1 : 0; e->nTask = sm->nTask;
+	for (int i = 0; i < 8; i++) e->taskFp[i] = sm->taskFp[i];
+	e->ctx = (uint8_t)sm->ctx; e->evt = evt;
+	e->sx = (int16_t)sx; e->sy = (int16_t)sy; e->gx = (int16_t)gx; e->gy = (int16_t)gy;
+	e->gvalid = gvalid ? 1 : 0; e->touching = touching ? 1 : 0; e->drag = s_tDrag ? 1 : 0;
+	e->ret = ret; e->cursAddr = cursAddr; e->cursSize = (uint8_t)cursSize;
+	e->before = before; e->after = after;
+	s_tLogN++;
+	s_tWasTouch = touching;
+}
+
+void touch_log_dump(const char* path) {
+	if (s_tLogN == 0) return;            // nothing captured -> don't litter SD with an empty file
+	mkdir("sdmc:/cias", 0777);
+	mkdir("sdmc:/cias/netlogs", 0777);
+	FILE* f = fopen(path, "w");
+	if (!f) return;
+	fprintf(f, "# 3DGBA touch-event log  (one row per touch event: press / drag-hold / release / heartbeat)\n");
+	fprintf(f, "# evt: 0=press 1=drag/hold 2=release 3=heartbeat. ctxName via the GameCtx enum.\n");
+	fprintf(f, "# THE CURSOR PROOF: cursAddr=the ctx's authoritative game cursor (0=ctx has none); before/after=its value\n");
+	fprintf(f, "#   read just BEFORE and AFTER the touch handler ran (FFFFFFFF=no cursor for this ctx). before!=after => touch moved it.\n");
+	fprintf(f, "#   ctx->cursor: b.act=actionCursor b.move=moveCursor b.tgt=gMultiUsePlayerCursor party=gPartyMenu.slotId fmenu=sMenu.cursorPos bag=ListMenu row(+26).\n");
+	fprintf(f, "#   field(overworld) has NO cursor -> read 'ret' (the injected key: walk dir / A). undetected screens (map/PokeNav/Pokemon-PC/move-learn/intro/Frontier) fall through to ctx=field/none with resolved=0 -> identify them by cb2 + t0..t7 (active task fps).\n");
+	fprintf(f, "# coords: sx,sy=raw bottom-screen(320x240); gx,gy=mapped GBA px(0..239,0..159); gvalid=0 if off-frame. ret=injected GBA key mask. drag=moved>6px since press.\n");
+	fprintf(f, "idx,frame,ms,evt,ctx,ctxName,resolved,touching,newPress,drag,gvalid,sx,sy,gx,gy,ret,keys,cursAddr,cursSz,before,after,changed,cb2,nTask,t0,t1,t2,t3,t4,t5,t6,t7\n");
+	uint32_t n    = (s_tLogN < TLOG_N) ? s_tLogN : TLOG_N;
+	uint32_t base = (s_tLogN < TLOG_N) ? 0u : (s_tLogN % TLOG_N);
+	static const char* const EVN[] = { "press", "drag", "release", "beat" };
+	for (uint32_t i = 0; i < n; i++) {
+		const TLogEntry* e = &s_tLog[(base + i) % TLOG_N];
+		char ks[12]; touch_keystr(e->ret, ks, sizeof ks);
+		const char* cn = gamestate_ctx_name(e->ctx);
+		const char* en = (e->evt < 4) ? EVN[e->evt] : "?";
+		(void)en;
+		int changed = (e->cursAddr && e->before != e->after) ? 1 : 0;
+		fprintf(f, "%lu,%lu,%lu,%u,%u,%s,%u,%u,%u,%u,%u,%d,%d,%d,%d,%04X,%s,%08lX,%u,",
+		        (unsigned long)i, (unsigned long)e->frame, (unsigned long)e->ms, e->evt, e->ctx, cn,
+		        e->resolved, e->touching, (e->evt == 0) ? 1u : 0u, e->drag, e->gvalid,
+		        e->sx, e->sy, e->gx, e->gy, e->ret, ks, (unsigned long)e->cursAddr, e->cursSize);
+		if (e->cursAddr) fprintf(f, "%08lX,%08lX,%d", (unsigned long)e->before, (unsigned long)e->after, changed);
+		else             fprintf(f, ",,");   // no cursor for this ctx -> empty before/after/changed
+		fprintf(f, ",%08lX,%u,%08lX,%08lX,%08lX,%08lX,%08lX,%08lX,%08lX,%08lX\n",
+		        (unsigned long)e->cb2, e->nTask,
+		        (unsigned long)e->taskFp[0], (unsigned long)e->taskFp[1], (unsigned long)e->taskFp[2], (unsigned long)e->taskFp[3],
+		        (unsigned long)e->taskFp[4], (unsigned long)e->taskFp[5], (unsigned long)e->taskFp[6], (unsigned long)e->taskFp[7]);
+	}
+	fclose(f);
+}
+
 // ================================ dispatch ==================================
 static void all_reset(void) { battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); bag_reset(); }
 
@@ -342,6 +535,12 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 	if (mode != TOUCH_SMART) { all_reset(); return 0; }            // TOUCH_OFF
 	if (!sm || !sm->valid)   { all_reset(); return 0; }
 
+	// LOGGING ONLY: read the ctx cursor BEFORE the dispatch (and AFTER, below) so a row shows old->new.
+	uint32_t cursAddr; int cursSize;
+	touch_cursor_addr(sm, &cursAddr, &cursSize);
+	uint32_t before = touch_cursor_read(sm, cursAddr, cursSize);
+
+	u16 ret = 0;
 	switch (sm->ctx) {
 	case GCTX_BATTLE_ACTION:
 	case GCTX_BATTLE_MOVE: {
@@ -351,7 +550,8 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 			int cell = (sm->ctx == GCTX_BATTLE_ACTION) ? hit_action(gx, gy) : hit_move(gx, gy);
 			if (cell >= 0) { s_target = cell; s_selTick = 0; }
 		}
-		return menu_select(sm->core, base);
+		ret = menu_select(sm->core, base);
+		break;
 	}
 	case GCTX_BATTLE_TARGET:
 		battle_reset(); walk_reset(); party_reset(); fmenu_reset(); bag_reset();
@@ -359,35 +559,52 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 			int pos = hit_battler(gx, gy);
 			if (pos >= 0) { int idx = battler_index_for_pos(sm, pos); if (idx >= 0) { s_tgt = idx; s_tgtTick = 0; } }
 		}
-		return select_pulse(sm->core, sm->prof ? sm->prof->multiCursor : 0, &s_tgt, &s_tgtTick);
+		ret = select_pulse(sm->core, sm->prof ? sm->prof->multiCursor : 0, &s_tgt, &s_tgtTick);
+		break;
 	case GCTX_PARTY:
 		battle_reset(); walk_reset(); target_reset(); fmenu_reset(); bag_reset();
 		if (newPress && gvalid) {
 			int slot = hit_party(gx, gy, sm->partyLayout);
 			if (slot == 7 || (slot >= 0 && slot < sm->partyCount)) { s_party = slot; s_partyTick = 0; }
 		}
-		return select_pulse(sm->core, sm->prof ? sm->prof->partyMenu + 0x09 : 0, &s_party, &s_partyTick);
+		ret = select_pulse(sm->core, sm->prof ? sm->prof->partyMenu + 0x09 : 0, &s_party, &s_partyTick);
+		break;
 	case GCTX_OVERWORLD:
 		battle_reset(); party_reset(); target_reset(); fmenu_reset(); bag_reset();
-		return walk_update(touching, newPress, gvalid, gx, gy, sm->px, sm->py, sm->core, sm->prof);
+		ret = walk_update(touching, newPress, gvalid, gx, gy, sm->px, sm->py, sm->core, sm->prof);
+		break;
 	case GCTX_FIELDMENU:
 		battle_reset(); walk_reset(); party_reset(); target_reset(); bag_reset();
 		if (newPress && gvalid && sm->prof) { int i = hit_fieldmenu(sm->core, sm->prof, gx, gy); if (i >= 0) { s_fmenu = i; s_fmenuTick = 0; } }
-		return sm->prof ? fmenu_select(sm->core, sm->prof) : 0;
+		ret = sm->prof ? fmenu_select(sm->core, sm->prof) : 0;
+		break;
 	case GCTX_BAG:
 		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset();
-		return bag_update(sm, touching, newPress, gvalid, gx, gy);
+		ret = bag_update(sm, touching, newPress, gvalid, gx, gy);
+		break;
 	case GCTX_BATTLE_OTHER:
 		all_reset();
-		return touching ? (1 << GBAKEY_A) : 0;                     // battle dialog/animation: tap = advance
+		ret = touching ? (1 << GBAKEY_A) : 0;                      // battle dialog/animation: tap = advance
+		break;
 	default:
 		all_reset();
-		return 0;
+		ret = 0;
+		break;
 	}
+
+	// LOGGING ONLY: read the cursor AFTER, then record the event (covers every switch case incl. the
+	// default/undetected fall-through; cursAddr==0 there -> cb2/tasks are the fingerprint).
+	uint32_t after = touch_cursor_read(sm, cursAddr, cursSize);
+	touch_log_sample(sm, touching, newPress, sx, sy, gx, gy, gvalid, ret, cursAddr, cursSize, before, after);
+	return ret;
 }
 
-void touch_draw(TouchMode mode, u16 held, const TouchSmart* sm) {
+void touch_draw(TouchMode mode, u16 held, const TouchSmart* sm, C2D_TextBuf buf) {
 	(void)sm;
-	if (mode == TOUCH_PAD) pad_overlay(held);
-	// SMART: no overlay — the touchscreen points at the real game UI.
+	if (mode == TOUCH_PAD) pad_overlay(held, buf);
+	else if (mode == TOUCH_SMART && buf) {   // SMART: no overlay — the chip label only (screen 07)
+		float w = ui_text_w(buf, "TOUCH · SMART POINTER", 0.32f) + 14.0f;
+		ui_fill((320.0f - w) / 2.0f, 4.0f, w, 14.0f, C2D_Color32(0x00, 0x00, 0x00, 0x80), 4.0f);
+		ui_text_c(buf, "TOUCH · SMART POINTER", 160.0f, 6.0f, 0.32f, C2D_Color32(0xF5, 0xD0, 0x42, 0xB4));
+	}
 }

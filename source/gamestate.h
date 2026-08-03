@@ -115,11 +115,22 @@ typedef struct {
 
 // Optional 3D-effect health, logged alongside the TOP game's row (pass NULL for the bottom game).
 // Mirrors the main.c DepthSnap scalars so a wrong-looking 3D pop can be correlated with the screen.
+// Newer per-sprite disparity-detail fields are APPENDED (size-tolerant, like the settings loader):
+// callers that don't set them leave them 0, and the dump prints them in trailing columns so an old
+// reader still parses the leading ones. Disparities are in px-at-FULL-slider (the pop_eye unit before
+// it multiplies by eyeSl), so the values are slider-independent (a wrong pop is visible regardless).
 typedef struct {
 	uint8_t overworld, textTop, textBot;   // depth gating flags
 	short   nspr, nui, nfg;                // on-screen sprite / BG0-panel / foreground-tile counts
 	float   maxd;                          // strongest in-view stereoscopic depth
 	short   camX, camY;                    // gFieldCamera sub-tile scroll
+	// --- per-sprite stereoscopic-disparity detail (LOGGING ONLY) — proves the 3D EFFECT, not just counts.
+	// All px @ full slider; mirror pop_eye's feet base = RAMP_AT(fy)+floorD and head = base+POP3D_STANDUP. ---
+	float   feetMin, feetMax;              // min/max grounded-feet disparity across on-screen sprites
+	float   headMin, headMax;              // min/max head disparity (feet + standup, clamped)
+	short   tallOk, tallFail;              // sprites where head exceeds feet by ~POP3D_STANDUP (tall-is-taller) vs not
+	uint8_t orderOk;                       // 1 = on-screen set is MONOTONIC in screen-y vs feet disparity (front-is-front)
+	uint8_t s3d;                           // 1 = stereoscopic 3D engaged this frame (slider>thresh & not in menu); 0 = flat
 } GsDepth;
 
 // Profile for a core's ROM (by header game code), or NULL if unknown.

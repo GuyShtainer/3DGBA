@@ -1,0 +1,760 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  body{margin:0;background:#141019;font-family:'Space Grotesk',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  *{box-sizing:border-box}
+  .rail-card{background:#1B1526;border:1px solid #34285A;border-radius:12px;padding:12px 13px}
+  .rail-h{font:600 8.5px 'JetBrains Mono',monospace;color:#8b81ab;letter-spacing:1.5px;margin-bottom:10px}
+</style>
+</helmet>
+
+<div style="min-height:100vh;padding:26px 26px 46px">
+  <div style="{{ rootStyle }}">
+    <div style="display:flex;gap:26px;justify-content:center;align-items:flex-start;flex-wrap:wrap;max-width:1200px;margin:0 auto">
+
+      <!-- ==================== DEVICE STAGE ==================== -->
+      <div style="display:flex;flex-direction:column;align-items:center;gap:15px">
+        <div style="background:var(--shell,linear-gradient(158deg,#3d4048,#282a30));padding:var(--shellpad,20px 24px 18px);border-radius:var(--shellrad,30px);box-shadow:var(--shellshadow,0 34px 70px rgba(0,0,0,.55));display:flex;flex-direction:column;align-items:center">
+
+          <div style="display:var(--chrome,flex);align-items:center;gap:8px;margin-bottom:11px">
+            <div style="width:5px;height:5px;border-radius:50%;background:#141619;box-shadow:0 0 0 2px #4a4d54"></div>
+            <div style="font:600 8px 'JetBrains Mono';color:#8a8d95;letter-spacing:2px">NEW 3DS</div>
+          </div>
+
+          <div style="display:flex;flex-direction:var(--sdir,column);align-items:center;gap:var(--sgap,0px)">
+
+            <!-- TOP SCREEN -->
+            <div style="display:flex;flex-direction:column;align-items:center;gap:7px">
+              <div style="display:var(--flatshow,none);font:600 8.5px 'JetBrains Mono';color:#8F87AE;letter-spacing:1.5px">TOP · 400×240 · 3D SCREEN</div>
+              <div style="display:flex;align-items:center;gap:9px">
+                <div style="display:var(--chrome,flex);flex-direction:column;align-items:center;gap:5px;width:22px">
+                  <div style="font:700 7px 'JetBrains Mono';color:#a9d4ff">3D</div>
+                  <div style="width:5px;height:54px;border-radius:3px;background:#191b1f;position:relative;box-shadow:inset 0 0 0 1px #4a4d54">
+                    <div style="position:absolute;left:-3px;top:5px;width:11px;height:9px;border-radius:2px;background:#8a8d95"></div>
+                  </div>
+                </div>
+                <div style="background:#08080c;padding:9px;border-radius:12px;box-shadow:inset 0 0 0 1px #000,0 2px 6px rgba(0,0,0,.5)">
+                  <div style="width:360px;height:216px;border-radius:5px;background:var(--bg,#201830);position:relative;overflow:hidden;color:var(--text,#F4F1FB)">
+
+                    <sc-if value="{{ isBoot }}" hint-placeholder-val="{{ true }}">
+                      <div style="position:absolute;inset:0;background:var(--bg,#201830);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:13px">
+                        <svg width="52" height="52" viewBox="0 0 48 48" fill="none"><rect x="10.5" y="7.5" width="26" height="14.5" rx="3.4" stroke="#3E86D6" stroke-opacity="0.32" stroke-width="1.5"></rect><rect x="8" y="9" width="26" height="14.5" rx="3.4" fill="var(--panel,#2A2042)" stroke="var(--acc,#F5D042)" stroke-width="2"></rect><text x="21" y="19" text-anchor="middle" font-family="'JetBrains Mono', monospace" font-size="8" font-weight="700" fill="#3E86D6">3D</text><rect x="8" y="25.5" width="26" height="14.5" rx="3.4" fill="var(--panel,#2A2042)" stroke="var(--acc,#F5D042)" stroke-width="2"></rect><circle cx="15.5" cy="32.7" r="1.9" fill="var(--acc,#F5D042)"></circle><circle cx="15.5" cy="32.7" r="4.8" stroke="var(--acc,#F5D042)" stroke-opacity="0.5" stroke-width="1.1"></circle><path d="M40 16.2 V32.7" stroke="#8F87AE" stroke-width="1.4"></path><circle cx="40" cy="16.2" r="2.4" fill="#63B23C"></circle><circle cx="40" cy="32.7" r="2.4" fill="#3E86D6"></circle></svg>
+                        <div style="font:700 30px 'Space Grotesk';letter-spacing:-.5px;color:var(--text,#F4F1FB)"><span style="color:#3E86D6;text-shadow:1.5px 0 0 rgba(120,200,255,.65),-1.5px 0 0 rgba(18,60,130,.7)">3D</span>GBA</div>
+                        <div style="display:flex;align-items:center;gap:8px">
+                          <div style="width:9px;height:9px;border-radius:50%;background:#63B23C"></div>
+                          <div style="width:40px;height:2px;border-radius:2px;background:linear-gradient(90deg,#63B23C,#3E86D6)"></div>
+                          <div style="font:600 8px 'JetBrains Mono';color:var(--dim,#B0A8C8);letter-spacing:1px">TWO CORES</div>
+                          <div style="width:40px;height:2px;border-radius:2px;background:linear-gradient(90deg,#63B23C,#3E86D6)"></div>
+                          <div style="width:9px;height:9px;border-radius:50%;background:#3E86D6"></div>
+                        </div>
+                        <div style="font:500 8.5px 'JetBrains Mono';color:var(--dim,#B0A8C8);letter-spacing:1.5px">NEW 3DS · mGBA · GPLv3</div>
+                      </div>
+                    </sc-if>
+
+                    <sc-if value="{{ isRecent }}" hint-placeholder-val="">
+                      <div style="position:absolute;inset:0;background:var(--bg,#201830);padding:22px;display:flex;flex-direction:column;justify-content:center;gap:15px">
+                        <div style="font:600 9px 'JetBrains Mono';color:var(--acc,#F5D042);letter-spacing:2px">RESUME LAST PAIRING?</div>
+                        <div style="display:flex;align-items:center;gap:12px">
+                          <div style="flex:1;background:var(--panel,#2A2042);border:1px solid var(--line,#3B2E60);border-left:3px solid #63B23C;border-radius:8px;padding:11px 13px">
+                            <div style="font:600 8px 'JetBrains Mono';color:#63B23C">A · TOP</div>
+                            <div style="font:600 13px 'Space Grotesk';color:var(--text,#F4F1FB);margin-top:3px">{{ gTopName }}</div>
+                          </div>
+                          <div style="font:700 15px 'JetBrains Mono';color:var(--acc,#F5D042)">+</div>
+                          <div style="flex:1;background:var(--panel,#2A2042);border:1px solid var(--line,#3B2E60);border-left:3px solid #3E86D6;border-radius:8px;padding:11px 13px">
+                            <div style="font:600 8px 'JetBrains Mono';color:#3E86D6">B · BOTTOM</div>
+                            <div style="font:600 13px 'Space Grotesk';color:var(--text,#F4F1FB);margin-top:3px">{{ gBotName }}</div>
+                          </div>
+                        </div>
+                        <div style="font:500 8px 'JetBrains Mono';color:var(--dim,#B0A8C8);letter-spacing:1px">choose on the touch screen ↓</div>
+                      </div>
+                    </sc-if>
+
+                    <sc-if value="{{ isSelect }}" hint-placeholder-val="">
+                      <div style="position:absolute;inset:0;background:var(--bg,#201830);padding:13px 14px;overflow:hidden">
+                        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:9px">
+                          <div style="font:600 9px 'JetBrains Mono';color:var(--dim,#B0A8C8);letter-spacing:1.5px">{{ selectTitle }}</div>
+                          <div style="font:600 8px 'JetBrains Mono';color:var(--acc,#F5D042)">{{ selectPick }}</div>
+                        </div>
+                        <div style="display:flex;flex-direction:column;gap:3px">
+                          <sc-for list="{{ gamesList }}" as="g" hint-placeholder-count="6">
+                            <div onClick="{{ act }}" data-act="pick" data-arg="{{ g.i }}" style="{{ g.rowStyle }}" style-hover="background:var(--panel2,#33265A)">
+                              <div style="width:13px;height:17px;border-radius:2px 2px 3px 3px;flex:none;position:relative;background:var(--panel2,#33265A)"><div style="{{ g.chip }}"></div></div>
+                              <div style="flex:1;font:500 11.5px 'Space Grotesk';color:var(--text,#F4F1FB)">{{ g.name }}</div>
+                              <sc-if value="{{ g.assigned }}" hint-placeholder-val=""><div style="{{ g.badgeStyle }}">{{ g.badge }}</div></sc-if>
+                              <sc-if value="{{ g.free }}" hint-placeholder-val="{{ true }}"><div style="font:500 8px 'JetBrains Mono';color:var(--dim,#B0A8C8)">{{ g.code }}</div></sc-if>
+                            </div>
+                          </sc-for>
+                        </div>
+                      </div>
+                    </sc-if>
+
+                    <sc-if value="{{ isPlayTop }}" hint-placeholder-val="">
+                      <div style="position:absolute;inset:0;background:#0E0B16"></div>
+                      <div style="position:absolute;top:24px;left:18px;right:18px;bottom:0;overflow:hidden">
+                        <div style="{{ stripeTop }}"></div>
+                        <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;text-align:center;padding:0 12px">
+                          <div style="width:22px;height:28px;border-radius:2px 2px 4px 4px;background:rgba(255,255,255,.88);box-shadow:0 2px 7px rgba(0,0,0,.45)"></div>
+                          <div style="font:600 16px 'Space Grotesk';color:#fff;text-shadow:0 1px 4px rgba(0,0,0,.7)">{{ gTopName }}</div>
+                          <div style="font:500 8.5px 'JetBrains Mono';color:rgba(255,255,255,.75)">{{ gTopCode }} · GBA 240×160 · running</div>
+                        </div>
+                      </div>
+                      <div style="position:absolute;top:0;left:0;right:0;height:24px;background:rgba(0,0,0,.5);display:flex;align-items:center;gap:6px;padding:0 9px;border-bottom:1px solid rgba(255,255,255,.06)">
+                        <div style="width:6px;height:6px;border-radius:2px;background:#63B23C"></div>
+                        <div style="font:600 9.5px 'Space Grotesk';color:#fff">{{ gTopName }}</div>
+                        <div style="font:600 6.5px 'JetBrains Mono';color:var(--acc,#F5D042);border:1px solid var(--acc,#F5D042);border-radius:3px;padding:0 3px">◉FOCUS</div>
+                        <div style="flex:1"></div>
+                        <div style="font:600 7px 'JetBrains Mono';color:#a9d4ff;border:1px solid #3E86D6;border-radius:3px;padding:0 3px">3D</div>
+                        <div style="font:500 8px 'JetBrains Mono';color:#63B23C">59<span style="color:#9a93b0">fps</span></div>
+                        <div style="font:500 8px 'JetBrains Mono';color:#d7d0ea">14:32</div>
+                        <div style="width:15px;height:8px;border:1px solid #cbc4e0;border-radius:2px;position:relative"><div style="position:absolute;left:1px;top:1px;bottom:1px;width:8px;background:#63B23C;border-radius:1px"></div></div>
+                      </div>
+                    </sc-if>
+
+                    <sc-if value="{{ isPause }}" hint-placeholder-val="">
+                      <div style="position:absolute;inset:0;overflow:hidden"><div style="{{ stripeTop }}"></div></div>
+                      <div style="position:absolute;inset:0;background:rgba(9,7,14,.74)"></div>
+                      <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:13px;padding:0 18px">
+                        <div style="font:700 9px 'JetBrains Mono';color:var(--acc,#F5D042);letter-spacing:3px">❚❚ PAUSED</div>
+                        <div style="display:flex;align-items:center;gap:9px">
+                          <div style="font:600 14px 'Space Grotesk';color:#fff">{{ gTopName }}</div>
+                          <sc-if value="{{ isDual }}" hint-placeholder-val="{{ true }}"><div style="font:700 12px 'JetBrains Mono';color:var(--acc,#F5D042)">⇄</div><div style="font:600 14px 'Space Grotesk';color:#fff">{{ gBotName }}</div></sc-if>
+                        </div>
+                        <div style="display:flex;flex-wrap:wrap;gap:6px;justify-content:center;max-width:290px">
+                          <sc-for list="{{ pills }}" as="p" hint-placeholder-count="5"><div style="{{ p.style }}">{{ p.t }}</div></sc-for>
+                        </div>
+                        <div style="font:500 8px 'JetBrains Mono';color:var(--dim,#B0A8C8)">settings on the touch screen ↓</div>
+                      </div>
+                    </sc-if>
+
+                    <sc-if value="{{ isWless }}" hint-placeholder-val="">
+                      <div style="position:absolute;inset:0;background:var(--bg,#201830);padding:12px 13px;overflow:hidden">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+                          <div style="font:700 12px 'Space Grotesk';color:var(--text,#F4F1FB)">Wireless Link</div>
+                          <div style="font:600 8px 'JetBrains Mono';color:#63B23C">● {{ wTransport }} · {{ wStatusLabel }}</div>
+                        </div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+                          <sc-for list="{{ seats }}" as="st" hint-placeholder-count="4">
+                            <div style="{{ st.cardStyle }}">
+                              <div style="display:flex;align-items:center;gap:6px">
+                                <div style="{{ st.dotStyle }}"></div>
+                                <div style="font:600 10px 'Space Grotesk';color:var(--text,#F4F1FB)">{{ st.name }}</div>
+                                <div style="flex:1"></div>
+                                <div style="font:600 6.5px 'JetBrains Mono';color:var(--dim,#B0A8C8)">{{ st.role }}</div>
+                              </div>
+                              <div style="display:flex;align-items:center;gap:6px;margin-top:6px">
+                                <div style="font:500 8px 'JetBrains Mono';color:var(--dim,#B0A8C8)">{{ st.code }}</div>
+                                <div style="flex:1"></div>
+                                <div style="{{ st.matchStyle }}">{{ st.matchTxt }}</div>
+                              </div>
+                            </div>
+                          </sc-for>
+                        </div>
+                        <div style="display:flex;gap:8px;margin-top:9px">
+                          <div style="flex:1;background:var(--panel,#2A2042);border:1px solid var(--line,#3B2E60);border-radius:7px;padding:6px 9px"><div style="font:600 7px 'JetBrains Mono';color:var(--dim,#B0A8C8)">RTT</div><div style="font:600 13px 'JetBrains Mono';color:#63B23C">{{ rtt }}</div></div>
+                          <div style="flex:1;background:var(--panel,#2A2042);border:1px solid var(--line,#3B2E60);border-radius:7px;padding:6px 9px"><div style="font:600 7px 'JetBrains Mono';color:var(--dim,#B0A8C8)">LOSS</div><div style="font:600 13px 'JetBrains Mono';color:#63B23C">{{ loss }}</div></div>
+                        </div>
+                      </div>
+                    </sc-if>
+
+                  </div>
+                </div>
+                <div style="display:var(--chrome,flex);width:22px"></div>
+              </div>
+            </div>
+
+            <!-- HINGE -->
+            <div style="display:var(--chrome,flex);align-items:center;gap:44px;height:17px">
+              <div style="width:24px;height:7px;border-radius:4px;background:#1e2025"></div>
+              <div style="width:24px;height:7px;border-radius:4px;background:#1e2025"></div>
+            </div>
+
+            <!-- BOTTOM SCREEN -->
+            <div style="display:flex;flex-direction:column;align-items:center;gap:7px">
+              <div style="display:var(--flatshow,none);font:600 8.5px 'JetBrains Mono';color:#8F87AE;letter-spacing:1.5px">BOTTOM · 320×240 · TOUCH</div>
+              <div style="display:flex;align-items:center;gap:10px">
+                <div style="display:var(--chrome,flex);flex-direction:column;align-items:center;gap:13px;width:64px">
+                  <div style="width:34px;height:34px;border-radius:50%;background:radial-gradient(circle at 40% 35%,#4c4f57,#2a2c31);box-shadow:inset 0 1px 2px rgba(255,255,255,.18)"></div>
+                  <div style="position:relative;width:32px;height:32px">
+                    <div style="position:absolute;left:10px;top:0;width:12px;height:32px;border-radius:3px;background:#1c1e22"></div>
+                    <div style="position:absolute;top:10px;left:0;width:32px;height:12px;border-radius:3px;background:#1c1e22"></div>
+                  </div>
+                </div>
+
+                <div style="background:#08080c;padding:9px;border-radius:12px;box-shadow:inset 0 0 0 1px #000,0 2px 6px rgba(0,0,0,.5)">
+                  <div style="width:288px;height:216px;border-radius:5px;background:var(--bg,#201830);position:relative;overflow:hidden;color:var(--text,#F4F1FB)">
+
+                    <sc-if value="{{ isBoot }}" hint-placeholder-val="{{ true }}">
+                      <div style="position:absolute;inset:0;background:var(--bg,#201830);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:15px;padding:20px">
+                        <div style="font:500 8.5px 'JetBrains Mono';color:var(--dim,#B0A8C8);letter-spacing:.5px;line-height:1.7;text-align:center">Play two GBA games at once,<br>one per screen — linked in-house.</div>
+                        <div onClick="{{ act }}" data-act="nav" data-arg="recent" style="font:700 13px 'Space Grotesk';color:var(--ink,#20182F);background:var(--acc,#F5D042);border-radius:9px;padding:11px 30px;cursor:pointer;box-shadow:0 4px 0 rgba(0,0,0,.16)" style-hover="filter:brightness(1.06)">▶  TAP TO START</div>
+                        <div style="font:500 7.5px 'JetBrains Mono';color:var(--dim,#B0A8C8);text-align:center;line-height:1.7">mGBA · MPL-2.0 · ships no games<br>3DGBA · GPLv3 · unofficial, not Nintendo</div>
+                      </div>
+                    </sc-if>
+
+                    <sc-if value="{{ isRecent }}" hint-placeholder-val="">
+                      <div style="position:absolute;inset:0;background:var(--bg,#201830);display:flex;flex-direction:column;justify-content:center;gap:9px;padding:18px">
+                        <div onClick="{{ act }}" data-act="nav" data-arg="ingame" style="font:700 12px 'Space Grotesk';color:var(--ink,#20182F);background:var(--acc,#F5D042);border-radius:9px;padding:12px;text-align:center;cursor:pointer" style-hover="filter:brightness(1.06)">↺  Resume this pairing</div>
+                        <div onClick="{{ act }}" data-act="nav" data-arg="select" style="font:600 12px 'Space Grotesk';color:var(--text,#F4F1FB);background:var(--panel,#2A2042);border:1px solid var(--line,#3B2E60);border-radius:9px;padding:11px;text-align:center;cursor:pointer" style-hover="background:var(--panel2,#33265A)">Pick new games</div>
+                        <div onClick="{{ act }}" data-act="nav" data-arg="ingame" style="font:600 11px 'Space Grotesk';color:var(--dim,#B0A8C8);padding:9px;text-align:center;cursor:pointer">Use defaults</div>
+                        <div style="display:flex;justify-content:space-between;font:500 7.5px 'JetBrains Mono';color:var(--dim,#B0A8C8);margin-top:3px;padding:0 6px"><span>Ⓐ resume</span><span>Ⓧ pick</span><span>START · defaults</span></div>
+                      </div>
+                    </sc-if>
+
+                    <sc-if value="{{ isSelect }}" hint-placeholder-val="">
+                      <div style="position:absolute;inset:0;background:var(--bg,#201830);padding:11px;display:flex;flex-direction:column;gap:8px">
+                        <div style="display:flex;gap:4px;background:var(--panel,#2A2042);border-radius:8px;padding:3px">
+                          <sc-for list="{{ segMode }}" as="o" hint-placeholder-count="2"><div onClick="{{ act }}" data-act="{{ o.act }}" data-key="{{ o.key }}" data-arg="{{ o.arg }}" style="{{ o.pill }}">{{ o.label }}</div></sc-for>
+                        </div>
+                        <sc-if value="{{ isDual }}" hint-placeholder-val="{{ true }}">
+                          <div style="border:1.5px solid #63B23C;border-radius:8px;padding:7px 10px;background:rgba(99,178,60,.09)">
+                            <div style="font:600 8px 'JetBrains Mono';color:#63B23C;letter-spacing:1.2px;margin-bottom:4px">A · TOP SCREEN</div>
+                            <div style="display:flex;align-items:center;gap:8px"><div style="width:12px;height:16px;border-radius:2px 2px 3px 3px;background:#63B23C;flex:none"></div><div style="flex:1;font:600 12px 'Space Grotesk';color:var(--text,#F4F1FB)">{{ slotAName }}</div></div>
+                          </div>
+                          <div style="border:1.5px solid #3E86D6;border-radius:8px;padding:7px 10px;background:rgba(62,134,214,.09)">
+                            <div style="font:600 8px 'JetBrains Mono';color:#3E86D6;letter-spacing:1.2px;margin-bottom:4px">B · BOTTOM SCREEN</div>
+                            <div style="display:flex;align-items:center;gap:8px"><div style="width:12px;height:16px;border-radius:2px 2px 3px 3px;background:#3E86D6;flex:none"></div><div style="flex:1;font:600 12px 'Space Grotesk';color:var(--text,#F4F1FB)">{{ slotBName }}</div></div>
+                          </div>
+                          <div style="margin-top:auto;display:flex;gap:7px">
+                            <div onClick="{{ act }}" data-act="start" style="flex:1;text-align:center;font:700 12px 'Space Grotesk';color:var(--ink,#20182F);background:var(--acc,#F5D042);border-radius:8px;padding:9px 0;cursor:pointer" style-hover="filter:brightness(1.06)">▶ START</div>
+                            <div onClick="{{ act }}" data-act="startlinked" style="flex:1.3;text-align:center;font:700 10px 'Space Grotesk';color:var(--acc,#F5D042);background:rgba(245,208,66,.1);border:1px solid var(--acc,#F5D042);border-radius:8px;padding:8px 0;cursor:pointer" style-hover="background:rgba(245,208,66,.2)">⚡ START — LINKED</div>
+                          </div>
+                          <div style="font:500 8px 'JetBrains Mono';color:var(--dim,#B0A8C8);text-align:center">tap a game above ↑ · ⚡ linked = trade / battle-ready</div>
+                        </sc-if>
+                        <sc-if value="{{ isSingle }}" hint-placeholder-val="">
+                          <div style="border:1.5px solid #63B23C;border-radius:8px;padding:9px 11px;background:rgba(99,178,60,.09)">
+                            <div style="font:600 8px 'JetBrains Mono';color:#63B23C;letter-spacing:1.2px;margin-bottom:5px">GAME · TOP SCREEN · 3D</div>
+                            <div style="display:flex;align-items:center;gap:8px"><div style="width:13px;height:17px;border-radius:2px 2px 3px 3px;background:#63B23C;flex:none"></div><div style="flex:1;font:600 13px 'Space Grotesk';color:var(--text,#F4F1FB)">{{ slotAName }}</div></div>
+                          </div>
+                          <div style="background:var(--panel,#2A2042);border:1px solid var(--line,#3B2E60);border-radius:8px;padding:8px 10px;display:flex;align-items:center;gap:8px">
+                            <div style="font:700 12px 'JetBrains Mono';color:#3E86D6">▽</div>
+                            <div style="flex:1"><div style="font:600 8px 'JetBrains Mono';color:var(--dim,#B0A8C8);letter-spacing:.5px">BOTTOM SCREEN</div><div style="font:600 11px 'Space Grotesk';color:var(--text,#F4F1FB)">Touch controller</div></div>
+                            <div style="font:600 7px 'JetBrains Mono';color:#a9d4ff;border:1px solid #3E86D6;border-radius:3px;padding:1px 4px">3D top</div>
+                          </div>
+                          <div style="margin-top:auto;display:flex;gap:7px">
+                            <div onClick="{{ act }}" data-act="start" style="flex:1;text-align:center;font:700 12px 'Space Grotesk';color:var(--ink,#20182F);background:var(--acc,#F5D042);border-radius:8px;padding:9px 0;cursor:pointer" style-hover="filter:brightness(1.06)">▶ START</div>
+                            <div onClick="{{ act }}" data-act="nav" data-arg="wless" style="flex:1.2;text-align:center;font:700 10px 'Space Grotesk';color:var(--text,#F4F1FB);background:linear-gradient(90deg,rgba(62,134,214,.22),rgba(124,107,240,.22));border:1px solid #3E86D6;border-radius:8px;padding:8px 0;cursor:pointer" style-hover="filter:brightness(1.12)">🌐 LINK A FRIEND</div>
+                          </div>
+                          <div style="font:500 8px 'JetBrains Mono';color:var(--dim,#B0A8C8);text-align:center">one game · full 3D + touch · link locally or online</div>
+                        </sc-if>
+                      </div>
+                    </sc-if>
+
+                    <sc-if value="{{ isIngame }}" hint-placeholder-val="">
+                      <sc-if value="{{ isDual }}" hint-placeholder-val="{{ true }}">
+                      <div onClick="{{ act }}" data-act="nav" data-arg="pause" style="position:absolute;inset:0;cursor:pointer">
+                        <div style="position:absolute;inset:0;background:#0E0B16"></div>
+                        <div style="position:absolute;top:22px;left:8px;right:8px;bottom:19px;overflow:hidden;border-radius:2px">
+                          <div style="{{ stripeBot }}"></div>
+                          <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;text-align:center;padding:0 10px">
+                            <div style="font:600 14px 'Space Grotesk';color:#fff;text-shadow:0 1px 4px rgba(0,0,0,.7)">{{ gBotName }}</div>
+                            <div style="font:500 8px 'JetBrains Mono';color:rgba(255,255,255,.75)">{{ gBotCode }} · GBA 240×160</div>
+                          </div>
+                        </div>
+                        <div style="position:absolute;top:0;left:0;right:0;height:22px;background:rgba(0,0,0,.5);display:flex;align-items:center;gap:6px;padding:0 8px">
+                          <div style="width:6px;height:6px;border-radius:2px;background:#3E86D6"></div>
+                          <div style="font:600 9px 'Space Grotesk';color:#fff">{{ gBotName }}</div>
+                          <sc-if value="{{ linkOn }}" hint-placeholder-val=""><div style="font:600 6.5px 'JetBrains Mono';color:var(--acc,#F5D042);border:1px solid var(--acc,#F5D042);border-radius:3px;padding:0 3px">⚡LINK</div></sc-if>
+                          <div style="flex:1"></div>
+                          <div style="font:500 8px 'JetBrains Mono';color:#3E86D6">57<span style="color:#9a93b0">fps</span></div>
+                          <div style="font:500 8px 'JetBrains Mono';color:#d7d0ea">14:32</div>
+                        </div>
+                        <div style="position:absolute;bottom:0;left:0;right:0;height:17px;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center"><div style="font:500 7.5px 'JetBrains Mono';color:var(--acc,#F5D042)">tap screen → pause menu</div></div>
+                      </div>
+                      </sc-if>
+                      <sc-if value="{{ isSingle }}" hint-placeholder-val="">
+                      <div style="position:absolute;inset:0;background:var(--bg,#201830);display:flex;flex-direction:column">
+                        <div style="display:flex;align-items:center;gap:6px;padding:8px 10px;border-bottom:1px solid var(--line,#3B2E60)">
+                          <div style="font:600 8px 'JetBrains Mono';color:var(--dim,#B0A8C8);letter-spacing:1px">◱ CONTROLLER</div>
+                          <div style="width:5px;height:5px;border-radius:50%;background:#63B23C"></div>
+                          <div style="flex:1;font:600 10px 'Space Grotesk';color:var(--text,#F4F1FB)">{{ gTopName }}</div>
+                          <div style="{{ linkChipStyle }}">{{ linkChip }}</div>
+                        </div>
+                        <div style="display:flex;gap:4px;padding:7px 10px 5px">
+                          <sc-for list="{{ segTouch }}" as="o" hint-placeholder-count="3"><div onClick="{{ act }}" data-act="{{ o.act }}" data-key="{{ o.key }}" data-arg="{{ o.arg }}" style="{{ o.pill }}">{{ o.label }}</div></sc-for>
+                        </div>
+                        <div style="flex:1;position:relative">
+                          <sc-if value="{{ touchIsPad }}" hint-placeholder-val="{{ true }}">
+                            <div style="position:absolute;left:6px;top:4px;font:600 7px 'JetBrains Mono';color:var(--pad-ink,#F5D042);background:var(--pad-fill,rgba(245,208,66,.16));border:1px solid var(--pad-line,rgba(245,208,66,.5));border-radius:var(--pad-rad,5px);padding:2px 8px">L</div>
+                            <div style="position:absolute;right:6px;top:4px;font:600 7px 'JetBrains Mono';color:var(--pad-ink,#F5D042);background:var(--pad-fill,rgba(245,208,66,.16));border:1px solid var(--pad-line,rgba(245,208,66,.5));border-radius:var(--pad-rad,5px);padding:2px 8px">R</div>
+                            <div style="position:absolute;left:22px;top:50%;transform:translateY(-50%);width:72px;height:72px">
+                              <div style="position:absolute;left:25px;top:0;width:22px;height:25px;border-radius:var(--pad-rad,5px);background:var(--pad-fill,rgba(245,208,66,.16));border:1px solid var(--pad-line,rgba(245,208,66,.5));display:flex;align-items:center;justify-content:center;color:var(--pad-ink,#F5D042);font:700 8px 'JetBrains Mono'">▲</div>
+                              <div style="position:absolute;left:25px;bottom:0;width:22px;height:25px;border-radius:var(--pad-rad,5px);background:var(--pad-fill,rgba(245,208,66,.16));border:1px solid var(--pad-line,rgba(245,208,66,.5));display:flex;align-items:center;justify-content:center;color:var(--pad-ink,#F5D042);font:700 8px 'JetBrains Mono'">▼</div>
+                              <div style="position:absolute;top:25px;left:0;width:25px;height:22px;border-radius:var(--pad-rad,5px);background:var(--pad-fill,rgba(245,208,66,.16));border:1px solid var(--pad-line,rgba(245,208,66,.5));display:flex;align-items:center;justify-content:center;color:var(--pad-ink,#F5D042);font:700 8px 'JetBrains Mono'">◀</div>
+                              <div style="position:absolute;top:25px;right:0;width:25px;height:22px;border-radius:var(--pad-rad,5px);background:var(--pad-fill,rgba(245,208,66,.16));border:1px solid var(--pad-line,rgba(245,208,66,.5));display:flex;align-items:center;justify-content:center;color:var(--pad-ink,#F5D042);font:700 8px 'JetBrains Mono'">▶</div>
+                              <div style="position:absolute;left:25px;top:25px;width:22px;height:22px;background:var(--pad-fill,rgba(245,208,66,.16))"></div>
+                            </div>
+                            <div style="position:absolute;right:22px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;gap:9px;align-items:center">
+                              <div style="width:34px;height:34px;border-radius:var(--pad-radbtn,50%);background:var(--pad-Afill,rgba(245,208,66,.24));border:1px solid var(--pad-line,rgba(245,208,66,.55));display:flex;align-items:center;justify-content:center;color:var(--pad-ink,#F5D042);font:700 15px 'Space Grotesk'">A</div>
+                              <div style="width:30px;height:30px;border-radius:var(--pad-radbtn,50%);background:var(--pad-fill,rgba(245,208,66,.16));border:1px solid var(--pad-line,rgba(245,208,66,.5));display:flex;align-items:center;justify-content:center;color:var(--pad-ink,#F5D042);font:700 13px 'Space Grotesk'">B</div>
+                            </div>
+                            <div style="position:absolute;bottom:6px;left:50%;transform:translateX(-50%);display:flex;gap:8px"><div style="font:600 7px 'JetBrains Mono';color:var(--pad-ink,#F5D042);background:var(--pad-fill,rgba(245,208,66,.16));border:1px solid var(--pad-line,rgba(245,208,66,.5));border-radius:var(--pad-rad,5px);padding:3px 9px">SELECT</div><div style="font:600 7px 'JetBrains Mono';color:var(--pad-ink,#F5D042);background:var(--pad-fill,rgba(245,208,66,.16));border:1px solid var(--pad-line,rgba(245,208,66,.5));border-radius:var(--pad-rad,5px);padding:3px 9px">START</div></div>
+                          </sc-if>
+                          <sc-if value="{{ touchIsSmart }}" hint-placeholder-val="">
+                            <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:0 22px;text-align:center">
+                              <div style="font:700 9px 'JetBrains Mono';color:#63B23C;letter-spacing:1px">SMART POINTER</div>
+                              <div style="font:500 10px/1.6 'Space Grotesk';color:var(--dim,#B0A8C8)">Bottom screen mirrors the game — tap a tile to walk, tap menus &amp; targets, double-tap for START.</div>
+                            </div>
+                          </sc-if>
+                          <sc-if value="{{ touchIsOff }}" hint-placeholder-val="">
+                            <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:0 22px;text-align:center"><div style="font:500 10px/1.6 'Space Grotesk';color:var(--dim,#B0A8C8)">Touch off — a tap opens the pause menu. Pick Gamepad or Smart above to play from the bottom screen.</div></div>
+                          </sc-if>
+                        </div>
+                        <div style="display:flex;align-items:center;padding:6px 10px;border-top:1px solid var(--line,#3B2E60)"><div style="font:600 7px 'JetBrains Mono';color:#a9d4ff;border:1px solid #3E86D6;border-radius:3px;padding:0 3px">3D on top</div><div style="flex:1"></div><div onClick="{{ act }}" data-act="nav" data-arg="pause" style="font:600 8px 'JetBrains Mono';color:var(--text,#F4F1FB);background:var(--panel2,#33265A);border-radius:5px;padding:3px 8px;cursor:pointer">≡ menu</div></div>
+                      </div>
+                      </sc-if>
+                    </sc-if>
+
+                    <sc-if value="{{ isPad }}" hint-placeholder-val="">
+                      <div style="position:absolute;inset:0;background:#0E0B16"></div>
+                      <div style="position:absolute;inset:0;overflow:hidden"><div style="{{ stripeBot }}"></div></div>
+                      <div style="position:absolute;left:4px;top:4px;width:47px;height:20px;border-radius:var(--pad-rad,5px);background:var(--pad-fill,rgba(245,208,66,.16));border:1px solid var(--pad-line,rgba(245,208,66,.5));display:flex;align-items:center;justify-content:center;font:600 8px 'JetBrains Mono';color:var(--pad-ink,#F5D042)">L</div>
+                      <div style="position:absolute;left:238px;top:4px;width:47px;height:20px;border-radius:var(--pad-rad,5px);background:var(--pad-fill,rgba(245,208,66,.16));border:1px solid var(--pad-line,rgba(245,208,66,.5));display:flex;align-items:center;justify-content:center;font:600 8px 'JetBrains Mono';color:var(--pad-ink,#F5D042)">R</div>
+                      <div style="position:absolute;left:30px;top:124px;width:40px;height:27px;border-radius:var(--pad-rad,5px);background:var(--pad-fill,rgba(245,208,66,.16));border:1px solid var(--pad-line,rgba(245,208,66,.5));display:flex;align-items:center;justify-content:center;font:700 9px 'JetBrains Mono';color:var(--pad-ink,#F5D042)">▲</div>
+                      <div style="position:absolute;left:30px;top:173px;width:40px;height:27px;border-radius:var(--pad-rad,5px);background:var(--pad-fill,rgba(245,208,66,.16));border:1px solid var(--pad-line,rgba(245,208,66,.5));display:flex;align-items:center;justify-content:center;font:700 9px 'JetBrains Mono';color:var(--pad-ink,#F5D042)">▼</div>
+                      <div style="position:absolute;left:6px;top:146px;width:29px;height:32px;border-radius:var(--pad-rad,5px);background:var(--pad-fill,rgba(245,208,66,.16));border:1px solid var(--pad-line,rgba(245,208,66,.5));display:flex;align-items:center;justify-content:center;font:700 9px 'JetBrains Mono';color:var(--pad-ink,#F5D042)">◀</div>
+                      <div style="position:absolute;left:64px;top:146px;width:29px;height:32px;border-radius:var(--pad-rad,5px);background:var(--pad-fill,rgba(245,208,66,.16));border:1px solid var(--pad-line,rgba(245,208,66,.5));display:flex;align-items:center;justify-content:center;font:700 9px 'JetBrains Mono';color:var(--pad-ink,#F5D042)">▶</div>
+                      <div style="position:absolute;left:227px;top:135px;width:54px;height:54px;border-radius:var(--pad-radbtn,50%);background:var(--pad-Afill,rgba(245,208,66,.18));border:1px solid var(--pad-line,rgba(245,208,66,.55));display:flex;align-items:center;justify-content:center;font:700 15px 'Space Grotesk';color:var(--pad-ink,#F5D042)">A</div>
+                      <div style="position:absolute;left:178px;top:158px;width:45px;height:40px;border-radius:var(--pad-radbtn,50%);background:var(--pad-fill,rgba(245,208,66,.14));border:1px solid var(--pad-line,rgba(245,208,66,.5));display:flex;align-items:center;justify-content:center;font:700 12px 'Space Grotesk';color:var(--pad-ink,#F5D042)">B</div>
+                      <div style="position:absolute;left:115px;top:193px;width:58px;height:20px;border-radius:var(--pad-rad,5px);background:var(--pad-fill,rgba(245,208,66,.16));border:1px solid var(--pad-line,rgba(245,208,66,.5));display:flex;align-items:center;justify-content:center;font:600 8px 'JetBrains Mono';color:var(--pad-ink,#F5D042)">START</div>
+                      <div style="position:absolute;top:5px;left:50%;transform:translateX(-50%);font:600 7.5px 'JetBrains Mono';color:var(--pad-ink,#F5D042);background:rgba(0,0,0,.5);border-radius:5px;padding:3px 7px">TOUCH · GAMEPAD</div>
+                      <div onClick="{{ act }}" data-act="nav" data-arg="pause" style="position:absolute;bottom:5px;right:5px;font:600 8px 'JetBrains Mono';color:#fff;background:rgba(0,0,0,.5);border-radius:5px;padding:3px 6px;cursor:pointer">≡ menu</div>
+                    </sc-if>
+
+                    <sc-if value="{{ isSmart }}" hint-placeholder-val="">
+                      <div style="position:absolute;inset:0;background:#0E0B16"></div>
+                      <div style="position:absolute;inset:0;overflow:hidden"><div style="{{ stripeBot }}"></div></div>
+                      <div style="position:absolute;left:118px;top:92px;width:24px;height:24px;border-radius:50%;border:2px solid #F5D042"></div>
+                      <div style="position:absolute;left:125px;top:99px;width:10px;height:10px;border-radius:50%;background:#F5D042"></div>
+                      <div style="position:absolute;left:150px;top:90px;font:600 8px 'JetBrains Mono';color:#fff;background:rgba(0,0,0,.6);border-radius:5px;padding:3px 6px">tap → walk here</div>
+                      <div style="position:absolute;left:14px;top:28px;font:600 8px 'JetBrains Mono';color:#fff;background:rgba(0,0,0,.6);border-radius:5px;padding:3px 6px">tap menu row</div>
+                      <div style="position:absolute;left:14px;bottom:26px;font:600 8px 'JetBrains Mono';color:#fff;background:rgba(0,0,0,.6);border-radius:5px;padding:3px 6px">double-tap = START</div>
+                      <div style="position:absolute;right:8px;bottom:26px;font:600 8px 'JetBrains Mono';color:#fff;background:rgba(0,0,0,.6);border-radius:5px;padding:3px 6px">tap target / party</div>
+                      <div style="position:absolute;top:5px;left:50%;transform:translateX(-50%);font:600 7.5px 'JetBrains Mono';color:#63B23C;background:rgba(0,0,0,.5);border-radius:5px;padding:3px 7px">TOUCH · SMART POINTER</div>
+                      <div onClick="{{ act }}" data-act="nav" data-arg="pause" style="position:absolute;bottom:5px;right:5px;font:600 8px 'JetBrains Mono';color:#fff;background:rgba(0,0,0,.5);border-radius:5px;padding:3px 6px;cursor:pointer">≡ menu</div>
+                    </sc-if>
+
+                    <sc-if value="{{ isPause }}" hint-placeholder-val="">
+                      <div style="position:absolute;inset:0;background:var(--bg,#201830);display:flex">
+                        <div style="width:74px;flex:none;background:var(--panel,#2A2042);border-right:1px solid var(--line,#3B2E60);display:flex;flex-direction:column;padding:6px 0">
+                          <sc-for list="{{ pauseTabs }}" as="tb" hint-placeholder-count="6"><div onClick="{{ act }}" data-act="ptab" data-arg="{{ tb.id }}" style="{{ tb.style }}">{{ tb.name }}</div></sc-for>
+                        </div>
+                        <div style="flex:1;padding:9px 10px;overflow-y:auto">
+
+                          <sc-if value="{{ isTabSession }}" hint-placeholder-val="">
+                            <div style="display:flex;flex-direction:column;gap:8px">
+                              <div onClick="{{ act }}" data-act="nav" data-arg="ingame" style="font:700 11px 'Space Grotesk';color:var(--ink,#20182F);background:var(--acc,#F5D042);border-radius:8px;padding:11px;text-align:center;cursor:pointer">▶ Resume</div>
+                              <div onClick="{{ act }}" data-act="nav" data-arg="select" style="font:600 11px 'Space Grotesk';color:var(--text,#F4F1FB);background:var(--panel2,#33265A);border-radius:8px;padding:11px;text-align:center;cursor:pointer">⟳ Change games</div>
+                              <div onClick="{{ act }}" data-act="nav" data-arg="boot" style="font:600 11px 'Space Grotesk';color:#E4796B;background:rgba(228,70,46,.1);border:1px solid rgba(228,70,46,.4);border-radius:8px;padding:11px;text-align:center;cursor:pointer">⏻ Quit</div>
+                            </div>
+                          </sc-if>
+
+                          <sc-if value="{{ isTabDisplay }}" hint-placeholder-val="{{ true }}">
+                            <div style="font:600 8px 'JetBrains Mono';color:var(--dim,#B0A8C8);margin-bottom:4px">SCALE · TOP</div>
+                            <div style="display:flex;gap:4px;background:var(--panel,#2A2042);border-radius:7px;padding:3px;margin-bottom:8px"><sc-for list="{{ segScaleTop }}" as="o" hint-placeholder-count="3"><div onClick="{{ act }}" data-act="{{ o.act }}" data-key="{{ o.key }}" data-arg="{{ o.arg }}" style="{{ o.pill }}">{{ o.label }}</div></sc-for></div>
+                            <div style="font:600 8px 'JetBrains Mono';color:var(--dim,#B0A8C8);margin-bottom:4px">SCALE · BOTTOM</div>
+                            <div style="display:flex;gap:4px;background:var(--panel,#2A2042);border-radius:7px;padding:3px;margin-bottom:8px"><sc-for list="{{ segScaleBot }}" as="o" hint-placeholder-count="3"><div onClick="{{ act }}" data-act="{{ o.act }}" data-key="{{ o.key }}" data-arg="{{ o.arg }}" style="{{ o.pill }}">{{ o.label }}</div></sc-for></div>
+                            <div style="font:600 8px 'JetBrains Mono';color:var(--dim,#B0A8C8);margin-bottom:4px">FILTER · FOCUSED</div>
+                            <div style="display:flex;gap:4px;background:var(--panel,#2A2042);border-radius:7px;padding:3px;margin-bottom:8px"><sc-for list="{{ segFiltTop }}" as="o" hint-placeholder-count="2"><div onClick="{{ act }}" data-act="{{ o.act }}" data-key="{{ o.key }}" data-arg="{{ o.arg }}" style="{{ o.pill }}">{{ o.label }}</div></sc-for></div>
+                            <div style="font:600 8px 'JetBrains Mono';color:var(--dim,#B0A8C8);margin-bottom:4px">HUD</div>
+                            <div style="display:flex;gap:4px;background:var(--panel,#2A2042);border-radius:7px;padding:3px;margin-bottom:6px"><sc-for list="{{ segHud }}" as="o" hint-placeholder-count="4"><div onClick="{{ act }}" data-act="{{ o.act }}" data-key="{{ o.key }}" data-arg="{{ o.arg }}" style="{{ o.pill }}">{{ o.label }}</div></sc-for></div>
+                            <sc-for list="{{ displayToggles }}" as="tgl" hint-placeholder-count="2"><div style="display:flex;align-items:center;gap:8px;padding:5px 0"><div style="flex:1"><div style="font:600 10px 'Space Grotesk';color:var(--text,#F4F1FB)">{{ tgl.label }}</div></div><div onClick="{{ act }}" data-act="toggle" data-key="{{ tgl.key }}" style="{{ tgl.track }}"><div style="{{ tgl.knob }}"></div></div></div></sc-for>
+                          </sc-if>
+
+                          <sc-if value="{{ isTabAudio }}" hint-placeholder-val="">
+                            <div style="font:600 8px 'JetBrains Mono';color:var(--dim,#B0A8C8);margin-bottom:4px">MIX MODE</div>
+                            <div style="display:flex;gap:4px;background:var(--panel,#2A2042);border-radius:7px;padding:3px;margin-bottom:9px"><sc-for list="{{ segAudio }}" as="o" hint-placeholder-count="3"><div onClick="{{ act }}" data-act="{{ o.act }}" data-key="{{ o.key }}" data-arg="{{ o.arg }}" style="{{ o.pill }}">{{ o.label }}</div></sc-for></div>
+                            <div style="display:flex;justify-content:space-between;font:600 8px 'JetBrains Mono';color:var(--dim,#B0A8C8);margin-bottom:4px"><span>VOLUME · A</span><span>{{ volA }}</span></div>
+                            <div style="display:flex;align-items:center;gap:6px;margin-bottom:9px"><div onClick="{{ act }}" data-act="vol" data-key="volA" data-arg="-" style="width:22px;height:22px;border-radius:6px;background:var(--panel2,#33265A);color:var(--text,#F4F1FB);display:flex;align-items:center;justify-content:center;cursor:pointer;font:600 13px 'Space Grotesk'">−</div><div style="flex:1;height:6px;border-radius:3px;background:var(--panel2,#33265A);position:relative"><div style="{{ volABar }}"></div></div><div onClick="{{ act }}" data-act="vol" data-key="volA" data-arg="+" style="width:22px;height:22px;border-radius:6px;background:var(--panel2,#33265A);color:var(--text,#F4F1FB);display:flex;align-items:center;justify-content:center;cursor:pointer;font:600 13px 'Space Grotesk'">+</div></div>
+                            <div style="display:flex;justify-content:space-between;font:600 8px 'JetBrains Mono';color:var(--dim,#B0A8C8);margin-bottom:4px"><span>VOLUME · B</span><span>{{ volB }}</span></div>
+                            <div style="display:flex;align-items:center;gap:6px;margin-bottom:9px"><div onClick="{{ act }}" data-act="vol" data-key="volB" data-arg="-" style="width:22px;height:22px;border-radius:6px;background:var(--panel2,#33265A);color:var(--text,#F4F1FB);display:flex;align-items:center;justify-content:center;cursor:pointer;font:600 13px 'Space Grotesk'">−</div><div style="flex:1;height:6px;border-radius:3px;background:var(--panel2,#33265A);position:relative"><div style="{{ volBBar }}"></div></div><div onClick="{{ act }}" data-act="vol" data-key="volB" data-arg="+" style="width:22px;height:22px;border-radius:6px;background:var(--panel2,#33265A);color:var(--text,#F4F1FB);display:flex;align-items:center;justify-content:center;cursor:pointer;font:600 13px 'Space Grotesk'">+</div></div>
+                            <div style="display:flex;align-items:center;gap:8px;padding:4px 0"><div style="flex:1;font:600 10px 'Space Grotesk';color:var(--text,#F4F1FB)">Mute</div><div onClick="{{ act }}" data-act="toggle" data-key="muted" style="{{ muteTrack }}"><div style="{{ muteKnob }}"></div></div></div>
+                          </sc-if>
+
+                          <sc-if value="{{ isTabEnhance }}" hint-placeholder-val="">
+                            <div style="font:600 7.5px 'JetBrains Mono';color:var(--acc,#F5D042);background:var(--panel,#2A2042);border-radius:6px;padding:6px 8px;margin-bottom:7px">✦ GEN-3 POKÉMON ENHANCEMENTS</div>
+                            <sc-for list="{{ enhanceToggles }}" as="tgl" hint-placeholder-count="5"><div style="display:flex;align-items:center;gap:8px;padding:5px 0"><div style="flex:1"><div style="font:600 10px 'Space Grotesk';color:var(--text,#F4F1FB)">{{ tgl.label }}</div><sc-if value="{{ tgl.note }}" hint-placeholder-val=""><div style="font:500 7px 'JetBrains Mono';color:var(--dim,#B0A8C8)">{{ tgl.note }}</div></sc-if></div><div onClick="{{ act }}" data-act="toggle" data-key="{{ tgl.key }}" style="{{ tgl.track }}"><div style="{{ tgl.knob }}"></div></div></div></sc-for>
+                          </sc-if>
+
+                          <sc-if value="{{ isTabLink }}" hint-placeholder-val="">
+                            <sc-for list="{{ linkToggles }}" as="tgl" hint-placeholder-count="2"><div style="display:flex;align-items:center;gap:8px;padding:5px 0"><div style="flex:1"><div style="font:600 10px 'Space Grotesk';color:var(--text,#F4F1FB)">{{ tgl.label }}</div></div><div onClick="{{ act }}" data-act="toggle" data-key="{{ tgl.key }}" style="{{ tgl.track }}"><div style="{{ tgl.knob }}"></div></div></div></sc-for>
+                            <div onClick="{{ act }}" data-act="nav" data-arg="wless" style="font:600 10px 'Space Grotesk';color:var(--ink,#20182F);background:var(--acc,#F5D042);border-radius:8px;padding:9px;text-align:center;cursor:pointer;margin:6px 0 8px">📡 Wireless lobby…</div>
+                            <div style="display:flex;gap:6px"><div style="flex:1;font:600 9px 'Space Grotesk';color:var(--text,#F4F1FB);background:var(--panel2,#33265A);border-radius:7px;padding:8px;text-align:center;cursor:pointer">Save state</div><div style="flex:1;font:600 9px 'Space Grotesk';color:var(--text,#F4F1FB);background:var(--panel2,#33265A);border-radius:7px;padding:8px;text-align:center;cursor:pointer">Load state</div></div>
+                            <div style="font:600 9px 'Space Grotesk';color:var(--text,#F4F1FB);background:var(--panel2,#33265A);border-radius:7px;padding:8px;text-align:center;cursor:pointer;margin-top:6px">Load .sav (focused)</div>
+                          </sc-if>
+
+                          <sc-if value="{{ isTabTouch }}" hint-placeholder-val="">
+                            <div style="font:600 8px 'JetBrains Mono';color:var(--dim,#B0A8C8);margin-bottom:4px">TOUCH MODE</div>
+                            <div style="display:flex;gap:4px;background:var(--panel,#2A2042);border-radius:7px;padding:3px;margin-bottom:9px"><sc-for list="{{ segTouch }}" as="o" hint-placeholder-count="3"><div onClick="{{ act }}" data-act="{{ o.act }}" data-key="{{ o.key }}" data-arg="{{ o.arg }}" style="{{ o.pill }}">{{ o.label }}</div></sc-for></div>
+                            <div style="font:500 9px/1.6 'Space Grotesk';color:var(--dim,#B0A8C8);margin-bottom:10px">{{ touchExplain }}</div>
+                            <div style="display:flex;gap:6px"><div onClick="{{ act }}" data-act="nav" data-arg="pad" style="flex:1;font:600 9px 'Space Grotesk';color:var(--text,#F4F1FB);background:var(--panel2,#33265A);border-radius:7px;padding:8px;text-align:center;cursor:pointer">Preview Gamepad</div><div onClick="{{ act }}" data-act="nav" data-arg="smart" style="flex:1;font:600 9px 'Space Grotesk';color:var(--text,#F4F1FB);background:var(--panel2,#33265A);border-radius:7px;padding:8px;text-align:center;cursor:pointer">Preview Smart</div></div>
+                            <div style="height:1px;background:var(--line,#3B2E60);margin:11px 0 9px"></div>
+                            <div style="font:600 8px 'JetBrains Mono';color:var(--dim,#B0A8C8);margin-bottom:6px">GAMEPAD · COLOR</div>
+                            <div style="display:flex;gap:8px;margin-bottom:10px"><sc-for list="{{ padColorList }}" as="c" hint-placeholder-count="5"><div onClick="{{ act }}" data-act="padcolor" data-arg="{{ c.arg }}" style="{{ c.ring }}"><div style="{{ c.sw }}"></div></div></sc-for></div>
+                            <div style="font:600 8px 'JetBrains Mono';color:var(--dim,#B0A8C8);margin-bottom:5px">GAMEPAD · EDGES</div>
+                            <div style="display:flex;gap:4px;background:var(--panel,#2A2042);border-radius:7px;padding:3px;margin-bottom:9px"><sc-for list="{{ padEdgeSeg }}" as="o" hint-placeholder-count="3"><div onClick="{{ act }}" data-act="{{ o.act }}" data-key="{{ o.key }}" data-arg="{{ o.arg }}" style="{{ o.pill }}">{{ o.label }}</div></sc-for></div>
+                            <div onClick="{{ act }}" data-act="nav" data-arg="pad" style="font:600 9px 'Space Grotesk';color:var(--ink,#20182F);background:var(--acc,#F5D042);border-radius:7px;padding:8px;text-align:center;cursor:pointer">See gamepad →</div>
+                          </sc-if>
+
+                        </div>
+                      </div>
+                    </sc-if>
+
+                    <sc-if value="{{ isWless }}" hint-placeholder-val="">
+                      <div style="position:absolute;inset:0;background:var(--bg,#201830);padding:12px;display:flex;flex-direction:column;gap:8px">
+                        <sc-if value="{{ wIdle }}" hint-placeholder-val="{{ true }}">
+                          <div style="font:600 7.5px 'JetBrains Mono';color:var(--dim,#B0A8C8);letter-spacing:1px">LOCAL · SAME ROOM (UDS)</div>
+                          <div onClick="{{ act }}" data-act="wless" data-arg="hosting" style="font:700 11px 'Space Grotesk';color:var(--ink,#20182F);background:var(--acc,#F5D042);border-radius:9px;padding:11px;text-align:center;cursor:pointer" style-hover="filter:brightness(1.06)">📡 Host a session</div>
+                          <div onClick="{{ act }}" data-act="wless" data-arg="scanning" style="font:600 11px 'Space Grotesk';color:var(--text,#F4F1FB);background:var(--panel,#2A2042);border:1px solid var(--line,#3B2E60);border-radius:9px;padding:11px;text-align:center;cursor:pointer" style-hover="background:var(--panel2,#33265A)">🔍 Scan for lobbies</div>
+                          <div style="display:flex;align-items:center;gap:8px;margin:3px 0"><div style="flex:1;height:1px;background:var(--line,#3B2E60)"></div><div style="font:600 7px 'JetBrains Mono';color:var(--dim,#B0A8C8)">OR · OVER THE INTERNET</div><div style="flex:1;height:1px;background:var(--line,#3B2E60)"></div></div>
+                          <div onClick="{{ act }}" data-act="wless" data-arg="online" style="font:700 11px 'Space Grotesk';color:var(--text,#F4F1FB);background:linear-gradient(90deg,rgba(62,134,214,.22),rgba(124,107,240,.22));border:1px solid #3E86D6;border-radius:9px;padding:11px;text-align:center;cursor:pointer" style-hover="filter:brightness(1.12)">🌐 Connect via online server</div>
+                        </sc-if>
+                        <sc-if value="{{ wHost }}" hint-placeholder-val="">
+                          <div style="font:600 11px 'Space Grotesk';color:var(--text,#F4F1FB);text-align:center;margin-top:8px">Hosting…</div>
+                          <div style="font:500 9px 'JetBrains Mono';color:var(--dim,#B0A8C8);text-align:center">waiting for players to join</div>
+                          <div onClick="{{ act }}" data-act="wless" data-arg="connected" style="font:700 11px 'Space Grotesk';color:var(--ink,#20182F);background:var(--acc,#F5D042);border-radius:9px;padding:11px;text-align:center;cursor:pointer;margin-top:6px">Simulate a join →</div>
+                          <div onClick="{{ act }}" data-act="wless" data-arg="idle" style="font:600 10px 'Space Grotesk';color:var(--dim,#B0A8C8);padding:8px;text-align:center;cursor:pointer">Cancel</div>
+                        </sc-if>
+                        <sc-if value="{{ wScan }}" hint-placeholder-val="">
+                          <div style="font:600 8px 'JetBrains Mono';color:var(--dim,#B0A8C8);margin-bottom:2px">FOUND · 1 LOBBY</div>
+                          <div onClick="{{ act }}" data-act="wless" data-arg="connected" style="background:var(--panel,#2A2042);border:1px solid var(--line,#3B2E60);border-radius:9px;padding:11px 12px;cursor:pointer" style-hover="border-color:var(--acc,#F5D042)"><div style="display:flex;align-items:center;gap:7px"><div style="width:7px;height:7px;border-radius:50%;background:#63B23C"></div><div style="font:600 12px 'Space Grotesk';color:var(--text,#F4F1FB)">Guy's room</div><div style="flex:1"></div><div style="font:600 8px 'JetBrains Mono';color:var(--dim,#B0A8C8)">1 / 2 OPEN</div></div><div style="font:500 8px 'JetBrains Mono';color:var(--dim,#B0A8C8);margin-top:5px">FireRed · BPRE · tap to join</div></div>
+                          <div onClick="{{ act }}" data-act="wless" data-arg="idle" style="font:600 10px 'Space Grotesk';color:var(--dim,#B0A8C8);padding:8px;text-align:center;cursor:pointer">‹ Back</div>
+                        </sc-if>
+                        <sc-if value="{{ wConn }}" hint-placeholder-val="">
+                          <div style="font:600 11px 'Space Grotesk';color:#63B23C;text-align:center;margin-top:6px">● Linked · 2 seats</div>
+                          <div style="font:500 9px 'JetBrains Mono';color:var(--dim,#B0A8C8);text-align:center">RTT {{ rtt }} · loss {{ loss }}</div>
+                          <div onClick="{{ act }}" data-act="startlinked" style="font:700 11px 'Space Grotesk';color:var(--acc,#F5D042);background:rgba(245,208,66,.1);border:1px solid var(--acc,#F5D042);border-radius:9px;padding:11px;text-align:center;cursor:pointer;margin-top:6px" style-hover="background:rgba(245,208,66,.2)">⚡ Start linked trade</div>
+                          <div onClick="{{ act }}" data-act="wless" data-arg="idle" style="font:600 10px 'Space Grotesk';color:var(--dim,#B0A8C8);padding:8px;text-align:center;cursor:pointer">Leave</div>
+                        </sc-if>
+                        <sc-if value="{{ wOnline }}" hint-placeholder-val="">
+                          <div style="font:600 7.5px 'JetBrains Mono';color:#6aa6e6;letter-spacing:1px">ONLINE SERVER · soc:U RELAY</div>
+                          <div style="background:var(--panel,#2A2042);border:1px solid var(--line,#3B2E60);border-radius:8px;padding:9px 10px;display:flex;align-items:center;gap:8px"><div style="font:600 8px 'JetBrains Mono';color:var(--dim,#B0A8C8)">SERVER</div><div style="flex:1;font:600 10px 'JetBrains Mono';color:var(--text,#F4F1FB)">relay.3dgba.net</div><div style="width:6px;height:6px;border-radius:50%;background:#63B23C"></div></div>
+                          <div style="background:var(--panel,#2A2042);border:1px solid var(--line,#3B2E60);border-radius:8px;padding:9px 10px;display:flex;align-items:center;gap:8px"><div style="font:600 8px 'JetBrains Mono';color:var(--dim,#B0A8C8)">ROOM</div><div style="flex:1;font:600 10px 'JetBrains Mono';color:var(--text,#F4F1FB);letter-spacing:2px">4KZ9</div></div>
+                          <div onClick="{{ act }}" data-act="wless" data-arg="connected" style="font:700 11px 'Space Grotesk';color:#fff;background:linear-gradient(90deg,#3E86D6,#7C6BF0);border-radius:9px;padding:11px;text-align:center;cursor:pointer;margin-top:2px" style-hover="filter:brightness(1.08)">🌐 Connect</div>
+                          <div onClick="{{ act }}" data-act="wless" data-arg="idle" style="font:600 10px 'Space Grotesk';color:var(--dim,#B0A8C8);padding:6px;text-align:center;cursor:pointer">‹ Back</div>
+                          <div style="font:500 7.5px 'JetBrains Mono';color:var(--dim,#B0A8C8);text-align:center;line-height:1.6">Routes the same link over the internet via a relay. Higher latency than local.</div>
+                        </sc-if>
+                        <div onClick="{{ act }}" data-act="nav" data-arg="pause" style="margin-top:auto;font:600 8px 'JetBrains Mono';color:var(--dim,#B0A8C8);text-align:center;cursor:pointer">‹ back to menu</div>
+                      </div>
+                    </sc-if>
+
+                  </div>
+                </div>
+
+                <div style="display:var(--chrome,flex);flex-direction:column;align-items:center;gap:11px;width:64px">
+                  <div style="width:16px;height:16px;border-radius:50%;background:#3a3d44;box-shadow:inset 0 1px 2px rgba(255,255,255,.2)"></div>
+                  <div style="position:relative;width:52px;height:52px">
+                    <div style="position:absolute;left:19px;top:0;width:15px;height:15px;border-radius:50%;background:#1c1e22;color:#8a8d95;font:600 7px 'JetBrains Mono';display:flex;align-items:center;justify-content:center">X</div>
+                    <div style="position:absolute;left:0;top:19px;width:15px;height:15px;border-radius:50%;background:#1c1e22;color:#8a8d95;font:600 7px 'JetBrains Mono';display:flex;align-items:center;justify-content:center">Y</div>
+                    <div style="position:absolute;right:0;top:19px;width:15px;height:15px;border-radius:50%;background:#1c1e22;color:#8a8d95;font:600 7px 'JetBrains Mono';display:flex;align-items:center;justify-content:center">A</div>
+                    <div style="position:absolute;left:19px;bottom:0;width:15px;height:15px;border-radius:50%;background:#1c1e22;color:#8a8d95;font:600 7px 'JetBrains Mono';display:flex;align-items:center;justify-content:center">B</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+
+          <div style="display:var(--chrome,flex);align-items:center;gap:11px;margin-top:13px">
+            <div style="width:24px;height:6px;border-radius:3px;background:#1e2025"></div>
+            <div style="font:600 6.5px 'JetBrains Mono';color:#6a6d75">SELECT</div>
+            <div style="width:15px;height:15px;border-radius:50%;background:#1c1e22;border:1px solid #4a4d54"></div>
+            <div style="font:600 6.5px 'JetBrains Mono';color:#6a6d75">START</div>
+            <div style="width:24px;height:6px;border-radius:3px;background:#1e2025"></div>
+          </div>
+
+        </div>
+        <div style="font:500 10.5px/1.5 'Space Grotesk';color:#8a80ad;text-align:center;max-width:430px">{{ hintLine }}</div>
+      </div>
+
+      <!-- ==================== RAIL ==================== -->
+      <div style="width:320px;flex:none;display:flex;flex-direction:column;gap:13px">
+        <div style="display:flex;align-items:center;gap:11px">
+          <svg width="36" height="36" viewBox="0 0 48 48" fill="none"><rect x="8" y="9" width="26" height="14.5" rx="3.4" fill="#2A2042" stroke="#F5D042" stroke-width="2"></rect><text x="21" y="19" text-anchor="middle" font-family="'JetBrains Mono', monospace" font-size="8" font-weight="700" fill="#3E86D6">3D</text><rect x="8" y="25.5" width="26" height="14.5" rx="3.4" fill="#2A2042" stroke="#F5D042" stroke-width="2"></rect><circle cx="15.5" cy="32.7" r="1.9" fill="#F5D042"></circle><circle cx="40" cy="16.2" r="2.4" fill="#63B23C"></circle><circle cx="40" cy="32.7" r="2.4" fill="#3E86D6"></circle><path d="M40 16.2 V32.7" stroke="#8F87AE" stroke-width="1.4"></path></svg>
+          <div>
+            <div style="font:700 19px 'Space Grotesk';color:#F4F1FB;letter-spacing:-.3px"><span style="color:#3E86D6;text-shadow:1px 0 0 rgba(120,200,255,.6),-1px 0 0 rgba(18,60,130,.6)">3D</span>GBA</div>
+            <div style="font:500 8px 'JetBrains Mono';color:#8b81ab;letter-spacing:1.3px;margin-top:3px">CLICKABLE PROTOTYPE · SHELF</div>
+          </div>
+        </div>
+
+        <div class="rail-card">
+          <div class="rail-h">PRESENTATION</div>
+          <div style="display:flex;gap:6px;background:#120E20;border-radius:9px;padding:4px">
+            <div onClick="{{ act }}" data-act="view" data-arg="device" style="{{ viewDevStyle }}">◳ Device</div>
+            <div onClick="{{ act }}" data-act="view" data-arg="flat" style="{{ viewFlatStyle }}">▭ Flat spec</div>
+          </div>
+        </div>
+
+        <div class="rail-card">
+          <div class="rail-h">THEME · 6</div>
+          <div style="display:flex;flex-wrap:wrap;gap:9px">
+            <sc-for list="{{ themeList }}" as="t" hint-placeholder-count="5">
+              <div onClick="{{ act }}" data-act="theme" data-arg="{{ t.id }}" style="display:flex;flex-direction:column;align-items:center;gap:5px;cursor:pointer;width:50px">
+                <div style="{{ t.ringStyle }}"><div style="{{ t.sw }}"></div></div>
+                <div style="font:500 7.5px 'Space Grotesk';color:#9a90bc;text-align:center">{{ t.short }}</div>
+              </div>
+            </sc-for>
+            <div onClick="{{ act }}" data-act="theme" data-arg="custom" style="display:flex;flex-direction:column;align-items:center;gap:5px;cursor:pointer;width:50px">
+              <div style="{{ customRing }}"><div style="width:26px;height:26px;border-radius:7px;background:conic-gradient(from 210deg,#35D0BA,#7C6BF0,#F5D042,#63B23C,#35D0BA);box-shadow:inset 0 0 0 1px rgba(255,255,255,.12)"></div></div>
+              <div style="font:500 7.5px 'Space Grotesk';color:#9a90bc">Custom</div>
+            </div>
+          </div>
+          <div style="{{ customPanelStyle }}">
+            <div style="font:600 8px 'JetBrains Mono';color:#8b81ab;letter-spacing:1px;margin:13px 0 7px">PRESETS</div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              <sc-for list="{{ presets }}" as="p" hint-placeholder-count="5">
+                <div onClick="{{ act }}" data-act="cpreset" data-arg="{{ p.arg }}" style="{{ p.chipStyle }}">
+                  <div style="{{ p.dotStyle }}"></div>
+                  <div style="font:600 8.5px 'Space Grotesk';color:#cfc7e6">{{ p.label }}</div>
+                </div>
+              </sc-for>
+            </div>
+            <div style="font:600 8px 'JetBrains Mono';color:#8b81ab;letter-spacing:1px;margin:13px 0 5px">BASE HUE</div>
+            <input type="range" min="0" max="359" value="{{ customHue }}" data-key="customHue" onInput="{{ onRange }}" style="width:100%;height:5px;accent-color:#F5D042;cursor:pointer" />
+            <div style="font:600 8px 'JetBrains Mono';color:#8b81ab;letter-spacing:1px;margin:12px 0 5px">ACCENT HUE</div>
+            <input type="range" min="0" max="359" value="{{ customAccHue }}" data-key="customAccHue" onInput="{{ onRange }}" style="width:100%;height:5px;accent-color:#F5D042;cursor:pointer" />
+            <div style="font:600 8px 'JetBrains Mono';color:#8b81ab;letter-spacing:1px;margin:12px 0 5px">CONTRAST · {{ customLift }}</div>
+            <input type="range" min="6" max="24" value="{{ customLift }}" data-key="customLift" onInput="{{ onRange }}" style="width:100%;height:5px;accent-color:#F5D042;cursor:pointer" />
+            <div style="{{ cpLine }}">
+              <div style="{{ cpBg }}">
+                <div style="{{ cpText }}">Aa</div>
+                <div style="{{ cpAccBtn }}">START</div>
+                <div style="flex:1"></div>
+                <div style="{{ cpPanelSw }}"></div>
+                <div style="{{ cpAccSw }}"></div>
+              </div>
+            </div>
+            <div style="font:500 7.5px 'JetBrains Mono';color:#7a71a0;margin-top:8px;line-height:1.5">Live — applies to every screen. Ships as a user-built theme.</div>
+          </div>
+        </div>
+
+        <div class="rail-card">
+          <div class="rail-h">SCREENS · click to jump</div>
+          <div style="display:flex;flex-direction:column;gap:3px">
+            <sc-for list="{{ navList }}" as="n" hint-placeholder-count="8">
+              <div onClick="{{ act }}" data-act="nav" data-arg="{{ n.id }}" style="{{ n.rowStyle }}" style-hover="background:rgba(255,255,255,0.05)">
+                <div style="{{ n.numStyle }}">{{ n.num }}</div>
+                <div style="{{ n.nameStyle }}">{{ n.name }}</div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+
+        <div class="rail-card">
+          <div class="rail-h">CONTROLS</div>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <div style="display:flex;align-items:center;gap:8px"><div style="font:600 8px 'JetBrains Mono';color:#F5D042;background:#2a2440;border-radius:4px;padding:2px 5px;min-width:56px;text-align:center">Y</div><div style="font:500 10.5px 'Space Grotesk';color:#b3a9d1">Switch focus (input)</div></div>
+            <div style="display:flex;align-items:center;gap:8px"><div style="font:600 8px 'JetBrains Mono';color:#F5D042;background:#2a2440;border-radius:4px;padding:2px 5px;min-width:56px;text-align:center">X</div><div style="font:500 10.5px 'Space Grotesk';color:#b3a9d1">Swap screens</div></div>
+            <div style="display:flex;align-items:center;gap:8px"><div style="font:600 8px 'JetBrains Mono';color:#F5D042;background:#2a2440;border-radius:4px;padding:2px 5px;min-width:56px;text-align:center">ZR / ZL</div><div style="font:500 10.5px 'Space Grotesk';color:#b3a9d1">Scale / filter</div></div>
+            <div style="display:flex;align-items:center;gap:8px"><div style="font:600 8px 'JetBrains Mono';color:#F5D042;background:#2a2440;border-radius:4px;padding:2px 5px;min-width:56px;text-align:center">STA+SEL</div><div style="font:500 10.5px 'Space Grotesk';color:#b3a9d1">Pause menu</div></div>
+            <div style="display:flex;align-items:center;gap:8px"><div style="font:600 8px 'JetBrains Mono';color:#a9d4ff;background:#1c2a40;border-radius:4px;padding:2px 5px;min-width:56px;text-align:center">3D ▮</div><div style="font:500 10.5px 'Space Grotesk';color:#b3a9d1">Depth — top screen only</div></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  games = [
+    { name: 'Pokémon Emerald', code: 'BPEE', tint: '#5FB03A' },
+    { name: 'Pokémon FireRed', code: 'BPRE', tint: '#E4462E' },
+    { name: 'Pokémon LeafGreen', code: 'BPGE', tint: '#63B23C' },
+    { name: 'Fire Emblem', code: 'AE7E', tint: '#C24BE0' },
+    { name: 'Metroid Fusion', code: 'AMTE', tint: '#3E86D6' },
+    { name: 'Golden Sun', code: 'AGSE', tint: '#E0A93E' },
+    { name: 'Advance Wars 2', code: 'AW2E', tint: '#E0A93E' },
+    { name: 'Minish Cap', code: 'BZME', tint: '#4FB36A' },
+    { name: 'Mario Kart', code: 'AMKE', tint: '#E4462E' },
+    { name: 'Castlevania Aria', code: 'A2CE', tint: '#8A6BF0' },
+  ];
+  THEMES = {
+    indigo:   { name: 'Indigo + Gold', short: 'Indigo', bg: '#201830', panel: '#2A2042', panel2: '#33265A', line: '#3B2E60', acc: '#F5D042', ink: '#20182F', text: '#F4F1FB', dim: '#B0A8C8', box: '#0E0B16', sw: '#F5D042' },
+    oled:     { name: 'Midnight OLED', short: 'OLED', bg: '#0B0D12', panel: '#14171F', panel2: '#1C2130', line: '#242A3A', acc: '#F5D042', ink: '#0B0D12', text: '#EAECF2', dim: '#8A90A2', box: '#000000', sw: '#0B0D12' },
+    daylight: { name: 'Daylight', short: 'Daylight', bg: '#EDEBE4', panel: '#FFFFFF', panel2: '#F1EDE4', line: '#DAD5CB', acc: '#BE7A16', ink: '#FFFFFF', text: '#241C33', dim: '#6E6784', box: '#DED9CE', sw: '#EDEBE4' },
+    duo:      { name: 'Per-game Duo', short: 'Duo', bg: '#12161C', panel: '#1B222C', panel2: '#232C38', line: '#2E3846', acc: '#63B23C', ink: '#0A140A', text: '#EAF0F2', dim: '#8FA0A6', box: '#0A0D11', sw: '#63B23C' },
+    retro:    { name: 'Retro Purple', short: 'Retro', bg: '#241246', panel: '#341C5E', panel2: '#43277A', line: '#4C3578', acc: '#E7B84A', ink: '#241246', text: '#F3EDFF', dim: '#B29ED9', box: '#160A2E', sw: '#7A4FD0' },
+  };
+  state = {
+    screen: 'boot', theme: 'indigo', view: 'device',
+    slotA: 0, slotB: 1, phase: 'A', pick: 0,
+    mode: 'dual', touchMode: 'off', pauseTab: 'display',
+    scaleTop: 'Aspect-fit', scaleBot: 'Aspect-fit', filterTop: 'Sharp', filterBot: 'Sharp',
+    hud: 'both', swapped: false, frameskip: false,
+    linkOn: false, netOn: false,
+    depth3d: true, dof: true, bloom: true, light: true, vivid: false,
+    audio: 'Solo', volA: 80, volB: 70, muted: false,
+    wless: 'idle', netMode: 'local', padColor: '#F5D042', padEdge: 'soft',
+    customHue: 205, customAccHue: 168, customLift: 14,
+  };
+  act = (e) => {
+    const d = e.currentTarget.dataset;
+    switch (d.act) {
+      case 'nav': { const p = { screen: d.arg }; if (d.arg === 'pad') p.touchMode = 'pad'; if (d.arg === 'smart') p.touchMode = 'smart'; this.setState(p); break; }
+      case 'theme': this.setState({ theme: d.arg }); break;
+      case 'view': this.setState({ view: d.arg }); break;
+      case 'set': this.setState({ [d.key]: d.arg }); break;
+      case 'toggle': this.setState((s) => ({ [d.key]: !s[d.key] })); break;
+      case 'touch': this.setState({ touchMode: d.arg }); break;
+      case 'mode': { const m = d.arg; this.setState({ mode: m, touchMode: m === 'single' ? 'pad' : 'off' }); break; }
+      case 'padcolor': this.setState({ padColor: d.arg }); break;
+      case 'ptab': this.setState({ pauseTab: d.arg }); break;
+      case 'pick': { const i = +d.arg; this.setState((s) => (s.mode === 'single' ? { slotA: i, pick: i } : (s.phase === 'A' ? { slotA: i, phase: 'B', pick: i } : { slotB: i, phase: 'A', pick: i }))); break; }
+      case 'vol': this.setState((s) => { let v = s[d.key] + (d.arg === '+' ? 10 : -10); v = Math.max(0, Math.min(100, v)); return { [d.key]: v }; }); break;
+      case 'wless': { const p = { wless: d.arg }; if (d.arg === 'hosting' || d.arg === 'scanning' || d.arg === 'idle') p.netMode = 'local'; if (d.arg === 'online') p.netMode = 'online'; this.setState(p); break; }
+      case 'cpreset': { const [ph, pa] = d.arg.split(',').map(Number); this.setState({ customHue: ph, customAccHue: pa, theme: 'custom' }); break; }
+      case 'start': this.setState({ screen: 'ingame', linkOn: false }); break;
+      case 'startlinked': this.setState({ screen: 'ingame', linkOn: true }); break;
+    }
+  };
+  onRange = (e) => { this.setState({ [e.target.dataset.key]: +e.target.value, theme: 'custom' }); };
+  hexRgb(h) { const n = parseInt(h.slice(1), 16); return ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255); }
+  mix(c, p, w) { return 'color-mix(in srgb, ' + c + ' ' + p + '%, ' + w + ')'; }
+  tokens() {
+    const s = this.state;
+    if (s.theme === 'custom') return this.customTokens();
+    return this.THEMES[s.theme];
+  }
+  customTokens() {
+    const s = this.state, lift = s.customLift;
+    const bg = 'hsl(' + s.customHue + ', 24%, 9%)';
+    const acc = 'hsl(' + s.customAccHue + ', 72%, 60%)';
+    return { bg, panel: this.mix(bg, 100 - lift, 'white'), panel2: this.mix(bg, Math.max(50, 100 - lift * 1.9), 'white'), line: this.mix(bg, Math.max(40, 100 - lift * 2.7), 'white'), acc, ink: '#0B1014', text: this.mix(bg, 10, 'white'), dim: this.mix(bg, 46, 'white'), box: this.mix(bg, 86, 'black') };
+  }
+  renderVals() {
+    const s = this.state, T = this.tokens();
+    const flat = s.view === 'flat';
+    const rootStyle = {
+      '--bg': T.bg, '--panel': T.panel, '--panel2': T.panel2, '--line': T.line, '--acc': T.acc, '--ink': T.ink, '--text': T.text, '--dim': T.dim, '--box': T.box, '--a': '#63B23C', '--b': '#3E86D6',
+      '--chrome': flat ? 'none' : 'flex', '--sdir': flat ? 'row' : 'column', '--sgap': flat ? '40px' : '0px', '--flatshow': flat ? 'block' : 'none',
+      '--shell': flat ? 'none' : 'linear-gradient(158deg,#3d4048,#282a30)', '--shellpad': flat ? '0px' : '20px 24px 18px', '--shellrad': flat ? '0px' : '30px', '--shellshadow': flat ? 'none' : '0 34px 70px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.09)',
+      '--pad-fill': 'rgba(' + this.hexRgb(s.padColor) + ',.16)', '--pad-line': 'rgba(' + this.hexRgb(s.padColor) + ',.55)', '--pad-Afill': 'rgba(' + this.hexRgb(s.padColor) + ',.24)', '--pad-ink': s.padColor, '--pad-rad': s.padEdge === 'round' ? '11px' : (s.padEdge === 'soft' ? '5px' : '1px'), '--pad-radbtn': s.padEdge === 'round' ? '50%' : (s.padEdge === 'soft' ? '32%' : '22%'),
+    };
+    const single = s.mode === 'single';
+    const gTop = single ? this.games[s.slotA] : (s.swapped ? this.games[s.slotB] : this.games[s.slotA]);
+    const gBot = single ? this.games[s.slotA] : (s.swapped ? this.games[s.slotA] : this.games[s.slotB]);
+    const stripe = (t) => ({ position: 'absolute', inset: '0', backgroundColor: this.mix(t, 42, '#0b0b10'), backgroundImage: 'repeating-linear-gradient(135deg, rgba(255,255,255,.07) 0 8px, rgba(0,0,0,.12) 8px 16px)' });
+    const gamesList = this.games.map((g, i) => ({
+      i, name: g.name, code: g.code,
+      chip: { position: 'absolute', top: '2px', left: '2px', right: '2px', height: '3px', borderRadius: '1px', background: g.tint },
+      rowStyle: { display: 'flex', alignItems: 'center', gap: '9px', padding: '5px 8px', borderRadius: '6px', cursor: 'pointer', background: (s.screen === 'select' && i === s.pick) ? 'var(--panel2,#33265A)' : 'transparent' },
+      assigned: i === s.slotA || i === s.slotB,
+      badge: i === s.slotA ? 'A' : (i === s.slotB ? 'B' : ''),
+      badgeStyle: { background: i === s.slotA ? '#63B23C' : '#3E86D6', color: '#fff', font: "600 8px 'JetBrains Mono'", padding: '1px 6px', borderRadius: '4px' },
+      free: !(i === s.slotA || i === s.slotB),
+    }));
+    const themeList = ['indigo', 'oled', 'daylight', 'duo', 'retro'].map((id) => {
+      const th = this.THEMES[id], active = s.theme === id;
+      return { id, short: th.short, active,
+        sw: { width: '26px', height: '26px', borderRadius: '7px', background: th.sw, boxShadow: 'inset 0 0 0 1px rgba(255,255,255,.14)' },
+        ringStyle: { padding: '2px', borderRadius: '10px', border: active ? '2px solid #F5D042' : '2px solid transparent' } };
+    });
+    const customActive = s.theme === 'custom';
+    const cpreset = (label, h, a) => { const on = s.customHue === h && s.customAccHue === a; return { label, arg: h + ',' + a, chipStyle: { display: 'flex', alignItems: 'center', gap: '5px', padding: '5px 8px', borderRadius: '999px', border: '1.5px solid', borderColor: on ? '#F5D042' : '#34285A', cursor: 'pointer', background: 'hsl(' + h + ',24%,12%)' }, dotStyle: { width: '9px', height: '9px', borderRadius: '50%', background: 'hsl(' + a + ',72%,60%)' } }; };
+    const presets = [cpreset('Teal', 205, 168), cpreset('Violet', 262, 275), cpreset('Amber', 30, 42), cpreset('Emerald', 160, 150), cpreset('Coral', 350, 12)];
+    const pc = this.customTokens();
+    const navDefs = [['boot', 'Boot / splash'], ['recent', 'Resume prompt'], ['select', 'Game select'], ['ingame', 'In-game · dual'], ['pause', 'Pause menu'], ['pad', 'Touch · Gamepad'], ['smart', 'Touch · Smart'], ['wless', 'Wireless lobby']];
+    const navList = navDefs.map(([id, name], i) => { const active = s.screen === id; return { id, name, num: ('0' + (i + 1)).slice(-2),
+      rowStyle: { display: 'flex', alignItems: 'center', gap: '9px', padding: '6px 8px', borderRadius: '7px', cursor: 'pointer', background: active ? 'rgba(245,208,66,.14)' : 'transparent' },
+      numStyle: { font: "600 8px 'JetBrains Mono'", width: '22px', textAlign: 'center', padding: '2px 0', borderRadius: '4px', background: active ? '#F5D042' : '#2a2440', color: active ? '#20182F' : '#8b81ab' },
+      nameStyle: { font: "500 11.5px 'Space Grotesk'", color: active ? '#F4F1FB' : '#b3a9d1' } }; });
+    const tabDefs = [['session', 'Session'], ['display', 'Display'], ['audio', 'Audio'], ['enhance', 'Enhance'], ['link', 'Link'], ['touch', 'Touch']];
+    const pauseTabs = tabDefs.map(([id, name]) => { const active = s.pauseTab === id; const base = { font: "600 9px 'Space Grotesk'", padding: '8px 4px 8px 8px', cursor: 'pointer', borderLeft: '2px solid transparent' }; return { id, name, style: active ? { ...base, background: 'var(--panel2,#33265A)', color: 'var(--text,#F4F1FB)', borderLeftColor: 'var(--acc,#F5D042)' } : { ...base, color: 'var(--dim,#B0A8C8)' } }; });
+    const pillBase = { flex: 1, textAlign: 'center', font: "600 8.5px 'Space Grotesk'", padding: '5px 2px', borderRadius: '5px', cursor: 'pointer' };
+    const segA = { ...pillBase, background: 'var(--acc,#F5D042)', color: 'var(--ink,#20182F)' };
+    const segI = { ...pillBase, background: 'transparent', color: 'var(--dim,#B0A8C8)' };
+    const seg = (key, opts, cur, type) => opts.map((o) => { const v = typeof o === 'string' ? o : o.v; const label = typeof o === 'string' ? o : o.l; return { label, act: type || 'set', key, arg: v, pill: v === cur ? segA : segI }; });
+    const scaleOpts = ['1:1', 'Aspect-fit', 'Stretch'], filtOpts = ['Sharp', 'Smooth'];
+    const tog = (key, label, note) => { const on = s[key]; return { label, note, key,
+      track: { width: '30px', height: '16px', borderRadius: '999px', padding: '2px', boxSizing: 'border-box', cursor: 'pointer', background: on ? 'var(--acc,#F5D042)' : 'var(--line,#3B2E60)' },
+      knob: { width: '12px', height: '12px', borderRadius: '50%', background: '#fff', transition: 'transform .15s', transform: on ? 'translateX(14px)' : 'translateX(0)' } }; };
+    const pills = [];
+    if (s.depth3d) pills.push({ t: '3D', c: '#3E86D6' });
+    if (s.dof) pills.push({ t: 'DoF', c: 'var(--acc,#F5D042)' });
+    if (s.bloom) pills.push({ t: 'Bloom', c: 'var(--acc,#F5D042)' });
+    if (s.light) pills.push({ t: 'Light', c: 'var(--acc,#F5D042)' });
+    pills.push({ t: s.touchMode === 'off' ? 'Touch Off' : (s.touchMode === 'pad' ? 'Gamepad' : 'Smart'), c: '#63B23C' });
+    pills.push({ t: s.linkOn ? 'Link On' : 'Link Off', c: s.linkOn ? '#63B23C' : 'var(--dim,#B0A8C8)' });
+    const pillsOut = pills.map((p) => ({ t: p.t, style: { font: "600 7px 'JetBrains Mono'", padding: '2px 7px', borderRadius: '999px', border: '1px solid ' + p.c, color: p.c, background: 'rgba(255,255,255,.05)' } }));
+    const matchOf = (code) => code === gTop.code || (code[0] === 'B' && gTop.code[0] === 'B');
+    const seatDefs = [
+      { node: '01', name: 'You', role: 'HOST', code: gTop.code, me: true, filled: true },
+      { node: '02', name: 'Guy', role: 'SEAT', code: 'BPRE', me: false, filled: s.wless === 'connected' },
+      { node: '03', name: '—', role: 'OPEN', code: '', me: false, filled: false },
+      { node: '04', name: '—', role: 'OPEN', code: '', me: false, filled: false },
+    ];
+    const seats = seatDefs.map((x) => { const match = x.filled && (x.me || matchOf(x.code)); return { name: x.name, role: x.role, code: x.filled ? x.code : '',
+      cardStyle: { background: 'var(--panel,#2A2042)', border: '1px solid', borderColor: x.me ? 'var(--acc,#F5D042)' : (x.filled ? 'var(--b,#3E86D6)' : 'var(--line,#3B2E60)'), borderRadius: '8px', padding: '8px 9px', opacity: x.filled ? '1' : '0.45' },
+      dotStyle: { width: '7px', height: '7px', borderRadius: '50%', background: x.me ? 'var(--acc,#F5D042)' : (x.filled ? 'var(--b,#3E86D6)' : 'var(--line,#3B2E60)') },
+      matchTxt: x.filled ? (match ? '✓ match' : '✗ diff') : 'open',
+      matchStyle: { font: "600 8px 'JetBrains Mono'", color: x.filled ? (match ? '#63B23C' : '#E4462E') : 'var(--dim,#B0A8C8)' } }; });
+    const segMode = [{ l: '◱ 1 Game', v: 'single' }, { l: '◱◲ 2 Games', v: 'dual' }].map((o) => ({ label: o.l, act: 'mode', key: 'mode', arg: o.v, pill: o.v === s.mode ? segA : segI }));
+    const linkChip = s.linkOn ? '● LINKED' : 'SOLO';
+    const linkChipStyle = { font: "600 7px 'JetBrains Mono'", padding: '1px 7px', borderRadius: '999px', border: '1px solid', color: s.linkOn ? '#63B23C' : 'var(--dim,#B0A8C8)', borderColor: s.linkOn ? '#63B23C' : 'var(--line,#3B2E60)' };
+    const padColorList = ['#F5D042', '#63B23C', '#3E86D6', '#FF7A59', '#B98CFF'].map((c) => ({ arg: c, ring: { padding: '2px', borderRadius: '8px', cursor: 'pointer', border: s.padColor === c ? '2px solid var(--acc,#F5D042)' : '2px solid transparent' }, sw: { width: '20px', height: '20px', borderRadius: '5px', background: c } }));
+    const padEdgeSeg = seg('padEdge', [{ l: 'Round', v: 'round' }, { l: 'Soft', v: 'soft' }, { l: 'Sharp', v: 'sharp' }], s.padEdge);
+    const hints = {
+      boot: 'Boot splash — tap START on the touch screen to continue.',
+      recent: 'Resume the last A + B pairing, pick new, or use defaults.',
+      select: 'Top = the library. Tap a game to fill the next open slot. Bottom = A / B slots + START & linked.',
+      ingame: 'A on top, B on bottom — genuine parallel cores. Y = switch focus · X = swap · tap = menu.',
+      pause: 'START + SELECT opens this. Top screen = summary, bottom = touch settings (6 tabs).',
+      pad: 'Gamepad: fixed translucent D-pad / A B / L R / START zones over game B (exact touch.c hitboxes).',
+      smart: 'Smart pointer: the touch screen drives the real game UI — tap-to-walk, menus, targets, double-tap START.',
+      wless: 'Host or join over local wireless (UDS). Live seat map with per-seat game-match + RTT / loss probe.',
+    };
+    const viewBase = { flex: 1, textAlign: 'center', padding: '7px 0', borderRadius: '7px', cursor: 'pointer', font: "600 10px 'Space Grotesk'" };
+    const touchExplain = s.touchMode === 'off' ? 'Off — a touch opens the pause menu. No game input from the touch screen.'
+      : (s.touchMode === 'pad' ? 'Gamepad — a translucent virtual controller (D-pad, A/B, L/R, START) over game B.'
+      : 'Smart — the touch screen is a pointer on the real Gen-3 UI: tap-to-walk, tap menus/party/targets, double-tap = START.');
+    return {
+      rootStyle, act: this.act,
+      isBoot: s.screen === 'boot', isRecent: s.screen === 'recent', isSelect: s.screen === 'select',
+      isIngame: s.screen === 'ingame', isPause: s.screen === 'pause', isPad: s.screen === 'pad', isSmart: s.screen === 'smart', isWless: s.screen === 'wless',
+      isPlayTop: s.screen === 'ingame' || s.screen === 'pad' || s.screen === 'smart',
+      isTabSession: s.pauseTab === 'session', isTabDisplay: s.pauseTab === 'display', isTabAudio: s.pauseTab === 'audio', isTabEnhance: s.pauseTab === 'enhance', isTabLink: s.pauseTab === 'link', isTabTouch: s.pauseTab === 'touch',
+      gTopName: gTop.name, gTopCode: gTop.code, gBotName: gBot.name, gBotCode: gBot.code,
+      slotAName: this.games[s.slotA].name, slotBName: this.games[s.slotB].name,
+      stripeTop: stripe(gTop.tint), stripeBot: stripe(gBot.tint),
+      gamesList, pickPhaseLabel: s.phase === 'A' ? 'A · TOP' : 'B · BOTTOM',
+      themeList, customActive, presets, customHue: s.customHue, customAccHue: s.customAccHue, customLift: s.customLift, onRange: this.onRange,
+      cpLine: { marginTop: '13px', borderRadius: '9px', overflow: 'hidden', border: '1px solid', borderColor: pc.line }, cpBg: { padding: '10px 11px', display: 'flex', alignItems: 'center', gap: '8px', background: pc.bg }, cpText: { font: "700 13px 'Space Grotesk'", color: pc.text }, cpAccBtn: { padding: '2px 8px', borderRadius: '6px', font: "700 8px 'Space Grotesk'", color: '#0B1014', background: pc.acc }, cpPanelSw: { width: '18px', height: '18px', borderRadius: '5px', background: pc.panel }, cpAccSw: { width: '18px', height: '18px', borderRadius: '5px', background: pc.acc },
+      customRing: { padding: '2px', borderRadius: '10px', border: customActive ? '2px solid #F5D042' : '2px solid transparent' },
+      customPanelStyle: { display: customActive ? 'block' : 'none' },
+      navList, pauseTabs,
+      segScaleTop: seg('scaleTop', scaleOpts, s.scaleTop), segScaleBot: seg('scaleBot', scaleOpts, s.scaleBot),
+      segFiltTop: seg('filterTop', filtOpts, s.filterTop), segHud: seg('hud', ['off', 'top', 'bottom', 'both'], s.hud),
+      segAudio: seg('audio', ['Solo', 'Mixed', 'Split'], s.audio),
+      segTouch: [{ l: 'Off', v: 'off' }, { l: 'Gamepad', v: 'pad' }, { l: 'Smart', v: 'smart' }].map((o) => ({ label: o.l, act: 'touch', key: 'touchMode', arg: o.v, pill: o.v === s.touchMode ? segA : segI })),
+      displayToggles: [tog('swapped', 'Swap screens', ''), tog('frameskip', 'Frameskip unfocused', '')],
+      enhanceToggles: [tog('depth3d', 'Stereoscopic 3D', 'top screen'), tog('dof', 'Tilt-shift DoF', ''), tog('bloom', 'LDR Bloom', ''), tog('light', 'Time-of-day light', ''), tog('vivid', 'Vivid mode', '')],
+      linkToggles: [tog('linkOn', 'Link cable', ''), tog('netOn', 'Net link (loopback)', '')],
+      muteTrack: tog('muted', 'Mute', '').track, muteKnob: tog('muted', 'Mute', '').knob,
+      volA: s.volA, volB: s.volB, volABar: { position: 'absolute', left: 0, top: 0, bottom: 0, width: s.volA + '%', borderRadius: '3px', background: 'var(--acc,#F5D042)' }, volBBar: { position: 'absolute', left: 0, top: 0, bottom: 0, width: s.volB + '%', borderRadius: '3px', background: 'var(--acc,#F5D042)' },
+      linkOn: s.linkOn, touchExplain, pills: pillsOut, seats,
+      isSingle: single, isDual: !single, segMode, touchIsPad: s.touchMode === 'pad', touchIsSmart: s.touchMode === 'smart', touchIsOff: s.touchMode === 'off', selectTitle: single ? 'CHOOSE A GAME' : 'CHOOSE TWO GAMES', selectPick: single ? '1 GAME · 3D' : ('NOW PICKING ' + (s.phase === 'A' ? 'A · TOP' : 'B · BOTTOM')), linkChip, linkChipStyle,
+      wStatusLabel: s.wless === 'connected' ? (s.netMode === 'online' ? 'online · relay' : '2 seats linked') : (s.wless === 'hosting' ? 'hosting' : (s.wless === 'scanning' ? 'scanning' : (s.wless === 'online' ? 'connecting…' : 'standalone'))), wTransport: s.netMode === 'online' ? 'NET · relay' : 'UDS · local', wOnline: s.wless === 'online', padColorList, padEdgeSeg,
+      rtt: s.wless === 'connected' ? '1.2 ms' : '—', loss: s.wless === 'connected' ? '0.0 %' : '—',
+      wIdle: s.wless === 'idle', wHost: s.wless === 'hosting', wScan: s.wless === 'scanning', wConn: s.wless === 'connected',
+      viewDevStyle: { ...viewBase, ...(flat ? { color: '#9a90bc' } : { background: '#F5D042', color: '#20182F' }) },
+      viewFlatStyle: { ...viewBase, ...(flat ? { background: '#F5D042', color: '#20182F' } : { color: '#9a90bc' }) },
+      hintLine: single ? (s.screen === 'select' ? 'Single game — pick one. It runs on the 3D top screen with touch; link a friend locally or online.' : (s.screen === 'ingame' ? 'One game on the 3D top screen; the bottom screen is your touch controller. Link a friend via wireless.' : (hints[s.screen] || ''))) : (hints[s.screen] || ''),
+    };
+  }
+}
+</script>
+</body>
+</html>

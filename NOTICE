@@ -1,0 +1,54 @@
+3DGBA — NOTICE / Credits
+========================
+
+3DGBA is licensed under the GNU General Public License v3.0 (see LICENSE).
+It builds on, and gratefully credits, the following prior art.
+
+--------------------------------------------------------------------------------
+Celio-Link  —  https://github.com/Celio-Link
+License: GNU General Public License v3.0 (compatible with 3DGBA's GPL-3.0)
+--------------------------------------------------------------------------------
+
+3DGBA's wireless Game Boy Advance link (the "local termination" trade path,
+source/celiolink.c / celiolink.h / celiolink_payloads.h and the state-F driver
+in source/gbacore.c) is a clean-room reimplementation of the technique
+pioneered by the Celio-Link project, which brings the Pokemon Generation III
+games online via a USB dongle + relay server.
+
+The specific ideas adopted from Celio-Link:
+  * LOCAL TERMINATION of the Gen-3 link: the device IS the link partner and
+    answers every SIO transfer locally at full speed, so the game never waits
+    on the network. Only semantic data (the party block, trainer/LinkPlayer
+    block, and the trade select/confirm decisions) crosses the wire.
+  * The PacketLayer framing: the single-word handshake, the [CRC][8 command]
+    9-word command frames, and the additive mutual checksum (seed 0xB9A0, reset
+    per command block).
+  * The TransiveStruct {init, transive, transiveDone} command-handler dispatch
+    and the trade-section state machine (LinkPlayer / party / select / confirm
+    / close), modeled on Celio's emu-module sections and callbacks.
+
+Files studied (reference only — no Celio source is vendored here):
+  Celio-Firmware: src/layers/packetLayer.*, src/callbacks/* (TransiveStruct,
+  blockCommand, sendLinkTypeCommand, moveCommand, readyExit/CloseLink,
+  usbLinkCommand), src/sections/tradeConnection.cpp, tradeSetup.cpp,
+  src/link_defines.h; plus the Celio-Server (relay model) and Celio-Client
+  (transport-emitter seam, the model for 3DGBA's future online backend).
+
+The 3DGBA design notes derived from this study live in docs/kb/celio/.
+
+--------------------------------------------------------------------------------
+pret — https://github.com/pret/pokeemerald , https://github.com/pret/pokefirered
+--------------------------------------------------------------------------------
+
+The authoritative Gen-3 link protocol (include/link.h, src/link.c, src/trade.c)
+that validated the wire format, the LINKCMD_*/LINKTYPE_* tables, and the
+idle-frame / RECEIVED_NOTHING semantics 3DGBA relies on.
+
+--------------------------------------------------------------------------------
+mGBA — https://github.com/mgba-emu/mgba
+License: Mozilla Public License 2.0 (file-level copyleft)
+--------------------------------------------------------------------------------
+
+3DGBA embeds mGBA as its Game Boy Advance core. mGBA files remain under MPL-2.0;
+3DGBA's wireless link is a new GBASIODriver peripheral, not a fork of mGBA's
+lockstep driver. Any modified mGBA files remain MPL-2.0 and source-available.

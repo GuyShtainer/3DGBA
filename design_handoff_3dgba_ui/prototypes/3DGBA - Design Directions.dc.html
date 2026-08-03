@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  body{margin:0;background:#17102A;font-family:'Space Grotesk',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  .dv-turn{padding:38px 46px 34px;border-bottom:1px solid rgba(255,255,255,0.08);scroll-margin-top:16px}
+  .dv-thd{display:flex;align-items:baseline;gap:10px;margin:0 0 22px}
+  .dv-tid{font:600 10px 'JetBrains Mono',monospace;padding:3px 7px;background:#F5D042;color:#20182F;border-radius:4px;text-decoration:none}
+  .dv-tname{font:600 14px 'Space Grotesk',sans-serif;color:#F4F1FB}
+  .dv-opts{display:flex;flex-wrap:wrap;gap:30px;align-items:flex-start}
+  .dv-opt{flex:none;display:flex;flex-direction:column;gap:11px;scroll-margin-top:16px}
+  .dv-oid{font:600 10.5px 'JetBrains Mono',monospace;padding:3px 7px;background:rgba(255,255,255,0.1);color:#F4F1FB;border-radius:5px;text-decoration:none}
+  .dv-olabel{display:flex;align-items:center;gap:9px;font:500 12px 'Space Grotesk',sans-serif;color:#C9C1DE}
+  .dv-card{background:#201830;border:1px solid #3B2E60;border-radius:13px;overflow:hidden;box-shadow:0 14px 38px rgba(0,0,0,0.45)}
+  .dv-opt:target .dv-oid{background:#F5D042;color:#20182F}
+  .dv-next{margin:24px 0 0;font:400 12px/1.7 'Space Grotesk',sans-serif;color:#9990B8}
+  .chip{display:inline-flex;align-items:center;gap:7px;padding:6px 11px;border:1px solid #3B2E60;border-radius:999px;font:500 11px 'Space Grotesk';color:#C9C1DE;background:#201830}
+  a.dv-oid,a.dv-tid{cursor:pointer}
+</style>
+</helmet>
+
+<header style="padding:38px 46px 30px;border-bottom:1px solid rgba(255,255,255,0.09)">
+  <div style="display:flex;align-items:flex-start;gap:30px;flex-wrap:wrap">
+    <div style="display:flex;align-items:center;gap:15px">
+      <svg width="54" height="54" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <rect x="10.5" y="7.5" width="26" height="14.5" rx="3.4" stroke="#F5D042" stroke-opacity="0.32" stroke-width="1.5"></rect>
+        <rect x="8" y="9" width="26" height="14.5" rx="3.4" fill="#2A2042" stroke="#F5D042" stroke-width="2"></rect><text x="21" y="19" text-anchor="middle" font-family="'JetBrains Mono', monospace" font-size="8" font-weight="700" fill="#3E86D6">3D</text>
+        <rect x="8" y="25.5" width="26" height="14.5" rx="3.4" fill="#2A2042" stroke="#F5D042" stroke-width="2"></rect>
+        <circle cx="15.5" cy="32.7" r="1.9" fill="#F5D042"></circle>
+        <circle cx="15.5" cy="32.7" r="4.8" stroke="#F5D042" stroke-opacity="0.5" stroke-width="1.1"></circle>
+        <path d="M40 16.2 V32.7" stroke="#8F87AE" stroke-width="1.4"></path>
+        <circle cx="40" cy="16.2" r="2.4" fill="#63B23C"></circle>
+        <circle cx="40" cy="32.7" r="2.4" fill="#3E86D6"></circle>
+      </svg>
+      <div>
+        <div style="font:700 31px/1 'Space Grotesk',sans-serif;letter-spacing:-0.5px"><span style="color:#3E86D6;text-shadow:1.5px 0 0 rgba(120,200,255,0.65),-1.5px 0 0 rgba(18,60,130,0.7)">3D</span><span style="color:#F4F1FB">GBA</span></div>
+        <div style="font:500 10.5px/1.4 'JetBrains Mono',monospace;color:#A99FC6;margin-top:7px;letter-spacing:1.5px">TWO GBA GAMES · ONE NEW 3DS · LINKED</div>
+      </div>
+    </div>
+    <div style="flex:1;min-width:260px;max-width:540px;color:#C9C1DE;font:400 13.5px/1.65 'Space Grotesk',sans-serif">
+      A fresh, modern face for the dual-screen emulator — built on your <b style="color:#F5D042">indigo + gold</b> DNA, refined and made intuitive. Below: the design system, a new logo &amp; icon that folds in the dual screen, stereoscopic 3D, touch and the link cable, then <b style="color:#F4F1FB">three directions</b> for the signature “pick two games” flow. Pick a lane and I build the clickable New-3DS prototype next.
+    </div>
+  </div>
+
+  <div style="display:flex;flex-wrap:wrap;gap:9px;margin-top:22px">
+    <span class="chip"><span style="width:9px;height:9px;border-radius:2px;background:#F5D042"></span>Aesthetic · Indigo + Gold, refined</span>
+    <span class="chip">Screens · 400×240 top + 320×240 bottom</span>
+    <span class="chip">6 themes incl. custom builder</span>
+    <span class="chip">Clickable prototype next</span>
+    <span class="chip">Grounded in your source</span>
+  </div>
+
+  <div style="display:flex;flex-wrap:wrap;gap:16px;margin-top:26px">
+    <div style="flex:1;min-width:250px;background:#201830;border:1px solid #3B2E60;border-radius:12px;padding:15px 16px">
+      <div style="font:500 9.5px 'JetBrains Mono',monospace;letter-spacing:1.5px;color:#8F87AE;margin-bottom:12px">PALETTE · from theme.h, refined</div>
+      <div style="display:flex;flex-wrap:wrap;gap:9px">
+        <div style="text-align:center"><div style="width:40px;height:40px;border-radius:9px;background:#F5D042"></div><div style="font:500 8px 'JetBrains Mono';color:#8F87AE;margin-top:5px">GOLD</div></div>
+        <div style="text-align:center"><div style="width:40px;height:40px;border-radius:9px;background:#201830;border:1px solid #3B2E60"></div><div style="font:500 8px 'JetBrains Mono';color:#8F87AE;margin-top:5px">INDIGO</div></div>
+        <div style="text-align:center"><div style="width:40px;height:40px;border-radius:9px;background:#2A2042;border:1px solid #3B2E60"></div><div style="font:500 8px 'JetBrains Mono';color:#8F87AE;margin-top:5px">PANEL</div></div>
+        <div style="text-align:center"><div style="width:40px;height:40px;border-radius:9px;background:#63B23C"></div><div style="font:500 8px 'JetBrains Mono';color:#8F87AE;margin-top:5px">A·GRN</div></div>
+        <div style="text-align:center"><div style="width:40px;height:40px;border-radius:9px;background:#3E86D6"></div><div style="font:500 8px 'JetBrains Mono';color:#8F87AE;margin-top:5px">B·BLU</div></div>
+        <div style="text-align:center"><div style="width:40px;height:40px;border-radius:9px;background:#B0A8C8"></div><div style="font:500 8px 'JetBrains Mono';color:#8F87AE;margin-top:5px">LAV</div></div>
+        <div style="text-align:center"><div style="width:40px;height:40px;border-radius:9px;background:#0E0B16;border:1px solid #2A2042"></div><div style="font:500 8px 'JetBrains Mono';color:#8F87AE;margin-top:5px">BOX</div></div>
+      </div>
+    </div>
+    <div style="min-width:190px;background:#201830;border:1px solid #3B2E60;border-radius:12px;padding:15px 16px">
+      <div style="font:500 9.5px 'JetBrains Mono',monospace;letter-spacing:1.5px;color:#8F87AE;margin-bottom:12px">TYPE</div>
+      <div style="font:700 22px 'Space Grotesk';color:#F4F1FB;line-height:1">Space Grotesk</div>
+      <div style="font:400 11px 'Space Grotesk';color:#A99FC6;margin-top:3px">UI · titles · buttons — geometric, a touch of retro-tech</div>
+      <div style="font:500 15px 'JetBrains Mono';color:#F5D042;margin-top:12px">JetBrains Mono 0123</div>
+      <div style="font:400 11px 'Space Grotesk';color:#A99FC6;margin-top:3px">fps · clock · game codes · seat IDs</div>
+    </div>
+    <div style="min-width:210px;background:#201830;border:1px solid #3B2E60;border-radius:12px;padding:15px 16px">
+      <div style="font:500 9.5px 'JetBrains Mono',monospace;letter-spacing:1.5px;color:#8F87AE;margin-bottom:12px">APP ICON · 3 themes</div>
+      <div style="display:flex;gap:12px;align-items:center">
+        <div style="text-align:center">
+          <div style="width:52px;height:52px;border-radius:12px;background:radial-gradient(120% 120% at 30% 20%,#2A2042,#17102A);border:1px solid #3B2E60;display:flex;align-items:center;justify-content:center">
+            <svg width="30" height="30" viewBox="0 0 48 48" fill="none"><rect x="8" y="9" width="26" height="14.5" rx="3.4" fill="#2A2042" stroke="#F5D042" stroke-width="2"></rect><text x="21" y="19" text-anchor="middle" font-family="'JetBrains Mono', monospace" font-size="8" font-weight="700" fill="#3E86D6">3D</text><rect x="8" y="25.5" width="26" height="14.5" rx="3.4" fill="#2A2042" stroke="#F5D042" stroke-width="2"></rect><circle cx="15.5" cy="32.7" r="1.9" fill="#F5D042"></circle><circle cx="40" cy="16.2" r="2.4" fill="#63B23C"></circle><circle cx="40" cy="32.7" r="2.4" fill="#3E86D6"></circle><path d="M40 16.2 V32.7" stroke="#8F87AE" stroke-width="1.4"></path></svg>
+          </div>
+          <div style="font:500 7.5px 'JetBrains Mono';color:#8F87AE;margin-top:5px">INDIGO</div>
+        </div>
+        <div style="text-align:center">
+          <div style="width:52px;height:52px;border-radius:12px;background:#0B0D12;border:1px solid #23283A;display:flex;align-items:center;justify-content:center">
+            <svg width="30" height="30" viewBox="0 0 48 48" fill="none"><rect x="8" y="9" width="26" height="14.5" rx="3.4" fill="#14171F" stroke="#F5D042" stroke-width="2"></rect><text x="21" y="19" text-anchor="middle" font-family="'JetBrains Mono', monospace" font-size="8" font-weight="700" fill="#35D0BA">3D</text><rect x="8" y="25.5" width="26" height="14.5" rx="3.4" fill="#14171F" stroke="#F5D042" stroke-width="2"></rect><circle cx="15.5" cy="32.7" r="1.9" fill="#F5D042"></circle><circle cx="40" cy="16.2" r="2.4" fill="#35D0BA"></circle><circle cx="40" cy="32.7" r="2.4" fill="#7C6BF0"></circle><path d="M40 16.2 V32.7" stroke="#4A4E63" stroke-width="1.4"></path></svg>
+          </div>
+          <div style="font:500 7.5px 'JetBrains Mono';color:#8F87AE;margin-top:5px">OLED</div>
+        </div>
+        <div style="text-align:center">
+          <div style="width:52px;height:52px;border-radius:12px;background:linear-gradient(135deg,#1d3a1a,#16294a);border:1px solid #3B2E60;display:flex;align-items:center;justify-content:center">
+            <svg width="30" height="30" viewBox="0 0 48 48" fill="none"><rect x="8" y="9" width="26" height="14.5" rx="3.4" fill="#0E0B16" stroke="#63B23C" stroke-width="2"></rect><text x="21" y="19" text-anchor="middle" font-family="'JetBrains Mono', monospace" font-size="8" font-weight="700" fill="#3E86D6">3D</text><rect x="8" y="25.5" width="26" height="14.5" rx="3.4" fill="#0E0B16" stroke="#3E86D6" stroke-width="2"></rect><circle cx="15.5" cy="32.7" r="1.9" fill="#3E86D6"></circle><circle cx="40" cy="16.2" r="2.4" fill="#63B23C"></circle><circle cx="40" cy="32.7" r="2.4" fill="#3E86D6"></circle><path d="M40 16.2 V32.7" stroke="#8F87AE" stroke-width="1.4"></path></svg>
+          </div>
+          <div style="font:500 7.5px 'JetBrains Mono';color:#8F87AE;margin-top:5px">DUO</div>
+        </div>
+      </div>
+    </div>
+    <div style="min-width:180px;background:#201830;border:1px solid #3B2E60;border-radius:12px;padding:15px 16px">
+      <div style="font:500 9.5px 'JetBrains Mono',monospace;letter-spacing:1.5px;color:#8F87AE;margin-bottom:12px">NEW 3DS · both screens</div>
+      <div style="width:132px;margin:0 auto;background:#161019;border:1px solid #2A2042;border-radius:14px;padding:9px">
+        <div style="background:#120E1C;border-radius:7px;padding:5px">
+          <div style="height:44px;border-radius:4px;background:repeating-linear-gradient(135deg,#2f5a1e,#2f5a1e 5px,#356720 5px,#356720 10px);display:flex;align-items:flex-end;justify-content:space-between;padding:4px"><span style="font:600 6.5px 'JetBrains Mono';color:#bfeaa0;align-self:flex-end">GAME A</span><span style="font:600 6px 'JetBrains Mono';color:#a9d4ff;border:1px solid #3E86D6;border-radius:3px;padding:0 3px;line-height:1.5;align-self:flex-start">3D</span></div>
+        </div>
+        <div style="height:8px;display:flex;align-items:center;justify-content:center"><div style="width:30px;height:2px;border-radius:2px;background:#2A2042"></div></div>
+        <div style="display:flex;gap:6px;align-items:center">
+          <div style="width:12px;height:12px;border-radius:50%;background:#241B37;border:1px solid #3B2E60;flex:none"></div>
+          <div style="flex:1;background:#120E1C;border-radius:6px;padding:5px">
+            <div style="height:34px;border-radius:4px;background:repeating-linear-gradient(135deg,#1c3d63,#1c3d63 5px,#22497a 5px,#22497a 10px);display:flex;align-items:flex-end;padding:3px"><span style="font:600 6px 'JetBrains Mono';color:#a9d4ff">GAME B</span></div>
+          </div>
+          <div style="display:grid;grid-template-columns:6px 6px;gap:3px;flex:none"><div style="width:6px;height:6px;border-radius:50%;background:#3B2E60"></div><div style="width:6px;height:6px;border-radius:50%;background:#F5D042"></div><div style="width:6px;height:6px;border-radius:50%;background:#3B2E60"></div><div style="width:6px;height:6px;border-radius:50%;background:#3B2E60"></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<section class="dv-turn" id="t1">
+  <div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Three directions — the “pick two games” flow (top = library, bottom = touch)</span></div>
+  <div class="dv-opts">
+
+    <!-- ============ 1a SHELF ============ -->
+    <div class="dv-opt" id="1a">
+      <div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a> Shelf — calm, system-modern</div>
+      <div class="dv-card" style="width:392px">
+        <div style="padding:15px 17px 11px">
+          <div style="font:600 15px 'Space Grotesk';color:#F4F1FB">Shelf</div>
+          <div style="font:400 12px/1.5 'Space Grotesk';color:#A99FC6;margin-top:3px">One tidy library up top; two labelled slots you tap to fill below. Spacious, gold used sparingly — a refined system menu.</div>
+        </div>
+        <div style="background:#120E1C;padding:16px;display:flex;flex-direction:column;align-items:center;gap:10px">
+          <div style="width:340px;height:204px;border-radius:9px;background:#0E0B16;border:1px solid #2A2042;box-sizing:border-box;padding:12px 13px;position:relative;overflow:hidden">
+            <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:9px">
+              <div style="font:500 9.5px 'JetBrains Mono',monospace;letter-spacing:1.5px;color:#A99FC6">CHOOSE TWO GAMES</div>
+              <div style="font:500 9px 'JetBrains Mono',monospace;color:#6D6690">12 CARTS</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:9px;padding:5px 8px;border-radius:6px;margin-bottom:3px">
+              <div style="width:14px;height:18px;border-radius:2px 2px 3px 3px;background:#33265A;border:1px solid #4a3a72;flex:none;position:relative"><div style="position:absolute;top:2px;left:2px;right:2px;height:3px;border-radius:1px;background:#63B23C"></div></div>
+              <div style="flex:1;font:500 12px 'Space Grotesk';color:#D9D2EC">Pokémon Emerald</div>
+              <div style="font:500 9px 'JetBrains Mono';color:#6D6690">BPEE</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:9px;padding:5px 8px;border-radius:6px;background:#F5D042;margin-bottom:3px">
+              <div style="width:14px;height:18px;border-radius:2px 2px 3px 3px;background:#20182F;flex:none;position:relative"><div style="position:absolute;top:2px;left:2px;right:2px;height:3px;border-radius:1px;background:#E4462E"></div></div>
+              <div style="flex:1;font:600 12px 'Space Grotesk';color:#20182F">Pokémon FireRed</div>
+              <div style="font:600 9px 'JetBrains Mono';color:#5A4B12">BPRE</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:9px;padding:5px 8px;border-radius:6px;margin-bottom:3px">
+              <div style="width:14px;height:18px;border-radius:2px 2px 3px 3px;background:#33265A;border:1px solid #4a3a72;flex:none;position:relative"><div style="position:absolute;top:2px;left:2px;right:2px;height:3px;border-radius:1px;background:#C24BE0"></div></div>
+              <div style="flex:1;font:500 12px 'Space Grotesk';color:#D9D2EC">Fire Emblem</div>
+              <div style="font:500 9px 'JetBrains Mono';color:#6D6690">AE7E</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:9px;padding:5px 8px;border-radius:6px;margin-bottom:3px">
+              <div style="width:14px;height:18px;border-radius:2px 2px 3px 3px;background:#33265A;border:1px solid #4a3a72;flex:none;position:relative"><div style="position:absolute;top:2px;left:2px;right:2px;height:3px;border-radius:1px;background:#3E86D6"></div></div>
+              <div style="flex:1;font:500 12px 'Space Grotesk';color:#D9D2EC">Metroid Fusion</div>
+              <div style="font:500 9px 'JetBrains Mono';color:#6D6690">AMTE</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:9px;padding:5px 8px;border-radius:6px">
+              <div style="width:14px;height:18px;border-radius:2px 2px 3px 3px;background:#33265A;border:1px solid #4a3a72;flex:none;position:relative"><div style="position:absolute;top:2px;left:2px;right:2px;height:3px;border-radius:1px;background:#E0A93E"></div></div>
+              <div style="flex:1;font:500 12px 'Space Grotesk';color:#D9D2EC">Golden Sun</div>
+              <div style="font:500 9px 'JetBrains Mono';color:#6D6690">AGSE</div>
+            </div>
+            <div style="position:absolute;left:0;right:0;bottom:0;height:26px;background:linear-gradient(180deg,rgba(14,11,22,0),#0E0B16)"></div>
+          </div>
+          <div style="width:272px;height:204px;border-radius:9px;background:#0E0B16;border:1px solid #2A2042;box-sizing:border-box;padding:12px;display:flex;flex-direction:column;gap:9px">
+            <div style="border:1.5px solid #63B23C;border-radius:8px;padding:8px 11px;background:rgba(99,178,60,0.09)">
+              <div style="font:600 8.5px 'JetBrains Mono';letter-spacing:1.5px;color:#7ecb52;margin-bottom:5px">A · TOP SCREEN</div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <div style="width:13px;height:17px;border-radius:2px 2px 3px 3px;background:#63B23C;flex:none"></div>
+                <div style="flex:1;font:600 13px 'Space Grotesk';color:#F4F1FB">Pokémon Emerald</div>
+                <div style="font:500 12px 'JetBrains Mono';color:#6D6690">⇄</div>
+              </div>
+            </div>
+            <div style="border:1.5px solid #3E86D6;border-radius:8px;padding:8px 11px;background:rgba(62,134,214,0.09)">
+              <div style="font:600 8.5px 'JetBrains Mono';letter-spacing:1.5px;color:#6aa6e6;margin-bottom:5px">B · BOTTOM SCREEN</div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <div style="width:13px;height:17px;border-radius:2px 2px 3px 3px;background:#3E86D6;flex:none"></div>
+                <div style="flex:1;font:600 13px 'Space Grotesk';color:#F4F1FB">Pokémon FireRed</div>
+                <div style="font:500 12px 'JetBrains Mono';color:#6D6690">⇄</div>
+              </div>
+            </div>
+            <div style="margin-top:auto;display:flex;gap:7px">
+              <div style="flex:1;text-align:center;font:700 12px 'Space Grotesk';color:#20182F;background:#F5D042;border-radius:8px;padding:8px 0">▶ START</div>
+              <div style="flex:1.25;text-align:center;font:700 10.5px 'Space Grotesk';color:#F5D042;background:rgba(245,208,66,0.12);border:1px solid #F5D042;border-radius:8px;padding:7px 0">⚡ START — LINKED</div>
+            </div>
+            <div style="font:500 9px 'JetBrains Mono';color:#6D6690;text-align:center;letter-spacing:0.5px">↺ RESUME  EMERALD + FIRERED</div>
+          </div>
+        </div>
+        <div style="padding:13px 17px 16px">
+          <div style="font:500 8.5px 'JetBrains Mono';letter-spacing:1.5px;color:#6D6690;margin-bottom:8px">IN-GAME HUD</div>
+          <div style="height:27px;border-radius:6px;background:#0E0B16;border:1px solid #241B3B;display:flex;align-items:center;gap:8px;padding:0 11px">
+            <div style="width:7px;height:7px;border-radius:2px;background:#63B23C"></div>
+            <div style="font:600 10px 'Space Grotesk';color:#EDE8FB">Pokémon Emerald</div>
+            <div style="flex:1"></div>
+            <div style="font:500 9px 'JetBrains Mono';color:#7ecb52">59<span style="color:#6D6690"> FPS</span></div>
+            <div style="width:1px;height:12px;background:#2A2042"></div>
+            <div style="font:500 9px 'JetBrains Mono';color:#A99FC6">14:32</div>
+            <div style="width:16px;height:8px;border:1px solid #A99FC6;border-radius:2px;position:relative"><div style="position:absolute;left:1px;top:1px;bottom:1px;width:9px;background:#7ecb52;border-radius:1px"></div></div>
+          </div>
+          <div style="font:400 11.5px/1.5 'Space Grotesk';color:#A99FC6;margin-top:12px"><b style="color:#7ecb52">Touch:</b> tap a cartridge → it drops into the next open slot; tap a slot to reassign.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 1b DUAL DECK ============ -->
+    <div class="dv-opt" id="1b">
+      <div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a> Dual Deck — celebrate the two cores</div>
+      <div class="dv-card" style="width:392px">
+        <div style="padding:15px 17px 11px">
+          <div style="font:600 15px 'Space Grotesk';color:#F4F1FB">Dual Deck</div>
+          <div style="font:400 12px/1.5 'Space Grotesk';color:#A99FC6;margin-top:3px">Each screen owns its game — A green on top, B blue on bottom — mirroring the two CPU cores. The link cable is always on screen.</div>
+        </div>
+        <div style="background:#120E1C;padding:16px;display:flex;flex-direction:column;align-items:center;gap:0">
+          <div style="width:340px;height:204px;border-radius:9px;background:#0E0B16;border:1px solid #2A2042;box-sizing:border-box;padding:12px 13px;position:relative;overflow:hidden;border-top:2px solid #63B23C">
+            <div style="display:flex;align-items:center;gap:7px;margin-bottom:9px">
+              <div style="font:700 12px 'Space Grotesk';color:#7ecb52">GAME A</div>
+              <div style="font:500 9px 'JetBrains Mono';color:#6D6690;letter-spacing:1px">→ TOP SCREEN</div>
+              <div style="flex:1"></div>
+              <div style="font:500 9px 'JetBrains Mono';color:#6D6690">TAP TO CHOOSE</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:9px;padding:6px 9px;border-radius:6px;background:rgba(99,178,60,0.16);border:1px solid #63B23C;margin-bottom:4px">
+              <div style="width:13px;height:17px;border-radius:2px 2px 3px 3px;background:#63B23C;flex:none"></div>
+              <div style="flex:1;font:600 12px 'Space Grotesk';color:#F4F1FB">Pokémon Emerald</div>
+              <div style="font:500 9px 'JetBrains Mono';color:#7ecb52">BPEE</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:9px;padding:6px 9px;border-radius:6px;margin-bottom:4px">
+              <div style="width:13px;height:17px;border-radius:2px 2px 3px 3px;background:#33265A;border:1px solid #4a3a72;flex:none"></div>
+              <div style="flex:1;font:500 12px 'Space Grotesk';color:#C9C1DE">Golden Sun</div>
+              <div style="font:500 9px 'JetBrains Mono';color:#6D6690">AGSE</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:9px;padding:6px 9px;border-radius:6px">
+              <div style="width:13px;height:17px;border-radius:2px 2px 3px 3px;background:#33265A;border:1px solid #4a3a72;flex:none"></div>
+              <div style="flex:1;font:500 12px 'Space Grotesk';color:#C9C1DE">Advance Wars</div>
+              <div style="font:500 9px 'JetBrains Mono';color:#6D6690">AWRE</div>
+            </div>
+            <div style="position:absolute;left:0;right:0;bottom:0;height:24px;background:linear-gradient(180deg,rgba(14,11,22,0),#0E0B16)"></div>
+          </div>
+          <div style="width:200px;display:flex;align-items:center;gap:7px;padding:7px 0">
+            <div style="width:9px;height:9px;border-radius:50%;background:#63B23C;flex:none"></div>
+            <div style="flex:1;height:3px;border-radius:2px;background:linear-gradient(90deg,#63B23C,#3E86D6)"></div>
+            <div style="font:700 7.5px 'JetBrains Mono';color:#A99FC6;letter-spacing:1px;flex:none">LINK CABLE</div>
+            <div style="flex:1;height:3px;border-radius:2px;background:linear-gradient(90deg,#63B23C,#3E86D6)"></div>
+            <div style="width:9px;height:9px;border-radius:50%;background:#3E86D6;flex:none"></div>
+          </div>
+          <div style="width:272px;height:204px;border-radius:9px;background:#0E0B16;border:1px solid #2A2042;box-sizing:border-box;padding:12px 13px;position:relative;overflow:hidden;border-top:2px solid #3E86D6">
+            <div style="display:flex;align-items:center;gap:7px;margin-bottom:9px">
+              <div style="font:700 12px 'Space Grotesk';color:#6aa6e6">GAME B</div>
+              <div style="font:500 8.5px 'JetBrains Mono';color:#6D6690;letter-spacing:1px">→ BOTTOM</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:9px;padding:6px 9px;border-radius:6px;background:rgba(62,134,214,0.16);border:1px solid #3E86D6;margin-bottom:4px">
+              <div style="width:12px;height:16px;border-radius:2px 2px 3px 3px;background:#3E86D6;flex:none"></div>
+              <div style="flex:1;font:600 12px 'Space Grotesk';color:#F4F1FB">Pokémon FireRed</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:9px;padding:6px 9px;border-radius:6px;margin-bottom:4px">
+              <div style="width:12px;height:16px;border-radius:2px 2px 3px 3px;background:#33265A;border:1px solid #4a3a72;flex:none"></div>
+              <div style="flex:1;font:500 12px 'Space Grotesk';color:#C9C1DE">Zelda: Minish Cap</div>
+            </div>
+            <div style="position:absolute;left:12px;right:12px;bottom:11px;text-align:center;font:700 12px 'Space Grotesk';color:#20182F;background:#F5D042;border-radius:8px;padding:8px 0">▶  START — LINKED</div>
+          </div>
+        </div>
+        <div style="padding:13px 17px 16px">
+          <div style="font:500 8.5px 'JetBrains Mono';letter-spacing:1.5px;color:#6D6690;margin-bottom:8px">IN-GAME HUD · two-tone</div>
+          <div style="height:27px;border-radius:6px;overflow:hidden;display:flex;border:1px solid #241B3B">
+            <div style="flex:1;background:rgba(99,178,60,0.14);display:flex;align-items:center;gap:6px;padding:0 10px">
+              <div style="width:6px;height:6px;border-radius:50%;background:#63B23C"></div>
+              <div style="font:600 9.5px 'Space Grotesk';color:#EDE8FB">Emerald</div>
+              <div style="flex:1"></div>
+              <div style="font:500 8.5px 'JetBrains Mono';color:#7ecb52">59</div>
+            </div>
+            <div style="width:22px;background:#0E0B16;display:flex;align-items:center;justify-content:center;font:700 8px 'JetBrains Mono';color:#F5D042">⇄</div>
+            <div style="flex:1;background:rgba(62,134,214,0.14);display:flex;align-items:center;gap:6px;padding:0 10px">
+              <div style="width:6px;height:6px;border-radius:50%;background:#3E86D6"></div>
+              <div style="font:600 9.5px 'Space Grotesk';color:#EDE8FB">FireRed</div>
+              <div style="flex:1"></div>
+              <div style="font:500 8.5px 'JetBrains Mono';color:#6aa6e6">57</div>
+            </div>
+          </div>
+          <div style="font:400 11.5px/1.5 'Space Grotesk';color:#A99FC6;margin-top:12px"><b style="color:#6aa6e6">Link-first:</b> the two lanes echo the parallel cores; START begins a linked session (trade/battle-ready).</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 1c CARTRIDGE OS ============ -->
+    <div class="dv-opt" id="1c">
+      <div class="dv-olabel"><a class="dv-oid" href="#1c">1c</a> Cartridge OS — tactile &amp; game-y</div>
+      <div class="dv-card" style="width:392px">
+        <div style="padding:15px 17px 11px">
+          <div style="font:600 15px 'Space Grotesk';color:#F4F1FB">Cartridge OS</div>
+          <div style="font:400 12px/1.5 'Space Grotesk';color:#A99FC6;margin-top:3px">Two cart slots up top read as a handheld faceplate; a chunky cartridge grid below. Reads like hardware — playful and physical.</div>
+        </div>
+        <div style="background:#120E1C;padding:16px;display:flex;flex-direction:column;align-items:center;gap:10px">
+          <div style="width:340px;height:204px;border-radius:9px;background:#0E0B16;border:1px solid #2A2042;box-sizing:border-box;padding:13px;position:relative;overflow:hidden">
+            <div style="display:flex;align-items:center;gap:7px;margin-bottom:12px">
+              <div style="font:700 11px 'JetBrains Mono';color:#F5D042;letter-spacing:1px">◲ DUAL DECK</div>
+              <div style="flex:1"></div>
+              <div style="font:500 8.5px 'JetBrains Mono';color:#6D6690">2 / 2 SLOTTED</div>
+            </div>
+            <div style="display:flex;gap:14px;justify-content:center">
+              <div style="text-align:center">
+                <div style="width:76px;height:96px;border-radius:6px 6px 9px 9px;background:linear-gradient(#33265A,#241C42);border:1px solid #4a3a72;padding:7px;box-sizing:border-box;display:flex;flex-direction:column;box-shadow:0 5px 14px rgba(0,0,0,0.4)">
+                  <div style="height:12px;border-radius:2px;background:#63B23C;margin-bottom:6px"></div>
+                  <div style="flex:1;border-radius:3px;background:#0E0B16;display:flex;align-items:center;justify-content:center;text-align:center;font:600 8px 'JetBrains Mono';color:#8fce63;padding:4px">POKéMON EMERALD</div>
+                </div>
+                <div style="font:600 8px 'JetBrains Mono';color:#7ecb52;margin-top:6px;letter-spacing:1px">SLOT A</div>
+              </div>
+              <div style="text-align:center">
+                <div style="width:76px;height:96px;border-radius:6px 6px 9px 9px;background:linear-gradient(#33265A,#241C42);border:1px solid #4a3a72;padding:7px;box-sizing:border-box;display:flex;flex-direction:column;box-shadow:0 5px 14px rgba(0,0,0,0.4)">
+                  <div style="height:12px;border-radius:2px;background:#3E86D6;margin-bottom:6px"></div>
+                  <div style="flex:1;border-radius:3px;background:#0E0B16;display:flex;align-items:center;justify-content:center;text-align:center;font:600 8px 'JetBrains Mono';color:#7fb2ec;padding:4px">POKéMON FIRERED</div>
+                </div>
+                <div style="font:600 8px 'JetBrains Mono';color:#6aa6e6;margin-top:6px;letter-spacing:1px">SLOT B</div>
+              </div>
+            </div>
+          </div>
+          <div style="width:272px;height:204px;border-radius:9px;background:#0E0B16;border:1px solid #2A2042;box-sizing:border-box;padding:12px;position:relative;overflow:hidden">
+            <div style="font:500 9px 'JetBrains Mono';letter-spacing:1.5px;color:#A99FC6;margin-bottom:10px">CARTRIDGE BIN</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:9px">
+              <div style="aspect-ratio:3/4;border-radius:5px;background:linear-gradient(#2b2148,#211a3c);border:1px solid #46376e;padding:5px;box-sizing:border-box;display:flex;flex-direction:column"><div style="height:7px;border-radius:2px;background:#C24BE0;margin-bottom:4px"></div><div style="flex:1;border-radius:2px;background:#0E0B16;display:flex;align-items:flex-end;padding:3px;font:600 6px 'JetBrains Mono';color:#c98fe0">GOLD SUN</div></div>
+              <div style="aspect-ratio:3/4;border-radius:5px;background:linear-gradient(#2b2148,#211a3c);border:1px solid #46376e;padding:5px;box-sizing:border-box;display:flex;flex-direction:column"><div style="height:7px;border-radius:2px;background:#E0A93E;margin-bottom:4px"></div><div style="flex:1;border-radius:2px;background:#0E0B16;display:flex;align-items:flex-end;padding:3px;font:600 6px 'JetBrains Mono';color:#e0c68f">MARIO KART</div></div>
+              <div style="aspect-ratio:3/4;border-radius:5px;background:linear-gradient(#2b2148,#211a3c);border:1px solid #46376e;padding:5px;box-sizing:border-box;display:flex;flex-direction:column"><div style="height:7px;border-radius:2px;background:#E4462E;margin-bottom:4px"></div><div style="flex:1;border-radius:2px;background:#0E0B16;display:flex;align-items:flex-end;padding:3px;font:600 6px 'JetBrains Mono';color:#e08f8f">METROID</div></div>
+            </div>
+            <div style="position:absolute;left:12px;right:12px;bottom:11px;text-align:center;font:700 12px 'Space Grotesk';color:#20182F;background:#F5D042;border-radius:8px;padding:8px 0;box-shadow:0 3px 0 #b99a2e">⏻  POWER ▶</div>
+          </div>
+        </div>
+        <div style="padding:13px 17px 16px">
+          <div style="font:500 8.5px 'JetBrains Mono';letter-spacing:1.5px;color:#6D6690;margin-bottom:8px">IN-GAME HUD · faceplate</div>
+          <div style="height:27px;border-radius:7px;background:linear-gradient(#241C42,#0E0B16);border:1px solid #46376e;display:flex;align-items:center;gap:8px;padding:0 11px">
+            <div style="width:9px;height:11px;border-radius:1px 1px 2px 2px;background:#63B23C;flex:none"></div>
+            <div style="font:600 10px 'Space Grotesk';color:#EDE8FB">Emerald</div>
+            <div style="flex:1"></div>
+            <div style="font:500 9px 'JetBrains Mono';color:#7ecb52">59 FPS</div>
+            <div style="width:1px;height:12px;background:#46376e"></div>
+            <div style="font:500 9px 'JetBrains Mono';color:#A99FC6">14:32</div>
+          </div>
+          <div style="font:400 11.5px/1.5 'Space Grotesk';color:#A99FC6;margin-top:12px"><b style="color:#F5D042">Tactile:</b> pick from the bin; carts snap into the two slots. Most physical, most “game console.”</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+  <p class="dv-next">Reply with a pick — e.g. “go with <a class="dv-oid" href="#1b">1b</a>”, “<a class="dv-oid" href="#1a">1a</a> layout but the link cable from <a class="dv-oid" href="#1b">1b</a>”, or “blend <a class="dv-oid" href="#1a">1a</a> + <a class="dv-oid" href="#1c">1c</a>”. Then I build the full clickable New-3DS prototype (all screens + 6 themes) in that lane. Want a 4th, wilder direction too?</p>
+</section>
+
+</x-dc>
+</body>
+</html>

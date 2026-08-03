@@ -34,7 +34,22 @@ typedef struct {
 	uint8_t  absentMask;     // gAbsentBattlerFlags
 	uint8_t  battlerPos[4];  // gBattlerPositions[0..3]
 	uint32_t bagListTaskBase; // live bag ListMenu task (+24 scroll, +26 row), 0 if N/A
+	// --- instrumentation passthrough (LOGGING ONLY; never gates touch) — the screen fingerprint the touch
+	// log records so NOT-YET-DETECTED contexts (map/PokeNav/Pokemon PC/move-learn/intro/Battle Frontier)
+	// that fall through to ctx=overworld/none are identifiable by cb2 + active-task pointers. ---
+	uint32_t cb2;             // raw gMain.callback2 (Thumb stripped) — the undetected-screen fingerprint
+	bool     ctxResolved;     // ctx from a POSITIVE menu/battle match (true) vs the bare overworld fall-through (false)
+	uint8_t  nTask;           // count of active-task func ptrs in taskFp[]
+	uint32_t taskFp[8];       // active gTasks func pointers (Thumb stripped, sorted) — disambiguate cb2-ambiguous screens
 } TouchSmart;
+
+// --- Touch-event instrumentation logger (LOGGING ONLY — never changes touch/gameplay) ---------------
+// Self-contained ring in touch.c: touch_update records a row on each touch EVENT (a new press; plus
+// drags/holds where they matter — bag + overworld/PC). Each row captures the ctx fingerprint and the
+// context-relevant game cursor read BEFORE and AFTER the handler (the "does the cursor update" proof),
+// plus the injected key mask. Flushed to ONE SD file on session close (the gs_log one-shot pattern).
+void touch_log_reset(void);              // clear the ring (call once when a session starts)
+void touch_log_dump(const char* path);   // flush the ring to an SD file (mkdir's sdmc:/cias/netlogs)
 
 // Advance touch one frame; returns the GBA key mask to OR into the bottom game.
 //   (sx,sy) = raw bottom-screen touch (320x240) — used by PAD's fixed zones.
@@ -45,4 +60,4 @@ u16  touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy,
 
 // Draw the overlay for the mode on the bound bottom target. PAD draws the gamepad; SMART draws
 // nothing (it points at the real game UI). `held` lights pressed PAD zones.
-void touch_draw(TouchMode mode, u16 held, const TouchSmart* sm);
+void touch_draw(TouchMode mode, u16 held, const TouchSmart* sm, C2D_TextBuf buf);

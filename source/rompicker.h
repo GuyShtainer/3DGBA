@@ -12,8 +12,10 @@
 
 #define ROM_DIR "sdmc:/3DGBA"
 
+// startLinked (optional out): true when the user chose "START - LINKED" (attach the in-process
+// link cable at session start). In 1-game mode (g_prefs.gameMode == 1) pathB is set to "".
 bool rompicker_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txtBuf,
-                   char* pathA, char* pathB, size_t cap);
+                   char* pathA, char* pathB, size_t cap, bool* startLinked);
 
 // Derive a friendly name for a .gba file from its header (known Gen-3 codes, else the
 // internal 12-char title, else the filename). `path` is a full sdmc path. Used by the

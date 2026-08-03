@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>3DGBA — device-native art pack</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#161020;--panel:#1d1630;--line:#33265a;--acc:#F5D042;--text:#F4F1FB;--dim:#b0a8c8}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:'Space Grotesk',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  a{color:var(--acc)}
+  .wrap{max-width:1120px;margin:0 auto;padding:40px 28px 90px}
+  header .logo{display:flex;align-items:center;gap:13px}
+  h1{font-size:26px;letter-spacing:-.4px;margin:0}
+  h1 .d{color:#3E86D6;text-shadow:1.5px 0 0 rgba(120,200,255,.55),-1.5px 0 0 rgba(18,60,130,.6)}
+  .sub{font:500 10px 'JetBrains Mono',monospace;color:var(--dim);letter-spacing:1.5px;margin-top:4px}
+  .kpis{display:flex;flex-wrap:wrap;gap:10px;margin:22px 0 8px}
+  .kpi{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:11px 15px;min-width:120px}
+  .kpi b{font:700 20px 'Space Grotesk';display:block}
+  .kpi span{font:500 9px 'JetBrains Mono',monospace;color:var(--dim);letter-spacing:1px;text-transform:uppercase}
+  .links{display:flex;flex-wrap:wrap;gap:10px;margin:18px 0 10px}
+  .links a{background:rgba(245,208,66,.1);border:1px solid var(--acc);border-radius:9px;padding:9px 14px;text-decoration:none;font-weight:600;font-size:13px}
+  .links a.alt{background:var(--panel);border-color:var(--line);color:var(--text)}
+  h2{font-size:14px;font-family:'JetBrains Mono',monospace;letter-spacing:2px;color:var(--dim);text-transform:uppercase;margin:44px 0 4px;border-top:1px solid var(--line);padding-top:20px}
+  .note{color:var(--dim);font-size:13px;line-height:1.65;margin:0 0 18px;max-width:760px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:22px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px}
+  .card .t{font:600 13px 'Space Grotesk';margin-bottom:2px}
+  .card .c{font:500 8.5px 'JetBrains Mono',monospace;color:var(--dim);letter-spacing:.5px;margin-bottom:11px}
+  .screens{display:flex;gap:10px;align-items:flex-start}
+  .scr{display:flex;flex-direction:column;gap:5px}
+  .scr img{display:block;background:#000;border-radius:3px;image-rendering:auto;box-shadow:0 6px 18px rgba(0,0,0,.4)}
+  .scr .lab{font:600 7.5px 'JetBrains Mono',monospace;color:var(--dim);letter-spacing:1px}
+  .top img{width:280px;height:168px}
+  .bot img{width:224px;height:168px}
+  .proofrow{display:flex;gap:22px;flex-wrap:wrap;align-items:flex-start}
+  .proof{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px}
+  .proof img{display:block;border-radius:3px;box-shadow:0 6px 18px rgba(0,0,0,.4)}
+  .atlas{background:repeating-conic-gradient(#2a2440 0 25%, #241e38 0 50%) 0 0/20px 20px;border:1px solid var(--line);border-radius:12px;padding:14px}
+  .atlas img{display:block;width:100%;max-width:512px;image-rendering:pixelated}
+  .themebar{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 0}
+  .sw{display:flex;flex-direction:column;align-items:center;gap:6px}
+  .sw .chip{width:60px;height:38px;border-radius:8px;border:1px solid rgba(255,255,255,.12)}
+  .sw span{font:500 8px 'JetBrains Mono',monospace;color:var(--dim)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo">
+      <svg width="40" height="40" viewBox="0 0 48 48" fill="none"><rect x="8" y="9" width="26" height="14.5" rx="3.4" fill="#2A2042" stroke="#F5D042" stroke-width="2"></rect><text x="21" y="19" text-anchor="middle" font-family="'JetBrains Mono',monospace" font-size="8" font-weight="700" fill="#3E86D6">3D</text><rect x="8" y="25.5" width="26" height="14.5" rx="3.4" fill="#2A2042" stroke="#F5D042" stroke-width="2"></rect><circle cx="15.5" cy="32.7" r="1.9" fill="#F5D042"></circle><circle cx="40" cy="16.2" r="2.4" fill="#63B23C"></circle><circle cx="40" cy="32.7" r="2.4" fill="#3E86D6"></circle><path d="M40 16.2 V32.7" stroke="#8F87AE" stroke-width="1.4"></path></svg>
+      <div>
+        <h1><span class="d">3D</span>GBA — device-native art pack</h1>
+        <div class="sub">EXACT DEVICE PIXELS · 6 THEMES · TRANSPARENT · CITRO2D-READY</div>
+      </div>
+    </div>
+    <div class="kpis">
+      <div class="kpi"><b>144</b><span>chrome plates</span></div>
+      <div class="kpi"><b>252</b><span>widget sprites</span></div>
+      <div class="kpi"><b>6</b><span>themes</span></div>
+      <div class="kpi"><b>24</b><span>screens / tabs</span></div>
+      <div class="kpi"><b>1×</b><span>400×240 · 320×240</span></div>
+    </div>
+    <div class="links">
+      <a href="README-IMPLEMENTATION.md">📖 Implementation guide</a>
+      <a class="alt" href="fonts/FONTS.md">🔤 Fonts guide</a>
+      <a class="alt" href="plates/manifests.json">🗺 Dynamic-region manifests</a>
+      <a class="alt" href="widgets/atlas/widgets-indigo.json">🧩 Widget atlas coords</a>
+    </div>
+  </header>
+
+  <h2>Compositing proof — video + plate + widgets reassemble to target</h2>
+  <p class="note">This is the whole point of the hybrid slice: the emulator draws the game, your
+  code draws the chrome <b>plate</b> on top (its video area is a transparent hole), then drops the
+  <b>widget sprites</b> and live text at the manifest coordinates. Both images below were
+  assembled from the exported PNGs — nothing hand-drawn.</p>
+  <div class="proofrow">
+    <div class="proof"><div class="scr"><span class="lab">IN-GAME TOP · fake video + play-top.png + dot/chip/battery sprites</span><img src="examples/_proof-ingame-top.png" width="400" height="240"></div></div>
+    <div class="proof"><div class="scr"><span class="lab">GAME-SELECT BOTTOM · select-dual-bot.png + seg + button sprites</span><img src="examples/_proof-select-bot.png" width="320" height="240"></div></div>
+  </div>
+
+  <h2>The 24 screens — composed "target look" (Indigo)</h2>
+  <p class="note">Each pair is the top screen (400×240) + bottom screen (320×240). These are the
+  fully-composed targets; match them. The other five themes ship the identical geometry with
+  different fills — see <code>plates/&lt;theme&gt;/</code>.</p>
+  <div class="grid" id="screens"></div>
+
+  <h2>Widget sheet (Indigo atlas)</h2>
+  <p class="note">42 reusable sprites — buttons (+ focused), 9-slice fills, toggle, segmented,
+  HUD chips, badges, pills, status dots, battery, cartridge chips, logo, wordmark. One atlas per
+  theme in <code>widgets/atlas/</code>; individual transparent PNGs in <code>widgets/&lt;theme&gt;/</code>.</p>
+  <div class="atlas"><img src="widgets/atlas/widgets-indigo.png" alt="widget atlas"></div>
+
+  <h2>6 themes</h2>
+  <p class="note">Indigo is the shipped default. Fixed role colors (Game A green, Game B blue,
+  3D badge, quit red) stay constant across all themes.</p>
+  <div class="themebar">
+    <div class="sw"><div class="chip" style="background:#201830"></div><span>Indigo</span></div>
+    <div class="sw"><div class="chip" style="background:#0B0D12"></div><span>OLED</span></div>
+    <div class="sw"><div class="chip" style="background:#EDEBE4"></div><span>Daylight</span></div>
+    <div class="sw"><div class="chip" style="background:#12161C"></div><span>Duo</span></div>
+    <div class="sw"><div class="chip" style="background:#241246"></div><span>Retro</span></div>
+    <div class="sw"><div class="chip" style="background:#0e1512"></div><span>Custom</span></div>
+  </div>
+</div>
+
+<script>
+  const screens = [
+    ['Boot / splash','splash','splash-top','splash-bot'],
+    ['Resume prompt','recent','resume-top','resume-bot'],
+    ['Game select · 2 games','select','select-dual-top','select-dual-bot'],
+    ['Game select · 1 game','select','select-single-top','select-single-bot'],
+    ['In-game · dual','ingame','play-top','ingame-dual-bot'],
+    ['In-game · single (controller)','ingame','play-top','controller-bot'],
+    ['Pause · Display tab','pause','pause-top','pause-bot-display'],
+    ['Pause · Session tab','pause','pause-top','pause-bot-session'],
+    ['Pause · Audio tab','pause','pause-top','pause-bot-audio'],
+    ['Pause · Enhance tab','pause','pause-top','pause-bot-enhance'],
+    ['Pause · Link tab','pause','pause-top','pause-bot-link'],
+    ['Pause · Touch tab','pause','pause-top','pause-bot-touch'],
+    ['Touch · Gamepad','pad','play-top','pad-bot'],
+    ['Touch · Smart pointer','smart','play-top','smart-bot'],
+    ['Wireless lobby · idle','wless','wless-idle-top','wless-idle-bot'],
+    ['Wireless lobby · connected','wless','wless-conn-top','wless-conn-bot'],
+  ];
+  const root = document.getElementById('screens');
+  for (const [title, code, top, bot] of screens) {
+    const el = document.createElement('div');
+    el.className = 'card';
+    el.innerHTML = `<div class="t">${title}</div><div class="c">${top} · ${bot}</div>
+      <div class="screens">
+        <div class="scr top"><img loading="lazy" src="examples/indigo/${top}.png"><span class="lab">TOP 400×240</span></div>
+        <div class="scr bot"><img loading="lazy" src="examples/indigo/${bot}.png"><span class="lab">BOTTOM 320×240</span></div>
+      </div>`;
+    root.appendChild(el);
+  }
+</script>
+</body>
+</html>

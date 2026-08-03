@@ -215,6 +215,10 @@ typedef struct {
 	uint8_t  dValid, dOw, dTT, dTB;            // 3D-effect health (top game only)
 	int16_t  dNspr, dNui, dNfg, dCamX, dCamY;
 	float    dMaxd;
+	// per-sprite stereoscopic-disparity detail (proves the 3D EFFECT) — px @ full slider
+	float    dFeetMin, dFeetMax, dHeadMin, dHeadMax;
+	int16_t  dTallOk, dTallFail;
+	uint8_t  dOrderOk, dS3d;
 	uint32_t lstat, lbuf0, lbuf1, lnotrecv;    // link-error diagnostics (gLinkStatus / sLinkErrorBuffer / notRecv)
 	uint8_t  lerr;                             // gLinkErrorOccurred
 } GsLogEntry;
@@ -226,6 +230,13 @@ static uint32_t s_lastCb2[2]   = { 0, 0 };
 static uint32_t s_lastFrame[2] = { 0, 0 };
 static uint8_t  s_lastLinkErr[2] = { 0xFF, 0xFF };   // edge on the link-error flag flipping -> always log the death
 static uint32_t s_lastTickMs[2]  = { 0, 0 };          // wall-clock of the last logged row (frozen-game heartbeat)
+// Edge on the LINK STATE so we capture the exact failure SEQUENCE (CONN_ESTABLISHED appearing, RECEIVED_NOTHING
+// starting, the player/master/error bits, and gRemoteLinkPlayersNotReceived changing) — not just at the coarse
+// heartbeat. We mask lstat to the STABLE bits (local-id/playerCount/master/established/errors) and DROP the noisy
+// RECEIVED_NOTHING(0x100)/UNK_9(0x200) that toggle most frames, so an established link doesn't flood the ring.
+#define GS_LSTAT_KEY(s) ((uint32_t)(s) & 0x0007F07Fu)   // 0x7F000 errors | 0x40 established | 0x20 master | 0x1C count | 0x03 id
+static uint32_t s_lastLstatKey[2] = { 0xFFFFFFFFu, 0xFFFFFFFFu };
+static uint32_t s_lastNotRecv[2]  = { 0xFFFFFFFFu, 0xFFFFFFFFu };
 
 void gs_log_reset(void) {
 	s_gsLogN = 0;
@@ -234,19 +245,25 @@ void gs_log_reset(void) {
 	s_lastFrame[0] = s_lastFrame[1] = 0;
 	s_lastLinkErr[0] = s_lastLinkErr[1] = 0xFF;
 	s_lastTickMs[0] = s_lastTickMs[1] = 0;
+	s_lastLstatKey[0] = s_lastLstatKey[1] = 0xFFFFFFFFu;
+	s_lastNotRecv[0]  = s_lastNotRecv[1]  = 0xFFFFFFFFu;
 }
 
 void gs_log_sample(GbaCore* c, const GameProfile* p, const GameState* gs,
                    int screen, uint16_t injKeys, const GsDepth* depth, uint32_t nowMs) {
 	if (!c || !p || !gs || !gs->valid || screen < 0 || screen > 1) return;
 	uint32_t frame = gbacore_frame_counter(c);
+	uint32_t lstatKey = GS_LSTAT_KEY(gs->linkStatus);
 	bool edge = (gs->ctx != s_lastCtx[screen]) || (gs->cb2 != s_lastCb2[screen])
 	            || (gs->linkErr != s_lastLinkErr[screen])   // capture the exact frame the link error flips
+	            || (lstatKey != s_lastLstatKey[screen])     // ...and each link-state transition (established/errors/roles)
+	            || (gs->linkNotRecv != s_lastNotRecv[screen])  // ...and when a remote player stops being heard from
 	            || (frame - s_lastFrame[screen] >= GS_HEARTBEAT_FRAMES)
 	            || (nowMs - s_lastTickMs[screen] >= GS_HEARTBEAT_MS);   // WALL-CLOCK: keep logging a frozen game
 	if (!edge) return;                                 // cheap no-op on the common (unchanged) frame
 	s_lastCtx[screen] = (uint8_t)gs->ctx; s_lastCb2[screen] = gs->cb2; s_lastFrame[screen] = frame;
 	s_lastLinkErr[screen] = gs->linkErr; s_lastTickMs[screen] = nowMs;
+	s_lastLstatKey[screen] = lstatKey; s_lastNotRecv[screen] = gs->linkNotRecv;
 
 	GsLogEntry* e = &s_gsLog[s_gsLogN % GSLOG_N];
 	memset(e, 0, sizeof *e);
@@ -261,6 +278,10 @@ void gs_log_sample(GbaCore* c, const GameProfile* p, const GameState* gs,
 		e->dValid = 1; e->dOw = depth->overworld; e->dTT = depth->textTop; e->dTB = depth->textBot;
 		e->dNspr = depth->nspr; e->dNui = depth->nui; e->dNfg = depth->nfg;
 		e->dMaxd = depth->maxd; e->dCamX = depth->camX; e->dCamY = depth->camY;
+		e->dFeetMin = depth->feetMin; e->dFeetMax = depth->feetMax;
+		e->dHeadMin = depth->headMin; e->dHeadMax = depth->headMax;
+		e->dTallOk = depth->tallOk; e->dTallFail = depth->tallFail;
+		e->dOrderOk = depth->orderOk; e->dS3d = depth->s3d;
 	}
 	e->lstat = gs->linkStatus; e->lbuf0 = gs->linkErrBuf0; e->lbuf1 = gs->linkErrBuf1;
 	e->lnotrecv = gs->linkNotRecv; e->lerr = gs->linkErr;
@@ -286,8 +307,9 @@ void gamestate_log_dump(const char* path) {
 	fprintf(f, "# undetected screens (pokedex/townmap/summary/card/keyboard/title) fall through to ctx=field with resolved=0:\n");
 	fprintf(f, "# read the cb2 column for each one you visit, then promote that value into a GameProfile later (logging only; no detection wired yet).\n");
 	fprintf(f, "# geo: px,py=camera tile; objX,objY=true avatar tile; mapG,mapN=which map; face 1=D 2=U 3=L 4=R (NPC-overlay inputs). inj=injected touch key. d_*=3D-effect health (top rows).\n");
+	fprintf(f, "# 3D detail (top rows; px @ FULL slider = the pop_eye disparity unit BEFORE *eyeSl, so slider-independent): d_feetMin/Max=grounded-feet disparity range; d_headMin/Max=head disparity (feet+standup, clamped); d_tallOk/d_tallFail=#sprites whose head exceeds feet by ~standup (tall renders taller) vs not; d_ordOk=1 if the on-screen set is monotonic in screen-y vs feet disparity (lower/closer pops >=); d_s3d=1 stereoscopic engaged this frame.\n");
 	fprintf(f, "# link: lerr=gLinkErrorOccurred (1=game flagged a link error); lstat=gLinkStatus (live); lbuf0/lbuf1=sLinkErrorBuffer 8B LATCHED at error (lbuf0=status word, lbuf1 low bytes=send/recv queue counts+disconnected); lnotrecv=gRemoteLinkPlayersNotReceived. cb2=0800B1A0(EM)/0800AF2C(FR) = CB2_PrintErrorMessage = the red error screen.\n");
-	fprintf(f, "idx,frame,scr,ctx,ctxName,cb1,cb2,sb1V,resolved,px,py,objX,objY,mapG,mapN,face,inj,nTask,t0,t1,t2,t3,t4,t5,t6,t7,d_ow,d_nspr,d_nui,d_nfg,d_maxd,d_camX,d_camY,lerr,lstat,lbuf0,lbuf1,lnotrecv\n");
+	fprintf(f, "idx,frame,scr,ctx,ctxName,cb1,cb2,sb1V,resolved,px,py,objX,objY,mapG,mapN,face,inj,nTask,t0,t1,t2,t3,t4,t5,t6,t7,d_ow,d_nspr,d_nui,d_nfg,d_maxd,d_camX,d_camY,d_feetMin,d_feetMax,d_headMin,d_headMax,d_tallOk,d_tallFail,d_ordOk,d_s3d,lerr,lstat,lbuf0,lbuf1,lnotrecv\n");
 	uint32_t n    = (s_gsLogN < GSLOG_N) ? s_gsLogN : GSLOG_N;
 	uint32_t base = (s_gsLogN < GSLOG_N) ? 0u : (s_gsLogN % GSLOG_N);   // oldest retained entry
 	for (uint32_t i = 0; i < n; i++) {
@@ -299,8 +321,11 @@ void gamestate_log_dump(const char* path) {
 		        e->px, e->py, e->objX, e->objY, e->mapG, e->mapN, e->face, ks, e->nTask,
 		        (unsigned long)e->taskFp[0], (unsigned long)e->taskFp[1], (unsigned long)e->taskFp[2], (unsigned long)e->taskFp[3],
 		        (unsigned long)e->taskFp[4], (unsigned long)e->taskFp[5], (unsigned long)e->taskFp[6], (unsigned long)e->taskFp[7]);
-		if (e->dValid) fprintf(f, ",%u,%d,%d,%d,%.2f,%d,%d", e->dOw, e->dNspr, e->dNui, e->dNfg, e->dMaxd, e->dCamX, e->dCamY);
-		else           fprintf(f, ",,,,,,,");   // 7 empty fields to match the 7 d_* header columns
+		if (e->dValid) {
+			fprintf(f, ",%u,%d,%d,%d,%.2f,%d,%d", e->dOw, e->dNspr, e->dNui, e->dNfg, e->dMaxd, e->dCamX, e->dCamY);
+			fprintf(f, ",%.2f,%.2f,%.2f,%.2f,%d,%d,%u,%u",          // per-sprite disparity detail (px @ full slider)
+			        e->dFeetMin, e->dFeetMax, e->dHeadMin, e->dHeadMax, e->dTallOk, e->dTallFail, e->dOrderOk, e->dS3d);
+		} else fprintf(f, ",,,,,,,,,,,,,,,");   // 7 d_* + 8 detail = 15 empty fields (bottom rows carry no 3D)
 		fprintf(f, ",%u,%08lX,%08lX,%08lX,%08lX\n", e->lerr,                       // link-error diagnostics
 		        (unsigned long)e->lstat, (unsigned long)e->lbuf0, (unsigned long)e->lbuf1, (unsigned long)e->lnotrecv);
 	}

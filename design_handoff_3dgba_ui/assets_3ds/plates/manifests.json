@@ -1,0 +1,145 @@
+{
+ "_meta": {
+  "units": "device px, origin top-left, y-down",
+  "top_screen": [400, 240],
+  "bottom_screen": [320, 240],
+  "how_to_read": "Each unit is one physical screen. 'dynamic' rectangles are regions the plate PNG leaves for you to draw at runtime: game video (transparent hole), live text (fps/clock/names/RTT), scrolling lists, seat cards, and the reusable widgets (buttons, segmented controls, toggles, HUD chips, dots, battery) from the widget sheet. Everything NOT listed here is baked into the plate. Draw order per frame: (1) game video into the video rect, (2) the chrome plate PNG on top, (3) these dynamic items on top of the plate.",
+  "geometry_is_theme_independent": "These rects are identical for all 6 themes. Only the plate PNG colors change per theme.",
+  "notes": {
+   "pause-bot-*": "The content panel (right of the 74px tab rail) scrolls vertically; rects with y+h > 240 sit below the fold. Tab rail x:0..74. Active-tab highlight (panel2 fill + 2px accent left border) is drawn in code per current tab.",
+   "play-top": "Shared by in-game (dual & single) top, gamepad top, and smart top. 'letterbox base' is the full transparent field; 'game A video' is where the aspect-fit GBA frame lands. HUD bar (semi-transparent black) is baked into the plate.",
+   "video_rects": "A plate PNG is fully transparent (alpha 0) across every video rect."
+  }
+ },
+ "splash-top":        { "face": "top",    "size": [400,240], "dynamic": [] },
+ "splash-bot":        { "face": "bottom", "size": [320,240], "dynamic": [
+   { "label": "btn: TAP TO START (primary)", "widget": "btn-primary", "x":72, "y":101, "w":175, "h":42 } ] },
+ "resume-top":        { "face": "top",    "size": [400,240], "dynamic": [
+   { "label": "A: last game name", "type":"text", "x":42, "y":119, "w":124, "h":18 },
+   { "label": "B: last game name", "type":"text", "x":236, "y":119, "w":124, "h":18 } ] },
+ "resume-bot":        { "face": "bottom", "size": [320,240], "dynamic": [
+   { "label": "btn: Resume this pairing", "widget":"btn-primary",   "x":20, "y":36,  "w":280, "h":44 },
+   { "label": "btn: Pick new games",      "widget":"btn-secondary", "x":20, "y":89,  "w":280, "h":43 },
+   { "label": "btn: Use defaults",        "widget":"btn-ghost",     "x":20, "y":143, "w":280, "h":35 } ] },
+ "select-dual-top":   { "face": "top",    "size": [400,240], "dynamic": [
+   { "label": "picking target (A/B)", "type":"text", "x":283, "y":15, "w":101, "h":12 },
+   { "label": "ROM list (scrolling rows)", "type":"list", "x":16, "y":37, "w":369, "h":197 } ] },
+ "select-dual-bot":   { "face": "bottom", "size": [320,240], "dynamic": [
+   { "label": "mode segmented (1/2 games)", "widget":"seg", "x":12, "y":12, "w":296, "h":30 },
+   { "label": "slot A game name", "type":"text", "x":47, "y":77, "w":248, "h":17 },
+   { "label": "slot B game name", "type":"text", "x":47, "y":138, "w":248, "h":17 },
+   { "label": "btn: START", "widget":"btn-primary", "x":12, "y":174, "w":124, "h":37 },
+   { "label": "btn: START — LINKED", "widget":"btn-accent-outline", "x":144, "y":174, "w":164, "h":37 } ] },
+ "select-single-top": { "face": "top",    "size": [400,240], "dynamic": [
+   { "label": "picking target", "type":"text", "x":326, "y":15, "w":59, "h":12 },
+   { "label": "ROM list (scrolling rows)", "type":"list", "x":16, "y":37, "w":369, "h":197 } ] },
+ "select-single-bot": { "face": "bottom", "size": [320,240], "dynamic": [
+   { "label": "mode segmented (1/2 games)", "widget":"seg", "x":12, "y":12, "w":296, "h":30 },
+   { "label": "slot game name", "type":"text", "x":49, "y":80, "w":245, "h":18 },
+   { "label": "btn: START", "widget":"btn-primary", "x":12, "y":175, "w":130, "h":37 },
+   { "label": "btn: LINK A FRIEND", "widget":"btn-accent-outline", "x":150, "y":175, "w":158, "h":37 } ] },
+ "play-top":          { "face": "top",    "size": [400,240], "dynamic": [
+   { "label": "letterbox base (clear/black)", "type":"video", "x":0, "y":0, "w":400, "h":240 },
+   { "label": "game A video (aspect-fit)", "type":"video", "x":20, "y":27, "w":360, "h":213 },
+   { "label": "status dot A", "widget":"dot-green", "x":10, "y":10, "w":7, "h":7 },
+   { "label": "game A name", "type":"text", "x":23, "y":6, "w":90, "h":14 },
+   { "label": "FOCUS chip", "widget":"chip-focus", "x":120, "y":7, "w":35, "h":12 },
+   { "label": "3D chip", "widget":"chip-3d", "x":282, "y":7, "w":18, "h":13 },
+   { "label": "fps A", "type":"text", "x":307, "y":7, "w":27, "h":12 },
+   { "label": "clock", "type":"text", "x":340, "y":7, "w":27, "h":12 },
+   { "label": "battery", "widget":"battery", "x":373, "y":8, "w":17, "h":9 } ] },
+ "ingame-dual-bot":   { "face": "bottom", "size": [320,240], "dynamic": [
+   { "label": "letterbox base (clear/black)", "type":"video", "x":0, "y":0, "w":320, "h":240 },
+   { "label": "game B video (aspect-fit)", "type":"video", "x":9, "y":24, "w":302, "h":194 },
+   { "label": "status dot B", "widget":"dot-blue", "x":9, "y":9, "w":7, "h":7 },
+   { "label": "game B name", "type":"text", "x":22, "y":6, "w":83, "h":13 },
+   { "label": "LINK chip", "widget":"chip-link", "x":111, "y":5, "w":35, "h":14 },
+   { "label": "fps B", "type":"text", "x":251, "y":6, "w":27, "h":12 },
+   { "label": "clock", "type":"text", "x":284, "y":6, "w":27, "h":12 } ] },
+ "controller-bot":    { "face": "bottom", "size": [320,240], "dynamic": [
+   { "label": "game name", "type":"text", "x":107, "y":9, "w":159, "h":14 },
+   { "label": "link/solo chip", "widget":"chip", "x":273, "y":9, "w":36, "h":15 },
+   { "label": "touch-mode segmented (Off/Gamepad/Smart)", "widget":"seg", "x":0, "y":33, "w":320, "h":37 },
+   { "label": "virtual gamepad (pad-* widgets)", "type":"widgets", "x":0, "y":70, "w":320, "h":137 },
+   { "label": "btn: menu", "widget":"chip", "x":259, "y":215, "w":50, "h":18 } ] },
+ "pause-top":         { "face": "top",    "size": [400,240], "dynamic": [
+   { "label": "dimmed game behind (transparent)", "type":"video", "x":0, "y":0, "w":400, "h":240 },
+   { "label": "game A name", "type":"text", "x":56, "y":95, "w":132, "h":20 },
+   { "label": "game B name (dual only)", "type":"text", "x":216, "y":95, "w":128, "h":20 },
+   { "label": "active-feature pills", "type":"widgets", "x":56, "y":129, "w":288, "h":17 } ] },
+ "pause-bot-session": { "face": "bottom", "size": [320,240], "scroll": true, "dynamic": [
+   { "label": "btn: Resume", "widget":"btn-primary", "x":93, "y":10, "w":216, "h":40 },
+   { "label": "btn: Change games", "widget":"btn-secondary", "x":93, "y":59, "w":216, "h":40 },
+   { "label": "btn: Quit", "widget":"btn-destructive", "x":93, "y":108, "w":216, "h":43 } ] },
+ "pause-bot-display": { "face": "bottom", "size": [320,240], "scroll": true, "dynamic": [
+   { "label": "segmented: scale top (3)", "widget":"seg", "x":93, "y":26, "w":208, "h":30 },
+   { "label": "segmented: scale bottom (3)", "widget":"seg", "x":93, "y":81, "w":208, "h":30 },
+   { "label": "segmented: filter (2)", "widget":"seg", "x":93, "y":136, "w":208, "h":30 },
+   { "label": "segmented: HUD (4)", "widget":"seg", "x":93, "y":191, "w":208, "h":30 },
+   { "label": "toggle: swap screens", "widget":"toggle", "x":268, "y":234, "w":33, "h":18 },
+   { "label": "toggle: frameskip", "widget":"toggle", "x":268, "y":263, "w":33, "h":18 } ] },
+ "pause-bot-audio":   { "face": "bottom", "size": [320,240], "scroll": true, "dynamic": [
+   { "label": "segmented: mix (3)", "widget":"seg", "x":93, "y":26, "w":216, "h":30 },
+   { "label": "vol A value", "type":"text", "x":298, "y":66, "w":11, "h":12 },
+   { "label": "stepper: volume A", "widget":"stepper", "x":93, "y":82, "w":216, "h":24 },
+   { "label": "vol B value", "type":"text", "x":298, "y":117, "w":11, "h":12 },
+   { "label": "stepper: volume B", "widget":"stepper", "x":93, "y":132, "w":216, "h":24 },
+   { "label": "toggle: mute", "widget":"toggle", "x":276, "y":171, "w":33, "h":18 } ] },
+ "pause-bot-enhance": { "face": "bottom", "size": [320,240], "scroll": true, "dynamic": [
+   { "label": "toggle: stereoscopic 3D", "widget":"toggle", "x":276, "y":51, "w":33, "h":18 },
+   { "label": "toggle: tilt-shift DoF", "widget":"toggle", "x":276, "y":83, "w":33, "h":18 },
+   { "label": "toggle: LDR bloom", "widget":"toggle", "x":276, "y":112, "w":33, "h":18 },
+   { "label": "toggle: time-of-day light", "widget":"toggle", "x":276, "y":141, "w":33, "h":18 },
+   { "label": "toggle: vivid", "widget":"toggle", "x":276, "y":170, "w":33, "h":18 } ] },
+ "pause-bot-link":    { "face": "bottom", "size": [320,240], "scroll": true, "dynamic": [
+   { "label": "toggle: link cable", "widget":"toggle", "x":276, "y":16, "w":33, "h":18 },
+   { "label": "toggle: net link", "widget":"toggle", "x":276, "y":44, "w":33, "h":18 },
+   { "label": "btn: Wireless lobby", "widget":"btn-primary", "x":93, "y":74, "w":216, "h":35 },
+   { "label": "btn: Save state", "widget":"btn-secondary", "x":93, "y":118, "w":104, "h":31 },
+   { "label": "btn: Load state", "widget":"btn-secondary", "x":204, "y":118, "w":104, "h":31 },
+   { "label": "btn: Load .sav", "widget":"btn-secondary", "x":93, "y":156, "w":216, "h":31 } ] },
+ "pause-bot-touch":   { "face": "bottom", "size": [320,240], "scroll": true, "dynamic": [
+   { "label": "segmented: touch mode (3)", "widget":"seg", "x":93, "y":26, "w":208, "h":30 },
+   { "label": "touch-mode explainer text", "type":"text", "x":93, "y":66, "w":208, "h":32 },
+   { "label": "btn: Preview Gamepad", "widget":"btn-secondary", "x":93, "y":109, "w":101, "h":44 },
+   { "label": "btn: Preview Smart", "widget":"btn-secondary", "x":201, "y":109, "w":101, "h":44 },
+   { "label": "pad color swatches (5)", "type":"widgets", "x":93, "y":195, "w":208, "h":31 },
+   { "label": "segmented: pad edges (3)", "widget":"seg", "x":93, "y":253, "w":208, "h":30 },
+   { "label": "btn: See gamepad", "widget":"btn-primary", "x":93, "y":294, "w":208, "h":31 } ] },
+ "pad-bot":           { "face": "bottom", "size": [320,240], "dynamic": [
+   { "label": "letterbox base (clear/black)", "type":"video", "x":0, "y":0, "w":320, "h":240 },
+   { "label": "game B video (behind pad)", "type":"video", "x":0, "y":0, "w":320, "h":240 },
+   { "label": "pad: L (shoulder)", "widget":"pad-L", "x":4, "y":4, "w":52, "h":22 },
+   { "label": "pad: R (shoulder)", "widget":"pad-R", "x":264, "y":4, "w":52, "h":22 },
+   { "label": "pad: D-up", "widget":"pad-up", "x":33, "y":138, "w":44, "h":30 },
+   { "label": "pad: D-down", "widget":"pad-down", "x":33, "y":192, "w":44, "h":30 },
+   { "label": "pad: D-left", "widget":"pad-left", "x":7, "y":162, "w":32, "h":36 },
+   { "label": "pad: D-right", "widget":"pad-right", "x":71, "y":162, "w":32, "h":36 },
+   { "label": "pad: A", "widget":"pad-A", "x":252, "y":150, "w":60, "h":60 },
+   { "label": "pad: B", "widget":"pad-B", "x":198, "y":176, "w":50, "h":44 },
+   { "label": "pad: START", "widget":"pad-START", "x":128, "y":214, "w":64, "h":22 },
+   { "label": "btn: menu", "widget":"chip", "x":269, "y":216, "w":45, "h":18 } ] },
+ "smart-bot":         { "face": "bottom", "size": [320,240], "dynamic": [
+   { "label": "letterbox base (clear/black)", "type":"video", "x":0, "y":0, "w":320, "h":240 },
+   { "label": "game B video (behind pointer)", "type":"video", "x":0, "y":0, "w":320, "h":240 },
+   { "label": "pointer + transient hints (drawn in code)", "type":"widgets", "x":0, "y":0, "w":320, "h":240 },
+   { "label": "btn: menu", "widget":"chip", "x":269, "y":216, "w":45, "h":18 } ] },
+ "wless-idle-top":    { "face": "top",    "size": [400,240], "dynamic": [
+   { "label": "transport + status", "type":"text", "x":247, "y":16, "w":139, "h":12 },
+   { "label": "seat map (4 seats)", "type":"cards", "x":14, "y":41, "w":371, "h":113 },
+   { "label": "RTT tile value", "type":"text", "x":25, "y":182, "w":159, "h":19 },
+   { "label": "LOSS tile value", "type":"text", "x":215, "y":182, "w":159, "h":19 } ] },
+ "wless-idle-bot":    { "face": "bottom", "size": [320,240], "dynamic": [
+   { "label": "btn: Host a session", "widget":"btn-primary", "x":13, "y":33, "w":293, "h":40 },
+   { "label": "btn: Scan for lobbies", "widget":"btn-secondary", "x":13, "y":83, "w":293, "h":42 },
+   { "label": "btn: Connect via online server", "widget":"btn-gradient", "x":13, "y":160, "w":293, "h":42 } ] },
+ "wless-conn-top":    { "face": "top",    "size": [400,240], "dynamic": [
+   { "label": "transport + status", "type":"text", "x":226, "y":16, "w":160, "h":12 },
+   { "label": "seat map (4 seats)", "type":"cards", "x":14, "y":41, "w":371, "h":113 },
+   { "label": "RTT tile value", "type":"text", "x":25, "y":182, "w":159, "h":19 },
+   { "label": "LOSS tile value", "type":"text", "x":215, "y":182, "w":159, "h":19 } ] },
+ "wless-conn-bot":    { "face": "bottom", "size": [320,240], "dynamic": [
+   { "label": "RTT / loss line", "type":"text", "x":13, "y":44, "w":293, "h":13 },
+   { "label": "btn: Start linked trade", "widget":"btn-accent-outline", "x":13, "y":73, "w":293, "h":42 },
+   { "label": "btn: Leave", "widget":"btn-ghost", "x":13, "y":124, "w":293, "h":32 } ] }
+}

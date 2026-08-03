@@ -1,0 +1,170 @@
+{
+ "btn-primary": {
+  "w": 121,
+  "h": 38
+ },
+ "btn-primary-focus": {
+  "w": 129,
+  "h": 46
+ },
+ "btn-secondary": {
+  "w": 131,
+  "h": 38
+ },
+ "btn-secondary-focus": {
+  "w": 136,
+  "h": 42
+ },
+ "btn-ghost": {
+  "w": 81,
+  "h": 10
+ },
+ "btn-ghost-focus": {
+  "w": 125,
+  "h": 42
+ },
+ "btn-destructive": {
+  "w": 121,
+  "h": 41
+ },
+ "btn-destructive-focus": {
+  "w": 125,
+  "h": 45
+ },
+ "btn-accent-outline": {
+  "w": 121,
+  "h": 38
+ },
+ "fill-primary-r8": {
+  "w": 45,
+  "h": 34
+ },
+ "fill-secondary-r8": {
+  "w": 45,
+  "h": 34
+ },
+ "fill-panel-r9": {
+  "w": 45,
+  "h": 34
+ },
+ "fill-card-r8": {
+  "w": 45,
+  "h": 34
+ },
+ "toggle-on": {
+  "w": 34,
+  "h": 19
+ },
+ "toggle-off": {
+  "w": 34,
+  "h": 19
+ },
+ "seg-active": {
+  "w": 74,
+  "h": 25
+ },
+ "seg-track": {
+  "w": 168,
+  "h": 30
+ },
+ "seg-example": {
+  "w": 188,
+  "h": 31
+ },
+ "chip-3d": {
+  "w": 19,
+  "h": 16
+ },
+ "chip-focus": {
+  "w": 36,
+  "h": 14
+ },
+ "chip-link": {
+  "w": 31,
+  "h": 14
+ },
+ "chip-3dtop": {
+  "w": 52,
+  "h": 16
+ },
+ "badge-a": {
+  "w": 20,
+  "h": 15
+ },
+ "badge-b": {
+  "w": 20,
+  "h": 15
+ },
+ "pill-3d": {
+  "w": 28,
+  "h": 18
+ },
+ "pill-dof": {
+  "w": 32,
+  "h": 18
+ },
+ "pill-green": {
+  "w": 51,
+  "h": 18
+ },
+ "pill-dim": {
+  "w": 56,
+  "h": 18
+ },
+ "dot-green": {
+  "w": 9,
+  "h": 9
+ },
+ "dot-blue": {
+  "w": 9,
+  "h": 9
+ },
+ "dot-gold": {
+  "w": 9,
+  "h": 9
+ },
+ "dot-red": {
+  "w": 9,
+  "h": 9
+ },
+ "dot-dim": {
+  "w": 9,
+  "h": 9
+ },
+ "battery-full": {
+  "w": 18,
+  "h": 10
+ },
+ "battery-mid": {
+  "w": 18,
+  "h": 10
+ },
+ "battery-low": {
+  "w": 18,
+  "h": 10
+ },
+ "cart-blank": {
+  "w": 15,
+  "h": 20
+ },
+ "cart-tinted": {
+  "w": 15,
+  "h": 20
+ },
+ "cart-solid-a": {
+  "w": 14,
+  "h": 19
+ },
+ "cart-solid-b": {
+  "w": 14,
+  "h": 19
+ },
+ "logo": {
+  "w": 40,
+  "h": 39
+ },
+ "wordmark": {
+  "w": 107,
+  "h": 25
+ }
+}
