@@ -30,12 +30,18 @@
 // when tilt is off) and it is what lets the tween pass through zero without a discontinuity.
 #pragma once
 
+#include "fieldgate.h"   // the shared "is this game in a meaningful field state" predicate
+                         // (G5-G8 == presence P-G6). Phase-15 SPEC-data D4.6: factor, do not copy.
+
 // ---- shared constants ----------------------------------------------------------------------
 
 #define TILT_FOCAL      1.0f    // d = TILT_FOCAL * vh   (gen1recomp Tilt.lua:33; SPEC-render R1.1)
 #define TILT_COVER_MIX  0.0f    // SPEC-render R2.5.6: 0 = fit-to-height (shipped), 1 = zero void
 #define TILT_LEVELS     4       // OFF / Soft / Med / Deep (SPEC-render R2.5.5, SPEC-integration I4.1)
-#define TILT_CTX_FIELD  1       // == GCTX_OVERWORLD (gamestate.h:12); _Static_assert'd in main.c
+// == GCTX_OVERWORLD (gamestate.h:12); _Static_assert'd in main.c:1130. Now an ALIAS of
+// FIELD_CTX_OVERWORLD (fieldgate.h) so the one assert at the call site covers both users and the
+// two gates can never drift apart (SPEC-data D4.6).
+#define TILT_CTX_FIELD  FIELD_CTX_OVERWORLD
 #define TILT_DEG2RAD    0.01745329251994329577f
 
 // The shipped angle ladder, DEGREES (SPEC-render R2.5.5): OFF / 10 / 15 / 20, default 15 (level

@@ -86,6 +86,40 @@ typedef struct {
 	// Status: derived-from-verified-anchors, VERIFY-ON-HW-PENDING (self-verifying once the D3 CSV
 	// shows it ticking ~60/s); BPGE is FR-derived/unverified per the house rule (HANDOFF Gotchas).
 	uint32_t vblankCtr;     // gMain.vblankCounter1 (u32); 0 = not mapped -> D2 Tier B stays disarmed
+	// --- phase 15 co-op presence (SPEC-data.md D1). All VERIFIED-SYM against pret's byte-matched
+	// `symbols` branch (re-read 2026-08-04); FR/LG values come from pokefirered.sym AND
+	// pokeleafgreen.sym SEPARATELY (not FR-derived), and the rev0/rev1 maps agree on every one of
+	// them — which matters because the user's FireRed is rev1 (MEMORY, run #12). 0 = not mapped,
+	// and every 0 has a named graceful degradation in D1.9 (never a garbage read, never a draw at
+	// a plausible-looking wrong position). Appending is the only safe edit: PROFILES[] in
+	// gamestate.c is POSITIONAL-initialised (the D2 vblankCtr block above is the precedent). ---
+	uint32_t sb2ptr;        // gSaveBlock2Ptr (deref -> +0x00 name[8] GBA charmap 0xFF-terminated,
+	                        //   +0x08 playerGender 0=M/1=F, +0x0A visible TID = LE u16). D1.1/D1.2:
+	                        //   EM sym:962 / FR sym:810 / LG sym:810; = sb1ptr+4 (a CONSEQUENCE of
+	                        //   the read, not the derivation). Corroborated in-repo by
+	                        //   docs/kb/gen3-ram-touch.md:48-49. VERIFIED-SYM.
+	uint32_t spriteCoordOff;// gSpriteCoordOffsetX (s16); Y = this + 2. D1.4: EM sym:20-21,
+	                        //   FR/LG sym:23-24. LOGGING/diagnostic ONLY in M0-M2 — the SHIPPED
+	                        //   sub-tile source is fieldCamera+0x10/+0x14 (D1.3), which is already
+	                        //   in this struct and already hardware-exercised by build_depth_grid.
+	                        //   What this buys is the scripted CAMERA PAN term
+	                        //   (gSpriteCoordOffset = gTotalCameraPixelOffset - sCameraPan,
+	                        //   pokeemerald src/field_camera.c:459-462 == pokefirered :521-527);
+	                        //   promote it into the anchor math only if a hardware run shows a
+	                        //   pan-time misalignment (SPEC-data Open Q4). VERIFIED-SYM.
+	uint32_t hbCtr;         // gMain.vblankCounter2 = gMain+0x24 — the presence liveness/wedge
+	                        //   heartbeat (D1.5), incremented UNCONDITIONALLY in VBlankIntr in BOTH
+	                        //   engines (pokeemerald src/main.c:355, pokefirered src/main.c:396).
+	                        //   NOT vblankCtr: FR/LG's gMain+0x20 is declared `u32 *vblankCounter1`
+	                        //   (pokefirered include/main.h:26) and is NULL unless SetVBlankCounter
+	                        //   armed it, so the D2/D3 columns above are silently disarmed on the
+	                        //   user's FireRed (a real, REPORTED-not-silently-changed defect in a
+	                        //   LOGGING-ONLY path — SPEC-data D1.5.1 / Open Q1; presence routes
+	                        //   around it instead of editing what a diagnostics column means
+	                        //   mid-flight). gMain bases are themselves VERIFIED-SYM now: EM
+	                        //   0x030022C0 (sym:894), FR/LG 0x030030F0 (sym:745) == mainCb2-4, which
+	                        //   also retires the "derived" caveat on the vblankCtr ADDRESS above.
+	                        //   VERIFIED-SYM base + VERIFIED-SRC offset (include/main.h:8-33).
 } GameProfile;
 
 // One-pass snapshot of the live game.
@@ -155,6 +189,21 @@ typedef struct {
 	// cause them, and a tween edge would emit ~15 rows per transition into a 1024-entry ring. ---
 	uint8_t tiltLvl;                       // effective (clamped) level in force on the TOP screen, 0..3
 	float   tiltAngTop, tiltAngBot;        // tweened angle in DEGREES per screen (0 = flat)
+	// --- phase 15 co-op presence (LOGGING ONLY; SPEC-avatar A6.5.3) — the PEER of the TOP game,
+	// appended size-tolerantly exactly as the phase-14 tilt block above was. This is the surface
+	// that actually FIRES in a same-console phase: the D3 CSV's peer columns only write during a
+	// wireless session, and gate P-G3 turns presence off for the whole of one (SPEC-data D4.8), so
+	// the gs ring is where a "why can I not see my friend" run is read back from. Values are the
+	// PREVIOUS frame's solve, like tiltLvl above: this block is stamped in the parked window and
+	// presence_solve runs later, in the render phase — i.e. the state of the frame just displayed.
+	// Nothing reads these back; they change no behaviour. ---
+	uint8_t prLive;                        // presence_liveness: 0 none / 1 connected / 2 active
+	uint8_t prDrawn;                       // 1 = the P-G ladder resolved to DRAW this game's peer
+	uint8_t prReason;                      // PRES_OFF_* (0 = drawing) — "why not" without a rebuild
+	int8_t  prFace;                        // peer facing 1=D 2=U 3=L 4=R (-1 = no record)
+	int16_t prMapG, prMapN;                // peer map (-1 = n/a); != this row's mapG/mapN is THE
+	                                       //   commonest reason the avatar is absent
+	int16_t prPx, prPy;                    // peer tile (-1 = n/a)
 } GsDepth;
 
 // Profile for a core's ROM (by header game code), or NULL if unknown.

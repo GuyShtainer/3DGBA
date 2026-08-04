@@ -208,7 +208,8 @@ int diag_hang_format(char* buf, size_t cap, const GbaCpuDump* d, uint32_t vf, ui
 	"ctx,cb2,px,py,mapg,mapn,objx,objy,face,sb1,lstat,lerr,lnrecv,lbuf0,lbuf1,vbl," \
 	"clSec,clSt,clBlk,clFrm,clPB,clTC,clHP,clHS,clHC,clSelL,clSelP,clExitP,clSessEnd,clPCard,clIdReal,clOutQ,gateN,cForceN,resetN,sioMode,siocnt," \
 	"startN,injN,finN,okN,toN,edgeN,forceN,round,lastW0,lastW1,lastOk," \
-	"rtt,txSeq,txAcked,rxDel,evOvf,evRetx,evTxQ,rxWordN,txFails,busyN,peerUp"
+	"rtt,txSeq,txAcked,rxDel,evOvf,evRetx,evTxQ,rxWordN,txFails,busyN,peerUp," \
+	"prLive,prMapg,prMapn,prPx,prPy,prSubX,prSubY,prFace,prRound,prDrawn,prReason,prObjD"
 
 // SPEC D3.3 header: line 1 = build + role comment (mirrors the netlog header discipline,
 // gbacore.c gbacore_net_log_dump) + the D3.4 disclosure that a GAP in rf marks menu-open frames
@@ -234,7 +235,8 @@ int diag_csv_row(char* buf, size_t cap, const DiagCsvRow* r) {
 	    "%d,%lX,%d,%d,%d,%d,%d,%d,%d,%d,%lX,%d,%lX,%lX,%lX,%lu,"            // ctx..vbl
 	    "%d,%d,%d,%lu,%lu,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%lX," // clSec..siocnt
 	    "%d,%d,%d,%d,%d,%d,%d,%lu,%lX,%lX,%d,"                              // startN..lastOk
-	    "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",                               // rtt..peerUp
+	    "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,"                                 // rtt..peerUp
+	    "%d,%d,%d,%d,%d,%d,%d,%d,%lu,%d,%d,%d\n",                           // prLive..prObjD (phase 15)
 	    (unsigned long)r->tms, (unsigned long)r->rf, r->exp,
 	    r->ctx, (unsigned long)r->cb2, r->px, r->py, r->mapg, r->mapn,
 	    r->objx, r->objy, r->face, r->sb1,
@@ -247,5 +249,7 @@ int diag_csv_row(char* buf, size_t cap, const DiagCsvRow* r) {
 	    r->startN, r->injN, r->finN, r->okN, r->toN, r->edgeN, r->forceN,
 	    (unsigned long)r->round, (unsigned long)r->lastW0, (unsigned long)r->lastW1, r->lastOk,
 	    r->rtt, r->txSeq, r->txAcked, r->rxDel, r->evOvf, r->evRetx, r->evTxQ,
-	    r->rxWordN, r->txFails, r->busyN, r->peerUp);
+	    r->rxWordN, r->txFails, r->busyN, r->peerUp,
+	    r->prLive, r->prMapg, r->prMapn, r->prPx, r->prPy, r->prSubX, r->prSubY, r->prFace,
+	    (unsigned long)r->prRound, r->prDrawn, r->prReason, r->prObjD);
 }

@@ -44,3 +44,15 @@ void assets_seg(C2D_TextBuf buf, float x, float y, float w, float h,
 void assets_toggle(int on, float x, float y);
 // 9-slice a widget (fill-*-r8) to any (x,y,w,h) keeping its r-px corners crisp.
 void assets_fill9(const char* id, float x, float y, float w, float h, float r);
+
+// ---- sub-cell of a sheet (phase 15 SPEC-avatar A1.4.3) ----
+// Cut the pixel rect (px,py,pw,ph) out of `src`'s OWN subtexture rect and hand back a drawable
+// C2D_Image referring to it. This is the subtexture arithmetic draw_9slice/draw_hslice already
+// use, promoted to a public helper rather than copied a third time for the co-op avatar's 3x3
+// sprite sheet. `st` must outlive the returned image (the C2D_Image points AT it), which is why
+// the caller owns it — the same pattern render_game uses for its own frame subtexture.
+// Works for any image whose subtex is valid, including one built by hand over a plain C3D_Tex
+// (the placeholder sheet), so the placeholder and the real baked art take one code path.
+// Returns false (and leaves *out zeroed) when `src` has no texture.
+bool assets_img_cell(C2D_Image src, float px, float py, float pw, float ph,
+                     C2D_Image* out, Tex3DS_SubTexture* st);

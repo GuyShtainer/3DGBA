@@ -145,10 +145,10 @@ int tilt_target_level(const TiltGateIn* in) {
 	if (!in->isN3DS)                                          return 0;   // G2
 	if (in->menuOpen)                                         return 0;   // G3
 	if (in->wlOn || in->netOn)                                return 0;   // G4
-	if (!in->ok)                                              return 0;   // G5
-	if (in->ctx != TILT_CTX_FIELD)                            return 0;   // G6
-	if (!in->sb1Valid || in->px < 0)                          return 0;   // G7
-	if (in->textDlg)                                          return 0;   // G8
+	// G5-G8 are the SHARED field predicate (fieldgate.h), factored out in phase 15 so tilt and
+	// presence can never drift (SPEC-data D4.6). Same four rules, same order, same short-circuit —
+	// test_tilt.c's 1694 checks (TEST 1-3 = the exhaustive gate truth table) pass unmodified.
+	if (!field_state_ok(in->ok, in->ctx, in->sb1Valid, in->px, in->textDlg)) return 0;   // G5-G8
 	if (in->screen == 1 && in->touchActive)                   return 0;   // G9
 	if (in->screen == 0 && in->stereoEngaged)                 return 0;   // G10
 	if (in->fsOn && in->screen != in->focScreen)              return 0;   // G11

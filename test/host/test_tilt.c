@@ -541,9 +541,14 @@ static void test_active(void) {
 // --------------------------------------------------------------------------------------------
 
 // Mirror of main.c's `Settings` (the struct immediately below SETTINGS_MAGIC). s32 -> int32_t;
-// the layout is 24 consecutive 4-byte words with no padding on any target we build for, which is
-// what the two _Static_asserts in main.c assert (sizeof == 24*4, offsetof(tilt) == 23*4,
-// offsetof(padEdge) == 22*4).
+// the layout is 25 consecutive 4-byte words with no padding on any target we build for, which is
+// what the _Static_asserts in main.c assert (sizeof == 25*4, offsetof(presence) == 24*4,
+// offsetof(tilt) == 23*4, offsetof(padEdge) == 22*4).
+//
+// PHASE 15 (SPEC-avatar A6.3.2, updated in the same commit as main.c): `presence` is APPENDED, so
+// offsetof(tilt) stays 23 — and that invariance IS the proof the change is backward-compatible.
+// The length ladder grows one rung: what was "the full struct" for a phase-14 build is now the
+// `lenTilt` rung, i.e. exactly what every settings file on an existing card is.
 typedef struct {
 	uint32_t magic;
 	int32_t scaleMode[2], smooth[2], swapped, hudMode, audioMode, volA, volB, touchMode, frameskip;
@@ -551,27 +556,31 @@ typedef struct {
 	int32_t theme, customBaseHue, customAccentHue, customContrast;        // UI-redesign chrome...
 	int32_t gameMode, padColor, padEdge;                                  // ...prefs
 	int32_t tilt;                                                         // phase 14 (I4.9)
+	int32_t presence;                                                     // phase 15 (A6.3)
 } RefSettings;
-_Static_assert(sizeof(RefSettings)            == 24 * sizeof(int32_t), "mirror drifted from main.c Settings");
-_Static_assert(offsetof(RefSettings, tilt)    == 23 * sizeof(int32_t), "mirror drifted from main.c Settings");
-_Static_assert(offsetof(RefSettings, padEdge) == 22 * sizeof(int32_t), "mirror drifted from main.c Settings");
+_Static_assert(sizeof(RefSettings)             == 25 * sizeof(int32_t), "mirror drifted from main.c Settings");
+_Static_assert(offsetof(RefSettings, presence) == 24 * sizeof(int32_t), "mirror drifted from main.c Settings");
+_Static_assert(offsetof(RefSettings, tilt)     == 23 * sizeof(int32_t), "mirror drifted from main.c Settings");
+_Static_assert(offsetof(RefSettings, padEdge)  == 22 * sizeof(int32_t), "mirror drifted from main.c Settings");
 
 // A pure-C mirror of settings_load's acceptance + field-gating decision (main.c). Returns 1 if the
-// file is accepted. `outTilt` is only written when the ladder says the field is present, so the
-// caller can prove that an older file leaves g_prefs.tiltLevel at its DEFAULT.
-static int ref_settings_load(size_t n, uint32_t magic, int32_t tiltWord,
-                             int* outAcceptedRedesign, int* outTilt) {
+// file is accepted. `outTilt` / `outPresence` are only written when the ladder says that field is
+// present, so the caller can prove an older file leaves each pref at its DEFAULT.
+static int ref_settings_load(size_t n, uint32_t magic, int32_t tiltWord, int32_t presenceWord,
+                             int* outAcceptedRedesign, int* outTilt, int* outPresence) {
 	const size_t lenDof   = offsetof(RefSettings, dof);
 	const size_t lenBloom = offsetof(RefSettings, bloom);
 	const size_t lenLight = offsetof(RefSettings, light);
 	const size_t lenVivid = offsetof(RefSettings, vivid);
 	const size_t lenOld   = offsetof(RefSettings, theme);
-	const size_t lenPad   = offsetof(RefSettings, tilt);   // pre-tilt full struct
+	const size_t lenPad   = offsetof(RefSettings, tilt);       // pre-tilt full struct
+	const size_t lenTilt  = offsetof(RefSettings, presence);   // pre-presence full struct (phase 14)
 	const size_t lenNew   = sizeof(RefSettings);
-	if ((n != lenNew && n != lenPad && n != lenOld && n != lenVivid && n != lenLight
+	if ((n != lenNew && n != lenTilt && n != lenPad && n != lenOld && n != lenVivid && n != lenLight
 	     && n != lenBloom && n != lenDof) || magic != 0x33424744u) return 0;
 	if (outAcceptedRedesign) *outAcceptedRedesign = (n >= lenPad);
-	if (n >= lenNew && outTilt) *outTilt = (int)(((unsigned)tiltWord) % TILT_LEVELS);
+	if (n >= lenTilt && outTilt)    *outTilt     = (int)(((unsigned)tiltWord) % TILT_LEVELS);
+	if (n >= lenNew  && outPresence) *outPresence = (presenceWord != 0) ? 1 : 0;
 	return 1;
 }
 
@@ -579,50 +588,73 @@ static int ref_settings_load(size_t n, uint32_t magic, int32_t tiltWord,
 static void test_settings_and_tier(void) {
 	printf("TEST 6: settings round-trip (I7.6) + performance tier / defaults (§5)\n");
 
-	// -- (a) the offsetof ladder is strictly increasing, and lenPad IS the pre-tilt sizeof -------
+	// -- (a) the offsetof ladder is strictly increasing, and each rung IS a shipped sizeof --------
 	{
-		const size_t rung[7] = {
+		const size_t rung[8] = {
 			offsetof(RefSettings, dof), offsetof(RefSettings, bloom), offsetof(RefSettings, light),
 			offsetof(RefSettings, vivid), offsetof(RefSettings, theme), offsetof(RefSettings, tilt),
-			sizeof(RefSettings)
+			offsetof(RefSettings, presence), sizeof(RefSettings)
 		};
-		for (int i = 1; i < 7; i++)
+		for (int i = 1; i < 8; i++)
 			CHECK(rung[i] > rung[i - 1], "length rung %d (%u) must exceed rung %d (%u)\n",
 			      i, (unsigned)rung[i], i - 1, (unsigned)rung[i - 1]);
-		// I4.10's whole backward-compatibility claim in one line: the length a PRE-TILT build wrote
-		// is exactly the new struct's offsetof(tilt), so those files still match a rung.
-		CHECK(offsetof(RefSettings, tilt) == sizeof(RefSettings) - sizeof(int32_t),
-		      "the pre-tilt full struct must be exactly one s32 shorter than the new one\n");
-		CHECK(sizeof(RefSettings) - offsetof(RefSettings, tilt) == 4,
-		      "the phase-14 growth is 4 bytes, i.e. ONE appended word (no magic bump needed)\n");
+		// I4.10's / A6.3's whole backward-compatibility claim in two lines: the length a PRE-PHASE-15
+		// build wrote is exactly the new struct's offsetof(presence), and the length a PRE-TILT build
+		// wrote is offsetof(tilt) — so BOTH still match a rung.
+		CHECK(offsetof(RefSettings, presence) == sizeof(RefSettings) - sizeof(int32_t),
+		      "the pre-presence full struct must be exactly one s32 shorter than the new one\n");
+		CHECK(sizeof(RefSettings) - offsetof(RefSettings, presence) == 4,
+		      "the phase-15 growth is 4 bytes, i.e. ONE appended word (no magic bump needed)\n");
+		CHECK(offsetof(RefSettings, presence) - offsetof(RefSettings, tilt) == 4,
+		      "...and phase 14's word is still exactly where it was (append-only)\n");
 	}
 
-	// -- (b) the loader accepts old AND new lengths, and only the new one carries a tilt level ---
+	// -- (b) the loader accepts every historical length, and each field only rides its own rung --
 	{
-		int redesign = -1, tilt = 0 /* the g_prefs default */;
-		CHECK(ref_settings_load(sizeof(RefSettings), 0x33424744u, 2, &redesign, &tilt) == 1,
+		int redesign = -1, tilt = 0 /* the g_prefs default */, pres = 0 /* A6.3.4: default OFF */;
+		CHECK(ref_settings_load(sizeof(RefSettings), 0x33424744u, 2, 1, &redesign, &tilt, &pres) == 1,
 		      "a file written by THIS build is accepted\n");
-		CHECK(redesign == 1 && tilt == 2, "...and carries both the redesign prefs and the tilt level\n");
+		CHECK(redesign == 1 && tilt == 2 && pres == 1,
+		      "...and carries the redesign prefs, the tilt level AND the co-op pref\n");
 
-		redesign = -1; tilt = 0;
-		CHECK(ref_settings_load(offsetof(RefSettings, tilt), 0x33424744u, 3, &redesign, &tilt) == 1,
+		redesign = -1; tilt = 0; pres = 0;
+		CHECK(ref_settings_load(offsetof(RefSettings, presence), 0x33424744u, 3, 1, &redesign, &tilt, &pres) == 1,
+		      "a PRE-PRESENCE (phase-14) file is still accepted (A6.3 — no magic bump)\n");
+		CHECK(redesign == 1 && tilt == 3, "...and still loads everything it had, tilt included\n");
+		CHECK(pres == 0, "...and leaves co-op at the DEFAULT rather than reading past the file\n");
+
+		redesign = -1; tilt = 0; pres = 0;
+		CHECK(ref_settings_load(offsetof(RefSettings, tilt), 0x33424744u, 3, 1, &redesign, &tilt, &pres) == 1,
 		      "a PRE-TILT file is still accepted (I4.10 — no magic bump)\n");
 		CHECK(redesign == 1, "...and still loads every UI-redesign chrome pref it had\n");
-		CHECK(tilt == 0, "...and leaves tiltLevel at the DEFAULT rather than reading past the file\n");
+		CHECK(tilt == 0 && pres == 0, "...and leaves BOTH later prefs at their defaults\n");
 
-		redesign = -1; tilt = 0;
-		CHECK(ref_settings_load(offsetof(RefSettings, theme), 0x33424744u, 3, &redesign, &tilt) == 1,
+		redesign = -1; tilt = 0; pres = 0;
+		CHECK(ref_settings_load(offsetof(RefSettings, theme), 0x33424744u, 3, 1, &redesign, &tilt, &pres) == 1,
 		      "a pre-redesign file is still accepted\n");
-		CHECK(redesign == 0 && tilt == 0, "...and gets defaults for both the chrome prefs and tilt\n");
+		CHECK(redesign == 0 && tilt == 0 && pres == 0,
+		      "...and gets defaults for the chrome prefs, tilt and co-op alike\n");
 
-		CHECK(ref_settings_load(offsetof(RefSettings, dof), 0x33424744u, 1, NULL, NULL) == 1,
+		CHECK(ref_settings_load(offsetof(RefSettings, dof), 0x33424744u, 1, 1, NULL, NULL, NULL) == 1,
 		      "the oldest accepted rung still loads\n");
-		CHECK(ref_settings_load(sizeof(RefSettings) - 1, 0x33424744u, 1, NULL, NULL) == 0,
+		CHECK(ref_settings_load(sizeof(RefSettings) - 1, 0x33424744u, 1, 1, NULL, NULL, NULL) == 0,
 		      "an off-ladder length is rejected wholesale\n");
-		CHECK(ref_settings_load(sizeof(RefSettings) + 4, 0x33424744u, 1, NULL, NULL) == 0,
+		CHECK(ref_settings_load(sizeof(RefSettings) + 4, 0x33424744u, 1, 1, NULL, NULL, NULL) == 0,
 		      "a LONGER file (a future build) is rejected — I4.11's disclosed one-way property\n");
-		CHECK(ref_settings_load(sizeof(RefSettings), 0xDEADBEEFu, 1, NULL, NULL) == 0,
+		CHECK(ref_settings_load(sizeof(RefSettings), 0xDEADBEEFu, 1, 1, NULL, NULL, NULL) == 0,
 		      "a foreign magic is rejected at every length\n");
+	}
+
+	// -- (b2) phase 15: the co-op word is 2-state, so a CORRUPT s32 can only ever produce 0/1 -----
+	{
+		const int32_t nasty[8] = { 0, 1, -1, 2, 12345, -99999, INT32_MAX, INT32_MIN };
+		for (int i = 0; i < 8; i++) {
+			int pres = -7;
+			CHECK(ref_settings_load(sizeof(RefSettings), 0x33424744u, 0, nasty[i], NULL, NULL, &pres) == 1,
+			      "presence word %ld: the file still loads\n", (long)nasty[i]);
+			CHECK(pres == 0 || pres == 1, "presence word %ld maps to 0/1 (got %d)\n", (long)nasty[i], pres);
+			CHECK(pres == (nasty[i] != 0 ? 1 : 0), "presence word %ld round-trips as != 0\n", (long)nasty[i]);
+		}
 	}
 
 	// -- (c) the modulo maps EVERY s32 into the ladder, so a corrupt word can never index out ----
@@ -644,7 +676,8 @@ static void test_settings_and_tier(void) {
 		RefSettings s; memset(&s, 0, sizeof s);
 		s.magic = 0x33424744u; s.tilt = lv;
 		int got = -1;
-		CHECK(ref_settings_load(sizeof s, s.magic, s.tilt, NULL, &got) == 1, "level %d file loads\n", lv);
+		CHECK(ref_settings_load(sizeof s, s.magic, s.tilt, s.presence, NULL, &got, NULL) == 1,
+		      "level %d file loads\n", lv);
 		CHECK(got == lv, "level %d round-trips through the file (got %d)\n", lv, got);
 		TiltGateIn in = gate_clear(0, got);
 		CHECK(tilt_target_level(&in) == lv, "level %d survives an all-clear gate\n", lv);

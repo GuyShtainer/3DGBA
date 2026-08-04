@@ -25,7 +25,12 @@ static const GameProfile PROFILES[] = {
             0x030030E0u, 0x0300306Cu, 0x02022B00u, 0x03003078u,
             /* D2 vblankCtr (EM): gMain.vblankCounter1 = gMain+0x20 = mainCb2(0x030022C4)-4+0x20;
                derived-from-verified-anchors (newKeys 0x030022EE = gMain+0x2E), verify-on-hw-pending */
-            0x030022E0u },
+            0x030022E0u,
+            /* phase 15 presence (SPEC-data D1.7): sb2ptr / spriteCoordOff / hbCtr — all VERIFIED-SYM
+               vs pret's symbols branch, re-read 2026-08-04. EM: gSaveBlock2Ptr 0x03005D90
+               (pokeemerald.sym:962), gSpriteCoordOffsetX 0x02021BBC (:20; Y = +2, :21),
+               gMain.vblankCounter2 = gMain(0x030022C0, :894) + 0x24. */
+            0x03005D90u, 0x02021BBCu, 0x030022E4u },
   { "BPRE", 0x03005008u, 0x02022B4Cu, 0x02023FF8u, 0x02023FFCu, 0x02023BE4u, 0x02022976u,
             0x0203B0A0u, 0x02024029u, 0x030030F4u, 0x0811EBA0u, 0x0811EBD0u, 0x0303011Eu,
             0x03004FE0u, 0x0802E674u, 0x03004FF4u, 0x02023BD6u, 0x02023BCCu, 0x02023D70u, 0x02023BC4u, 0x03005040u,
@@ -37,8 +42,17 @@ static const GameProfile PROFILES[] = {
             0x03003F20u, 0x03003EACu, 0x02022854u, 0x03003EB8u,
             /* D2 vblankCtr (FR): gMain.vblankCounter1 = gMain+0x20 = mainCb2(0x030030F4)-4+0x20;
                derived-from-verified-anchors, verify-on-hw-pending (user's FR = rev1; gMain is IWRAM
-               and mainCb2 matched rev0/rev1 — SPEC D2.1/Open Q3) */
-            0x03003110u },
+               and mainCb2 matched rev0/rev1 — SPEC D2.1/Open Q3).
+               *** NOTE (SPEC-data D1.5.2, phase-13 follow-up / Open Q1): on FR/LG gMain+0x20 is a
+               POINTER (`u32 *vblankCounter1`, pokefirered include/main.h:26), NULL unless a caller
+               armed it — so this column reads 0 on the user's FireRed and the D2 Tier-B hang watch
+               is disarmed there. REPORTED, NOT SILENTLY CHANGED (house rule). Presence uses hbCtr
+               below instead; fixing D2/D3 needs its own hardware evidence. */
+            0x03003110u,
+            /* phase 15 presence (SPEC-data D1.7): FR values read from pokefirered.sym (rev0 AND
+               rev1 agree): gSaveBlock2Ptr 0x0300500C (:810), gSpriteCoordOffsetX 0x02021BC8 (:23;
+               Y = +2, :24), gMain.vblankCounter2 = gMain(0x030030F0, :745) + 0x24. */
+            0x0300500Cu, 0x02021BC8u, 0x03003114u },
   { "BPGE", 0x03005008u, 0x02022B4Cu, 0x02023FF8u, 0x02023FFCu, 0x02023BE4u, 0x02022976u,
             0x0203B0A0u, 0x02024029u, 0x030030F4u, 0x0811EBA0u, 0x0811EBD0u, 0x0303011Eu,
             0x03004FE0u, 0x0802E674u, 0x03004FF4u, 0x02023BD6u, 0x02023BCCu, 0x02023D70u, 0x02023BC4u, 0x03005040u,
@@ -48,8 +62,14 @@ static const GameProfile PROFILES[] = {
             0x0203709Cu, 0x080981ACu, 0x03005050u,
             /* link diag (FRLG): gLinkStatus gLinkErrorOccurred sLinkErrorBuffer gRemoteLinkPlayersNotReceived */
             0x03003F20u, 0x03003EACu, 0x02022854u, 0x03003EB8u,
-            /* D2 vblankCtr (LG): FR-derived per the house rule (BPGE addrs unverified; HANDOFF Gotchas) */
-            0x03003110u },
+            /* D2 vblankCtr (LG): FR-derived per the house rule (BPGE addrs unverified; HANDOFF Gotchas).
+               Same pointer-not-counter defect as BPRE above (D1.5.2). */
+            0x03003110u,
+            /* phase 15 presence (SPEC-data D1.7): unlike the rest of this row these three were read
+               from LEAFGREEN'S OWN symbol map, not FR-derived — pokeleafgreen.sym:810 / :23-24 / :745
+               (rev0 and rev1 agree): gSaveBlock2Ptr 0x0300500C, gSpriteCoordOffsetX 0x02021BC8,
+               gMain.vblankCounter2 = gMain(0x030030F0) + 0x24. VERIFIED-SYM. */
+            0x0300500Cu, 0x02021BC8u, 0x03003114u },
 };
 
 const GameProfile* profile_for(GbaCore* c) {
@@ -230,6 +250,9 @@ typedef struct {
 	uint8_t  dOrderOk, dS3d;
 	uint8_t  dTiltLvl;                         // phase 14: effective tilt level on the TOP screen (I6.4)
 	float    dTiltAngT, dTiltAngB;             // ...and the tweened angle per screen, DEGREES
+	uint8_t  dPrLive, dPrDrawn, dPrReason;     // phase 15 co-op presence (A6.5.3) — the TOP game's
+	int8_t   dPrFace;                          //   peer: liveness tier / drew / PRES_OFF_* / facing
+	int16_t  dPrMapG, dPrMapN, dPrPx, dPrPy;   //   ...and its map + tile. LOGGING ONLY.
 	uint32_t lstat, lbuf0, lbuf1, lnotrecv;    // link-error diagnostics (gLinkStatus / sLinkErrorBuffer / notRecv)
 	uint8_t  lerr;                             // gLinkErrorOccurred
 } GsLogEntry;
@@ -302,6 +325,10 @@ void gs_log_sample(GbaCore* c, const GameProfile* p, const GameState* gs,
 		e->dOrderOk = depth->orderOk; e->dS3d = depth->s3d;
 		e->dTiltLvl = depth->tiltLvl;                                   // phase 14 (I6.4)
 		e->dTiltAngT = depth->tiltAngTop; e->dTiltAngB = depth->tiltAngBot;
+		e->dPrLive = depth->prLive; e->dPrDrawn = depth->prDrawn;       // phase 15 (A6.5.3)
+		e->dPrReason = depth->prReason; e->dPrFace = depth->prFace;
+		e->dPrMapG = depth->prMapG; e->dPrMapN = depth->prMapN;
+		e->dPrPx = depth->prPx;     e->dPrPy = depth->prPy;
 	}
 	e->lstat = gs->linkStatus; e->lbuf0 = gs->linkErrBuf0; e->lbuf1 = gs->linkErrBuf1;
 	e->lnotrecv = gs->linkNotRecv; e->lerr = gs->linkErr;
@@ -336,7 +363,11 @@ void gamestate_log_dump(const char* path) {
 		fprintf(f, "# env: model=%s speedup804=%s%s\n", s_envN3DS ? "New3DS" : "Old3DS",
 		        s_envSpeedup ? "YES" : "NO",
 		        s_envSpeedup ? "" : "  <- NOT running at 804MHz/L2 (.3dsx from the Homebrew Launcher cannot claim it): a low fps here is NOT a tilt cost");
-	fprintf(f, "idx,frame,scr,ctx,ctxName,cb1,cb2,sb1V,resolved,px,py,objX,objY,mapG,mapN,face,inj,nTask,t0,t1,t2,t3,t4,t5,t6,t7,d_ow,d_nspr,d_nui,d_nfg,d_maxd,d_camX,d_camY,d_feetMin,d_feetMax,d_headMin,d_headMax,d_tallOk,d_tallFail,d_ordOk,d_s3d,d_tiltLvl,d_tiltAngT,d_tiltAngB,lerr,lstat,lbuf0,lbuf1,lnotrecv\n");
+	// phase 15 (SPEC-avatar A6.5.3): the co-op peer of the TOP game. This is the surface that fires
+	// in a same-console run — the D3 CSV's peer columns only write during a wireless session, and
+	// presence gate P-G3 turns the feature off for the whole of one (SPEC-data D4.8).
+	fprintf(f, "# co-op (top rows): d_prLive=peer liveness 0 none/1 connected(record fresh, peer NOT game-active)/2 active; d_prDrawn=1 the gate resolved to DRAW; d_prReason=PRES_OFF_* code (0=drawing, and see presence.h: 1 off 2 menu 3 link 4 noprof 5 universe 6 self 7 field 8 obj 9 map 10 stale 11 cull); d_prMapG/d_prMapN != this row's mapG/mapN is THE commonest reason there is no avatar; d_prPx/d_prPy=peer tile; d_prFace=peer facing 1=D 2=U 3=L 4=R. Values are the PREVIOUS frame's solve (stamped in the parked window, solved in the render phase) = the frame the player just saw. LOGGING ONLY.\n");
+	fprintf(f, "idx,frame,scr,ctx,ctxName,cb1,cb2,sb1V,resolved,px,py,objX,objY,mapG,mapN,face,inj,nTask,t0,t1,t2,t3,t4,t5,t6,t7,d_ow,d_nspr,d_nui,d_nfg,d_maxd,d_camX,d_camY,d_feetMin,d_feetMax,d_headMin,d_headMax,d_tallOk,d_tallFail,d_ordOk,d_s3d,d_tiltLvl,d_tiltAngT,d_tiltAngB,d_prLive,d_prDrawn,d_prReason,d_prFace,d_prMapG,d_prMapN,d_prPx,d_prPy,lerr,lstat,lbuf0,lbuf1,lnotrecv\n");
 	uint32_t n    = (s_gsLogN < GSLOG_N) ? s_gsLogN : GSLOG_N;
 	uint32_t base = (s_gsLogN < GSLOG_N) ? 0u : (s_gsLogN % GSLOG_N);   // oldest retained entry
 	for (uint32_t i = 0; i < n; i++) {
@@ -353,10 +384,13 @@ void gamestate_log_dump(const char* path) {
 			fprintf(f, ",%.2f,%.2f,%.2f,%.2f,%d,%d,%u,%u",          // per-sprite disparity detail (px @ full slider)
 			        e->dFeetMin, e->dFeetMax, e->dHeadMin, e->dHeadMax, e->dTallOk, e->dTallFail, e->dOrderOk, e->dS3d);
 			fprintf(f, ",%u,%.2f,%.2f", e->dTiltLvl, (double)e->dTiltAngT, (double)e->dTiltAngB);   // phase 14 tilt
-			// I6.5: 7 d_* + 8 detail + 3 tilt = 18 empty fields on a non-depth (bottom) row. Getting
-			// this count wrong shifts every LATER column on those rows and silently corrupts the link
-			// columns, which is the one thing this log exists to make readable.
-		} else fprintf(f, ",,,,,,,,,,,,,,,,,,");
+			fprintf(f, ",%u,%u,%u,%d,%d,%d,%d,%d",                  // phase 15 co-op presence (A6.5.3)
+			        e->dPrLive, e->dPrDrawn, e->dPrReason, e->dPrFace,
+			        e->dPrMapG, e->dPrMapN, e->dPrPx, e->dPrPy);
+			// I6.5: 7 d_* + 8 detail + 3 tilt + 8 presence = 26 empty fields on a non-depth (bottom)
+			// row. Getting this count wrong shifts every LATER column on those rows and silently
+			// corrupts the link columns, which is the one thing this log exists to make readable.
+		} else fprintf(f, ",,,,,,,,,,,,,,,,,,,,,,,,,,");
 		fprintf(f, ",%u,%08lX,%08lX,%08lX,%08lX\n", e->lerr,                       // link-error diagnostics
 		        (unsigned long)e->lstat, (unsigned long)e->lbuf0, (unsigned long)e->lbuf1, (unsigned long)e->lnotrecv);
 	}

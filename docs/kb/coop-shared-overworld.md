@@ -2,6 +2,35 @@
 
 _Verified design study (2026-06-10). Same-console first, wireless later._
 
+> ## SHIPPED (M0–M3, same-console) — 2026-08-04
+>
+> **This study was executed as phase 15.** M0–M3 below are **built, host-tested and build-green**
+> (60135 PC checks across seven suites; `3DGBA.3dsx` + `3DGBA.cia` clean, zero warnings in every
+> file the phase created). It is **hardware-unproven** — nothing here is "done" until it runs on a
+> real New 3DS (CLAUDE.md #6); the bench checklist is SPEC-avatar §A7.2 **H1–H18**.
+>
+> - **The contract that binds the work:** `docs/phase15-presence/PHASE.md` (scope, the honest
+>   ceiling, nine invariants, and the decisions that are not to be re-opened).
+> - **The specs:** `docs/phase15-presence/SPEC-data.md` (the read/gate/interpolate half) and
+>   `SPEC-avatar.md` (the draw/identity/UI half, and the hardware checklist).
+> - **The build narrative:** `docs/phase15-presence/BUILDLOG.md` — a dated entry per slice
+>   (M0/M1/M2/M3) plus a **fix pass** over three adversarial reviews of the whole diff.
+> - **The code:** `source/presence.{c,h}` (pure-C data core), `presence_read.{c,h}` (the parked-window
+>   producer), `presence_art.{c,h}` (sheet + clip), `presence_ui.{c,h}` (meeting/card/text),
+>   `gbatext.{c,h}` (the Gen-3 charmap decoder), `fieldgate.h`; tests in `test/host/test_presence.c`.
+>
+> **Deviations from this study worth knowing before you read it:**
+>
+> 1. **§3 M0's Ruby/Sapphire prerequisite was dropped** — see the correction in §3 M0 itself.
+> 2. **M4 (wireless / two consoles) is deliberately NOT built.** PHASE.md defers it until HW run #13
+>    reports, by explicit user decision, because it adds a second UDS channel adjacent to the frozen
+>    trade path. The architecture anticipates it: peer state is filled behind a **transport-agnostic**
+>    `PeerPresence` seam (PHASE.md invariant 3), so M4 is the data-source swap this study called it.
+> 3. **The honest ceiling is a documented boundary, not a TODO:** the GBA engine does not know the
+>    avatar exists — **no collision, no occlusion behind buildings, no talking to them.** §2's
+>    rejection of object-event injection is what buys the read-only safety property, and it was
+>    re-confirmed, not revisited.
+
 All findings are verified against the live code. I have everything: the tile-to-screen math (`gx = px + c, gy = py + r + 2` at main.c:290, player fixed at screen tile (7,5)), the parked window, the dual-`game_read` precedent, the OAM-read precedent, the GameProfile gaps (no sb2ptr, no link symbols, no RS rows), `gbacore` exposing only read/write8/16 (no write32, no ROM-call), and the wireless KB doc with the netlink-on-core-1 / second-channel design. Now I'll produce the architecture document.
 
 ---
@@ -62,6 +91,31 @@ Presence is overlay/cosmetic; *real* trade/battle/mix rides the **existing emula
 ## 3. Milestone Plan (each independently testable, starting same-console: Ruby + Sapphire, no networking)
 
 ### M0 — Profile groundwork (prerequisite, do first)
+
+> **CORRECTED 2026-08-04 — the Ruby/Sapphire prerequisite was DROPPED, and this is what actually
+> happened.** The paragraph below was written in June 2026 and opens by demanding `AXVE`/`AXPE`
+> rows. `docs/phase15-presence/PHASE.md` ("Decisions already made") **overrode it**: authoring two
+> byte-matched RS symbol tables was the single biggest upfront cost in this plan, and by the time
+> the phase ran we already had **verified BPEE/BPRE/BPGE** profiles, the user's own carts are
+> **Emerald and FireRed rev1**, and phase 13's link-surface fingerprint records the ROM revision
+> per run. So the phase **started on the existing three profiles** and Ruby/Sapphire became an
+> optional later addition, not a gate. Nothing in M1–M3 depended on RS.
+>
+> **What M0 actually shipped:** `sb2ptr` (peer name / trainer ID / gender) and
+> `gSpriteCoordOffsetX/Y` (sub-tile scroll) added to `GameProfile` for **BPEE/BPRE/BPGE**, each
+> pret-cited and marked verified vs verify-on-hw-pending per the house rule.
+>
+> **One correction the phase made to a standing suspicion, worth carrying forward:** the long-flagged
+> "FR/LG `mapObjects` is probably wrong" note is **refuted**. SPEC-data D1.8.1 reads
+> `gObjectEvents = 0x02036E38` out of `pokefirered.sym:205` *and* `pokeleafgreen.sym:205` (rev0 and
+> rev1), and identifies `0x02037078` — the address the suspicion proposed — as `gPlayerAvatar`, the
+> *next* symbol. Hardware item **H4** still checks facing on FireRed specifically.
+>
+> **And one constraint this study did not state:** `(mapGroup, mapNum)` is only meaningful inside a
+> single game's map table, so a **cross-universe pair (Emerald + FireRed) can never draw a peer** —
+> Hoenn's `(3,12)` is not Kanto's `(3,12)`. Presence gates on the map universe and says so out loud.
+> Any hardware test of this feature needs **FR+LG, FR+FR or EM+EM**.
+
 Author the missing data. **Verified gap: there are no Ruby/Sapphire (`AXVE`/`AXPE`) rows at all** — the table is BPEE/BPRE/BPGE only. RS layout is identical to Emerald; only base addresses differ and must come from RS-specific byte-matched symbol maps (not derivable from Emerald).
 - **Files:** `source/gamestate.c` (add `AXVE`/`AXPE` rows), `source/gamestate.h` (add `sb2ptr` field to `GameProfile`; for M1+ smoothness also `spriteCoordOffsetX/Y`).
 - **Verify:** boot Ruby in one core, Sapphire in the other; confirm existing smart-touch (which uses `sb1ptr`/`mapObjects`) works on both — that proves the new rows are byte-correct before building anything on them.

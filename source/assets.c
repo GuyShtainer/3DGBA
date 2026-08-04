@@ -150,6 +150,17 @@ void assets_fill9(const char* id, float x, float y, float w, float h, float r) {
 	draw_9slice(assets_wgt(id), x, y, w, h, r);
 }
 
+// Phase 15 (SPEC-avatar A1.4.3): the same arithmetic, made public for the co-op avatar's sprite
+// sheet instead of copied. img_subrect stays static and this is its only wrapper, so there is one
+// implementation of "a sub-rect of a sheet" in the binary.
+bool assets_img_cell(C2D_Image src, float px, float py, float pw, float ph,
+                     C2D_Image* out, Tex3DS_SubTexture* st) {
+	if (!out || !st) return false;
+	if (!src.tex || !src.subtex) { C2D_Image z = { 0 }; *out = z; return false; }
+	img_subrect(src, px, py, pw, ph, out, st);
+	return true;
+}
+
 // Horizontal 3-slice for PILLS (rounded left/right ends, straight top/bottom): left cap + stretched
 // middle + right cap, each at FULL height. Avoids the vertical seam a 9-slice makes when r == h/2.
 static void draw_hslice(C2D_Image img, float x, float y, float w, float h, float cap) {

@@ -481,13 +481,19 @@ static void test_hang_format(void) {
 // --------------------------------------------------------------------------------------------
 // The binding SPEC D3.3 column list, verbatim (the spec's prose says "52 columns"; the list it
 // actually pins has 62 — the list is binding, see BUILDLOG 2026-08-03 slice D3).
+// Phase 15 slice M3 appends the 12 co-op-presence columns SPEC-avatar A6.5 specifies, in column
+// order, taking the total to 74. They are DORMANT in a same-console phase by construction (the CSV
+// only writes while wlOn and presence gate P-G3 blocks the feature for the whole of a link
+// session) — they exist so M4's first run is instrumented on day one instead of retrofitted, and
+// so the header/row parity below is settled now rather than during a hardware run.
 static const char* const CSV_COLS =
 	"tms,rf,exp,"
 	"ctx,cb2,px,py,mapg,mapn,objx,objy,face,sb1,lstat,lerr,lnrecv,lbuf0,lbuf1,vbl,"
 	"clSec,clSt,clBlk,clFrm,clPB,clTC,clHP,clHS,clHC,clSelL,clSelP,clExitP,clSessEnd,clPCard,"
 	"clIdReal,clOutQ,gateN,cForceN,resetN,sioMode,siocnt,"
 	"startN,injN,finN,okN,toN,edgeN,forceN,round,lastW0,lastW1,lastOk,"
-	"rtt,txSeq,txAcked,rxDel,evOvf,evRetx,evTxQ,rxWordN,txFails,busyN,peerUp";
+	"rtt,txSeq,txAcked,rxDel,evOvf,evRetx,evTxQ,rxWordN,txFails,busyN,peerUp,"
+	"prLive,prMapg,prMapn,prPx,prPy,prSubX,prSubY,prFace,prRound,prDrawn,prReason,prObjD";
 
 static int count_char(const char* s, size_t n, char c) {
 	int k = 0; for (size_t i = 0; i < n; i++) if (s[i] == c) k++; return k;
@@ -523,6 +529,11 @@ static void csv_fill_sample(DiagCsvRow* r) {
 	r->round = 10u; r->lastW0 = 0xB9A0u; r->lastW1 = 0x8FFFu; r->lastOk = -1;
 	r->rtt = 23; r->txSeq = 10; r->txAcked = 10; r->rxDel = 10; r->evOvf = 0; r->evRetx = 3;
 	r->evTxQ = 1; r->rxWordN = 5000; r->txFails = 0; r->busyN = 7; r->peerUp = 1;
+	// phase 15 co-op presence: a peer that is ACTIVE, on the same map, one tile east, mid-step —
+	// plus a NEGATIVE sub-tile phase and a -1 "unavailable" so both signed classes are exercised.
+	r->prLive = 2; r->prMapg = 3; r->prMapn = 12; r->prPx = 15; r->prPy = 9;
+	r->prSubX = -8; r->prSubY = 0; r->prFace = 3; r->prRound = 123456u;
+	r->prDrawn = 1; r->prReason = 0; r->prObjD = 7;
 }
 
 static void test_csv_header(void) {
@@ -557,7 +568,7 @@ static void test_csv_header(void) {
 	int hCommas = count_char(cols, colsLen, ',');
 	int rCommas = count_char(rowBuf, (size_t)rl - 1, ',');  // minus the row's '\n'
 	CHECK(hCommas == rCommas, "header has %d commas, row has %d (column desync)\n", hCommas, rCommas);
-	CHECK(hCommas == 61, "column count %d fields (want 62 = 61 commas)\n", hCommas + 1);
+	CHECK(hCommas == 73, "column count %d fields (want 74 = 73 commas)\n", hCommas + 1);
 	// No empty fields in either line (a doubled comma = a dropped column).
 	CHECK(strstr(cols, ",,") == NULL, "empty column NAME in the header\n");
 	CHECK(strstr(rowBuf, ",,") == NULL, "empty VALUE in the row\n");
@@ -588,7 +599,8 @@ static void test_csv_row(void) {
 	    "3,800ABCD,12,34,1,2,13,35,4,1,1133,0,C0,DEADBEEF,0,987654,"
 	    "2,3,1,4237,600,1,0,1,0,-1,3,0,0,1,1,2,64,21,1,2,4083,"
 	    "100,99,98,97,1,96,2,10,B9A0,8FFF,-1,"
-	    "23,10,10,10,0,3,1,5000,0,7,1\n";
+	    "23,10,10,10,0,3,1,5000,0,7,1,"
+	    "2,3,12,15,9,-8,0,3,123456,1,0,7\n";      // phase 15 peer columns (SPEC-avatar A6.5)
 	CHECK(n == (int)strlen(want), "row length %d want %d\n", n, (int)strlen(want));
 	CHECK(strcmp(buf, want) == 0, "row golden mismatch:\n--- got  ---\n%s--- want ---\n%s", buf, want);
 	CHECK(buf[n - 1] == '\n', "row is not '\\n'-terminated\n");
@@ -600,7 +612,7 @@ static void test_csv_row(void) {
 	int zn = diag_csv_row(zbuf, sizeof zbuf, &z);
 	CHECK(zn > 0 && zn < (int)sizeof zbuf, "zero row length %d\n", zn);
 	CHECK(strncmp(zbuf, "0,0,0,0,0,0,0,", 14) == 0, "zero row prefix: %.20s\n", zbuf);
-	CHECK(count_char(zbuf, (size_t)zn - 1, ',') == 61, "zero row comma count %d\n",
+	CHECK(count_char(zbuf, (size_t)zn - 1, ',') == 73, "zero row comma count %d\n",
 	      count_char(zbuf, (size_t)zn - 1, ','));
 	CHECK(strchr(zbuf, '-') == NULL, "zero row invented a -1 sentinel: %s", zbuf);
 
@@ -654,6 +666,38 @@ static void test_csv_row(void) {
 	      "hex diff localized to column %d, want lastW0 at %d\n",
 	      count_char(buf, h0, ','), col_index("lastW0"));
 	CHECK(strstr(buf3, ",B9A1,8FFF,") != NULL, "lastW0 hex column: %s", buf3);
+
+	// ---- phase 15 co-op presence columns (SPEC-avatar A6.5) ----------------------------------
+	// They are APPENDED, i.e. they are the columns furthest from the row's start — exactly the
+	// place a comma-count desync goes unnoticed, so they get the same localization proof the
+	// pre-existing ones do.
+	DiagCsvRow r4 = r; r4.prMapn = 13;
+	char buf4[512];
+	int n4 = diag_csv_row(buf4, sizeof buf4, &r4);
+	CHECK(n4 == n, "a peer-column change altered the row length (%d vs %d)\n", n4, n);
+	size_t p0 = 0; while (p0 < (size_t)n && buf[p0] == buf4[p0]) p0++;
+	CHECK(count_char(buf, p0, ',') == col_index("prMapn"),
+	      "peer diff localized to column %d, want prMapn at %d\n",
+	      count_char(buf, p0, ','), col_index("prMapn"));
+	// The row must END with the presence block — nothing may be appended after it without this
+	// firing, which is what keeps a future column add honest about where it goes.
+	CHECK(strstr(buf, ",2,3,12,15,9,-8,0,3,123456,1,0,7\n") != NULL, "peer block tail: %s", buf);
+
+	// "No peer at all" — every signed peer column prints -1, never a huge unsigned, and prSubX/
+	// prSubY stay 0 (they are a phase, not a sentinel: PRES_F_CAM clear means "no sub-tile term",
+	// which IS zero, and printing -1 there would read as a real 1 px offset).
+	DiagCsvRow p; memset(&p, 0, sizeof p);
+	p.ctx = -1; p.px = p.py = -1; p.mapg = p.mapn = -1; p.objx = p.objy = -1; p.face = -1;
+	p.clSec = p.clSt = p.clBlk = -1; p.clSelL = p.clSelP = -1; p.sioMode = -1;
+	p.lastOk = -1; p.rtt = -1;
+	p.prMapg = p.prMapn = p.prPx = p.prPy = p.prFace = p.prObjD = -1;
+	char pbuf[512];
+	int pn = diag_csv_row(pbuf, sizeof pbuf, &p);
+	CHECK(pn > 0, "no-peer row length %d\n", pn);
+	CHECK(strstr(pbuf, "4294967295") == NULL, "a peer -1 sentinel printed unsigned: %s", pbuf);
+	CHECK(strstr(pbuf, ",0,-1,-1,-1,-1,0,0,-1,0,0,0,-1\n") != NULL, "no-peer tail: %s", pbuf);
+	CHECK(count_char(pbuf, (size_t)pn - 1, ',') == 73, "no-peer row comma count %d\n",
+	      count_char(pbuf, (size_t)pn - 1, ','));
 }
 
 int main(void) {

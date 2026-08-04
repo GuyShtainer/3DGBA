@@ -44,20 +44,24 @@ void ui_text_r(C2D_TextBuf buf, const char* s, float rx, float y, float sz, u32 
 	C2D_DrawText(&t, C2D_WithColor, rx - w, y, 0.0f, sz, sz, col);
 }
 
-float ui_chip(C2D_TextBuf buf, const char* s, float x, float y, u32 col) {
-	float tw = ui_text_w(buf, s, 0.32f);
-	float w = tw + 12.0f;
+float ui_chip_w(C2D_TextBuf buf, const char* s, float x, float y, float w, u32 col) {
 	ui_border(x, y, w, 13.0f, col, 1.0f);
 	ui_text(buf, s, x + 6.0f, y + 1.5f, 0.32f, col);
 	return w;
 }
 
-float ui_chip_fill(C2D_TextBuf buf, const char* s, float x, float y, u32 bg, u32 fg) {
-	float tw = ui_text_w(buf, s, 0.32f);
-	float w = tw + 12.0f;
+float ui_chip_fill_w(C2D_TextBuf buf, const char* s, float x, float y, float w, u32 bg, u32 fg) {
 	ui_fill(x, y, w, 13.0f, bg, 3.0f);
 	ui_text(buf, s, x + 6.0f, y + 1.5f, 0.32f, fg);
 	return w;
+}
+
+float ui_chip(C2D_TextBuf buf, const char* s, float x, float y, u32 col) {
+	return ui_chip_w(buf, s, x, y, ui_text_w(buf, s, 0.32f) + 12.0f, col);
+}
+
+float ui_chip_fill(C2D_TextBuf buf, const char* s, float x, float y, u32 bg, u32 fg) {
+	return ui_chip_fill_w(buf, s, x, y, ui_text_w(buf, s, 0.32f) + 12.0f, bg, fg);
 }
 
 void ui_segmented(C2D_TextBuf buf, float x, float y, float w, float h,

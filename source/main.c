@@ -38,6 +38,11 @@ static u32 dim_color(u32 c, float f);   // fwd (defined near run_splash)
 #include "diag.h"     // D1 breadcrumbs + surviving-thread watchdog (docs/phase13-diagnostics/SPEC-firmware-diag.md)
 #include "control.h"  // D4 file-driven tile-exact movement (docs/phase13-diagnostics/SPEC-control-replay.md)
 #include "tilt.h"     // phase 14 HD-2D diorama tilt: pure-C projection + tween (docs/phase14-tilt/)
+#include "presence.h"      // phase 15 co-op presence: the pure-C record/gate/anchor (docs/phase15-presence/)
+#include "presence_read.h" // ...and the one file that reads game RAM for it (parked window only)
+#include "presence_art.h"  // ...and slice M2's pure-C sheet layout / cull-clip / walk cycle
+#include "presence_ui.h"   // ...and slice M3's meeting predicate / card / surface policy
+#include "gbatext.h"       // ...and the Gen-3 charmap -> UTF-8 decoder the card + nameplate share
 #include "warp_shbin.h"   // M2 grid-warp vertex shader (generated from source/warp.v.pica)
 #include "tilt_shbin.h"   // phase 14 tilt vertex shader (generated from source/tilt.v.pica)
 
@@ -1128,6 +1133,13 @@ typedef struct { uint8_t ok, ctx, sb1Valid, textDlg; int16_t px; } TiltSnap;
 // inserts a value ahead of GCTX_OVERWORLD in gamestate.h, this is a COMPILE ERROR rather than a
 // tilt that silently engages in the wrong screen.
 _Static_assert(GCTX_OVERWORLD == TILT_CTX_FIELD, "tilt.h TILT_CTX_FIELD drifted from GameCtx");
+// Phase 15 / SPEC-data §0.3 + D4.6: presence shares that ONE crossing (fieldgate.h's
+// FIELD_CTX_OVERWORLD is what TILT_CTX_FIELD is now an alias of) and computes in the SAME frame
+// space this file blits. Both are pinned here so a drift is a compile error, not a mis-placed
+// avatar.
+_Static_assert(GCTX_OVERWORLD == FIELD_CTX_OVERWORLD, "fieldgate.h drifted from GameCtx");
+_Static_assert(GBA_W == PRES_FRAME_W && GBA_H == PRES_FRAME_H,
+               "presence frame space must BE the GBA frame (SPEC-data §0.3)");
 
 static DVLB_s*         tiltDvlb;
 static shaderProgram_s tiltProg;
@@ -1278,6 +1290,386 @@ static void tilt_draw_image(C3D_RenderTarget* tgt, C3D_Tex* src, const TiltDraw*
 #endif
 	C2D_Prepare();                      // hand the GPU back (rebinds citro2d's shader/attrs/texenv)
 	C2D_SceneBegin(tgt);                // R3.1.4: render_game's contract — leave the screen bound
+}
+
+// ---- Phase 15 slice M2: the co-op peer AVATAR ------------------------------------------------
+// Spec: docs/phase15-presence/SPEC-avatar.md A1 (asset), A2 (the flat draw), A3 (the tilted draw).
+// All the math is in source/presence_art.{c,h} + source/presence.{c,h} — pure C, host-tested by
+// test/host/test_presence.c (CLAUDE.md rule #4 / PHASE.md invariant 8). This file owns exactly
+// three things the PC cannot have: the texture, the C2D_DrawImageAt, and the tilt_project call.
+//
+// WHY THIS IS ONE ORDINARY citro2d SPRITE AND NOT PART OF THE TILT BLOCK (A3.3). A billboard needs
+// no perspective divide: it is a PURE TRANSLATION of an upright quad (gen1-render.md finding 2), so
+// all four corners share one anchor, q is constant across it, and the divide the tilt shader exists
+// to perform is the identity. Joining the block would also force render_game to grow a presence
+// parameter or the block to be re-opened later — one EXTRA escape, which is the thing SPEC-render
+// R3.3 optimises away. R4.0.1 ("never draw a not-tilt-aware pass flat over a tilted base") is
+// satisfied, not bypassed: the avatar IS tilt-aware, because its anchor rides the ground plane
+// through tilt_project.
+//
+// PHASE.md invariant 1 lives here too: this pass READS. It never touches a GbaCore, never calls
+// game_read, and physically cannot write emulated RAM.
+static C3D_Tex   s_peerTex;              // the generated 128x128 RGBA8 placeholder sheet
+static bool      s_peerTexOk;            // ...and whether it actually built
+static bool      s_presenceOk;           // false => presence draws NOTHING, permanently, this run
+static C2D_Image s_peerArt[2];           // real baked art per variant, when the PNGs are present
+static bool      s_peerBaked[2];         // A1.5.4's drop-in switch, resolved once at init
+
+// A1.5 / O-A5 (resolved): the placeholder is THEME-NEUTRAL. It could have used g_ui.acc, but the
+// theme is switchable at runtime while this texture is baked once, so a themed placeholder would
+// either go stale on a theme change or need a re-bake on the render thread. It is also the answer
+// O-A5 asks for in the other direction: the avatar is WORLD content, and world content should not
+// re-skin with the chrome (A1.4.2), so shipping the placeholder theme-neutral is what makes it
+// look the same as the real art will. Words are 0xRRGGBBAA (presence_art.h).
+#define PRES_PH_ACCENT 0x3C78C8FFu   // a flat mid blue: nothing in theme.c and no Gen-3 skin tone
+#define PRES_PH_INK    0x201828FFu   // near-black ink for legs + the facing pip
+
+// A1.5.4's drop-in art must also be the RIGHT SIZE. FIX PASS (review finding 2): the switch used to
+// test only "does the widget exist", so a peer-walk-*.png exported at, say, 64x64 instead of 128x128
+// silently bypassed the placeholder and then asked assets_img_cell for cells up to x=47, y=95 out of
+// a 64 px subtexture. img_subrect (assets.c:115-125) computes UVs as `left + uw * (px / width)` with
+// NO clamp, so every cell would sample past its own subtexture rect — garbage pixels from whatever
+// sits next to it in the .t3x, with the wrap mode never set on a baked texture (only s_peerTex gets
+// GPU_CLAMP_TO_EDGE). The sheet layout contract (A1.2/A1.3) puts the used extent of ONE variant at
+// PRES_VAR_W x PRES_VAR_H = 48x96, so that is the real minimum; anything smaller falls back to the
+// placeholder, which is exactly what A1.5.3's "obvious placeholder beats plausible-looking wrong"
+// asks for.
+static bool presence_art_fits(C2D_Image img) {
+	return img.tex != NULL && img.subtex != NULL &&
+	       (int)img.subtex->width >= PRES_VAR_W && (int)img.subtex->height >= PRES_VAR_H;
+}
+
+// A1.6: built ONCE, off the per-frame path. Any failure leaves s_presenceOk false and presence is
+// off for the whole run — exactly the warpOk/tiltOk discipline (main.c:1032/1160, SPEC-render
+// R3.5.3). Never a partial draw.
+//
+// FIX PASS (review finding 10): LAZY, not unconditional. This allocates 64 KB of linear heap for the
+// staging buffer (freed) plus a permanent 64 KB RGBA8 texture held for the whole run, and the co-op
+// pref ships DEFAULT-OFF — so a user who never turns it on used to pay 64 KB of linear heap next to
+// the GBA framebuffers, the ~100 KB tilt VBO and the prescale textures, for nothing. PHASE.md
+// invariant 6 ("costs nothing measurable when off") is about the frame budget, but the linear heap
+// is the scarcer resource on this device. Idempotent: called at session start when the stored pref
+// is on, and at the moment the pause-menu row turns it on. Both call sites are OUTSIDE
+// C3D_FrameBegin/End (the menu action runs before the frame opens), which the blocking
+// C3D_SyncDisplayTransfer below requires.
+static void presence_art_ensure(void) {
+	static bool built = false;
+	if (built) return;
+	built = true;
+
+	// A1.5.4 — the drop-in switch, one line, one place. Dropping peer-walk-m.png / peer-walk-f.png
+	// (128x128 RGBA) into design_handoff_3dgba_ui/assets_3ds/widgets/<theme>/ and re-running
+	// tools/build_assets.sh makes them reachable here with ZERO changes to build_assets.sh,
+	// assets_gen.h (regenerated), assets.c or the Makefile (A1.4/A1.4.1).
+	s_peerArt[0]   = assets_ready() ? assets_wgt("peer-walk-m") : (C2D_Image){ 0 };
+	s_peerArt[1]   = assets_ready() ? assets_wgt("peer-walk-f") : (C2D_Image){ 0 };
+	s_peerBaked[0] = presence_art_fits(s_peerArt[0]);
+	s_peerBaked[1] = presence_art_fits(s_peerArt[1]);
+
+	u8* stage = (u8*)linearAlloc(PRES_SHEET_BYTES);
+	if (stage) {
+		if (C3D_TexInit(&s_peerTex, PRES_SHEET_DIM, PRES_SHEET_DIM, GPU_RGBA8)) {
+			presence_art_build(stage, PRES_PH_ACCENT, PRES_PH_INK);
+			GSPGPU_FlushDataCache(stage, PRES_SHEET_BYTES);
+			// upload_frame's proven recipe (main.c:617-624), same flags with the format swapped to
+			// RGBA8. IN == OUT format means the transfer is a pure linear->tiled reshuffle of 4-byte
+			// units and converts no channels, so presence_art_build's byte order is what the sampler
+			// reads. FLIP_VERT(0) + the "v = 1 - y/H" subtexture convention in the draw is inherited
+			// verbatim from upload_frame / render_game's own subtexture (main.c:1589-1590).
+			C3D_SyncDisplayTransfer((u32*)stage,          GX_BUFFER_DIM(PRES_SHEET_DIM, PRES_SHEET_DIM),
+			                        (u32*)s_peerTex.data, GX_BUFFER_DIM(PRES_SHEET_DIM, PRES_SHEET_DIM),
+			                        GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) |
+			                        GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGBA8) |
+			                        GX_TRANSFER_OUT_TILED(1) | GX_TRANSFER_FLIP_VERT(0));
+			C3D_TexSetWrap(&s_peerTex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);   // a clipped cell must
+			                                                       // never sample the opposite edge
+			C3D_TexSetFilter(&s_peerTex, GPU_NEAREST, GPU_NEAREST);
+			s_peerTexOk = true;
+		}
+		linearFree(stage);
+	}
+	// A1.6.2: presence may draw only if EVERY variant it could be asked for has a source — the
+	// placeholder covers both, so real art for both also suffices. Anything less and presence is
+	// off for the whole run rather than drawing a variant that is not there: the warpOk/tiltOk
+	// discipline (main.c:1032/1160, SPEC-render R3.5.3), never a partial draw.
+	s_presenceOk = s_peerTexOk || (s_peerBaked[0] && s_peerBaked[1]);
+}
+
+static void presence_art_fini(void) {
+	if (s_peerTexOk) C3D_TexDelete(&s_peerTex);
+	s_peerTexOk  = false;
+	s_presenceOk = false;
+}
+
+// The peer avatars on ONE screen. Called from the three per-screen sequences (top-left eye,
+// top-right eye, bottom) at the position A2.1 fixes: after ui_pop_eye and immediately BEFORE
+// light_pass, so the avatar is (a) not overpainted by the pop passes' background re-draws,
+// (b) not composited away by the DoF bands, and (c) graded by the time-of-day MULTIPLY like the
+// world it stands in — the ordering-instead-of-a-second-colour-path analogue of gen1recomp's
+// per-billboard zone-palette lookup at the foot anchor (gen1-render.md finding 2).
+//
+// `po`, `peer` and `pose` are ARRAYS of `nPeers` entries, one per peer slot; when the flagged 3-4
+// player work lands, main.c calls presence_solve per slot and passes longer arrays — A3.4's whole
+// point is that the ORDER exists in the shipped draw before it is needed. `nPeers` is EXPLICIT
+// rather than assumed to be PRES_MAX_PEERS because main.c's presOut/presPose are indexed by GAME
+// today, so it hands over single-element views; reading PRES_MAX_PEERS entries out of those the day
+// the bound grows would be a silent out-of-bounds read, which is precisely the class of trap
+// A6.1.1 names ("forgetting this is SILENT").
+// `tv` NULL == tilt_active() false for this screen == the flat path, byte-identical (A3.2.4).
+// `tint` is the SAME C2D_ImageTint pointer the matching render_game call received, so the avatar
+// shares the unfocused screen's dim and the right eye's NULL exactly (A2.6.1/A2.6.2) — two eyes
+// that disagree in brightness show up in the parallax barrier.
+//
+// Slice M3 adds `ch` — the NAMEPLATE and the "A - CARD" prompt (A4.4.1 / A5.4.1). They live in
+// this call, not in the chrome block, for two reasons A2.5.2 gives: they are chrome ATTACHED TO
+// WORLD CONTENT (their anchor is the projected head point, so they ride the tilt and the scroll
+// with the avatar), and they must appear in BOTH EYES exactly as the avatar does — a pill visible
+// in one eye only is binocular rivalry, the same defect draw_pop_tex's clip rule exists to avoid.
+// `ch` NULL => avatar only, and the surfaces cost nothing (presence_surfaces is the ONE policy
+// function; main.c never re-decides which pill is up).
+typedef struct {
+	C2D_TextBuf buf;       // the SHARED frame text buffer (A4.5.1: never allocate one here)
+	const char* name;      // the CACHED decoded name (A4.5.2) — never decoded in the draw
+	unsigned    surf;      // PRES_SURF_* from presence_surfaces()
+	float       plateW;    // FIX PASS (review finding 9): the two chip WIDTHS, measured ONCE per
+	float       promptW;   //   frame per screen where PresChrome is built, not three times per pill
+	                       //   per draw pass. A centred pill needs its width before it can be
+	                       //   placed, and ui_chip/ui_chip_fill measure internally, so the old
+	                       //   "measure, then chip (which measures again, then draws)" shape did
+	                       //   THREE C2D_TextParse+C2D_TextOptimize passes over the same string —
+	                       //   x3 draw passes (top-left eye, top-right eye, bottom) x2 pills = 18
+	                       //   parses per frame, on the render thread that feeds two saturated
+	                       //   804 MHz workers. A4.5.2's name cache stopped the charmap decode but
+	                       //   not the parse, which is the actual per-frame cost A7.2 H9 says to
+	                       //   suspect first. Measured here + ui_chip*_w in the draw = 8.
+} PresChrome;
+
+static void presence_draw_screen(C3D_RenderTarget* tgt,
+                                 const PresenceOut* po, const PeerPresence* peer, const int* pose,
+                                 int nPeers, int mode, float screenW, float screenH,
+                                 const TiltView* tv, const C2D_ImageTint* tint,
+                                 const PresChrome* ch) {
+	// A0.1.2: a closed gate costs ZERO work — no projection, no texture bind, no subtexture build,
+	// no calc_xform. The frame must be bit-identical to a presence-off frame. `po->draw` IS the data
+	// half's whole gate ladder (P-G1..P-G9 plus the D5.7 cull), menuOpen included via P-G2, so there
+	// is deliberately no second gate check here that could disagree with it (A3.5's last row).
+	if (!s_presenceOk || !po || !peer || !pose) return;
+	if (nPeers > PRES_MAX_PEERS) nPeers = PRES_MAX_PEERS;   // the local arrays below are that size
+
+	// A3.4 / gen1-render.md finding 2: ONE list of billboards, sorted ascending by the foot y
+	// actually drawn at (the PROJECTED y under tilt, the flat anchor otherwise), tid breaking ties
+	// deterministically so the order cannot flicker frame to frame. Everything the draw needs is
+	// resolved here, so tilt_project runs exactly once per avatar per screen.
+	struct { float sprX, sprY, dx, dy; PresArtCell cell; int gender; } av[PRES_MAX_PEERS];
+	PresBillboard bb[PRES_MAX_PEERS];
+	int nbb = 0;
+
+	for (int slot = 0; slot < nPeers; slot++) {
+		if (!po[slot].draw) continue;
+		// The foot anchor arrives in GBA FRAME space with the tile delta AND the engine's own
+		// sub-tile term already folded in for BOTH cameras (SPEC-data D5.3), which is what makes the
+		// avatar track the BG scroll and glide tile-to-tile. The render half must not re-apply
+		// either — doing so would double it (BUILDLOG M0 deviation 10). presence_art_rect is the
+		// whole conversion, and it is A1.1's 16x32-with-the-head-above-the-tile convention.
+		float ax = po[slot].footX, ay = po[slot].footY;
+		float dx = 0.0f, dy = 0.0f;
+		if (tv) {
+			// A3.1: project the FOOT ANCHOR through the SHIPPED tilt view and translate the whole
+			// upright sprite by the difference. `q` is read and THROWN AWAY: the art is deliberately
+			// UNSCALED ("pixel-identical to flat mode", gen1-render.md finding 2) because any
+			// non-integer scale on 16x32 pixel art turns it to mush — the most visible possible way
+			// to make this look broken. `tv` is main.c's per-frame TiltView, built from the LIVE
+			// TWEEN angle, so the feet track the moving ground for free; a CACHED view would slide
+			// against it during every tween, which is the exact defect invariant 4 is about
+			// (A3.2.2/A3.2.3). This is the only tilt entry point presence calls — no sinf/cosf, no
+			// TILT_FOCAL, no re-derived projection anywhere in the presence path (A3.1.3).
+			float fax, fay, q;
+			tilt_project(tv, ax, ay, &fax, &fay, &q);
+			(void)q;
+			dx = fax - ax;
+			dy = fay - ay;
+		}
+		presence_art_rect(ax, ay, &av[nbb].sprX, &av[nbb].sprY);
+		presence_art_cell(po[slot].gender, po[slot].dir, pose[slot], &av[nbb].cell);
+		av[nbb].dx = dx; av[nbb].dy = dy; av[nbb].gender = po[slot].gender ? 1 : 0;
+		bb[nbb].fy   = ay + dy;
+		bb[nbb].tid  = peer[slot].tid;
+		bb[nbb].slot = (uint8_t)nbb;      // index INTO av[], so the sort carries the resolved draw
+		nbb++;
+	}
+	if (nbb == 0) return;
+	presence_art_ysort(bb, nbb);
+
+	float ox, oy, sx, sy;
+	calc_xform(mode, screenW, screenH, &ox, &oy, &sx, &sy);   // A2.2: the SAME screen fit every
+	                                                          // other world pass uses, applied LAST
+
+	// FIX PASS (review finding 4): how far the TILTED image reaches outside the flat 240x160 frame.
+	// Zero when flat, so the flat path is byte-identical. Four tilt_project calls per screen per
+	// frame, only while the tilt is engaged, and they answer the one question the clip needs: the
+	// projection maps the flat frame ONTO the trapezoid, so the trapezoid's outermost excursion is
+	// attained at the frame's own corners. Widening the clip box by that much is what stops the trim
+	// being taken at a boundary the sprite has already been translated away from — without it a peer
+	// near a frame edge lost a quarter of its body to a cut while standing on plainly visible
+	// spilled ground (presence_art.h has the worked case). Widening rather than shifting is
+	// deliberate: under tilt the BASE IMAGE spills past the frame rect too (TILT_SCISSOR 0,
+	// main.c:1067-1074), and stereo is mutually exclusive with tilt (rule G10), so the
+	// letterbox-rivalry reason for a hard boundary is vacuous exactly when this is nonzero.
+	float spill = 0.0f;
+	if (tv) {
+		static const float CX[4] = { 0.0f, (float)GBA_W, 0.0f,          (float)GBA_W };
+		static const float CY[4] = { 0.0f, 0.0f,         (float)GBA_H,  (float)GBA_H };
+		for (int c = 0; c < 4; c++) {
+			float px, py, q;
+			tilt_project(tv, CX[c], CY[c], &px, &py, &q);
+			float ex = (px < 0.0f) ? -px : (px - (float)GBA_W);
+			float ey = (py < 0.0f) ? -py : (py - (float)GBA_H);
+			if (ex > spill) spill = ex;
+			if (ey > spill) spill = ey;
+		}
+	}
+
+	for (int i = 0; i < nbb; i++) {
+		int a = bb[i].slot;
+		PresArtDraw d;
+		// A3.2.1: the clip runs on the UNPROJECTED source rect and the TRIMMED rect is then
+		// translated. Because the transform is a pure translation a trimmed rectangle stays a
+		// rectangle, which is the whole reason this composition needs no scissor and no raw C3D.
+		if (!presence_art_clip(av[a].sprX, av[a].sprY, av[a].cell.mirror, spill, &d)) continue;
+
+		C2D_Image src;
+		Tex3DS_SubTexture sub;
+		if (s_peerBaked[av[a].gender]) {
+			// Real art: cut the cell out of the baked sheet's own subtexture rect (A1.4.3). Each
+			// widget PNG bakes into its OWN single-image .t3x (build_assets.sh:52-57), so the filter
+			// set below touches no other widget's texture. The baked sheet holds ONE variant, so the
+			// variant stride is subtracted back out — the sheet layout contract (A1.2/A1.3) is the
+			// same for both paths and only the x origin differs.
+			C2D_Image sheet = s_peerArt[av[a].gender];
+			float cx = (float)(av[a].cell.x - av[a].gender * PRES_VAR_STRIDE + d.cx);
+			if (!assets_img_cell(sheet, cx, (float)(av[a].cell.y + d.cy),
+			                     (float)d.w, (float)d.h, &src, &sub)) continue;
+			C3D_TexSetFilter(sheet.tex, tv ? GPU_LINEAR : GPU_NEAREST, tv ? GPU_LINEAR : GPU_NEAREST);
+		} else if (!s_peerTexOk) {
+			continue;              // this variant has neither baked art nor a placeholder to fall
+			                       // back on (A1.6.2 makes that unreachable, but never guess pixels)
+		} else {
+			// The generated placeholder: a plain 128x128 texture, so the subtexture is built here in
+			// render_game's own UV convention (main.c:1589-1590 — v = 1 - y/H, matching the
+			// GX_TRANSFER_FLIP_VERT(0) the upload used).
+			const float D = (float)PRES_SHEET_DIM;
+			float u0 = (float)(av[a].cell.x + d.cx) / D,        v0 = 1.0f - (float)(av[a].cell.y + d.cy) / D;
+			float u1 = (float)(av[a].cell.x + d.cx + d.w) / D,  v1 = 1.0f - (float)(av[a].cell.y + d.cy + d.h) / D;
+			sub.width = (u16)d.w; sub.height = (u16)d.h;
+			sub.left = u0; sub.top = v0; sub.right = u1; sub.bottom = v1;
+			src.tex = &s_peerTex; src.subtex = &sub;
+			// A1.6.3: NEAREST flat / LINEAR under tilt — the project's existing split (main.c:1257,
+			// gen1-render.md finding 1). Re-set at every draw because the tilt block re-sets filters
+			// on the textures it shares.
+			C3D_TexSetFilter(&s_peerTex, tv ? GPU_LINEAR : GPU_NEAREST, tv ? GPU_LINEAR : GPU_NEAREST);
+		}
+
+		C2D_SceneBegin(tgt);   // defensive, matching pop_eye / light_pass (main.c:767 / :985)
+		float X = ox + (d.x + av[a].dx) * sx, Y = oy + (d.y + av[a].dy) * sy;
+		// A2.5.3: order IS the z here — citro2d does no depth sorting and C3D_DepthTest is off
+		// (main.c:1266), so the depth argument stays 0.0f like every other call in this file.
+		// A2.8: ZERO stereo disparity in this slice — the avatar sits exactly on the screen plane.
+		// Deliberate: POP_DISP_MAX is a hardware-validated comfort ceiling SPEC-render R4.1.1
+		// forbids relaxing by a rendering change, a flat overlay honestly reads as a flat overlay,
+		// and adding an unproven disparity to an unproven overlay makes a bad photo un-diagnosable.
+		// The upgrade is fully specified in A2.8 and is one line.
+		if (av[a].cell.mirror) C2D_DrawImageAt(src, X + (float)d.w * sx, Y, 0.0f, tint, -sx, sy);  // A1.2.2
+		else                   C2D_DrawImageAt(src, X,                   Y, 0.0f, tint,  sx, sy);
+
+		// ---- slice M3: the nameplate + the prompt (A4.4.1 / A5.4.1) ----------------------------
+		// Anchored to the sprite's HEAD point — the top-centre of the UNCLIPPED cell, translated by
+		// the same tilt offset the art got — so both pills ride the world. Drawn in SCREEN space at
+		// a FIXED pixel size (never multiplied by sx), because they must stay legible at SCALE_1X
+		// where a 320x240 screen shows a 240x160 frame (A2.5.2), and clamped to the SCREEN rather
+		// than to the frame rect: the sprite is world content and is trimmed at the game box, the
+		// pills are chrome and simply stay on the panel.
+		if (ch && ch->buf && ch->surf) {
+			float headFx = av[a].sprX + (float)PRES_FOOT_DX + av[a].dx;   // cell top-centre, frame px
+			float headFy = av[a].sprY + av[a].dy;
+			float hx = ox + headFx * sx, hy = oy + headFy * sy;
+			// FIX PASS (review finding 8): the stack is laid out and clamped AS A UNIT, in pure C
+			// (presence_ui.c, host-tested by TEST 38). Two independent y-clamps collapsed the two
+			// pills onto each other for any peer ~3+ tiles above the player, and put them inside the
+			// translucent HUD bar that is drawn AFTER them. presence_pill_y keeps the 15 px
+			// separation at every position and never enters the bar; presence_pill_x is the same
+			// right-then-left clamp the old macro did, moved somewhere a PC test can reach it.
+			int hasPlate  = (ch->surf & PRES_SURF_PLATE)  ? 1 : 0;
+			int hasPrompt = (ch->surf & PRES_SURF_PROMPT) ? 1 : 0;
+			float plateY, promptY;
+			presence_pill_y(hy, hasPlate, hasPrompt, screenH, &plateY, &promptY);
+			if (hasPlate)
+				ui_chip_fill_w(ch->buf, ch->name,
+				               presence_pill_x(hx, ch->plateW, screenW), plateY, ch->plateW,
+				               THEME_HUD_BAR, g_ui.acc);
+			if (hasPrompt)
+				// A5.4.1: the passive prompt — no keypress needed to SEE it, so the player learns
+				// the interaction by walking into it. "A - CARD", not "(A) CARD" with a circled A:
+				// U+24B6 is not in the 3DS shared font (ui.h's own note about the missing arrow
+				// glyphs, which is why ui_tri exists), and an un-renderable glyph in the one chip
+				// that teaches the feature is worse than plain ASCII.
+				ui_chip_w(ch->buf, PRES_PROMPT_TEXT,
+				          presence_pill_x(hx, ch->promptW, screenW), promptY, ch->promptW, g_ui.acc);
+		}
+	}
+}
+
+// ---- slice M3: the CARD panel (SPEC-avatar A4.4.4) -------------------------------------------
+// A PURE READ (A4.4.5 / PHASE.md invariant 1): every value on it comes out of the SAME
+// PeerPresence record the avatar is already drawn from — no extra RAM read, no second
+// parked-window pass, no link, no state machine. That is exactly why identity is in scope for
+// this phase while trade and battle are not, and A5.5.3's one dim line says so on the card itself
+// rather than in a README nobody opens.
+//
+// Drawn from the chrome block (after light_pass, inside `!menuOpen`), so unlike the nameplate it
+// is NOT graded by the time-of-day multiply — it is a UI panel, not world content. Left eye only,
+// exactly like the HUD bar and the toast: every other piece of chrome in this file already draws
+// to `top` alone.
+static void presence_draw_card(C2D_TextBuf buf, const PresCardText* t, float screenW) {
+	if (!buf || !t) return;
+	const float W = 214.0f, H = 80.0f;
+	float x = (screenW - W) * 0.5f, y = 32.0f;    // under the HUD bar, over the game image
+
+	// The language of draw_paused_summary (main.c's own panel idiom): a 9-sliced card fill when the
+	// device-native art pack is present, the code-drawn panel when it is not — assets_ready() is
+	// false on any build where data/ was not baked, and a card that only exists with the art pack
+	// would be a diagnostic surface that disappears exactly when something is wrong.
+	if (assets_ready()) assets_fill9("fill-card-r8", x, y, W, H, 8.0f);
+	else                ui_panel(x, y, W, H, g_ui.panel, g_ui.line, 6.0f);
+	ui_border(x, y, W, H, g_ui.acc, 1.0f);
+
+	// A4.4.4's four rows, plus A5.5.3's disclosure:
+	//    NILS                    M      <- FNT_SG_BOLD 14 px + the gender field
+	//    ID  01234                      <- FNT_JBM_BOLD 10 px  (A4.3.2's %05u; NEVER the secret id)
+	//    MAP 3-12   TILE 14,9           <- FNT_JBM_MED 8 px
+	//    same map - read-only           <- FNT_JBM_MED 8 px, dim
+	//    trade & battle use ...         <- FNT_JBM_MED 8 px, dim
+	const float px = x + 10.0f;
+	if (assets_ready()) {
+		assets_text  (buf, FNT_SG_BOLD,  t->name,           px, y +  8.0f, 14.0f, g_ui.text);
+		assets_text_r(buf, FNT_JBM_BOLD, presence_gender_label(t->gender),
+		                                                    x + W - 10.0f, y + 10.0f, 10.0f, g_ui.acc);
+		assets_text  (buf, FNT_JBM_MED,  "ID",              px, y + 29.0f,  8.0f, g_ui.dim);
+		assets_text  (buf, FNT_JBM_BOLD, t->id,             px + 22.0f, y + 27.0f, 10.0f, g_ui.text);
+		assets_text  (buf, FNT_JBM_MED,  t->loc,            px, y + 44.0f,  8.0f, g_ui.text);
+		assets_text  (buf, FNT_JBM_MED,  PRES_CARD_READONLY_NOTE, px, y + 56.0f, 8.0f, g_ui.dim);
+		// A5.5.3 — the sanctioned disclosure. NOT a greyed "Trade"/"Battle" button: a greyed button
+		// reads as "coming in the next build", and this phase is not that (presence_ui.h carries the
+		// four blockers and the recorded later design).
+		assets_text  (buf, FNT_JBM_MED,  PRES_CARD_UNION_NOTE,    px, y + 67.0f, 8.0f, g_ui.dim);
+	} else {
+		ui_text  (buf, t->name,                              px, y +  7.0f, 0.42f, g_ui.text);
+		ui_text_r(buf, presence_gender_label(t->gender),     x + W - 10.0f, y + 9.0f, 0.34f, g_ui.acc);
+		ui_text  (buf, "ID",                                 px, y + 29.0f, 0.30f, g_ui.dim);
+		ui_text  (buf, t->id,                                px + 22.0f, y + 28.0f, 0.34f, g_ui.text);
+		ui_text  (buf, t->loc,                               px, y + 44.0f, 0.30f, g_ui.text);
+		ui_text  (buf, PRES_CARD_READONLY_NOTE,              px, y + 56.0f, 0.28f, g_ui.dim);
+		ui_text  (buf, PRES_CARD_UNION_NOTE,                 px, y + 67.0f, 0.28f, g_ui.dim);
+	}
 }
 
 // Standee depth field: a vertex carries the depth of the tile(s) just BELOW it (grid row vr), so a
@@ -1639,17 +2031,24 @@ typedef struct {
 	s32 padEdge;          // 0 round / 1 soft / 2 sharp
 	// --- phase 14 (appended; files that end at `padEdge` still load, tiltLevel stays default) ---
 	s32 tilt;             // g_prefs.tiltLevel, 0..TILT_LEVELS-1 (SPEC-integration I4.9)
+	// --- phase 15 (appended; files that end at `tilt` still load, presence stays 0 = OFF) ---
+	s32 presence;         // co-op presence pref (SPEC-avatar A6.3). NO magic bump, same as phase
+	                      // 14: SETTINGS_MAGIC identifies the FAMILY and the length ladder does the
+	                      // versioning, so every file a pre-phase-15 build wrote still loads.
 } Settings;
 // SPEC-integration I7.6: test/host/test_tilt.c TEST 6 replicates this layout (main.c cannot be
 // host-compiled), so pin the two together. If a field is inserted anywhere above, these fire and
 // the test's copy must be updated in the same edit — the alternative is a silently-shifted
-// offsetof ladder that mis-loads every older settings file.
-_Static_assert(sizeof(Settings)            == 24 * sizeof(s32), "Settings grew/shrank — sync test_tilt TEST 6");
-_Static_assert(offsetof(Settings, tilt)    == 23 * sizeof(s32), "Settings.tilt moved — sync test_tilt TEST 6");
-_Static_assert(offsetof(Settings, padEdge) == 22 * sizeof(s32), "Settings.padEdge moved — sync test_tilt TEST 6");
+// offsetof ladder that mis-loads every older settings file. offsetof(tilt) staying 23 across the
+// phase-15 append IS the proof that the change is backward-compatible (SPEC-avatar A6.3.2).
+_Static_assert(sizeof(Settings)             == 25 * sizeof(s32), "Settings grew/shrank — sync test_tilt TEST 6");
+_Static_assert(offsetof(Settings, presence) == 24 * sizeof(s32), "Settings.presence moved — sync test_tilt TEST 6");
+_Static_assert(offsetof(Settings, tilt)     == 23 * sizeof(s32), "Settings.tilt moved — sync test_tilt TEST 6");
+_Static_assert(offsetof(Settings, padEdge)  == 22 * sizeof(s32), "Settings.padEdge moved — sync test_tilt TEST 6");
 
 static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, int* hudMode,
-                          int* audioMode, int* volA, int* volB, int* touchMode, bool* fsOn, bool* dofOn, bool* bloomOn, bool* lightOn, bool* vividOn) {
+                          int* audioMode, int* volA, int* volB, int* touchMode, bool* fsOn, bool* dofOn, bool* bloomOn, bool* lightOn, bool* vividOn,
+                          bool* presenceOn) {
 	FILE* f = fopen(SETTINGS_PATH, "rb");
 	if (!f) return;
 	Settings s;
@@ -1666,8 +2065,13 @@ static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, int* 
 	// every file written before this build is, so those files still load everything they had and
 	// simply leave g_prefs.tiltLevel at its default 0. Backward-compatible by construction.
 	size_t lenPad   = offsetof(Settings, tilt);   // includes the UI-redesign prefs (pre-tilt)
-	size_t lenNew   = sizeof s;                    // + tiltLevel
-	if ((n != lenNew && n != lenPad && n != lenOld && n != lenVivid && n != lenLight && n != lenBloom && n != lenDof)
+	// phase 15 (SPEC-avatar A6.3.1): today's rungs shift by one name. lenTilt is the PRE-PRESENCE
+	// full struct — i.e. exactly what every file written by the phase-14 build is — and lenNew is
+	// the new sizeof. Getting this rename wrong rejects every existing settings file, which is the
+	// whole reason the ladder exists.
+	size_t lenTilt  = offsetof(Settings, presence);   // includes tiltLevel (pre-presence)
+	size_t lenNew   = sizeof s;                       // + presence
+	if ((n != lenNew && n != lenTilt && n != lenPad && n != lenOld && n != lenVivid && n != lenLight && n != lenBloom && n != lenDof)
 	    || s.magic != SETTINGS_MAGIC) return;      // tolerate older files
 	scaleMode[0] = ((unsigned)s.scaleMode[0]) % 3;
 	scaleMode[1] = ((unsigned)s.scaleMode[1]) % 3;
@@ -1695,17 +2099,23 @@ static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, int* 
 	}
 	// Modulo, exactly like padEdge: a corrupt/negative word can never index the angle ladder out
 	// of range (the unsigned cast makes even INT32_MIN land in 0..TILT_LEVELS-1 — TEST 6).
-	if (n >= lenNew) g_prefs.tiltLevel = ((unsigned)s.tilt) % TILT_LEVELS;
+	if (n >= lenTilt) g_prefs.tiltLevel = ((unsigned)s.tilt) % TILT_LEVELS;
+	// A6.3: a 2-state pref, so != 0 is the whole clamp — a corrupt word can only ever produce
+	// on/off. Older (pre-phase-15) files leave it at the shipped default, which is OFF (A6.3.4:
+	// a new feature ships inert so no existing user's frame changes).
+	if (n >= lenNew && presenceOn) *presenceOn = s.presence != 0;
 	theme_apply(g_prefs.theme, g_prefs.customBaseHue, g_prefs.customAccentHue, g_prefs.customContrast);
 }
 
 static void settings_save(const int scaleMode[2], const bool smooth[2], bool swapped, int hudMode,
-                          int audioMode, int volA, int volB, int touchMode, bool fsOn, bool dofOn, bool bloomOn, bool lightOn, bool vividOn) {
+                          int audioMode, int volA, int volB, int touchMode, bool fsOn, bool dofOn, bool bloomOn, bool lightOn, bool vividOn,
+                          bool presenceOn) {
 	Settings s = { SETTINGS_MAGIC, { scaleMode[0], scaleMode[1] },
 	               { smooth[0], smooth[1] }, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn,
 	               g_prefs.theme, g_prefs.customBaseHue, g_prefs.customAccentHue, g_prefs.customContrast,
 	               g_prefs.gameMode, g_prefs.padColor, g_prefs.padEdge,
-	               g_prefs.tiltLevel };   // phase 14, I4.9: appended last, so the file grows by 4 B
+	               g_prefs.tiltLevel,     // phase 14, I4.9: appended, so the file grew by 4 B
+	               presenceOn };          // phase 15, A6.3.3: appended last, another 4 B
 	FILE* f = fopen(SETTINGS_PATH, "wb");
 	if (!f) return;
 	fwrite(&s, 1, sizeof s, f);
@@ -1743,6 +2153,7 @@ enum {
 	ACT_3D, ACT_PADCOL, ACT_PADEDGE, ACT_CHUE, ACT_CAHUE, ACT_CCON,
 	ACT_PREVIEW_PAD, ACT_PREVIEW_SMART,   // Touch tab: set the mode + resume to see it live
 	ACT_TILT,                             // phase 14 HD-2D diorama tilt (PK_SEG, 4 rungs) — I4.7
+	ACT_PRESENCE,                         // phase 15 co-op presence (PK_TOG, 2 states) — A6.1.4
 };
 static const char* const MENU_TAB_NAMES[6] = { "SESSION", "DISPLAY", "AUDIO", "ENHANCE", "LINK", "TOUCH" };
 static const char* const PAD_EDGE_NAMES[3] = { "Round", "Soft", "Sharp" };
@@ -1779,10 +2190,21 @@ static const PCtl PT_ENHANCE[] = {
   {PK_TOG,ACT_3D,0, 276,51,34,18,0},{PK_TOG,ACT_DOF,0, 276,83,34,18,0},{PK_TOG,ACT_BLOOM,0, 276,112,34,18,0},
   {PK_TOG,ACT_LIGHT,0, 276,141,34,18,0},{PK_TOG,ACT_VIVID,0, 276,170,34,18,0},
   {PK_SEG,ACT_TILT,4, 140,198,170,26,"TILT"} };
+// Phase 15 adds the CO-OP row (SPEC-avatar A6.1). It goes on LINK, not ENHANCE, because ENHANCE is
+// measurably full: its five baked toggles end at y=188, the tilt seg takes y198..224 and the status
+// hint sits at y=231 — SEVEN pixels left, and phase 14's open question O6 (new plate art for a 6th
+// and 7th row) is still outstanding. LINK's last widget is ACT_LOADSAV at y156 h31 -> bottom edge
+// 187, so y196 h18 lands in a genuinely empty 44 px band and clears the hint by 17 px. LINK is also
+// semantically right: the tab is "how this console talks to another game", and it is where M4 (the
+// wireless version of exactly this feature) will need to live — so the control does not move when
+// the transport changes, which is PHASE.md invariant 3's whole point. x276/w34/h18 is the same
+// toggle geometry the other two rows on this tab use, so the column stays aligned; the "CO-OP"
+// label rides the PCtl.ov overlay (precedent on three tabs). No plate art changes, no row moves.
 static const PCtl PT_LINK[] = {
   {PK_TOG,ACT_LINK,0, 276,16,34,18,0},{PK_TOG,ACT_NETLINK,0, 276,44,34,18,0},
   {PK_BTN,ACT_WIRELESS,0, 93,74,216,35,0},{PK_BTN,ACT_SAVEST,0, 93,118,104,31,0},
-  {PK_BTN,ACT_LOADST,0, 204,118,104,31,0},{PK_BTN,ACT_LOADSAV,0, 93,156,216,31,0} };
+  {PK_BTN,ACT_LOADST,0, 204,118,104,31,0},{PK_BTN,ACT_LOADSAV,0, 93,156,216,31,0},
+  {PK_TOG,ACT_PRESENCE,0, 276,196,34,18,"CO-OP"} };
 static const PCtl PT_TOUCH[] = {
   {PK_SEG,ACT_TOUCHMODE,3, 93,26,208,30,0},{PK_BTN,ACT_PREVIEW_PAD,0, 93,109,101,44,0},
   {PK_BTN,ACT_PREVIEW_SMART,0, 201,109,101,44,0},{PK_SWATCH,ACT_PADCOL,0, 93,192,208,26,0},
@@ -1790,7 +2212,8 @@ static const PCtl PT_TOUCH[] = {
 static const PCtl* const PTABS[6] = { PT_SESSION, PT_DISPLAY, PT_AUDIO, PT_ENHANCE, PT_LINK, PT_TOUCH };
 // I4.4: ENHANCE goes 5 -> 6 for the tilt row. Forgetting this is SILENT — the row would never
 // draw (the draw loop is `for (i < nPd)`) and the touch hit-test loop would never reach it.
-static const int PTABN[6] = { 3, 6, 4, 6, 6, 5 };
+// A6.1.1: LINK goes 6 -> 7 for the phase-15 CO-OP row, and it is the SAME silent trap.
+static const int PTABN[6] = { 3, 6, 4, 6, 7, 5 };
 static const char* const PT_PLATE[6] = { "pause-bot-session","pause-bot-display","pause-bot-audio",
                                          "pause-bot-enhance","pause-bot-link","pause-bot-touch" };
 
@@ -1868,6 +2291,7 @@ static int menu_layout(int tab, MenuW* out) {
 		PUSH(W_BUTTON, ACT_SAVEST, 1, 0);
 		PUSH(W_BUTTON, ACT_LOADST, 2, 0);
 		PUSH(W_BUTTON, ACT_LOADSAV, 0, 0);
+		PUSH(W_TOGGLE, ACT_PRESENCE, 0, 0);   // phase 15 (A6.1.2 — the v2 list layout's copy)
 		break;
 	default:  // TOUCH
 		PUSH(W_SECTION, ACT_TOUCHMODE, 0, 0); PUSH(W_SEG, ACT_TOUCHMODE, 0, 0);
@@ -1887,7 +2311,7 @@ static int menu_layout(int tab, MenuW* out) {
 // "|| PAUSED", the two game names, a row of active-feature pills, and a pointer to the bottom screen.
 static void draw_paused_summary(C2D_TextBuf buf, const char* nameTop, const char* nameBot,
                                 bool s3d, bool dof, bool bloom, bool light, bool vivid,
-                                int touchMode, bool linkOn, bool netOn, bool wlOn) {
+                                int touchMode, bool linkOn, bool netOn, bool wlOn, bool coop) {
 	// Screen 05 top: the pause-top PLATE (PAUSED + swap arrow + hint, over a light dim of the game)
 	// is the chrome; we composite the two game names (manifest x56/x216 y95) + the feature pills.
 	if (!assets_ready()) { C2D_DrawRectSolid(0, 0, 0, 400, 240, C2D_Color32(0, 0, 0, 0x78));
@@ -1898,7 +2322,8 @@ static void draw_paused_summary(C2D_TextBuf buf, const char* nameTop, const char
 	{	// active-feature pills (manifest x56 y129 w288 h17): fill + baked JBM label, tinted per state
 		// I4.15: the arrays were [7] and this pushed up to exactly 7 pills; the Tilt pill makes 8,
 		// so ALL FOUR must widen in the same edit or the 8th push is a stack buffer overrun.
-		const char* labs[8]; u32 fg[8], bg[8]; int n = 0;
+		// A6.4.3: the phase-15 Co-op pill makes NINE — same trap, same rule, all four widened here.
+		const char* labs[9]; u32 fg[9], bg[9]; int n = 0;
 		#define PILL(L, ON, C) do { labs[n] = (L); fg[n] = (ON) ? g_ui.ink : g_ui.dim; \
 		                            bg[n] = (ON) ? (C) : g_ui.panel2; n++; } while (0)
 		PILL("3D", s3d, THEME_GAME_B); PILL("DoF", dof, g_ui.acc); PILL("Bloom", bloom, g_ui.acc);
@@ -1906,9 +2331,12 @@ static void draw_paused_summary(C2D_TextBuf buf, const char* nameTop, const char
 		PILL("Tilt", g_prefs.tiltLevel > 0, g_ui.acc);   // right after Light: the enhance pills stay grouped
 		if (vivid) PILL("Vivid", 1, g_ui.acc);
 		PILL(touchMode == 2 ? "Smart" : (touchMode == 1 ? "Pad" : "Touch Off"), touchMode != 0, THEME_GAME_A);
+		// A6.4.3: so the pause screen answers "is co-op on" without opening the LINK tab. It sits
+		// beside the link pill because that is where the control lives (A6.1.3).
+		PILL("Co-op", coop, g_ui.acc);
 		PILL(wlOn ? "Wireless" : (netOn ? "Net" : "Link"), (linkOn || netOn || wlOn), g_ui.acc);
 		#undef PILL
-		float pw[8], tw = 0.0f;
+		float pw[9], tw = 0.0f;
 		for (int i = 0; i < n; i++) { pw[i] = assets_text_w(buf, FNT_JBM_MED, labs[i], 8.0f) + 12.0f; tw += pw[i] + 5.0f; }
 		float x = (400.0f - tw) / 2.0f;
 		for (int i = 0; i < n; i++) {
@@ -2008,6 +2436,66 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	// GameStates the gs-logger block already reads (I1.1/I1.2); px = -1 and every flag 0 means a
 	// frame that never fills it (or a game with no profile) gates tilt OFF — fail-safe by init.
 	TiltSnap tiltSnap[2] = { { 0, 0, 0, 0, -1 }, { 0, 0, 0, 0, -1 } };
+	// ---- phase 15 co-op presence: per-session state (SPEC-data D3.4 / D6) ----
+	// Indexed by GAME (0 = emuA, 1 = emuB), NOT by screen. tiltSnap above is per SCREEN because a
+	// tilt is a property of a display; presence state is a property of a WORLD — the identity latch,
+	// the smoothing filter, the D4.7 hold and the teleport detector all belong to a game and must
+	// survive an X screen swap untouched. presSt[g] is that game's CONSUMER state and its one peer
+	// slot (PRES_MAX_PEERS == 1) holds the OTHER game's record, so this is already M4's shape: one
+	// PresenceState per console, one remote peer in it, and the only thing M4 changes is who calls
+	// presence_publish. The renderer resolves a screen to its game with `swapped`, exactly as it
+	// already does for topG/botG.
+	//   presenceOn is a run_session local like dofOn/bloomOn (A6.3.5) — g_prefs is the chrome/theme
+	//   block, and this is a session feature toggle. Default OFF (A6.3.4): a new feature ships inert.
+	bool          presenceOn = false;
+	PresenceState presSt  [2];
+	PresenceIdent presId  [2];
+	PeerPresence  presSelf[2];   // this frame's OWN record per game = presence_solve's `self`
+	PresenceOut   presOut [2];
+	int           presDraw[2] = { 0, 0 };
+	// Slice M2: the walk-cycle accumulator, one per GAME for the same reason presSt is
+	// (SPEC-avatar A2.6.4 — it is a property of a walking WORLD, not of a display), stepped exactly
+	// ONCE per frame beside presence_solve. It deliberately does NOT live in the draw: the top
+	// screen draws twice (left + right eye), so a per-draw accumulator would animate at double rate
+	// AND could hand the two eyes different poses, which on a parallax-barrier panel reads as
+	// flicker rather than as a fast walk.
+	PresWalk      presWalk[2];
+	int           presPose[2] = { PRES_POSE_STAND, PRES_POSE_STAND };
+	int8_t        presFaceRaw[2] = { -1, -1 };   // the raw facing nibble game_read reported, kept
+	                                             // beside the folded one so the M1 readout can
+	                                             // satisfy D2.4.1's promotion criterion ("one run
+	                                             // where it reads 1/2/3/4 as the player walks
+	                                             // D/U/L/R") without a garbage nibble hiding inside
+	                                             // presence_dir's fold to SOUTH. Slice M3 gave it a
+	                                             // SECOND, non-logging job: it is the only thing
+	                                             // that can tell "facing south" from "we have no
+	                                             // idea", which A5.2.1's degraded meeting predicate
+	                                             // needs (PeerPresence.facing is always 1..4).
+	// ---- slice M3: identity + interaction (SPEC-avatar A4/A5) ----
+	// Per GAME, like everything else above. The card is ONE BOOL (A5.4.2 — "no timer and no state
+	// machine beyond one bool"): every condition that opens or closes it is already computed
+	// elsewhere in the frame, so presence_card_step is a fold of flags rather than a controller.
+	PresMeet      presMeet[2];
+	PresCard      presCard[2];
+	PresCardText  presCardTx[2];
+	// A4.5.2 — the decoded name is CACHED and re-decoded only when the raw 8 bytes change. Decoding
+	// is cheap; a C2D text parse per surface per frame is not, and this runs on the thread that
+	// drives the LightEvent handshake with two saturated 804 MHz workers (PHASE.md invariant 6).
+	uint8_t       presNameRaw[2][8];
+	char          presNameTxt[2][PRES_CARD_NAME_CAP];
+	bool          presNameOk[2] = { false, false };
+	for (int i = 0; i < 2; i++) {
+		presence_reset(&presSt[i]);
+		presence_ident_reset(&presId[i]);
+		presence_walk_reset(&presWalk[i]);
+		presence_card_reset(&presCard[i]);
+		memset(&presSelf[i], 0, sizeof presSelf[i]);   // gameId 0 => P-G4 closes until a real fill
+		memset(&presOut[i],  0, sizeof presOut[i]);
+		memset(&presMeet[i], 0, sizeof presMeet[i]);
+		presence_card_fill(NULL, &presCardTx[i]);      // well-formed placeholders from frame 0
+		memset(presNameRaw[i], 0, sizeof presNameRaw[i]);
+		presNameTxt[i][0] = '\0';
+	}
 	gs_log_reset();                 // fresh game-state instrumentation log for this play session
 	touch_log_reset();              // fresh touch-event instrumentation log for this play session
 	diag_wd_session_reset();        // D1: fresh watchdog episode + kill-switch check for this session
@@ -2071,9 +2559,12 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	int audioMode = AUD_SOLO;
 	int volA = 256, volB = 256;
 
-	settings_load(scaleMode, smooth, &swapped, &hudMode, &audioMode, &volA, &volB, &touchMode, &fsOn, &dofOn, &bloomOn, &lightOn, &vividOn);   // restore prefs
+	settings_load(scaleMode, smooth, &swapped, &hudMode, &audioMode, &volA, &volB, &touchMode, &fsOn, &dofOn, &bloomOn, &lightOn, &vividOn, &presenceOn);   // restore prefs
+	if (presenceOn) presence_art_ensure();   // finding 10: build the co-op sheet only for a session
+	                                         // that actually starts with the pref on (idempotent;
+	                                         // the other call site is the pause-menu row)
 	if (single) swapped = false;   // 1-game: the game is ALWAYS on top (a stale swapped would blank it)
-	settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);   // persist picker-side g_prefs changes (mode/theme)
+	settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);   // persist picker-side g_prefs changes (mode/theme)
 	if (startLinked && emuA.core && emuB.core && link) {   // picker's "START - LINKED": attach the cable now
 		gbacore_link_attach(emuA.core, link, 0, link_cb_sleep, link_cb_wake, &emuA);
 		gbacore_link_attach(emuB.core, link, 1, link_cb_sleep, link_cb_wake, &emuB);
@@ -2248,7 +2739,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					swapped = !swapped;
 					snprintf(toast, sizeof toast, "Layout: %s", swapped ? "B top / A bottom" : "A top / B bottom");
 					toastTimer = 90;
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
 				}
 				int fs = swapped ? (focused ^ 1) : focused;   // screen the focused game sits on
 				if (kDown & KEY_ZR) {
@@ -2256,14 +2747,14 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					snprintf(toast, sizeof toast, "%s scale: %s",
 					         fs == 0 ? "Top" : "Bottom", SCALE_NAMES[scaleMode[fs]]);
 					toastTimer = 90;
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
 				}
 				if (kDown & KEY_ZL) {
 					smooth[fs] = !smooth[fs];   // render_game sets the per-pass filters
 					snprintf(toast, sizeof toast, "%s filter: %s", fs == 0 ? "Top" : "Bottom",
 					         smooth[fs] ? "Smooth" : "Sharp-bilinear");
 					toastTimer = 90;
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
 				}
 				u16 g = to_gba_keys(kHeld);
 				// Touchscreen drives the BOTTOM game (A is on bottom iff swapped) as a POINTER on the
@@ -2383,6 +2874,46 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 							tiltSnap[sc].px       = (int16_t)gsFor2[sc]->px;
 						}
 					}
+					{   // ---- phase 15 slice M1: co-op presence, fill + publish (SPEC-data D6.4) ----
+						// Two POD fills and two publishes, in the window where both workers are parked
+						// and the two GameStates are already in hand. NO writes to either bus
+						// (invariant 1), NO new synchronisation (invariant 2), and — when the pref is
+						// off — no new game-RAM reads at all.
+						//
+						// The condition below is a COST GUARD, not the gate. It decides whether the
+						// three reads per game happen; the AUTHORITATIVE decision is still
+						// presence_solve's P-G1..P-G9 ladder, which is fed the same flags and closes
+						// P-G1/P-G2/P-G3 by itself. The two must stay a strict subset relationship:
+						// anything the guard skips, the ladder must also refuse. It does — the guard
+						// is exactly (P-G1 && !P-G2 && !P-G3).
+						//
+						// P-G3's link term (linkOn || netOn || wlOn) is load-bearing here rather than
+						// belt-and-braces: main.c only parks the workers when !linkOn && !netOn &&
+						// !wlOn (see the pipeline wait above), so DURING A LINK THE PARKED-WINDOW
+						// GUARANTEE DOES NOT HOLD. The gs log and smart touch accept that benign EWRAM
+						// race because a torn row is a bad log line — but a torn (px, py) is a visibly
+						// teleporting avatar, and presence DRAWS its reads (D4.8).
+						//
+						// Index = GAME (0 = emuA, 1 = emuB), mapped off the same `swapped` the gsTop/
+						// gsBot split above already applied — the identical shape the D4/D5 control
+						// block uses two blocks down for its per-seat CtlIn.
+						presence_begin_round(&presSt[0], g_renderSeq);
+						presence_begin_round(&presSt[1], g_renderSeq);
+						if (presenceOn && !menuOpen && !linkOn && !netOn && !wlOn) {
+							GbaCore*           prCore[2] = { emuA.core, emuB.core };
+							const GameProfile* prProf[2] = { swapped ? gpBot : gpTop, swapped ? gpTop : gpBot };
+							const GameState*   prGs  [2] = { swapped ? &gsb  : &gst,  swapped ? &gst  : &gsb  };
+							for (int gi = 0; gi < 2; gi++) {
+								presence_read_fill(&presSelf[gi], gi, prCore[gi], prProf[gi], prGs[gi],
+								                   &presId[gi], g_renderSeq);
+								presFaceRaw[gi] = (int8_t)prGs[gi]->facing;   // LOGGING ONLY (D2.4.1)
+								// Each game publishes ITS record as the OTHER game's peer. That single
+								// line is the whole same-console transport, and it is the ONE call M4
+								// replaces with a UDS beacon RX (D3.4).
+								presence_publish(&presSt[gi ^ 1], 0, &presSelf[gi]);
+							}
+						}
+					}
 #if CTL_D4_ENABLE || CTL_D5_ENABLE
 					// ---- D4 file-driven tile-exact movement (SPEC-control-replay.md §D4 / C.4)
 					// + D5 record/replay, which share this one CtlIn snapshot and injection seam.
@@ -2467,6 +2998,25 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 						gd.tiltLvl    = (uint8_t)tiltTw[0].level;
 						gd.tiltAngTop = tiltTw[0].ang;
 						gd.tiltAngBot = tiltTw[1].ang;
+						// phase 15 (A6.5.3): the TOP game's peer — the surface that actually fires
+						// in a same-console run, because the D3 CSV's peer columns only write during
+						// a wireless session and P-G3 turns presence off for the whole of one. Same
+						// PREVIOUS-frame relationship as the tilt block above, for the same reason.
+						// A pure read of state already in hand: no game RAM, no solve, no new sync.
+						{
+							int pg = swapped ? 1 : 0;                  // the game on the TOP screen
+							const PresenceState* gps = &presSt[pg];
+							const PeerPresence*  gpr = &gps->rec[0];
+							int have = gps->have[0] ? 1 : 0;
+							gd.prLive   = (uint8_t)presence_liveness(gps, 0);
+							gd.prDrawn  = (uint8_t)(presDraw[pg] ? 1 : 0);
+							gd.prReason = (uint8_t)presOut[pg].reason;
+							gd.prFace   = (int8_t)(have ? (int)gpr->facing : -1);
+							gd.prMapG   = (int16_t)(have ? (int)gpr->mapGroup : -1);
+							gd.prMapN   = (int16_t)(have ? (int)gpr->mapNum   : -1);
+							gd.prPx     = (int16_t)((have && (gpr->flags & PRES_F_SB1VALID)) ? (int)gpr->px : -1);
+							gd.prPy     = (int16_t)((have && (gpr->flags & PRES_F_SB1VALID)) ? (int)gpr->py : -1);
+						}
 						// injKeys carries the TOP game's script mask so D4 injection shows up in the same
 						// timeline as ctx/geo (D4.14 — free correlation, no new log).
 						gs_log_sample(gsTop, gpTop, &gst, 0, (u16)(swapped ? ckB : ckA), &gd, (uint32_t)nowMs);   // screen 0 = top/3D
@@ -2527,6 +3077,37 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 						{ int rxW = 0, txF = 0, busy = 0, pUp = 0;
 						  net_link_get_stats(&rxW, &txF, &busy, &pUp, NULL);
 						  r.rxWordN = rxW; r.txFails = txF; r.busyN = busy; r.peerUp = pUp; }
+						// ---- phase 15 slice M3: the peer columns (SPEC-avatar A6.5) ----
+						// A pure read of state already computed — no game-RAM access, no solve, no
+						// second parked-window pass. DORMANT in this phase by construction: gate
+						// P-G3 blocks the whole feature while wlOn is true (D4.8) and this block
+						// only runs while wlOn is true, so every column below reports the "off"
+						// case. That is the point (A6.5.2): M4's first run is instrumented on day
+						// one rather than retrofitted, and the header/row parity is settled now.
+						// The values are the PREVIOUS frame's solve, exactly like gd.tiltLvl above.
+						{
+							int csvGi = (csvCore == emuA.core) ? 0 : 1;   // presence is keyed by GAME
+							const PresenceState* cps = &presSt[csvGi];
+							const PeerPresence*  cpr = &cps->rec[0];
+							int haveRec = cps->have[0] ? 1 : 0;
+							r.prLive   = presence_liveness(cps, 0);
+							r.prMapg   = haveRec ? (int)cpr->mapGroup : -1;
+							r.prMapn   = haveRec ? (int)cpr->mapNum   : -1;
+							r.prPx     = (haveRec && (cpr->flags & PRES_F_SB1VALID)) ? (int)cpr->px : -1;
+							r.prPy     = (haveRec && (cpr->flags & PRES_F_SB1VALID)) ? (int)cpr->py : -1;
+							r.prSubX   = haveRec ? (int)cpr->subX : 0;
+							r.prSubY   = haveRec ? (int)cpr->subY : 0;
+							r.prFace   = haveRec ? (int)cpr->facing : -1;
+							r.prRound  = haveRec ? cpr->round : 0u;
+							r.prDrawn  = presDraw[csvGi];
+							r.prReason = presOut[csvGi].reason;
+							// A0.2.2's free consistency check: gObjectEvents[0].currentCoords tracks
+							// SaveBlock1.pos + MAP_OFFSET, so this must read 7 whenever both are
+							// valid. Anything else means a mis-mapped mapObjects — the exact class of
+							// defect that would otherwise look like "the avatar is 7 tiles off".
+							r.prObjD = (haveRec && cpr->objX >= 0 && (cpr->flags & PRES_F_SB1VALID))
+							         ? (int)cpr->objX - (int)cpr->px : -1;
+						}
 						static char csvBuf[512];   // static = no per-frame stack/heap (SPEC D3.5)
 						int rl = diag_csv_row(csvBuf, sizeof csvBuf, &r);
 						if (rl > 0) {
@@ -2620,7 +3201,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 						if (c2->kind == PK_SEG)   segSet = ui_seg_hit(c2->x, c2->w, c2->nseg, (float)mtp.px);
 						else if (c2->kind == PK_STEP) adj = (mtp.px < c2->x + 24) ? -1 : (mtp.px > c2->x + c2->w - 24 ? 1 : 0);
 						else if (c2->kind == PK_SWATCH) { int cc = ((int)mtp.px - c2->x) / 30; if (cc<0)cc=0; if (cc>4)cc=4;
-							g_prefs.padColor = cc; settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn); }
+							g_prefs.padColor = cc; settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn); }
 						else activate = true;
 						break;
 					}
@@ -2650,13 +3231,13 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					if (act == ACT_TILT)
 						snprintf(status, sizeof status, isN3DS ? "Tilt: %s (overworld only)" : "Tilt: %s — New 3DS only",
 						         TILT_NAMES[cur]);
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
 					activate = false;
 				}
 				else if (pkind == PK_STEP && adj) {
 					int* v = (act == ACT_VOLA) ? &volA : &volB;
 					*v += adj * 32; if (*v < 0) *v = 0; else if (*v > 256) *v = 256;
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
 					activate = false;
 				}
 				else if (activate && act == ACT_3D) {
@@ -2664,9 +3245,50 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					snprintf(status, sizeof status, "3D %s (slider gates depth)", s3dEnabled ? "on" : "off");
 					activate = false;
 				}
+				// Phase 15 / A6.2 site 1. ACT_PRESENCE is a redesign-only id (>= 100), so like
+				// ACT_3D it needs its own branch here — the legacy `menuSel` chain below only
+				// covers ids 0..19. A6.2.1's status line names the two things the row itself
+				// cannot show: that the feature is same-map + overworld only.
+				else if (activate && act == ACT_PRESENCE) {
+					presenceOn = !presenceOn;
+					if (presenceOn) presence_art_ensure();   // finding 10: the 64 KB sheet is built on
+					                                         // FIRST ENABLE, not at boot. Safe here:
+					                                         // the menu runs before C3D_FrameBegin,
+					                                         // which the blocking display transfer
+					                                         // inside it requires.
+					// FIX PASS (review finding 3). The map-universe gate (SPEC-data D4.3) is CORRECT
+					// and stays: (mapGroup, mapNum) is only meaningful inside ONE game's map table, so
+					// an Emerald + FireRed pair that both report "(3, 12)" would otherwise draw a peer
+					// walking around an unrelated map — a category error that looks like a
+					// mysteriously wrong position. What was missing is that NOTHING SAID SO: the row
+					// turned on, the CO-OP chip stayed dim, and the only clue was the word `universe`
+					// in a debug readout. The user's own carts are exactly that pair, so it is the
+					// FIRST thing they would hit. profile_for is 4 ROM-header reads — main.c:2619
+					// already calls it outside the parked window for the same reason (ROM is
+					// immutable, so it is safe with the workers running).
+					if (!presenceOn) snprintf(status, sizeof status, "Co-op: off");
+					else {
+						const GameProfile* pa = emuA.core ? profile_for(emuA.core) : NULL;
+						const GameProfile* pb = emuB.core ? profile_for(emuB.core) : NULL;
+						int ga = pa ? presence_game_id(pa->code) : PRES_GAME_NONE;
+						int gb = pb ? presence_game_id(pb->code) : PRES_GAME_NONE;
+						// (the strings are kept short on purpose: `status` is 48 bytes and a truncated
+						//  explanation is worse than the silence it replaces)
+						if (ga == PRES_GAME_NONE || gb == PRES_GAME_NONE)
+							snprintf(status, sizeof status, "Co-op: on — no profile: nothing draws");
+						else if (ga != gb)
+							snprintf(status, sizeof status, "Co-op: on — %s vs %s: no peer",
+							         ga == PRES_GAME_HOENN ? "Hoenn" : "Kanto",
+							         gb == PRES_GAME_HOENN ? "Hoenn" : "Kanto");
+						else
+							snprintf(status, sizeof status, "Co-op: on — same map, overworld only");
+					}
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
+					activate = false;
+				}
 				else if (activate && (act == ACT_PREVIEW_PAD || act == ACT_PREVIEW_SMART)) {
 					touchMode = (act == ACT_PREVIEW_PAD) ? TOUCH_PAD : TOUCH_SMART;
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
 					menuOpen = false; activate = false;
 				}
 				
@@ -2702,24 +3324,24 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					audioMode = (audioMode + 1) % 3;
 					snprintf(status, sizeof status, "Audio: %s", AUDIO_NAMES[audioMode]);
 					audio_reset_stream();                        // clean cut between modes
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
 				}
 				else if (menuSel == 3) {                         // Touch mode (off / gamepad / smart)
 					touchMode = (touchMode + 1) % 3;
 					snprintf(status, sizeof status, "Touch: %s", TOUCH_NAMES[touchMode]);
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
 				}
 				else if (menuSel == 4) {                         // Frameskip (unfocused game)
 					fsOn = !fsOn;
 					gbacore_set_frameskip(emuA.core, (fsOn && focused != 0) ? 2 : 0);
 					gbacore_set_frameskip(emuB.core, (fsOn && focused != 1) ? 2 : 0);
 					snprintf(status, sizeof status, "Frameskip %s", fsOn ? "on" : "off");
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
 				}
 				else if (menuSel == 5) {                         // Toggle HUD
 					hudMode = (hudMode + 1) & 3;
 					snprintf(status, sizeof status, "HUD: %s", HUD_NAMES[hudMode]);
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
 				}
 				else if (menuSel == 6 && single) {               // Swap: meaningless with one game
 					snprintf(status, sizeof status, "No swap in 1-game mode");
@@ -2728,7 +3350,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					swapped = !swapped; menuOpen = false;
 					snprintf(toast, sizeof toast, "Layout: %s", swapped ? "B top / A bottom" : "A top / B bottom");
 					toastTimer = 90;
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
 				}
 				else if ((menuSel == 7 || menuSel == 8 || menuSel == 9) && (linkOn || netOn || wlOn)) {
 					snprintf(status, sizeof status, "Stop the link first");   // save/load/.sav would race a live core
@@ -2761,22 +3383,22 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 				else if (menuSel == MENU_DOF_IDX) {              // HD-2D tilt-shift DoF (top screen)
 					dofOn = !dofOn;
 					snprintf(status, sizeof status, "DoF %s", dofOn ? "on" : "off");
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
 				}
 				else if (menuSel == MENU_BLOOM_IDX) {            // HD-2D LDR bloom (focused top)
 					bloomOn = !bloomOn;
 					snprintf(status, sizeof status, "Bloom %s", bloomOn ? "on" : "off");
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
 				}
 				else if (menuSel == MENU_LIGHT_IDX) {            // HD-2D time-of-day lighting
 					lightOn = !lightOn;
 					snprintf(status, sizeof status, "Light %s", lightOn ? "on" : "off");
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
 				}
 				else if (menuSel == MENU_VIVID_IDX) {            // bright+sharp "sign look" everywhere
 					vividOn = !vividOn;
 					snprintf(status, sizeof status, "Vivid %s", vividOn ? "on" : "off");
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
 				}
 				else if (menuSel == MENU_WIRELESS_IDX) {        // wireless multi-console lobby (M1) -> M3 link
 					if (wlOn) {                                  // already linked -> stop the wireless link
@@ -3014,6 +3636,119 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			for (int sc = 0; sc < 2; sc++)
 				tilt_tween_step(&tiltTw[sc], tiltLvl[sc], tilt_angle_deg_for_level(tiltLvl[sc]), dtTilt);
 		}
+		// ---- phase 15 slice M1: co-op presence SOLVE (SPEC-data D6.2) ----
+		// One call per GAME, in the render phase next to the tilt tween, exactly as D6.1 splits the
+		// work: main.c does the reads, the publishes and the solves — and contains NO presence
+		// gating logic of its own, just as it contains no tilt gating logic. presence_solve owns the
+		// P-G1..P-G9 ladder, the anchor math, the D4.7 hold and the D5.5 filter, and it mutates only
+		// its PresenceState. Running it every frame (gate open or shut) is what keeps `reason`
+		// meaningful on the frames that do NOT draw, which is the entire point of slice M1: the HUD
+		// readout below must be able to say WHY there is no peer without a rebuild.
+		for (int gi = 0; gi < 2; gi++) {
+			PresenceIn pin;
+			pin.enabled  = presenceOn ? 1 : 0;                        // P-G1
+			pin.menuOpen = menuOpen ? 1 : 0;                          // P-G2
+			pin.linkAny  = (linkOn || netOn || wlOn) ? 1 : 0;         // P-G3 (D4.8)
+			pin.slot     = 0;                                         // PRES_MAX_PEERS == 1
+			pin.self     = presSelf[gi];
+			presDraw[gi] = presence_solve(&presSt[gi], &pin, &presOut[gi]);
+			// ---- slice M2: the walk phase (SPEC-avatar A2.6.3/A2.6.4) ----
+			// Driven by the PEER's own accumulated world travel, never by the foot anchor: the
+			// anchor is a DIFFERENCE, so a host-driven accumulator would animate a standing peer
+			// every time the player walks (and freeze them when both walk in step). A frame that
+			// does not draw RESETS the cycle, so a peer who leaves the screen and comes back does
+			// not resume mid-stride from a stale accumulator; on a D4.7 hold frame the anchor is
+			// frozen, travel stays 0, and the peer settles into STAND after PRES_IDLE_FRAMES —
+			// which is exactly what a frozen peer should look like.
+			if (presDraw[gi]) presPose[gi] = presence_walk_step(&presWalk[gi], &presSt[gi].rec[0]);
+			else { presence_walk_reset(&presWalk[gi]); presPose[gi] = PRES_POSE_STAND; }
+
+			// ---- slice M3: identity + the meeting predicate (SPEC-avatar A4/A5) ----
+			// PHASE.md invariant 6 read literally: with the pref off this whole block is skipped —
+			// no decode, no memcmp, no predicate — and the card is forced shut, so a presence-off
+			// frame does exactly what it did before phase 15. (presence_solve above deliberately
+			// DOES run either way, because slice M1's readout must be able to say WHY nothing drew.)
+			if (!presenceOn) {
+				presence_card_reset(&presCard[gi]);
+				memset(&presMeet[gi], 0, sizeof presMeet[gi]);
+			} else {
+				// A4.5.2 — the decoded name is CACHED and re-decoded ONLY when the raw 8 bytes
+				// change. A C2D text parse per surface per frame is the thing A7.2 H9 says to
+				// suspect first if the frame budget moves, so the decode never runs in a draw.
+				const PeerPresence* pr = &presSt[gi].rec[0];
+				if (!presNameOk[gi] || memcmp(presNameRaw[gi], pr->name, 8) != 0) {
+					memcpy(presNameRaw[gi], pr->name, 8);
+					presNameOk[gi] = true;
+					if (pr->flags & PRES_F_IDENT)
+						gbatext_decode(pr->name, 8, presNameTxt[gi], (int)sizeof presNameTxt[gi]);
+					else
+						presNameTxt[gi][0] = '\0';    // A0.4: no identity => nameplate suppressed,
+					                                  //   the avatar still draws
+				}
+				// A5.1/A5.2 — adjacency + facing, from the two records already in hand. The RAW
+				// nibbles come along because PeerPresence.facing is always 1..4 (presence_fill_core
+				// folds an unavailable facing to SOUTH), so only the raw value can tell "facing
+				// south" from "we have no idea" — which is what A5.2.1's degraded mode turns on.
+				// Index: presSelf[gi] is game gi's own record, presSt[gi].rec[0] is the OTHER
+				// game's, hence presFaceRaw[gi] and presFaceRaw[gi ^ 1].
+				presence_meet(&presSelf[gi], (int)presFaceRaw[gi],
+				              pr,            (int)presFaceRaw[gi ^ 1], &presMeet[gi]);
+				// A5.3 (ABSOLUTE) — presence does not consume, swallow, remap or synthesise a single
+				// key. This OBSERVES kDown, which was already assembled and is already on its way to
+				// the game this frame. There is no free button left on the 3DS pad anyway (X = screen
+				// swap, Y = focus, ZL = filter, ZR = scale, everything else is forwarded), and
+				// intercepting A is the input-side version of the write this whole phase refuses to
+				// make. The trigger is A on the FOCUSED game only, which is also what makes the card
+				// unambiguous when both games have a peer beside them.
+				PresCardIn ci;
+				ci.enabled  = 1;              // this branch IS presenceOn; the field stays in the
+				                              //   input struct because the pure-C FSM must be able
+				                              //   to close on it (TEST 35 drives exactly that case)
+				ci.drawn    = presDraw[gi];
+				ci.meet     = presMeet[gi].meet;
+				ci.menuOpen = menuOpen ? 1 : 0;
+				// A5.4.4 — the prompt and the card go away with the rest of that screen's chrome.
+				// The game a peer belongs to is on the screen `swapped` puts it on, and hudMode's
+				// bit 0 is the top screen, bit 1 the bottom.
+				ci.hudOn    = (hudMode & ((gi == (swapped ? 1 : 0)) ? 1 : 2)) ? 1 : 0;
+				ci.aEdge    = (gi == focused && (kDown & KEY_A)) ? 1 : 0;
+				ci.bEdge    = (gi == focused && (kDown & KEY_B)) ? 1 : 0;
+				if (presence_card_step(&presCard[gi], &ci))
+					presence_card_fill(pr, &presCardTx[gi]);   // A4.5.3/A4.4.5: the SAME record the
+					                                           // avatar uses — no extra RAM read
+			}
+		}
+		const int presTopGame = swapped ? 1 : 0;   // the game whose screen the top HUD describes
+		const int presBotGame = swapped ? 0 : 1;   // ...and the bottom's (A2.7.1: the roles invert)
+		// Slice M3 — which pills are up, resolved ONCE per SCREEN through the single policy function
+		// (A4.4.2 / open question O-A4). main.c never re-decides this: when the always-on vs
+		// on-approach taste call is made on hardware it is one line in presence_surfaces and nothing
+		// here moves. `nearTiles` is the Chebyshev tile distance, which the shipped policy ignores
+		// and the O-A4 alternative would use.
+		PresChrome presCh[2];
+		{
+			const int gm[2]  = { presTopGame, presBotGame };
+			const int hud[2] = { (hudMode & 1) ? 1 : 0, (hudMode & 2) ? 1 : 0 };
+			for (int sc = 0; sc < 2; sc++) {
+				int g  = gm[sc];
+				int ax = presOut[g].dTileX < 0 ? -presOut[g].dTileX : presOut[g].dTileX;
+				int ay = presOut[g].dTileY < 0 ? -presOut[g].dTileY : presOut[g].dTileY;
+				presCh[sc].buf  = txtBuf;
+				presCh[sc].name = presNameTxt[g];
+				presCh[sc].surf = presence_surfaces(presDraw[g], hud[sc], presNameTxt[g][0] != '\0',
+				                                    presMeet[g].meet, presCard[g].open,
+				                                    ax > ay ? ax : ay);
+				// FIX PASS (review finding 9): measure ONCE per screen per frame, and only for a
+				// surface that is actually up — a closed gate still costs zero text work (A0.1.2).
+				// txtBuf was cleared above (main.c's C2D_TextBufClear), so these parses land in this
+				// frame's buffer exactly like every other chrome measurement.
+				presCh[sc].plateW  = (presCh[sc].surf & PRES_SURF_PLATE)
+				                   ? ui_text_w(txtBuf, presNameTxt[g], 0.32f) + 12.0f : 0.0f;
+				presCh[sc].promptW = (presCh[sc].surf & PRES_SURF_PROMPT)
+				                   ? ui_text_w(txtBuf, PRES_PROMPT_TEXT, 0.32f) + 12.0f : 0.0f;
+			}
+		}
+
 		// THE invariant-1 check, once per screen: level > 0 OR angle > 0 (tween included).
 		bool tiltTop = tilt_active(&tiltTw[0]);
 		bool tiltBot = tilt_active(&tiltTw[1]);
@@ -3072,8 +3807,23 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		if (dofPass) dof_bands(top, &dofTexA, scaleMode[0], dofLvlTop, dofLvlBot, warpOk ? +slider3d : 0.0f);   // bands OVER the pops
 		if (bloomPass) bloom_add(top, &bloomTex, scaleMode[0], bloomLvl, 0);   // additive glow, over the blur
 		if (uipop) ui_pop_eye(top, topG, &depth3d, scaleMode[0], +UIPOP3D_PX * slider3d, sharpTop, &preTex);   // UI panels pop hardest
+		// Phase 15 slice M2 (SPEC-avatar A2.1): the co-op avatar goes AFTER the pop/DoF/bloom/UI
+		// passes — each of them re-draws sub-rects of the GAME texture over the frame, so anything
+		// drawn earlier is overpainted by background pixels — and BEFORE light_pass, which is a
+		// MULTIPLY grade over the whole frame box: the avatar is world content and must take the
+		// time-of-day grade with the map it stands on, or a bright peer floats over a dusk route.
+		// Under tilt all four of those passes are suppressed (&& !tiltTop below), so this one
+		// insertion point lands immediately after render_game there — one site, both cases (A2.1.1).
+		presence_draw_screen(top, &presOut[presTopGame], &presSt[presTopGame].rec[0], &presPose[presTopGame],
+		                     1, scaleMode[0], 400.0f, 240.0f, tiltTop ? &tiltVw : NULL, topTint, &presCh[0]);
 		if (litPass) light_pass(top, &depth3d, scaleMode[0], &lenv);   // lit LAST -> tints the UI panels too (sign is not a bright patch)
 		if (!menuOpen) {
+			// Slice M3 / A5.4.2: the Card, over the game image and UNDER the HUD bar drawn just
+			// below, as a !menuOpen overlay. AFTER light_pass on purpose — unlike the nameplate it
+			// is a UI panel, not world content, so it must not take the time-of-day grade. The
+			// hudMode suppression (A5.4.4) is inside the FSM, so `open` is already false there and
+			// this needs no second condition that could disagree with it.
+			if (presCard[presTopGame].open) presence_draw_card(txtBuf, &presCardTx[presTopGame], 400.0f);
 			if (hudMode & 1) {
 				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 400.0f, 14.0f, THEME_HUD_BAR);
 				if (focScreen == 0) C2D_DrawRectSolid(0.0f, 14.0f, 0.0f, 400.0f, 2.0f, clrHi);
@@ -3124,13 +3874,85 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 						rx -= cw;
 						ui_chip(txtBuf, tc, rx, 0.5f, tilt_active(&tiltTw[0]) ? g_ui.acc : THEME_ON_DARK_DIM);
 					}
+					// Phase 15 / A6.4: the CO-OP chip, immediately LEFT of the tilt chip, same
+					// right-to-left `rx -= cw` flow. The COLOUR carries the gate exactly as the tilt
+					// chip's does: accent = presence resolved to DRAW on this screen's game this
+					// frame, dim = the setting is on but the ladder closed (different map, not in
+					// the overworld, no profile, a live link, stale). That is what makes the M1
+					// milestone photographable and it is the fastest triage for "why do I not see
+					// my friend" — if the chip is dim it is a data/gate problem, not a draw problem.
+					// Costs nothing while the pref is off, which is the shipped default.
+					if (presenceOn) {
+						const char* pc = "CO-OP";
+						float cw = ui_text_w(txtBuf, pc, 0.32f) + 12.0f;
+						rx -= cw + 6.0f;
+						ui_chip(txtBuf, pc, rx, 0.5f, presDraw[presTopGame] ? g_ui.acc : THEME_ON_DARK_DIM);
+					}
 				}
 			} else if (focScreen == 0) {
 				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 400.0f, 4.0f, clrHi);
 			}
+			// ---- phase 15 slice M1: THE READOUT (SPEC-avatar A4.4.3 — the slice's acceptance test)
+			// "A HUD line naming the peer + their tile", which must work BEFORE any sprite exists.
+			// It is deliberately a DEBUG line, not final chrome: this slice's whole job is to prove
+			// the data, so it prints everything needed to diagnose a missing peer without a rebuild
+			// — both maps side by side (a mismatch is the commonest cause and the gate reports it as
+			// `map`), both tiles, the FOLDED facing next to the RAW nibble (D2.4.1's promotion
+			// criterion: one run reading 1/2/3/4 as the player walks D/U/L/R promotes the
+			// facingDirection offset to VERIFIED — printing only the folded value would let a
+			// garbage nibble masquerade as a genuine "facing south"), the tile delta, the record's
+			// AGE in frames and the heartbeat stall (the two liveness tiers, D3.5/D3.6.1), the
+			// liveness tier itself, and the P-G reason code. The foot anchor is appended when the
+			// gate is open — that number is what M2's calibration run (D5.4.1 / Open Q2) reads.
+			// Bottom-left of the TOP screen, matching where the smart-touch diagnostics sit on the
+			// bottom screen (y=224); it costs nothing while the pref is off and it respects the
+			// user's per-screen HUD preference like every other chrome surface (A4.4.2).
+			if (presenceOn && (hudMode & 1)) {
+				const PresenceState* pst = &presSt[presTopGame];
+				const PeerPresence*  pr  = &pst->rec[0];
+				const PeerPresence*  se  = &presSelf[presTopGame];
+				const PresenceOut*   po  = &presOut[presTopGame];
+				char nm[9] = "?";
+				if (pr->flags & PRES_F_IDENT) presence_name_ascii(pr->name, nm);
+				char tidBuf[8] = "-----";
+				if (pr->flags & PRES_F_IDENT) snprintf(tidBuf, sizeof tidBuf, "%05u", (unsigned)pr->tid);
+				// FIX PASS (review finding 11): both counters are CAPPED for display. They are
+				// unbounded and they keep counting — presence_begin_round runs every non-menu frame
+				// while publishing is skipped whenever the cost guard closes (any link/net/wl
+				// session, the very P-G3 case this line exists to explain), so at 60/s ten minutes
+				// of link makes `a` and `h` five digits each. That is +8 characters on a line whose
+				// own budget below is ~73 characters / ~340 px of a 400 px screen, and ui_text does
+				// no measurement, no ellipsis and no clamp — so the overflow is silently clipped at
+				// x = 400, taking the reason code, the HOLD flag and the foot anchor with it. Those
+				// are exactly the fields a photograph needs. Both counters are only ever read as
+				// "0 / small / saturated", and 999+ says saturated as well as 36000 does.
+				#define PRES_RO_CAP(v) ((unsigned)(v) > 999u ? 999u : (unsigned)(v))
+				unsigned age = pst->have[0] ? PRES_RO_CAP(pst->round - pst->seenRound[0]) : 0u;
+				unsigned hbs = PRES_RO_CAP(presence_hb_stall(pst, 0));
+				#undef PRES_RO_CAP
+				char anch[20] = "";
+				if (presDraw[presTopGame])
+					snprintf(anch, sizeof anch, " @%d,%d", (int)(po->footX + 0.5f), (int)(po->footY + 0.5f));
+				// Kept terse and drawn at 0.32 on purpose: the typical line
+				//   "CO-OP me 3-12@14,9 | Nils#01234 3-12@17,8 f1/1 d+3,-1 a0 h0 L2 ok @120,88"
+				// is ~73 characters, which is about 340 px at this size — it must not run off the
+				// 400 px screen, because a readout whose right-hand half (the reason code and the
+				// anchor) is clipped is exactly the half a photograph needs.
+				char pl[128];
+				snprintf(pl, sizeof pl,
+				         "CO-OP me %d-%d@%d,%d | %s#%s %d-%d@%d,%d f%d/%d d%+d,%+d a%u h%u L%d %s%s%s",
+				         (int)se->mapGroup, (int)se->mapNum, (int)se->px, (int)se->py,
+				         nm, tidBuf,
+				         (int)pr->mapGroup, (int)pr->mapNum, (int)pr->px, (int)pr->py,
+				         (int)pr->facing, (int)presFaceRaw[presTopGame ^ 1],
+				         po->dTileX, po->dTileY, age, hbs, po->liveness,
+				         presence_off_reason(po->reason), po->held ? " HOLD" : "", anch);
+				ui_text(txtBuf, pl, 6.0f, 226.0f, 0.32f,
+				        presDraw[presTopGame] ? g_ui.acc : THEME_ON_DARK_DIM);
+			}
 			if (toastTimer > 0) C2D_DrawText(&tToast, C2D_WithColor, 8.0f, (hudMode & 1) ? 20.0f : 8.0f, 0.0f, 0.5f, 0.5f, clrHi);
 		} else {
-			draw_paused_summary(txtBuf, topName, botName, s3dEnabled, dofOn, bloomOn, lightOn, vividOn, touchMode, linkOn, netOn, wlOn);
+			draw_paused_summary(txtBuf, topName, botName, s3dEnabled, dofOn, bloomOn, lightOn, vividOn, touchMode, linkOn, netOn, wlOn, presenceOn);
 		}
 
 		// top RIGHT eye = the SAME (top) game -> single-game stereoscopic depth. Player pops forward
@@ -3145,8 +3967,14 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		if (dofPass) dof_bands(topR, &dofTexA, scaleMode[0], dofLvlTop, dofLvlBot, warpOk ? -slider3d : 0.0f);
 		if (bloomPass) bloom_add(topR, &bloomTex, scaleMode[0], bloomLvl, 1);
 		if (uipop) ui_pop_eye(topR, topG, &depth3d, scaleMode[0], -UIPOP3D_PX * slider3d, sharpTop, &preTex);
+		// A2.8: the right eye draws the avatar at the IDENTICAL frame-space position (zero
+		// disparity), and A2.6.2: with the identical NULL tint the left eye's `topTint` becomes at
+		// this call site. Both eyes therefore agree pixel for pixel except for the game image's own
+		// per-eye pops, which is what "the avatar sits on the screen plane" means.
+		presence_draw_screen(topR, &presOut[presTopGame], &presSt[presTopGame].rec[0], &presPose[presTopGame],
+		                     1, scaleMode[0], 400.0f, 240.0f, tiltTop ? &tiltVw : NULL, NULL, &presCh[0]);
 		if (litPass) light_pass(topR, &depth3d, scaleMode[0], &lenv);
-		if (menuOpen) draw_paused_summary(txtBuf, topName, botName, s3dEnabled, dofOn, bloomOn, lightOn, vividOn, touchMode, linkOn, netOn, wlOn);
+		if (menuOpen) draw_paused_summary(txtBuf, topName, botName, s3dEnabled, dofOn, bloomOn, lightOn, vividOn, touchMode, linkOn, netOn, wlOn, presenceOn);
 
 		// bottom screen (+ menu overlay when open). render_game leaves `bot` bound.
 		// Phase 14 slice T3: the bottom screen tilts too — but ONLY while every touch mode is off
@@ -3164,7 +3992,24 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		TiltDraw tiltBL = { &tiltVwB, botMod, 2, -1 };   // slab 2 = the bottom image (R3.5.1), built
 		render_game(botG, bot, preTgt, &preTex, 320.0f, 240.0f, scaleMode[1], smooth[1], botTint, clrBg,
 		            tiltBot ? &tiltBL : NULL);
+		// A2.7: the bottom screen runs none of the pop/DoF/bloom/light passes, so the avatar draws
+		// immediately after render_game and before the HUD. A2.7.1: the PEER here is whichever game
+		// is on the TOP screen — the roles invert — and `swapped` is resolved once, in exactly the
+		// place the renderer already resolves it for topG/botG. A2.7.2: the avatar is NOT a touch
+		// target; smart touch pathfinds on the real game UI and draws its own diagnostics after
+		// this, so tapping "on" the peer does nothing, which is the honest ceiling, not a bug.
+		presence_draw_screen(bot, &presOut[presBotGame], &presSt[presBotGame].rec[0],
+		                     &presPose[presBotGame],
+		                     1, scaleMode[1], 320.0f, 240.0f, tiltBot ? &tiltVwB : NULL, botTint,
+		                     &presCh[1]);
 		if (!menuOpen) {
+			// Slice M3: the Card belongs to the FOCUSED game — the one whose A press opened it —
+			// so it draws on whichever screen that game is on. A4.4.4 says "a top-screen overlay",
+			// which is the single-peer reading of the same rule; with two games each having their
+			// own peer, pinning it to the top would put a Card about the bottom game's neighbour on
+			// the other screen. Only one can ever be open at a time (the A edge is fed to the
+			// focused game alone), so the two call sites are mutually exclusive in practice.
+			if (presCard[presBotGame].open) presence_draw_card(txtBuf, &presCardTx[presBotGame], 320.0f);
 			if (hudMode & 2) {
 				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 14.0f, THEME_HUD_BAR);
 				if (focScreen == 1) C2D_DrawRectSolid(0.0f, 14.0f, 0.0f, 320.0f, 2.0f, clrHi);
@@ -3227,7 +4072,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					switch (c->act) { case ACT_SWAP: on=swapped; break; case ACT_FS: on=fsOn; break; case ACT_MUTE: on=muted; break;
 						case ACT_3D: on=s3dEnabled; break; case ACT_DOF: on=dofOn; break; case ACT_BLOOM: on=bloomOn; break;
 						case ACT_LIGHT: on=lightOn; break; case ACT_VIVID: on=vividOn; break; case ACT_LINK: on=linkOn; break;
-						case ACT_NETLINK: on=netOn; break; }
+						case ACT_NETLINK: on=netOn; break; case ACT_PRESENCE: on=presenceOn; break; }   // A6.2 site 2
 					assets_toggle(on, x, y);
 					if (sel) ui_border(x - 2.0f, y - 2.0f, w + 4.0f, h + 4.0f, g_ui.acc, 1.5f);
 					break;
@@ -3382,9 +4227,16 @@ static void run_settings(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextB
 	int scaleMode[2] = { SCALE_FIT, SCALE_FIT }; bool smooth[2] = { false, false };
 	bool swapped = false; int hudMode = 3, audioMode = AUD_SOLO, volA = 256, volB = 256, touchMode = TOUCH_OFF;
 	bool fsOn = false, dofOn = true, bloomOn = true, lightOn = true, vividOn = false, muted = false, s3dEnabled = true;
+	// Phase 15 / A6.2 sites 3+4: the LINK tab is NOT one of the four tabs this pre-game screen
+	// exposes (TABS below is Display/Audio/Enhance/Touch), so the CO-OP row is unreachable here
+	// today — but this local is NOT optional. Every SETSAVE() writes the WHOLE Settings struct, so
+	// without loading and re-saving the pref, one visit to the pre-game settings screen would
+	// silently wipe the user's co-op setting. The two switch cases are added for the day the tab
+	// list grows; the load/save round trip is what actually matters right now.
+	bool presenceOn = false;
 	int focused = 0;
-	settings_load(scaleMode, smooth, &swapped, &hudMode, &audioMode, &volA, &volB, &touchMode, &fsOn, &dofOn, &bloomOn, &lightOn, &vividOn);
-	#define SETSAVE() settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn)
+	settings_load(scaleMode, smooth, &swapped, &hudMode, &audioMode, &volA, &volB, &touchMode, &fsOn, &dofOn, &bloomOn, &lightOn, &vividOn, &presenceOn);
+	#define SETSAVE() settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn)
 	static const int TABS[4] = { 1, 2, 3, 5 };   // Display, Audio, Enhance, Touch (indices into PTABS/PT_PLATE)
 	int ti = 0, row = 0;
 
@@ -3436,6 +4288,7 @@ static void run_settings(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextB
 			case ACT_SWAP: swapped=!swapped; break; case ACT_FS: fsOn=!fsOn; break; case ACT_MUTE: muted=!muted; break;
 			case ACT_3D: s3dEnabled=!s3dEnabled; break; case ACT_DOF: dofOn=!dofOn; break; case ACT_BLOOM: bloomOn=!bloomOn; break;
 			case ACT_LIGHT: lightOn=!lightOn; break; case ACT_VIVID: vividOn=!vividOn; break;
+			case ACT_PRESENCE: presenceOn=!presenceOn; break;   // A6.2 site 3 (see the note below)
 			case ACT_PREVIEW_PAD: touchMode=TOUCH_PAD; break; case ACT_PREVIEW_SMART: touchMode=TOUCH_SMART; break;
 			default: break; }
 			SETSAVE();
@@ -3465,7 +4318,7 @@ static void run_settings(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextB
 			switch (c->kind) {
 			case PK_TOG: { int on=0; switch(c->act){case ACT_SWAP:on=swapped;break;case ACT_FS:on=fsOn;break;case ACT_MUTE:on=muted;break;
 				case ACT_3D:on=s3dEnabled;break;case ACT_DOF:on=dofOn;break;case ACT_BLOOM:on=bloomOn;break;case ACT_LIGHT:on=lightOn;break;
-				case ACT_VIVID:on=vividOn;break;}
+				case ACT_VIVID:on=vividOn;break;case ACT_PRESENCE:on=presenceOn;break;}   // A6.2 site 4
 				assets_toggle(on,x,y); if(sel) ui_border(x-2,y-2,w+4,h+4,g_ui.acc,1.5f); break; }
 			case PK_SEG: { static const char* const A[3]={"1:1","Aspect-fit","Stretch"};static const char* const F[2]={"Sharp","Smooth"};
 				static const char* const H[4]={"off","top","bottom","both"};static const char* const M[3]={"Solo","Mixed","Split"};
@@ -3561,6 +4414,13 @@ int main(int argc, char** argv) {
 	assets_init();   // device-native art pack (plates/widgets/fonts); code-drawn fallback if absent
 	warp_grid_init();   // M2 grid-warp shader (falls back to the quad warp if it fails)
 	tilt_init();        // phase 14 tilt shader + vertex arena (AFTER warp_grid_init: reuses warpIbo)
+	// (phase 15's co-op avatar sheet is deliberately NOT built here — presence_art_ensure() is
+	//  called from run_session when the stored pref is on, and from the pause-menu row the moment it
+	//  is turned on. FIX PASS finding 10: the pref ships default-OFF and the sheet is a permanent
+	//  64 KB of linear heap next to the GBA framebuffers, the ~100 KB tilt VBO and the prescale
+	//  textures, so a user who never enables co-op must not pay for it. Still built ONCE and still
+	//  off the per-frame path — just at the first moment it can be needed. presence_art_fini below
+	//  is safe whether or not it ever ran.)
 	audio_init();   // ndsp; silently no-ops if dspfirm.cdc isn't present
 	netlink_init(); // wireless link (UDS); no-ops without the .cia's nwm::UDS grant
 	s_hasPtm = R_SUCCEEDED(ptmuInit());   // battery level for the HUD
@@ -3576,8 +4436,8 @@ int main(int argc, char** argv) {
 		// The full read happens again in run_session; this one only wants the g_prefs side effects.
 		int sm[2] = { 0, 0 }; bool sm2[2] = { false, false }; bool sw = false;
 		int hm = 3, am = 0, va = 256, vb = 256, tm = 0;
-		bool f1 = false, f2 = true, f3 = true, f4 = true, f5 = false;
-		settings_load(sm, sm2, &sw, &hm, &am, &va, &vb, &tm, &f1, &f2, &f3, &f4, &f5);
+		bool f1 = false, f2 = true, f3 = true, f4 = true, f5 = false, f6 = false;   // f6 = presence
+		settings_load(sm, sm2, &sw, &hm, &am, &va, &vb, &tm, &f1, &f2, &f3, &f4, &f5, &f6);
 	}
 	run_splash(top, bot, txtBuf, perfWarn);   // animated boot splash (skippable) + perf warning
 
@@ -3603,6 +4463,7 @@ int main(int argc, char** argv) {
 	audio_exit();
 	if (s_hasPtm) ptmuExit();
 	C2D_TextBufDelete(txtBuf);
+	presence_art_fini();
 	tilt_fini();
 	warp_grid_fini();
 	C2D_Fini();

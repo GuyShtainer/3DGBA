@@ -304,6 +304,36 @@ typedef struct {
 	int      evTxQ;                      // EVENT channel outbound un-ACKed backlog (run-#6 overflow X-ray)
 	int      rxWordN, txFails, busyN;    // WORD plane: received words / send fails / TX-busy retries
 	int      peerUp;                     // unicast peer resolved 0/1
+	// ---- phase 15 co-op presence (SPEC-avatar A6.5), APPENDED in column order -----------------
+	// The own-game columns above (mapg/mapn/px/py/objx/objy/face) describe the CSV core; these
+	// describe the PEER that core's presence state holds, so a missing avatar is diagnosable from
+	// one row instead of from a rebuild.
+	//
+	// DORMANT IN THIS PHASE, ON PURPOSE (A6.5.2). The CSV only writes while a wireless session is
+	// armed (main.c: s_csvFile && wlOn) and presence gate P-G3 blocks linkOn||netOn||wlOn outright
+	// (SPEC-data D4.8: main.c only PARKS the workers when none of those is on, so during a link the
+	// parked-window guarantee — the one that makes a cross-game read safe — does not hold, and
+	// presence DRAWS its reads). So in a same-console phase every column below reads
+	// "off"/-1 by construction. They exist so M4's first run is instrumented on day one rather
+	// than retrofitted, and so the header/row parity is settled now.
+	//
+	// Values are the PREVIOUS frame's solve: this row is filled in the parked window and
+	// presence_solve runs later, in the render phase — exactly the relationship the gs log's
+	// d_tiltLvl column already documents ("the state of the frame the player just saw").
+	int      prLive;          // presence_liveness(): 0 none / 1 connected / 2 active. A6.5 names a
+	                          //   0/1 "live" bit; the shipped tier is strictly more informative and
+	                          //   IS the pm-rom-abi.md §7.4 two-tier signal (connected != active)
+	int      prMapg, prMapn;  // peer map (-1 = n/a) — a mismatch with mapg/mapn explains a missing
+	                          //   avatar in one glance
+	int      prPx, prPy;      // peer tile (-1 = n/a)
+	int      prSubX, prSubY;  // peer sub-tile camera phase, -15..15 (0 when PRES_F_CAM is clear)
+	int      prFace;          // peer facing 1..4 (-1 = no record)
+	uint32_t prRound;         // the peer record's producer round — FROZEN while prLive is nonzero
+	                          //   is the wedge signal pm-rom-abi.md §3 describes
+	int      prDrawn;         // 1 = the gate ladder resolved to DRAW for the CSV core's game
+	int      prReason;        // PRES_OFF_* when it did not (0 = drawing) — "why" without a rebuild
+	int      prObjD;          // peer objX - px: must be exactly 7 when both are valid (the free
+	                          //   consistency check on mapObjects vs SaveBlock1); -1 = unavailable
 } DiagCsvRow;
 
 // ROW CAP (review fix 2026-08-03 — a design gap in SPEC D3.5, which specs open-once + flush-256

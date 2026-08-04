@@ -25,6 +25,14 @@ float ui_text_w(C2D_TextBuf buf, const char* s, float sz);                      
 float ui_chip(C2D_TextBuf buf, const char* s, float x, float y, u32 col);
 // Filled pill chip (label chips like "TOUCH - GAMEPAD", badges "A"/"B"): bg + text.
 float ui_chip_fill(C2D_TextBuf buf, const char* s, float x, float y, u32 bg, u32 fg);
+// ...the same two chips when the caller ALREADY measured the label and needs the width BEFORE it
+// can place the chip (a centred pill: x depends on w). ui_chip/ui_chip_fill measure internally, so
+// the centred pattern "w = ui_text_w(); x = f(w); ui_chip(x)" parses the same string THREE times —
+// once to measure, once inside the chip to measure again, once to draw. Passing the width in drops
+// that to one parse per draw. `w` is the TOTAL chip width (label + 12 px of padding), i.e. exactly
+// what ui_chip returns.
+float ui_chip_w     (C2D_TextBuf buf, const char* s, float x, float y, float w, u32 col);
+float ui_chip_fill_w(C2D_TextBuf buf, const char* s, float x, float y, float w, u32 bg, u32 fg);
 // Segmented control: track panel + n options; the active one is an acc-filled pill.
 // Returns nothing; hit-test with ui_seg_hit using the same geometry.
 void ui_segmented(C2D_TextBuf buf, float x, float y, float w, float h,
