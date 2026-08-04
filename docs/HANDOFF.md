@@ -35,8 +35,8 @@
 
 ## Next steps (resume here)
 
-1. **TEST the UI build (now folded into `3DGBA.cia` **2026-08-04 00:36**; unchanged since 0708 11:26) — never hands-on.** Boot the app (no game needed). Check: (a) game-select **1 Game / 2 Games** segmented reads cleanly (the pill-seam "huge ugly line" bug is fixed); (b) **drag on the bottom screen scrolls** the game list (tap still picks); (c) **ZR** or the **"settings·ZR"** chip (bottom-left) opens the **settings** screen (Display/Audio/Enhance/Touch) and changes persist. A photo of anything wrong = the fastest path (I render blind). If good → do Next step #3 (finish the HUD + the two overflow tabs + themes).
-2. **HW run #13 — the RUN-#12 FIXES + PHASE-13 DIAGNOSTICS build (`3DGBA.cia` **2026-08-04 00:36** — INSTALL THIS ONE, not the 0716 01:02 or 0803 21:40 cias; same trade fixes, now with the diagnostics layer that makes the run readable, plus the phase-14 tilt shipped Off so it cannot affect this run).** Run #12 root-caused BOTH open bugs (full forensics: `docs/kb/celio/run12/`); both are fixed + PC-tested (suite 417 checks, TESTs 14/15). Test on hardware: (a) trade as usual (must still work — regression risk is the reason for the test); (b) **check the friend's trainer ID post-trade** — expected: a card RENDERS (first-ever linkup shows a canned "3DGBA-ish" card; later linkups/visits show the REAL partner card + name via the new CL_EV_TRAINERCARD/identity cache — `# celio` logs `pCard=/idReal=`); (c) **walk OUT of the room on either console** — expected: BOTH games exit together (the new CL_EV_EXIT_ROOM relay), no black screen (the partner now goes silent at the exit fade so the game's close-gate `gLastRecvQueueCount==0` can pass, then answers the 5FFF — `# celio` logs `exitP=/sessEnd=`); (d) after exiting, go BACK to the counter and link again — the lazy gap-reset must give a fresh session (and now with the REAL partner name/card). **SETUP ON BOTH CONSOLES BEFORE POWERING THE APP (phase-13 diagnostics, 2026-08-03):** (i) **wipe `sdmc:/cias/netlogs/`** — one run = one empty folder in, everything copied out after (the archive workflow); (ii) **`mkdir sdmc:/cias/control`** — this directory's mere existence is the single opt-in that arms D4 movement scripts + D5 record/replay; with no directory the app does zero polls and zero extra file work, so skip it only if you want the run fully hands-on; (iii) drop the move scripts below into that directory if you want items (c)/(d) hands-free. **After a failure POWER OFF — don't press Quit** (that is what lost run #11's JOIN log). **Don't press KEY_Y while linked.** **NEW — copy the phase-13 diagnostics artifacts too** (all in `sdmc:/cias/netlogs/`, alongside the usual `3DGBA_net_*`/`3DGBA_gs_*`): **`3DGBA_csv_<HOST|JOIN>_*.csv`** — one per run per seat, a per-frame 62-column telemetry row (own game state + celio FSM holds/section + SIO driver + transport counters); the HOST and JOIN files **diff mechanically** to localize a stall to a column and a frame. **`3DGBA_wd_*.txt`** — only exists if a ≥1 s freeze happened (STUCK lines at 1s/4s/12s naming the parked loop; decode `netC`/`sioC` as `site = crumb - crumb%100`). **`3DGBA_hang_*.txt`** — only exists if the participant froze ≥ ~3 s (ARM register + stack dumps; `kind=CORE` = the emulated core stopped, `kind=GAME` = its VBlank IRQ died). Also **check the CSV's `vbl` column ticks ~60/s** — that promotes the `gMain.vblankCounter1` address from verify-on-hw-pending to verified. Kill switch if the logging ever gets in the way: create `sdmc:/cias/control/diag_off.txt`. **NEW — HANDS-FREE SCRIPTED MOVEMENT (D4, optional but it makes a run repeatable):** `mkdir sdmc:/cias/control` to arm it, then drop **`move_p1.txt`** (game A) / **`move_p2.txt`** (game B) with whitespace-separated tokens — `D2` = walk 2 tiles down **closed-loop on the game's own coordinates** (tile-exact regardless of lag; `d2` sprints), bare `L`/`U`/… = one face-turn tap, `a b s c x y` = A/B/START/SELECT/L/R taps, `W<n>` = wait n *emulated* frames, a leading `G` = hold until you touch **`go_p1.txt`** ("on my command", the two-console sync), a file starting with **`!`** = abort. Files are consumed on pickup; ANY real button press on that game aborts its script instantly. **The two run-#13 scripts, verbatim** (from `docs/phase13-diagnostics/SPEC-control-replay.md` Appendix; put them in `sdmc:/cias/control/` as `move_p1.txt` if the participating game is game A / top, `move_p2.txt` if it is game B / bottom — the mapping is fixed and echoed as `# control p1=… p2=…` in the netlog header):
+1. **TEST the UI build (now folded into `3DGBA.cia` **2026-08-04 03:58**; UI unchanged since 0708 11:26) — never hands-on.** Boot the app (no game needed). Check: (a) game-select **1 Game / 2 Games** segmented reads cleanly (the pill-seam "huge ugly line" bug is fixed); (b) **drag on the bottom screen scrolls** the game list (tap still picks); (c) **ZR** or the **"settings·ZR"** chip (bottom-left) opens the **settings** screen (Display/Audio/Enhance/Touch) and changes persist. A photo of anything wrong = the fastest path (I render blind). If good → do Next step #3 (finish the HUD + the two overflow tabs + themes).
+2. **HW run #13 — the RUN-#12 FIXES + PHASE-13 DIAGNOSTICS build (`3DGBA.cia` **2026-08-04 03:58** (1,927,616 B — the phase-15 build; INSTALL THIS ONE, not the 0716 01:02 / 0803 21:40 / 0804 00:36 cias); same trade fixes, now with the diagnostics layer that makes the run readable, plus the phase-14 tilt shipped Off so it cannot affect this run).** Run #12 root-caused BOTH open bugs (full forensics: `docs/kb/celio/run12/`); both are fixed + PC-tested (suite 417 checks, TESTs 14/15). Test on hardware: (a) trade as usual (must still work — regression risk is the reason for the test); (b) **check the friend's trainer ID post-trade** — expected: a card RENDERS (first-ever linkup shows a canned "3DGBA-ish" card; later linkups/visits show the REAL partner card + name via the new CL_EV_TRAINERCARD/identity cache — `# celio` logs `pCard=/idReal=`); (c) **walk OUT of the room on either console** — expected: BOTH games exit together (the new CL_EV_EXIT_ROOM relay), no black screen (the partner now goes silent at the exit fade so the game's close-gate `gLastRecvQueueCount==0` can pass, then answers the 5FFF — `# celio` logs `exitP=/sessEnd=`); (d) after exiting, go BACK to the counter and link again — the lazy gap-reset must give a fresh session (and now with the REAL partner name/card). **SETUP ON BOTH CONSOLES BEFORE POWERING THE APP (phase-13 diagnostics, 2026-08-03):** (i) **wipe `sdmc:/cias/netlogs/`** — one run = one empty folder in, everything copied out after (the archive workflow); (ii) **`mkdir sdmc:/cias/control`** — this directory's mere existence is the single opt-in that arms D4 movement scripts + D5 record/replay; with no directory the app does zero polls and zero extra file work, so skip it only if you want the run fully hands-on; (iii) drop the move scripts below into that directory if you want items (c)/(d) hands-free. **After a failure POWER OFF — don't press Quit** (that is what lost run #11's JOIN log). **Don't press KEY_Y while linked.** **NEW — copy the phase-13 diagnostics artifacts too** (all in `sdmc:/cias/netlogs/`, alongside the usual `3DGBA_net_*`/`3DGBA_gs_*`): **`3DGBA_csv_<HOST|JOIN>_*.csv`** — one per run per seat, a per-frame 62-column telemetry row (own game state + celio FSM holds/section + SIO driver + transport counters); the HOST and JOIN files **diff mechanically** to localize a stall to a column and a frame. **`3DGBA_wd_*.txt`** — only exists if a ≥1 s freeze happened (STUCK lines at 1s/4s/12s naming the parked loop; decode `netC`/`sioC` as `site = crumb - crumb%100`). **`3DGBA_hang_*.txt`** — only exists if the participant froze ≥ ~3 s (ARM register + stack dumps; `kind=CORE` = the emulated core stopped, `kind=GAME` = its VBlank IRQ died). Also **check the CSV's `vbl` column ticks ~60/s** — that promotes the `gMain.vblankCounter1` address from verify-on-hw-pending to verified. Kill switch if the logging ever gets in the way: create `sdmc:/cias/control/diag_off.txt`. **NEW — HANDS-FREE SCRIPTED MOVEMENT (D4, optional but it makes a run repeatable):** `mkdir sdmc:/cias/control` to arm it, then drop **`move_p1.txt`** (game A) / **`move_p2.txt`** (game B) with whitespace-separated tokens — `D2` = walk 2 tiles down **closed-loop on the game's own coordinates** (tile-exact regardless of lag; `d2` sprints), bare `L`/`U`/… = one face-turn tap, `a b s c x y` = A/B/START/SELECT/L/R taps, `W<n>` = wait n *emulated* frames, a leading `G` = hold until you touch **`go_p1.txt`** ("on my command", the two-console sync), a file starting with **`!`** = abort. Files are consumed on pickup; ANY real button press on that game aborts its script instantly. **The two run-#13 scripts, verbatim** (from `docs/phase13-diagnostics/SPEC-control-replay.md` Appendix; put them in `sdmc:/cias/control/` as `move_p1.txt` if the participating game is game A / top, `move_p2.txt` if it is game B / bottom — the mapping is fixed and echoed as `# control p1=… p2=…` in the netlog header):
 
    *Script 1 — checklist item (c), the post-trade ROOM EXIT, dropped on BOTH consoles:*
    ```
@@ -290,6 +290,65 @@ Iterate in **Azahar** (Citra successor). **Sign off only on real New 3DS** — 3
 ---
 
 ## Session log
+
+### Session — 2026-08-03/04 — THE ARC: an external-projects teardown that produced THREE shipped phases (13 diagnostics, 14 tilt, 15 presence) — all local commits, all PC-green, all hardware-unproven
+
+- **Where it started (the user's ask, verbatim in spirit):** two projects to investigate — a
+  "Pokémon Gen-1 in 3D" build (`bryanthaboi/gen1recomp`) with a suspicion it used *"an online AI
+  tool that creates a 3D image from a 2D image"*, and a **Pokémon Platinum multiplayer romhack**
+  with two emulator forks (`ComicartOlie/{Desmume,melonDS}-Project-PM`) plus a local
+  `BasePlatinumMultiplayerV1.0BETA.xdelta` — *"tell me what we can use from those 2"*.
+- **Round 1** (source-level, both repos cloned): the "3D" is **not AI** — 155 lines of projective
+  math (`Tilt.lua`) plus a separately-distributed voxel mod over their own renderer. Project PM is
+  a **shared-RAM mailbox bridge**, one file per fork, whose own header states *"The emulated radio
+  is never touched."* Their commit dates walk **our exact arc**: async-wireless first (2026-07-20),
+  give up and terminate locally (07-21) = our states A–E → state F.
+- **Round 2** (6 subsystem readers + inline disassembly of the romhack): **the ROM side is a
+  pret/pokeplatinum decomp build** (the xdelta's app header names `pokeplatinum.us.nds`, target
+  USA **Rev 1**; the user's dump is Rev 0, so `xdelta3 -d -n` was used for static analysis only).
+  Thumb-disassembled the mailbox init out of arm9: `'BRG1'` at EWRAM **0x021DA5E0**, partySize
+  **0x590 = 6×236+8**, the `OSi_AlarmQueue` export at ctl+16 — the ROM side cross-validates the
+  emulator-side ABI we had reconstructed, plus two magics round 1 never saw. Findings banked in
+  `docs/kb/external/` (7 files) + `docs/kb/external-projects-teardown.md`.
+- **The teardown's own verdict picked the work**, and three phases were built back-to-back, each
+  by the same method: a binding `docs/phaseNN-*/PHASE.md` contract with numbered invariants → 2–3
+  read-only spec agents → sequential implement slices that self-revert if red → 2–3 adversarial
+  review lenses → a fix pass that re-verifies every finding → a final gate.
+  - **`19375eb` phase 13 — diagnostics & reliability.** Breadcrumbs+watchdog, game-heartbeat hang
+    catcher with ARM register dumps, per-frame CSV, `sdmc:/cias/control/` tile-exact movement
+    scripts, input record/replay, link-surface fingerprint, suite hardening (~23 ms lag shim,
+    trace-replay, `tools/verdict.sh`, KNOWN-DIFFERENCES ledger). **Its review caught a blocker
+    that would have wasted a hardware run:** the watchdog ORed the free-running RX heartbeat into
+    the worker progress mask, so it was blind in the exact mode it exists for.
+  - **`ae35079` phase 14 — HD-2D diorama tilt.** Round 2's correction made it smaller: one quad,
+    real clip-space `w`, no fragment shader (we have none). Best call was not in the spec —
+    **bottom-anchored fit-to-height keeps 95.9 % of frame pixels at 15° vs 77.8 %** under
+    gen1recomp's centre-pinned model, zero vertical crop at any angle. Top-screen only, so
+    `touch_to_gba` is bit-identical.
+  - **`cfdc75d` phase 15 — co-op presence M0–M3.** Peer avatar read from the sibling core in the
+    parked window; composes with tilt per `gen1-render.md` finding 2 (foot anchor projected,
+    sprite upright and **unscaled**). **M4 wireless deliberately deferred** — user decision, it
+    adds a UDS channel next to the frozen trade path while run #13 is pending.
+- **Two long-standing questions closed by phase-15 research:** the suspected FR/LG `mapObjects`
+  bug is **REFUTED** — `0x02036E38` is correct per `pokefirered.sym:205` *and*
+  `pokeleafgreen.sym:205`; the proposed `0x02037078` is `gPlayerAvatar`, the next symbol. And a
+  **new** defect found: `gMain+0x20` is a **pointer** in FR/LG, so phase-13's Tier-B hang watch
+  and the CSV `vbl` column are disarmed on FireRed (presence routes around it via `gMain+0x24`;
+  fixing phase 13's own use is a follow-up needing one CSV run).
+- **Verified independently before every commit** (not taken from agent reports): all suites
+  compiled and run, `make clean` rebuilds, per-file warning counts diffed against a stashed
+  baseline, and the frozen path audited. **Final: 60,135 checks across 7 suites, 0 failures;**
+  `3DGBA.3dsx` 3,806,412 B + `3DGBA.cia` 1,927,616 B; zero warnings in every file these phases
+  created; **`git diff a8764c0 --stat -- source/celiolink.c` is EMPTY** — the working trade path
+  was never touched across all three phases.
+- **Honest limitations, disclosed not hidden:** (a) tilt can stay on during *undetected* fullscreen
+  menus because `GCTX_OVERWORLD` is `game_read`'s fall-through — **not** blind-fixed, because a
+  guessed `CB2_Overworld` fails silently (feature dead, no error); one hardware session harvests
+  the constants from the gs log and fixes tilt + presence together. (b) Presence needs the **same
+  map universe** — FR+LG / FR+FR / EM+EM; **Emerald+FireRed can never draw a peer** (Emerald's map
+  (3,12) is not FireRed's), and the UI now says so. (c) The presence avatar is an overlay: the GBA
+  engine doesn't know it exists — no collision, no occlusion, no talking.
+- **Nothing here is hardware-proven.** PC-green + build-green was the exit gate for all three.
 
 ### Session — 2026-08-04 — PHASE 15: CO-OP PRESENCE — "see your friend walking on YOUR map", built complete + reviewed (60135 PC checks; `.3dsx` + `.cia` clean; same-console only; hardware-unproven)
 
