@@ -31,6 +31,7 @@ $T/run gdbio resume                # MANDATORY: this Azahar release parks EVERY
 $T/run gdbio read-u32 g_prefs+0x1c # read a global (symbols from 3DGBA.elf via nm)
 $T/run gdbio poll g_renderSeq --changed          # ~60 Hz liveness
 $T/run see shot both shots/s.png   # top+bottom screen crops (Screen Recording)
+$T/run see rec --seconds 8 --fps 4 --screen both   # PNG frames + manifest + .mp4
 $T/run ctm make script.json m.ctm  # synthesize a from-boot input movie
 $T/run sdmc drop move 1 "U3 a W60" # in-game input via the app's own D4 channel
 $T/run gdbio detach                # retire the boot's one gdb client (resumes first)
@@ -46,6 +47,17 @@ Image verdicts: `run compare ref.png new.png --tolerance N --max-diff N` (exit c
 verdict, 3-panel heat-map via `-o`), `run zoom in.png out.png --rect x,y,w,h --scale 4`
 (read tiny glyphs), `run sheet out.html img:caption:ring=x,y:good ...` (one captioned
 HTML artifact per claim — the evidence rule).
+
+**Seeing motion (`see rec`).** Azahar's own `--dump-video` is dead on this machine
+(strict libavutil major check vs Homebrew's avutil.60), so the harness records by
+capturing the window on a timer: numbered PNG frames (`top_00037.png` — the model READS
+frames, video is for the user), a `manifest.json` (per-frame timestamps, window geometry,
+and with `--with-state SYM[,SYM]` the gdb-read value of a global AT each frame), and an
+ffmpeg-assembled `rec_top.mp4` / `rec_bottom.mp4`. Cite evidence as "frame 37" and point
+at the manifest. Practical rates: ~6 fps capture-only; each `--with-state` symbol adds a
+~0.4 s halt→read→cont blink per frame (measured: 4 fps request → 1.53 fps, and the
+emulated app runs correspondingly slower while you record). No ffmpeg → frames still
+land and the manifest says `video: null` with the reason (never claim video that failed).
 
 ## 2. The closed loop (what smoke proves; copy-paste recipes)
 
@@ -140,3 +152,7 @@ become a zero-permission state channel:
   are only written on graceful exit).
 - **Movie desync `Expected to read type 4`** → the is_new_3ds pin regressed (§2).
 - **`see` SKIPs though granted** → the host app wasn't restarted after granting.
+- **The capture shows Azahar's GAME LIST, not the 3DS screens** → the emulated app is not
+  running (it never booted, or it already quit — a Tier-A movie ends with an in-app QUIT).
+  Azahar is single-window: the same window carries the game list and the render surface.
+  Confirm with `run gdbio poll g_renderSeq --changed` before trusting any crop.

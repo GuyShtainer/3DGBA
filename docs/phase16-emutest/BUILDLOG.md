@@ -331,3 +331,177 @@ resume incl. picker drive.
    the gs-log sdmc assertion belongs (H4.4 already says so for the CSV).
 4. movie runs emulate an Old 3DS (the pin); anything model-sensitive (tilt EFFECT, core-2
    pinning) must be exercised via non-movie channels or on hardware.
+
+## 2026-08-08 — E4: see.py (+ the VIDEO channel), compare/zoom/sheet proven live, smoke's final form, SKILL.md
+
+**Files** (E3's session had *written* see/compare/zoom/sheet/smoke/SKILL.md but died before
+running any of them live — this slice is where they meet a real emulator):
+- `tools/emutest/see.py` — EDITED: (a) refactor `window_geometry()` / `_grab()` /
+  `_uniform()` / `require_window()` out of `shot()`; (b) **the new `rec` video channel**
+  (`rec_plan`, `frame_name`/`frame_pattern`, `ffmpeg_bin`/`ffmpeg_cmd`, `default_rec_dir`,
+  `_StateReader`, `rec()`, CLI `--seconds/--fps/--screen/--out/--with-state/--state-width/
+  --format/--keep-window`); (c) a live bug fix (below); (d) module doc rewritten around
+  LIVE-probed constants instead of the E3 session's untested guesses.
+- `tools/emutest/tests/test_see_rec.py` — NEW, 14 host tests (schedule, frame naming ⇔
+  ffmpeg pattern, argv, ffmpeg discovery, window geometry incl. the live case, the blank
+  tripwire, manifest shape). Host suite **125 tests, all green** (was 111).
+- `tools/emutest/smoke.sh` — EDITED: new **`see-rec` row** (12-frame clip → manifest cross-
+  checked against the files on disk → mp4 size; PASS / SKIP-with-reason / FAIL) + its
+  `--no-live` row.
+- `.claude/skills/emutest/SKILL.md` — EDITED (H5): `see rec` in the quickstart, a "Seeing
+  motion" section (why not `--dump-video`, the measured rates, how to cite "frame 37"), and
+  a troubleshooting entry for the trap below.
+- `compare.py` / `zoom.py` / `sheet.py` — UNCHANGED code, first time exercised on real
+  captures (results below).
+
+**THE TRAP (found live, cost one capture): Azahar is SINGLE-WINDOW.** The first real
+capture came back showing Azahar's **game list**, not the 3DS screens — because the movie
+had already driven the emulated app through its menu-QUIT, and the same window reverts to
+the list when the app exits. Probed with `CGWindowListOptionAll`: 11 Azahar window entries,
+**exactly one on-screen** (`id=139029 layer=0 bounds=(323,154 1280x568 pt)
+name='Azahar 2125.1.2'`), i.e. there is no separate render window to find — the window
+*content* changes. Consequence: a crop is only meaningful while the app is running
+(cross-check `g_renderSeq`), now stated in see.py's module doc and SKILL.md §8.
+
+**LIVE-verified SEE — PASS, with what the crops actually showed** (Screen Recording grant
+confirmed effective: full-window capture 2560x1136 px with real content):
+- Geometry, recomputed per shot (S4.5): window 1280x568 pt → factor **2.00**, title
+  **56 px**, client **2560x1080** → S4.1 rects **top (830,56)-(1730,596) = 900x540** and
+  **bottom (920,596)-(1640,1136) = 720x540** (= 400/320 × 2.25 — no chrome, no bleed).
+- **Top crop** (`runs/20260808-203721/rec-menu/top_00114.png`): the app's pause screen —
+  `❚❚ PAUSED`, `gameA ⇄ gameB`, the chip row `3D | DoF | Bloom | Light | Tilt | Touch Off |
+  Co-op | Link`, `settings on the touch screen ↓`.
+- **Bottom crop** (`bottom_00114.png`): the ENHANCE settings tab — tab rail Session/Display/
+  Audio/**Enhance**/Link/Touch, rows Stereoscopic 3D, Tilt-shift DoF, LDR Bloom, Time-of-day
+  light, Vivid mode, and the `TILT  Off | Low | Mid | Max` segmented control with **Mid**
+  selected; `bottom_00118.png` shows **Max** selected.
+- Smoke's own crop (`runs/20260808-204446/see/screen.bottom.png`): the ROM-less session
+  bottom screen — HUD `+ gameB   59 fps   02:00` and `tap screen · pause menu`. The
+  **02:00** is the pinned RTC epoch rendering on screen (S3.3 `init_time=946684800`).
+- **The three channels agree**: gdb-read `g_prefs+0x1c` = 2 at frames 113-116 and 3 from
+  117 ⇔ the pixels show Mid then Max ⇔ the recorded manifest state. That cross-check is the
+  point of the whole harness.
+
+**LIVE-verified VIDEO (`see rec`) — the added scope.** Azahar's `--dump-video` was NOT
+chased (brief: strict libavutil major check vs Homebrew avutil.60). Instead a 32 s clip of
+the CTM-driven menu interaction (E3's `movie_menu_tilt_quit.json`, replayed unchanged):
+- `see rec --seconds 32 --fps 4 --screen both --with-state g_prefs+0x1c` → **128 frames**,
+  `manifest.json` with per-frame `t_rel`/`t_utc`/files/state, `ended_reason=duration`.
+- ffmpeg 8.1.2 (`/opt/homebrew/bin/ffmpeg`, probed) assembled **`rec_top.mp4` 51 766 B**
+  and **`rec_bottom.mp4` 83 161 B**; `ffprobe`: h264, **900x540 / 720x540, 128 frames,
+  83.48 s** each — real, playable, non-trivial.
+- Frame-addressable evidence works: `manifest.frames[113].state = 2`, `[117] = 3`, and the
+  matching PNGs read back exactly those two UI states (above).
+- **Rates measured [M]**: `screencapture -x -o -l<id>` = **0.08 s** (3 timed runs);
+  capture-only loop sustained **6.04 fps at `--fps 6`**; with one `--with-state` symbol the
+  4 fps request delivered **1.53 fps** (each state read is a gdbio halt→read→cont blink,
+  ~0.4 s, which also slows the emulated app while recording). Both numbers are now in
+  see.py's doc and `--help`.
+- Smoke's cheap in-gate proof: 12 frames @ **4.03 fps** → `rec_top.mp4` 9 421 B.
+- `--format gif` verified separately by running its argv over the same 128 real frames:
+  rc=0, **17 983 713 B** — it works but a palette-free gif is ~200x the mp4, so gif stays
+  what its docstring says: short clips only (the probe file was deleted, not banked).
+
+**LIVE-verified compare / zoom / sheet** (they had only ever run on generated fixtures):
+- `compare frame114 frame114` → `IDENTICAL — 720x540, 0 differing pixels`, **exit 0**.
+- `compare frame114 frame118 -o diff_tilt.png` → `DIFFERENT — 9615/388800 pixels (2.473%),
+  max channel delta 199, mean 2.565, changed bbox x487-693 y449-533`, **exit 1** — and that
+  bbox is exactly the TILT segmented control, i.e. the heat map localizes the real change.
+- `compare … --max-diff 200000` → **exit 0** (the slack path).
+- `zoom bottom_00118.png --rect 300,435,420,80 --scale 3` → 1260x240, `Off | Low | Mid |
+  [Max]` plainly readable.
+- `sheet e4-evidence.html … ring=…:good/bad` → one self-contained 512 KB HTML, 6 cells,
+  mixing 900x540 top, 720x540 bottom, a zoom and a 3-panel diff (the dual-screen adaptation
+  works). Artifacts: `tools/emutest/runs/20260808-203721/evidence/`.
+
+**Live bug found and fixed:** `see shot --raw-window DIR/window.png` crashed with
+`FileNotFoundError` when the parent dir did not exist — the crop paths were `makedirs`'d,
+the raw-window path was not. smoke.sh had masked it by pre-creating its `see/` dir. Fixed
+(and the fix is what let the first real capture land).
+
+**Smoke — full coverage, `smoke.sh --rom`, exit 0** (this slice ran Tier B inside the gate
+for the first time; E3 had proven those two channels by hand):
+
+```
+CHANNEL    VERDICT DETAIL
+run        PASS    boot->status->stop; pid=89572 gdb-ready 1.19s; config restored byte-identical
+read-state PASS    resume; verify-base 3/3 anchors; renderSeq changed 0 -> 35; g_appActive=1 g_quit=0; detach
+press-ctm  PASS    movie menu-drive: tiltLevel 0->3; quit: app exit closed the RSP session (broker down, azahar shell alive); Loaded Movie in log, 0 desyncs
+press-d4   PASS    move_p1 consumed (pickup ctr 0->1); header: p1=BPEE p2=BPRE dir=sdmc:/cias/control; app quit (RSP session closed)
+sdmc       PASS    quit-time gs log: 3DGBA_gs_0101_020032.txt: header ok, 7 data rows
+see        PASS    window captured + cropped: top 900x540 2.3% lit; bottom 720x540 1.0% lit (crops in .../runs/20260808-204446/see)
+see-rec    PASS    12 frames @ 4.03 fps -> rec_top.mp4 (9421 B) (in .../runs/20260808-204446/rec)
+```
+
+**Final gate — `./setup.sh` (venv → 125 host tests → live smoke), exit 0**, run AFTER the
+last edit (H6.4):
+
+```
+CHANNEL    VERDICT DETAIL
+run        PASS    boot->status->stop; pid=92116 gdb-ready 1.18s; config restored byte-identical
+read-state PASS    resume; verify-base 3/3 anchors; renderSeq changed 0 -> 35; g_appActive=1 g_quit=0; detach
+press-ctm  PASS    movie menu-drive: tiltLevel 0->3; quit: app exit closed the RSP session (broker down, azahar shell alive); Loaded Movie in log, 0 desyncs
+press-d4   SKIP    Tier B needs --rom (stages copies of the user's dual-gba ROMs, H4.2)
+sdmc       SKIP    Tier B needs --rom (the gs-log assertion needs a Pokemon session, H4.4)
+see        PASS    window captured + cropped: top 900x540 2.3% lit; bottom 720x540 1.0% lit (crops in .../runs/20260808-204848/see)
+see-rec    PASS    12 frames @ 3.98 fps -> rec_top.mp4 (9473 B) (in .../runs/20260808-204848/rec)
+```
+
+**User-data integrity after everything** (PHASE inv. 2): `qt-config.ini` sha
+`dd20792e32878733` = the same bytes E1/E2/E3 recorded; `sdmc:/3DGBA` back to
+`settings.bin` only; dual-gba originals re-hashed **untouched** by azctl; `cias/control/`
+empty (armed, no injection); no azahar process, no `state/gdbio.sock`, profile CLEAN.
+
+**The settings.bin incident (honest log).** Two by-hand movie boots I ran *outside* smoke
+(smoke snapshots/restores settings.bin; ad-hoc runs do not) left the app's persisted
+`tiltLevel` at Max — the user's file went `7ac253c6…` → `58f750b7…`. Recovered exactly:
+brute-forcing single-field edits showed the only difference is the u32 at **offset 92
+(0x5C)**, 3 → 0, giving back sha **7ac253c67fb50ce8** = E3's recorded pre-run original;
+independently confirmed by the next smoke run reading `tiltLevel before movie taps: 0`.
+Rule for future sessions (now in the skill's user-data section by implication): drive
+movies through smoke, or snapshot `sdmc:/3DGBA/settings.bin` yourself first.
+
+**OS-input capability probe (the brief's open question).** `osascript`/System Events stays
+denied (-1743), but **`CGEventPost` WORKS** for this session (Accessibility granted): a
+synthetic `kCGEventMouseMoved` moved the cursor to the requested point and it was restored
+(probe printed `CGEventPost mouse-move: WORKS`). **No tooling was built on it** — CTM and
+D4 remain the primary input channels (they are deterministic and permission-free); the
+CGEvent path is recorded as available for Qt-UI-level actions a movie cannot reach.
+
+**Decisions / deviations (honest log):**
+1. **`see rec` replaces `--dump-video`** (brief). Frames are the deliverable; video is a
+   bonus assembled by ffmpeg. `--screen both` writes **two** videos (`rec_top.mp4`,
+   `rec_bottom.mp4`) rather than compositing — the screens have different geometry
+   (400x240 vs 320x240) and each stream stays pixel-exact for compare.py.
+2. **`rec` exits 0 whenever frames exist**; the video/state sub-verdicts live in
+   `manifest.json`, so exit **75 keeps meaning "permission SKIP" only** and smoke can still
+   render a SKIP row for "frames ok, no ffmpeg" (PHASE inv. 4 honesty without overloading
+   the code).
+3. Recording **stops early and honestly** on `window-gone` (the Tier-A movie ends with an
+   in-app QUIT) or `window-resized` (a mid-clip resize would ruin the assembly) — partial
+   frames + a reason beat ragged frames.
+4. Smoke's `see-rec` row is deliberately tiny (3 s @ 4 fps, **no** `--with-state`): it
+   proves the channel, not a long clip, and shares the boot with the other rows.
+5. `--with-state` is documented as **interfering** (halt→read→cont per frame): never use it
+   while measuring anything timing-sensitive; the manifest's real timestamps are the record.
+6. No app/`source/` changes (PHASE inv. 6). E3's fixtures and movies were reused verbatim.
+
+**Observation, NOT a claim (H6.5).** In both `bottom_00114.png` (Mid) and `bottom_00118.png`
+(Max) the **selected** TILT label renders smeared/doubled while the unselected labels are
+crisp; the later frames of that recording had already moved to another tab, so there is no
+settled-state frame to compare. Most likely the segment-selection animation caught by a
+1.5 fps sampler. Recorded as a follow-up probe (a dedicated movie that opens ENHANCE, taps
+one segment and then waits), **not** as a defect — and no app change either way.
+
+**Timings [M]:** `see shot` ≈ 1 s; `see rec` 3 s clip ≈ 4 s incl. ffmpeg; `smoke.sh --rom`
+≈ 5 min wall; `setup.sh` full gate ≈ 3.5 min; press-ctm tilt observed after 23 poll samples,
+Tier-B pickup after 27.
+
+**Follow-ups for the next slice / phase:**
+1. A CGEvent-based `press` sub-channel (Qt menus, Azahar's own dialogs) is now known to be
+   POSSIBLE; build it only when a test needs the emulator UI itself, never for app input.
+2. The TILT-label smear probe (above).
+3. `--record` (`-r`) movie harvesting still lacks a graceful-quit path when the run has no
+   in-app QUIT (E2 follow-up 2, unchanged): CGEvent could close the window now — worth a
+   look if a real recording bootstrap is ever needed (zero-revision movies play fine, so it
+   is not blocking).

@@ -1,24 +1,40 @@
 # Resuming phase 16 (emutest harness)
 
-Paused 2026-08-08 so the user can quit/reopen VS Code to apply the Accessibility +
-Screen Recording grants (granted to **Visual Studio Code**, not the "Claude" desktop app).
+Updated 2026-08-08 at the end of slice **E4**. (The original pause note — waiting for the
+user to restart VS Code so the Screen Recording / Accessibility grants applied — is
+resolved: both grants are live and verified, see below.)
 
-## State at pause
-- PHASE.md + pokedna-harness-report.md + **SPEC-harness.md DONE** (committed).
-- SPEC-protocols.md (CTM format / gdb stub / config keys / window geometry) was IN FLIGHT —
-  not written; its agent re-runs on resume.
-- Implementation E1-E4, reviews, final gate: NOT started. tools/emutest/ does not exist yet.
-- No Azahar strays; user's qt-config.ini untouched (profile management not yet built).
+## State
 
-## Resume (after restart, user says "continue")
-Same session id (conversation resumed): relaunch with
-  Workflow({ scriptPath: "/Users/guyshtainer/.claude/projects/-Users-guyshtainer-VSCodeProjects-3ds-toolkit/148c788c-2820-4164-be0b-618f60c5c7f5/workflows/scripts/phase16-emutest-wf_8ce6730f-57e.js",
-             resumeFromRunId: "wf_8ce6730f-57e" })
-— SPEC-harness replays from cache; SPEC-protocols runs live; then E1-E4 → reviews → gate.
-Fresh session fallback: launch the same scriptPath without resumeFromRunId (re-runs both specs;
-SPEC-harness.md on disk makes that cheap) — or edit the script to read the committed spec.
+- Specs DONE and committed: `PHASE.md`, `pokedna-harness-report.md`, `SPEC-harness.md`,
+  `SPEC-protocols.md` (the last one CORRECTED by E2/E3/E4 findings — read BUILDLOG before
+  trusting a master-branch citation in it).
+- Implementation **E1–E4 DONE and live-proven** (`tools/emutest/`): azctl (RUN), gdbio
+  (READ-STATE), ctm + sdmc (PRESS), see incl. the `rec` video channel (SEE), compare/zoom/
+  sheet, smoke.sh, setup.sh, 125 host tests, `.claude/skills/emutest/SKILL.md`.
+- **`smoke.sh --rom` = 7/7 PASS, exit 0** (run / read-state / press-ctm / press-d4 / sdmc /
+  see / see-rec). `./setup.sh` (venv → host tests → smoke) is the one-command gate.
+- Not done in E4: the phase's review pass + final gate/HANDOFF update (the orchestrator's
+  remaining steps). No app `source/` change was made or is needed.
 
-## First checks after the restart (permissions now granted?)
-  osascript -e 'tell application "System Events" to key code 49'   # no -1743 = Accessibility OK
-  screencapture -x -o /tmp/t.png                                    # windows visible = Screen Recording OK
-Expected end state of the phase: tools/emutest/smoke.sh prints RUN/READ-STATE/PRESS/SEE all PASS.
+## Start here in a new session
+
+```bash
+cd projects/3DGBA
+./tools/emutest/setup.sh          # rebuilds the venv if needed, host tests, live smoke
+# then read .claude/skills/emutest/SKILL.md — it is the operating manual
+```
+
+Per-slice detail, every measured number and every honest deviation live in `BUILDLOG.md`
+(E4's entry has the SEE/VIDEO evidence, the single-window trap, and the rate measurements).
+
+## Environment facts that bite (all live-verified)
+
+- Launch Azahar via the **.app bundle** (`open -a`), never `Contents/MacOS/azahar` — the raw
+  binary pops a blocking modal. GUI launches from the Bash tool may need
+  `dangerouslyDisableSandbox: true`.
+- Every `use_gdbstub` boot **parks** until `gdbio resume`; one gdb client per boot.
+- Screen Recording: granted + working (window contents visible). Accessibility: granted —
+  **`CGEventPost` works**; `osascript`/System Events is still denied (-1743), do not use it.
+- Azahar is single-window: the same window shows the game list when no app is running, so a
+  crop only means something while `g_renderSeq` advances.

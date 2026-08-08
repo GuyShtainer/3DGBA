@@ -11,6 +11,11 @@
 #              verify-base 3/3 ELF anchors, renderSeq ~60 Hz, g_appActive/g_quit (H3.3/H3.4).
 #   see        E4: Quartz window lookup + screencapture + S4.1 crops; SKIP 75 while Screen
 #              Recording is missing (H2.4; grant verified working 2026-08-08).
+#   see-rec    E4 (added scope): the VIDEO channel — a timed capture loop writes PNG
+#              frames + manifest.json and ffmpeg assembles an .mp4 (Azahar's own
+#              --dump-video is unusable here: strict libavutil major check vs Homebrew
+#              avutil.60). Frames are the deliverable, video is the bonus: no ffmpeg ->
+#              the row SKIPs with the reason, never a silent pass.
 #   press-ctm  E3: Tier A zero-permission closed loop — synthesized movie drives the
 #              ROM-less session's pause menu: tiltLevel 0->3 (gdb-read), menu QUIT ->
 #              app exit closes the RSP session (H3.5 as corrected in BUILDLOG E3).
@@ -75,6 +80,7 @@ if [ "$NO_LIVE" = 1 ]; then
   row press-d4  SKIP "--no-live (and Tier B additionally needs --rom)"
   row sdmc      SKIP "--no-live (and Tier B additionally needs --rom)"
   row see       SKIP "--no-live: needs a live window"
+  row see-rec   SKIP "--no-live: needs a live window"
   finish
 fi
 
@@ -162,6 +168,52 @@ elif [ "$SEE_RC" = 75 ]; then
   SEE_ROW_V=SKIP; SEE_ROW_D="Screen Recording not granted -> System Settings grant + restart the host app"
 else
   SEE_ROW_V=FAIL; SEE_ROW_D="see shot rc=$SEE_RC (see smoke output above)"
+fi
+
+# --- see-rec (E4 added scope): the video channel, proved on the same live window --------
+# Deliberately short (3 s @ 4 fps = 12 frames, ~3 s + ~0.5 s ffmpeg): the gate proves the
+# CHANNEL (frames land, manifest is well-formed, ffmpeg produces a playable mp4), not a
+# long clip. --with-state is NOT used here — each state read halts the app ~0.4 s and this
+# boot is shared with the other rows.
+REC_DIR="$LRD1/rec"
+REC_ROW_V=""
+REC_ROW_D=""
+REC_OUT="$("$RUN" see rec --seconds 3 --fps 4 --screen top --out "$REC_DIR" 2>&1)"
+REC_RC=$?
+echo "$REC_OUT" | sed 's/^/smoke: /'
+if [ "$REC_RC" = 0 ]; then
+  REC_CHK="$("$PY" - "$REC_DIR/manifest.json" <<'PYEOF'
+import json, os, sys
+m = json.load(open(sys.argv[1]))
+d = os.path.dirname(os.path.abspath(sys.argv[1]))
+n = m.get("frames_captured", 0)
+if n < 2:
+    print("only %d frame(s) captured" % n); sys.exit(2)
+missing = [f["files"]["top"] for f in m["frames"]
+           if not os.path.exists(os.path.join(d, f["files"]["top"]))]
+if missing:
+    print("manifest lists %d frames that do not exist (%s ...)" % (len(missing), missing[0]))
+    sys.exit(2)
+vid = (m.get("video") or {}).get("top")
+if not vid:
+    print("frames ok (%d @ %.2f fps) but NO VIDEO: %s" % (n, m["fps_actual"], m.get("video_error")))
+    sys.exit(75)
+size = os.path.getsize(os.path.join(d, vid["path"]))
+if size < 1024:
+    print("video %s is only %d bytes" % (vid["path"], size)); sys.exit(2)
+print("%d frames @ %.2f fps -> %s (%d B)" % (n, m["fps_actual"], vid["path"], size))
+PYEOF
+)"
+  case $? in
+    0)  REC_ROW_V=PASS; REC_ROW_D="$REC_CHK (in $REC_DIR)" ;;
+    75) REC_ROW_V=SKIP; REC_ROW_D="$REC_CHK" ;;
+    *)  REC_ROW_V=FAIL; REC_ROW_D="$REC_CHK" ;;
+  esac
+  echo "smoke: see rec: $REC_CHK"
+elif [ "$REC_RC" = 75 ]; then
+  REC_ROW_V=SKIP; REC_ROW_D="Screen Recording not granted (same grant as see)"
+else
+  REC_ROW_V=FAIL; REC_ROW_D="see rec rc=$REC_RC (see smoke output above)"
 fi
 
 "$RUN" gdbio detach || RS_OK=0            # resume + retire the boot's one gdb client
@@ -398,6 +450,7 @@ else
   row sdmc     SKIP "Tier B needs --rom (the gs-log assertion needs a Pokemon session, H4.4)"
 fi
 
-row see "${SEE_ROW_V:-FAIL}" "${SEE_ROW_D:-internal: see phase never ran}"
+row see     "${SEE_ROW_V:-FAIL}" "${SEE_ROW_D:-internal: see phase never ran}"
+row see-rec "${REC_ROW_V:-FAIL}" "${REC_ROW_D:-internal: see-rec phase never ran}"
 
 finish

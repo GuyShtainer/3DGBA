@@ -12,18 +12,29 @@ Design sources (house rule: every protocol fact cites where it came from):
   - PHASE.md invariant 4: the permission-gated channel SKIPs loudly (exit 75), never fails
     the harness and never silently passes.
 
-Live-calibrated constants (this machine, 2026-08-08, slice E4 — BUILDLOG has the probe):
+Live-calibrated constants (this machine, 2026-08-08, slice E4 — BUILDLOG E4 has the probe):
   - Window: kCGWindowOwnerName == 'Azahar' (capital A; the *process* is `azahar`),
-    single layer-0 window titled 'Azahar <version>'.
+    exactly ONE on-screen layer-0 window (probed with CGWindowListOptionAll: every other
+    Azahar entry is an off-screen 0x0-ish helper). Azahar runs in single-window mode, so
+    that same window shows the GAME LIST before boot / after the emulated app exits and
+    the two 3DS screens while emulating — the crops are only meaningful while the app
+    runs (verify with gdbio: g_renderSeq advancing).
   - Retina factor: screencapture -l returns exactly 2.0x the Quartz point bounds
     (probed: bounds 1280x568 pt -> image 2560x1136 px). Never assumed: recomputed per
     shot as img_w / bounds_w (S4.5 "calibrate, don't hardcode").
-  - Title bar: 28 pt (56 px @2x — probed: first render row at y=56; macOS standard
-    title-bar height; the S3 profile removes the status bar so the rest of the window
-    IS the render client area). [M] TITLE_BAR_PT below.
-  - Crop-math proof: at client 2560x1080 the S4.1 rects (830,0)-(1730,540) /
-    (920,540)-(1640,1080) cropped exactly the app's top HUD row and the bottom
-    "tap screen / pause menu" line — no bleed (BUILDLOG E4, images in the run dir).
+  - Title bar: 28 pt (56 px @2x — probed; macOS standard title-bar height; the S3 profile
+    removes the status bar so the rest of the window IS the render client area).
+    [M] TITLE_BAR_PT below.
+  - Crop-math PROOF (live, slice E4): window 1280x568 pt -> client 2560x1080 px -> S4.1
+    rects top (830,56)-(1730,596) and bottom (920,596)-(1640,1136) produced a 900x540 top
+    crop showing exactly the app's "|| PAUSED / gameA <-> gameB / settings on the touch
+    screen" pause screen and a 720x540 bottom crop showing exactly the ENHANCE settings
+    tab with the TILT segmented control — no bleed, no chrome (900 = 400x2.25,
+    720 = 320x2.25). Frames in runs/20260808-203721/rec-menu/{top,bottom}_00114.png.
+  - Capture cost [M]: `screencapture -x -o -l<id>` = 0.08 s per shot (3 timed runs), so
+    the loop sustains the requested rate up to ~6 fps (measured 6.04 fps at --fps 6).
+    Each --with-state symbol read adds a gdbio halt->read->cont blink (~0.4 s on this
+    release) — the measured 4 fps request with one state symbol delivered 1.53 fps.
 
 Permission model (macOS TCC):
   - Screen Recording: preflighted via CGPreflightScreenCaptureAccess() (Quartz, macOS
@@ -34,18 +45,32 @@ Permission model (macOS TCC):
 
 CLI (H2.4, via the venv shim):
   see shot top|bottom|both OUT.png [--raw-window FULL.png]   crop the live window
+  see rec  [--seconds S] [--fps F] [--screen top|bottom|both] [--out DIR]
+           [--with-state SYM,SYM] [--format mp4|gif|none] [--keep-window]
   see win                                                    print window id/bounds/title
 Exit codes (H2): 0 ok, 1 fail (no window / capture error), 75 SKIP (permission missing).
 
 `both` writes OUT.top.png + OUT.bottom.png (a single OUT.png cannot hold two screens
 of different widths honestly; the two files feed sheet.py's dual-screen cells).
+
+WHY `rec` exists instead of Azahar's own `--dump-video` (added scope, 2026-08-08): the
+installed release loads libavutil dynamically with a STRICT major-version check and this
+machine's Homebrew ships avutil.60 -> "Could not dynamically load libavutil" (probed).
+So the harness records the way it screenshots: a timed window-capture loop whose PNG
+frames ARE the deliverable (the model reads PNGs, not video), plus an OPTIONAL ffmpeg
+assembly into .mp4/.gif for the user's eyes. If ffmpeg is missing or fails, the frames
+still stand and the manifest says video: null with the reason — never claim a video
+channel that did not work (PHASE inv. 4's honesty rule applied to the new channel).
 """
 
 import argparse
+import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 EXIT_SKIP = 75  # sysexits EX_TEMPFAIL (SPEC-harness H2)
 
@@ -145,55 +170,89 @@ def capture_window(win, out_path):
         raise SystemExit(1)
 
 
-def shot(which, out_path, raw_window=None):
-    """Capture + crop. Returns {name: path} of the written crops."""
+def window_geometry(img_size, win):
+    """(image size, Quartz window dict) -> dict(factor, title_px, client W/H, rects).
+    Retina normalization (S4.5): the pt->px factor is RECOMPUTED per capture, never
+    assumed 2x; the title bar is the only chrome left (the S3 profile removes the status
+    bar), so client = image minus the title strip. Rects are already offset into IMAGE
+    coordinates, ready for Image.crop(). Host-tested via tests/test_layout.py's math."""
+    factor = img_size[0] / win["w"] if win.get("w") else 1.0
+    title_px = int(round(TITLE_BAR_PT * factor))
+    W, H = img_size[0], img_size[1] - title_px
+    if H <= 0:
+        raise ValueError("window too small ({}x{} px, title {} px)".format(
+            img_size[0], img_size[1], title_px))
+    top, bottom = layout_rects(W, H)
+    off = lambda r: (r[0], r[1] + title_px, r[2], r[3] + title_px)  # noqa: E731
+    return {"factor": factor, "title_px": title_px, "client": [W, H],
+            "rects": {"top": off(top), "bottom": off(bottom)}}
+
+
+def _grab(win):
+    """Capture the window to a temp PNG and return it as a PIL RGB image (+ deletes tmp).
+    Raises SystemExit(1) on capture failure (capture_window prints the reason)."""
     from PIL import Image
-
-    if not screen_recording_granted():
-        skip_no_permission()
-    win = find_window()
-    if win is None:
-        print("see: FAIL — no Azahar window on screen (boot first: "
-              "tools/emutest/run azctl boot && tools/emutest/run gdbio resume)",
-              file=sys.stderr)
-        raise SystemExit(1)
-
     tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
     tmp.close()
     try:
         capture_window(win, tmp.name)
-        im = Image.open(tmp.name).convert("RGB")
+        im = Image.open(tmp.name)
+        im.load()                       # force the decode before the file disappears
+        return im.convert("RGB")
     finally:
         os.unlink(tmp.name)
 
-    # Retina normalization (S4.5): recompute the pt->px factor per shot, never assume 2x.
-    factor = im.size[0] / win["w"] if win["w"] else 1.0
-    title_px = int(round(TITLE_BAR_PT * factor))
-    W, H = im.size[0], im.size[1] - title_px
-    if H <= 0:
-        print("see: FAIL — window too small ({}x{} px, title {} px)".format(
-            im.size[0], im.size[1], title_px), file=sys.stderr)
+
+def _uniform(im):
+    """True when the image has a single luminance value — what a capture WITHOUT the
+    Screen Recording grant looks like (probed pre-grant: wallpaper/blank). Post-grant the
+    app HUD is always drawn, so this is the silent-pass tripwire."""
+    lo, hi = im.convert("L").getextrema()
+    return lo == hi
+
+
+def require_window(context=""):
+    """Preflight the TCC grant + locate the window, or exit 75 / 1 with instructions."""
+    if not screen_recording_granted():
+        skip_no_permission()
+    win = find_window()
+    if win is None:
+        print("see: FAIL — no Azahar window on screen{} (boot first: "
+              "tools/emutest/run azctl boot && tools/emutest/run gdbio resume)".format(
+                  context), file=sys.stderr)
         raise SystemExit(1)
-    # Content check: a permissionless/foreign capture yields a uniform image (wallpaper
-    # was probed pre-grant; post-grant the app HUD is always visible). extrema equal ==
-    # nothing captured -> treat as the permission SKIP, never a silent pass.
-    if im.convert("L").getextrema()[0] == im.convert("L").getextrema()[1]:
+    return win
+
+
+def shot(which, out_path, raw_window=None):
+    """Capture + crop. Returns {name: path} of the written crops."""
+    win = require_window()
+    im = _grab(win)
+    try:
+        geo = window_geometry(im.size, win)
+    except ValueError as e:
+        print("see: FAIL — {}".format(e), file=sys.stderr)
+        raise SystemExit(1)
+    # Content check: a permissionless/foreign capture yields a uniform image -> treat as
+    # the permission SKIP, never a silent pass.
+    if _uniform(im):
         print("see: capture is a uniform image — Screen Recording grant not effective?")
         skip_no_permission()
 
     if raw_window:
-        im.save(raw_window)
+        d = os.path.dirname(os.path.abspath(raw_window))
+        if d:
+            os.makedirs(d, exist_ok=True)     # E4 live bug: --raw-window into a fresh
+        im.save(raw_window)                   # run-dir subdir crashed (crops mkdir'd, this didn't)
         print("see: raw window -> {} ({}x{} px, factor {:.2f})".format(
-            raw_window, im.size[0], im.size[1], factor))
+            raw_window, im.size[0], im.size[1], geo["factor"]))
 
-    top, bottom = layout_rects(W, H)
-    off = lambda r: (r[0], r[1] + title_px, r[2], r[3] + title_px)  # noqa: E731
     wrote = {}
     base, ext = os.path.splitext(out_path)
     plan = {"top": [("top", out_path)], "bottom": [("bottom", out_path)],
             "both": [("top", base + ".top" + ext), ("bottom", base + ".bottom" + ext)]}
     for name, path in plan[which]:
-        rect = off(top if name == "top" else bottom)
+        rect = geo["rects"][name]
         crop = im.crop(rect)
         d = os.path.dirname(os.path.abspath(path))
         if d:
@@ -205,9 +264,252 @@ def shot(which, out_path, raw_window=None):
     return wrote
 
 
+# ================================================================================== rec
+# The video channel (added scope 2026-08-08 — module doc explains why not --dump-video).
+# Everything below is deliberately split into pure helpers (host-tested in
+# tests/test_see_rec.py) + one live loop, so the naming/schedule/ffmpeg contract is
+# provable without a running emulator.
+
+FFMPEG_FALLBACK = "/opt/homebrew/bin/ffmpeg"    # probed on this machine (ffmpeg 8.1.2)
+
+
+def rec_plan(seconds, fps):
+    """-> (n_frames, interval_s). At least one frame; the loop paces off a fixed schedule
+    (t0 + i*interval) so a slow capture steals from the NEXT sleep instead of drifting."""
+    if seconds <= 0 or fps <= 0:
+        raise ValueError("--seconds and --fps must be > 0")
+    n = max(1, int(round(seconds * fps)))
+    return n, 1.0 / fps
+
+
+def frame_name(kind, idx):
+    """Deterministic frame naming — 'top_00037.png' is addressable in a bug report
+    ("look at frame 37") and is exactly what ffmpeg's %05d pattern consumes."""
+    return "{}_{:05d}.png".format(kind, idx)
+
+
+def frame_pattern(kind):
+    return "{}_%05d.png".format(kind)
+
+
+def ffmpeg_bin():
+    """PATH first, then the probed Homebrew location, then EMUTEST_FFMPEG override."""
+    env = os.environ.get("EMUTEST_FFMPEG")
+    if env:
+        return env if os.path.exists(env) else None
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    return FFMPEG_FALLBACK if os.path.exists(FFMPEG_FALLBACK) else None
+
+
+def ffmpeg_cmd(binary, directory, kind, fps, out_path, fmt="mp4"):
+    """The assembly command. mp4: libx264 + yuv420p (QuickTime/Preview-friendly) and an
+    even-dimension scale filter (h264 requires even width/height; a 320x240-scaled crop
+    can land odd after the S4.1 truncations). gif: a palette-free single pass — small
+    clips only, it is a convenience not a codec study."""
+    src = os.path.join(directory, frame_pattern(kind))
+    base = ["-y", "-framerate", "{:.4f}".format(fps), "-start_number", "0", "-i", src]
+    if fmt == "gif":
+        return [binary] + base + ["-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=neighbor",
+                                  out_path]
+    return [binary] + base + ["-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+                              "-c:v", "libx264", "-pix_fmt", "yuv420p", out_path]
+
+
+def default_rec_dir():
+    """Evidence goes in the run dir (H2.8): tools/emutest/state/last_run points at the
+    newest azctl run dir; fall back to runs/ad-hoc-<stamp> when nothing was booted by us."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+    try:
+        with open(os.path.join(here, "state", "last_run")) as f:
+            last = f.read().strip()
+        if last and os.path.isdir(last):
+            return os.path.join(last, "rec-" + stamp)
+    except OSError:
+        pass
+    return os.path.join(here, "runs", "adhoc-" + stamp, "rec")
+
+
+class _StateReader:
+    """--with-state: reads named globals through gdbio's broker at each frame. Each read
+    is a halt->read->cont blink (~0.4 s on this release — gdbio module doc), so it COSTS
+    frame rate; the manifest records the real timestamps either way. Any RSP error is
+    recorded once and recording continues — a state hiccup must never lose the frames."""
+
+    def __init__(self, specs, width=4):
+        self.specs = specs
+        self.width = width
+        self.error = None
+        self.broker = None
+        self.addrs = {}
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import gdbio
+        self.gdbio = gdbio
+        try:
+            cache = gdbio.build_symtab(quiet=True)
+            for s in specs:
+                self.addrs[s] = gdbio.lookup(cache, s)[0]
+            self.broker = gdbio.Broker()
+            self.broker.connect(autostart=True)
+        except Exception as e:                        # noqa: BLE001 (never fail the rec)
+            self.error = "{}: {}".format(type(e).__name__, e)
+            self.broker = None
+
+    def read(self):
+        if self.broker is None:
+            return None
+        out = {}
+        for s, addr in self.addrs.items():
+            try:
+                out[s] = int.from_bytes(self.broker.read_mem(addr, self.width), "little")
+            except Exception as e:                    # noqa: BLE001
+                self.error = self.error or "{}: {}".format(type(e).__name__, e)
+                out[s] = None
+        return out
+
+    def close(self):
+        if self.broker is not None:
+            self.broker.close()
+            self.broker = None
+
+
+def rec(seconds, fps, which, out_dir, state_specs=None, fmt="mp4", keep_window=False,
+        state_width=4):
+    """The capture loop. Returns the manifest dict (also written as manifest.json)."""
+    n_frames, interval = rec_plan(seconds, fps)
+    win = require_window(" to record")
+    os.makedirs(out_dir, exist_ok=True)
+    kinds = ["top", "bottom"] if which == "both" else [which]
+
+    reader = _StateReader(state_specs, width=state_width) if state_specs else None
+    manifest = {
+        "tool": "see.py rec", "format_version": 1,
+        "started_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "seconds_requested": seconds, "fps_requested": fps,
+        "frames_planned": n_frames, "screens": kinds, "dir": os.path.abspath(out_dir),
+        "state_symbols": list(state_specs or []), "state_error": None,
+        "window": {"id": win["id"], "bounds": [win["x"], win["y"], win["w"], win["h"]],
+                   "title": win["title"]},
+        "frames": [], "video": None, "video_error": None, "ended_reason": "duration",
+    }
+
+    t0 = time.time()
+    geo0 = None
+    print("see rec: {} frames @ {} fps ({}s) of {} -> {}".format(
+        n_frames, fps, seconds, "+".join(kinds), out_dir))
+    for i in range(n_frames):
+        target = t0 + i * interval
+        now = time.time()
+        if now < target:
+            time.sleep(target - now)
+        # The window can vanish mid-clip (the Tier-A movie ends with an in-app QUIT):
+        # that is a legitimate end, not a failure — keep every frame captured so far.
+        w = find_window()
+        if w is None:
+            manifest["ended_reason"] = "window-gone"
+            print("see rec: window disappeared at frame {} (app quit?) — stopping".format(i))
+            break
+        im = _grab(w)
+        if geo0 is None:
+            if _uniform(im):
+                print("see rec: first capture is a uniform image — grant not effective?")
+                skip_no_permission()
+            geo0 = window_geometry(im.size, w)
+            manifest["geometry"] = geo0
+        elif im.size != tuple(
+                [geo0["client"][0], geo0["client"][1] + geo0["title_px"]]):
+            # A resize would change every crop size and break the video assembly; stop
+            # and keep what we have (honest partial > silently ragged frames).
+            manifest["ended_reason"] = "window-resized"
+            print("see rec: window resized at frame {} — stopping".format(i))
+            break
+        rel = time.time() - t0
+        # entry["i"] is BOTH the schedule index and the file index: the loop never skips a
+        # frame silently (every abnormal case above `break`s), so manifest frame i is always
+        # <kind>_%05d.png with the same i — that is what makes "look at frame 37" citable.
+        entry = {"i": i, "t_rel": round(rel, 3),
+                 "t_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "files": {}}
+        for kind in kinds:
+            path = os.path.join(out_dir, frame_name(kind, len(manifest["frames"])))
+            im.crop(geo0["rects"][kind]).save(path)
+            entry["files"][kind] = os.path.basename(path)
+        if keep_window:
+            wpath = os.path.join(out_dir, frame_name("window", len(manifest["frames"])))
+            im.save(wpath)
+            entry["files"]["window"] = os.path.basename(wpath)
+        if reader is not None:
+            entry["state"] = reader.read()
+        manifest["frames"].append(entry)
+
+    if reader is not None:
+        manifest["state_error"] = reader.error
+        reader.close()
+
+    n = len(manifest["frames"])
+    span = manifest["frames"][-1]["t_rel"] - manifest["frames"][0]["t_rel"] if n > 1 else 0
+    fps_actual = (n - 1) / span if span > 0 else float(fps)
+    manifest["frames_captured"] = n
+    manifest["fps_actual"] = round(fps_actual, 3)
+    manifest["seconds_actual"] = round(span, 3)
+
+    # --- optional ffmpeg assembly (frames are the deliverable; video is a bonus) -------
+    if fmt != "none" and n >= 2:
+        binary = ffmpeg_bin()
+        if binary is None:
+            manifest["video_error"] = ("ffmpeg not found (PATH / {} / $EMUTEST_FFMPEG) — "
+                                       "frames kept, video SKIPPED".format(FFMPEG_FALLBACK))
+        else:
+            vids = {}
+            for kind in kinds:
+                out = os.path.join(out_dir, "rec_{}.{}".format(kind, fmt))
+                cmd = ffmpeg_cmd(binary, out_dir, kind, fps_actual, out, fmt)
+                r = subprocess.run(cmd, capture_output=True, text=True)
+                if r.returncode != 0 or not os.path.exists(out) or os.path.getsize(out) == 0:
+                    manifest["video_error"] = "ffmpeg rc={} — {}".format(
+                        r.returncode, (r.stderr or "").strip().splitlines()[-1:] or "")
+                    break
+                vids[kind] = {"path": os.path.basename(out),
+                              "bytes": os.path.getsize(out), "fps": round(fps_actual, 3)}
+            if vids and manifest["video_error"] is None:
+                manifest["video"] = vids
+    elif fmt == "none":
+        manifest["video_error"] = "assembly disabled (--format none) — frames only"
+    else:
+        manifest["video_error"] = "only {} frame(s) — nothing to assemble".format(n)
+
+    with open(os.path.join(out_dir, "manifest.json"), "w") as f:
+        json.dump(manifest, f, indent=1)
+
+    print("see rec: {} frames in {:.1f}s = {:.2f} fps actual ({}); manifest.json written"
+          .format(n, span, fps_actual, manifest["ended_reason"]))
+    for kind in kinds:
+        print("see rec:   {} frames: {}/{}".format(
+            kind, out_dir, frame_pattern(kind)))
+    if manifest["video"]:
+        for kind, v in manifest["video"].items():
+            print("see rec:   video: {}/{} ({} bytes)".format(out_dir, v["path"], v["bytes"]))
+    else:
+        print("see rec:   video: SKIPPED — {}".format(manifest["video_error"]))
+    if manifest["state_error"]:
+        print("see rec:   state: PARTIAL — {}".format(manifest["state_error"]))
+    return manifest
+
+
 def cmd_shot(args):
     shot(args.which, args.out, raw_window=args.raw_window)
     return 0
+
+
+def cmd_rec(args):
+    out_dir = args.out or default_rec_dir()
+    specs = [s for s in (args.with_state or "").split(",") if s.strip()]
+    m = rec(args.seconds, args.fps, args.screen, out_dir, state_specs=specs,
+            fmt=args.format, keep_window=args.keep_window, state_width=args.state_width)
+    # Exit 0 whenever FRAMES exist (the deliverable); the manifest's video/state fields
+    # carry the honest sub-verdicts for smoke.sh to turn into PASS/SKIP rows.
+    return 0 if m["frames_captured"] > 0 else 1
 
 
 def cmd_win(args):
@@ -235,6 +537,26 @@ def main(argv=None):
     s.add_argument("--raw-window", metavar="FULL.png",
                    help="also save the uncropped window capture")
     s.set_defaults(fn=cmd_shot)
+
+    s = sub.add_parser("rec", help="timed capture loop -> PNG frames + manifest + video")
+    s.add_argument("--seconds", type=float, default=8.0, help="clip length (default 8)")
+    s.add_argument("--fps", type=float, default=5.0,
+                   help="target capture rate (default 5; measured ceiling ~6 fps — a "
+                        "window screencapture costs 0.08 s)")
+    s.add_argument("--screen", choices=["top", "bottom", "both"], default="both")
+    s.add_argument("--out", metavar="DIR",
+                   help="output dir (default: <last azctl run dir>/rec-<UTC stamp>)")
+    s.add_argument("--with-state", metavar="SYM[,SYM...]",
+                   help="read these globals over gdbio at every frame into manifest.json "
+                        "(costs frame rate AND emulated speed: each read is a "
+                        "halt->read->cont blink, ~0.4 s — measured 4 fps -> 1.53 fps)")
+    s.add_argument("--state-width", type=int, default=4,
+                   help="bytes per --with-state read (default 4 = u32)")
+    s.add_argument("--format", choices=["mp4", "gif", "none"], default="mp4",
+                   help="ffmpeg assembly of the frame sequence (default mp4)")
+    s.add_argument("--keep-window", action="store_true",
+                   help="also keep the uncropped window frames")
+    s.set_defaults(fn=cmd_rec)
 
     s = sub.add_parser("win", help="print the Azahar window id/bounds/title")
     s.set_defaults(fn=cmd_win)
