@@ -1,0 +1,6 @@
+#!/bin/sh
+# venv shim (SPEC-harness H2): `tools/emutest/run <tool> [args...]` runs tools/emutest/<tool>.py
+# through the setup.sh-built venv, so callers never activate anything.
+d="$(cd "$(dirname "$0")" && pwd)"
+t="$1"; shift
+exec "$d/.venv/bin/python" "$d/$t.py" "$@"

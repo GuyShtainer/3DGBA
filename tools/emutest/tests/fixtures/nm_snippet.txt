@@ -1,0 +1,17 @@
+00235000 0000000c R AUDIO_NAMES
+0049b4e4 00000004 d _deadbeef
+001eb328 000000c4 t ctl_log_line
+0049b460 00000001 d g_appActive
+004a2600 00000030 B g_ctlStat
+004a2640 00000004 B g_diagRxSeq
+0049b49c 00000020 D g_prefs
+004d1869 00000001 b g_quit
+004d1884 00000004 b g_renderSeq
+0054bc38 00000004 b kHeld
+0054bc68 00000004 b kHeld
+00491454 r .LC2
+001dde6c t .divsi3_skip_div0_test
+001ddc58 t .udivsi3_skip_div0_test
+         w __cxa_begin_cleanup
+         w __cxa_call_unexpected
+         w __cxa_type_match

@@ -31,3 +31,11 @@ tools/.fontcache/
 # OS junk / build listings
 .DS_Store
 *.lst
+
+# phase-16 emulator harness — machine-local state, never source
+tools/emutest/.venv/
+tools/emutest/runs/
+tools/emutest/state/
+tools/emutest/emutest.mapsyms
+# E2: the checked-in ELF test fixture must survive the global *.elf ignore
+!tools/emutest/tests/fixtures/tiny.elf
