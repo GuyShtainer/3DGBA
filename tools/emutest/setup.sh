@@ -81,15 +81,22 @@ tools/emutest/.venv/
 tools/emutest/runs/
 tools/emutest/state/
 tools/emutest/emutest.mapsyms
-# E2: the checked-in ELF test fixture must survive the global *.elf ignore
+# E2: the checked-in test fixtures must survive the global *.elf / *.map ignores
 !tools/emutest/tests/fixtures/tiny.elf
+!tools/emutest/tests/fixtures/map_snippet.map
 EOF
   echo ".gitignore hunk appended"
 fi
-# E2 sub-hunk (idempotent for trees that already had the E1 hunk):
+# E2 sub-hunks (idempotent for trees that already had an older hunk). Both fixtures are
+# REQUIRED by tests/run_host_tests.sh (test_elf_extract.py / test_mapsyms.py open them
+# unconditionally), so a clone that ignored them could not run setup.sh at all.
 if ! grep -q 'tiny\.elf' "$GI" 2>/dev/null; then
   printf '# E2: the checked-in ELF test fixture must survive the global *.elf ignore\n!tools/emutest/tests/fixtures/tiny.elf\n' >> "$GI"
-  echo ".gitignore E2 sub-hunk appended"
+  echo ".gitignore tiny.elf sub-hunk appended"
+fi
+if ! grep -q 'map_snippet\.map' "$GI" 2>/dev/null; then
+  printf '# E2: the checked-in .map test fixture must survive the global *.map ignore\n!tools/emutest/tests/fixtures/map_snippet.map\n' >> "$GI"
+  echo ".gitignore map_snippet.map sub-hunk appended"
 fi
 
 echo "== emutest setup: host tests (H6) =="

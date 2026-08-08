@@ -1,0 +1,65 @@
+Archive member included to satisfy reference by file (symbol)
+
+/Users/guyshtainer/VSCodeProjects/3ds-toolkit/projects/3DGBA/external/mgba/build-3ds/libmgba.a(config.c.obj)
+                              gbacore.o (mCoreConfigDeinit)
+ .bss           0x00000000        0x0 /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/15.2.0/../../../../arm-none-eabi/lib/armv6k/fpu/3dsx_crt0.o
+
+                0x00000000                        __sync_synchronize = __sync_synchronize_dmb
+                0x00100000                        PROVIDE (__start__ = 0x100000)
+                0x00100000                        . = __start__
+
+.text           0x00100000   0x1347d0
+ *(.crt0)
+ .crt0          0x00100000       0x94 /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/15.2.0/../../../../arm-none-eabi/lib/armv6k/fpu/3dsx_crt0.o
+ .text.ctl_rec_feed
+                0x001eb124      0x204 main.o
+ .text.ctl_log_line
+                0x001eb328       0xc4 main.o
+ .text.ctl_rr_drain_seat
+                0x00235000                        . = ALIGN (0x1000)
+
+.rodata         0x00235000   0x2651e8
+ *(.rodata)
+ .rodata        0x00235000        0xc audio.o
+                0x00235000                AUDIO_NAMES
+ .rodata        0x0023500c       0x34 celiolink.o
+ .rodata        0x00235040       0x9e control.o
+ *fill*         0x002350de        0x2 
+ .rodata        0x002350e0      0x2a4 gamestate.o
+ .rodata        0x00235384      0x400 gbatext.o
+ .rodata        0x00235784      0x64c main.o
+ .rodata        0x00235dd0        0x5 netlink.o
+.data           0x0049b000     0x22c4
+ *(.data)
+ .data          0x0049b000      0x420 assets.o
+ .data          0x0049b420        0xc audio.o
+ .data          0x0049b42c       0x18 gamestate.o
+ .data          0x0049b444       0x1c gbacore.o
+ .data          0x0049b460        0xc main.o
+ .data          0x0049b46c        0xc netlink.o
+ .data          0x0049b478       0x44 theme.o
+                0x0049b478                g_ui
+                0x0049b49c                g_prefs
+ .data          0x0049b4bc       0x28 touch.o
+ .data          0x0049b4e4       0x24 /var/folders/kk/80281pd541g60nptm46fy9hh0000gn/T//ccGuCQ7q.ltrans3.ltrans.o
+                0x0049d2d8                        PROVIDE (__preinit_array_start = .)
+ *(.preinit_array)
+                0x0049d2e4                        __bss_start__ = .
+
+.bss            0x0049d2e4    0xb01dc
+ *(.dynbss)
+ *(.bss)
+ .bss           0x0049d2e4       0x21 assets.o
+ *fill*         0x0049d305        0x3 
+ .bss           0x0049d308     0x509c audio.o
+ .bss           0x004a23a4      0x25c celiolink.o
+ .bss           0x004a2600       0x30 control.o
+                0x004a2600                g_ctlStat
+ *fill*         0x004a2630       0x10 
+ .bss           0x004a2640       0x64 diag.o
+                0x004a2640                g_diagRxSeq
+                0x004a2660                g_diagMainCrumb
+                0x004a2680                g_diagSioCrumb
+                0x004a26a0                g_diagNetCrumb
+ .bss           0x004a26a4    0x25028 gamestate.o
+ *fill*         0x004c76cc        0x4 

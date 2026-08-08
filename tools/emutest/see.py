@@ -211,6 +211,30 @@ def _uniform(im):
     return lo == hi
 
 
+def _uniform_verdict(im, where):
+    """Decide what a flat capture MEANS, and exit accordingly.
+
+    REVIEW FIX (2026-08-09): both call sites used to jump straight to
+    skip_no_permission() — exit 75, "Screen Recording permission missing". But
+    require_window() has already preflighted CGPreflightScreenCaptureAccess(), so
+    reaching here normally PROVES the grant is effective, and the SKIP laundered a real
+    defect into a non-failure. A black/blank screen is precisely the bug class this
+    project keeps chasing (HANDOFF: the post-trade black screen), and PHASE invariant 4
+    says a SKIP is never a pass — it must also never be a swallowed FAIL. The grant is
+    re-checked here (it can be revoked mid-run) and only THEN does 75 apply."""
+    if not screen_recording_granted():
+        print("see: capture is a uniform image AND the Screen Recording grant is gone "
+              "(revoked mid-run?)")
+        skip_no_permission()
+    lo, _hi = im.convert("L").getextrema()
+    print("see: FAIL — {} is a single flat colour (luminance {}) while the Screen "
+          "Recording grant IS effective. That is NOT a permission problem: the window is "
+          "occluded/minimised/offscreen, or the app really is drawing a blank screen "
+          "(a real defect — see HANDOFF's black-screen class).".format(where, lo),
+          file=sys.stderr)
+    raise SystemExit(1)
+
+
 def require_window(context=""):
     """Preflight the TCC grant + locate the window, or exit 75 / 1 with instructions."""
     if not screen_recording_granted():
@@ -233,12 +257,7 @@ def shot(which, out_path, raw_window=None):
     except ValueError as e:
         print("see: FAIL — {}".format(e), file=sys.stderr)
         raise SystemExit(1)
-    # Content check: a permissionless/foreign capture yields a uniform image -> treat as
-    # the permission SKIP, never a silent pass.
-    if _uniform(im):
-        print("see: capture is a uniform image — Screen Recording grant not effective?")
-        skip_no_permission()
-
+    # The raw window is saved FIRST so the evidence survives a flat-capture failure below.
     if raw_window:
         d = os.path.dirname(os.path.abspath(raw_window))
         if d:
@@ -246,6 +265,11 @@ def shot(which, out_path, raw_window=None):
         im.save(raw_window)                   # run-dir subdir crashed (crops mkdir'd, this didn't)
         print("see: raw window -> {} ({}x{} px, factor {:.2f})".format(
             raw_window, im.size[0], im.size[1], geo["factor"]))
+
+    # Content check: never a silent pass — SKIP only if the grant is actually gone,
+    # otherwise FAIL (see _uniform_verdict).
+    if _uniform(im):
+        _uniform_verdict(im, "the captured window")
 
     wrote = {}
     base, ext = os.path.splitext(out_path)
@@ -414,8 +438,7 @@ def rec(seconds, fps, which, out_dir, state_specs=None, fmt="mp4", keep_window=F
         im = _grab(w)
         if geo0 is None:
             if _uniform(im):
-                print("see rec: first capture is a uniform image — grant not effective?")
-                skip_no_permission()
+                _uniform_verdict(im, "the first recorded frame")
             geo0 = window_geometry(im.size, w)
             manifest["geometry"] = geo0
         elif im.size != tuple(

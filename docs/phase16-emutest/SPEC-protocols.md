@@ -88,8 +88,10 @@ Playback assigns them straight back into the HID touch entry (`movie.cpp:269-284
   trusting synthesized movies for long runs.
 - Frame↔poll conversion (for humans): the UI's "input index" = `round(input / 234.0 *
   SCREEN_REFRESH_RATE)` (`movie.cpp:222-227`), `SCREEN_REFRESH_RATE = 268111856/4481136 ≈
-  59.83400 Hz` (`core_timing.h:42`) → **≈ 3.9108 polls per frame**. The PokeDNA "hold 8
-  frames, release 8 frames" rule ≈ hold 32 polls, release 32 polls.
+  59.83122 Hz` (`core_timing.h:37,42` — CORRECTED 2026-08-09 from the earlier 59.83400 /
+  3.9108, which were wrong in the 4th significant digit; ctm.py carries the exact
+  Fraction, so no synthesized bytes were ever affected) → **= 3.911001 polls per frame**.
+  The PokeDNA "hold 8 frames, release 8 frames" rule ≈ hold 32 polls, release 32 polls.
 
 ### S1.6 Playback consumption and termination
 
@@ -153,7 +155,7 @@ magic just logs `Movie … does not have valid header` to
 
 ### S1.11 Golden example — 3-frame movie, START pressed on frame 2 (424 bytes)
 
-12 polls ≈ 3.07 frames (12 / 3.9108). Polls 0-3 = frame 1 idle, polls 4-7 = frame 2 with
+12 polls ≈ 3.068 frames (12 / 3.911001). Polls 0-3 = frame 1 idle, polls 4-7 = frame 2 with
 START held (`hex = 0x0008`, bit 3), polls 8-11 = frame 3 idle. Layout per S1.5: 12 ×
 `[PadAndCircle][Touch]` = 24 records = 168 bytes after the 256-byte header.
 

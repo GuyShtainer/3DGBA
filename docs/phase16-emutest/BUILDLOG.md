@@ -505,3 +505,148 @@ Tier-B pickup after 27.
    in-app QUIT (E2 follow-up 2, unchanged): CGEvent could close the window now — worth a
    look if a real recording bootstrap is ever needed (zero-revision movies play fine, so it
    is not blocking).
+
+## 2026-08-09 — E5: adversarial-review FIX PASS (1 blocker, 7 major, 11 minor verified & closed)
+
+Two adversarial reviews of the E1–E4 harness produced 19 findings. Every one was re-checked
+against the code before touching it (reviewers can be wrong); **all 19 reproduced** — none
+needed refuting. Files changed: `tools/emutest/{azctl.py,gdbio.py,see.py,sdmc.py,ctm.py,
+smoke.sh,setup.sh}`, `tools/emutest/tests/{test_azctl_state.py (new),test_rsp.py,
+test_see_rec.py,test_ctm.py}`, `.gitignore`, `.claude/skills/emutest/SKILL.md`,
+`docs/phase16-emutest/SPEC-protocols.md`. **No `source/` change** (PHASE inv. 6).
+
+### The blocker — harvest fabricated provenance
+`_do_stop` defaulted `spawn_ts` to **0** when the pidfile was gone, and `harvest()` filters
+netlogs with `mtime >= spawn_ts - 1` — always true at 0. So `azctl stop` after the app
+self-quit (smoke does this unconditionally, twice) copied **every** file in the user's
+netlogs dir into the run dir and logged each as `harvest: netlogs/...` — a ROM-less boot
+"producing" a 4.3 KB gs log with real rows, exactly the claim the sdmc channel exists to
+make. Fix: recover `spawn_ts` from the run dir's own `boot.json`; when it is genuinely
+unknown, **skip** the netlog harvest with a printed reason rather than sweep. Live-proven
+in `tests/test_azctl_state.py::TestHarvestProvenance` (old-vs-new netlog pair: only the new
+one is harvested; with no boot.json the `netlogs/` dir is not even created).
+
+### User-data-safety lens (treated as blockers regardless of label)
+- **F1 restore-into-a-live-instance.** `cmd_boot` ran its stale-backup recovery *before* the
+  foreign-instance check, and `_do_stop` restored whenever the pidfile was missing. Azahar
+  saves the INI on exit (S3.2, citra_qt.cpp:1543), so restoring while an instance lives
+  means that instance writes the harness profile back — permanently, because
+  `restore_config()` had already **deleted** the only backup and the next restore silently
+  returns False. New `restore_config_guarded()` refuses while any azahar of ours is alive
+  and **keeps** the backup with recovery instructions; the foreign check moved ahead of the
+  recovery; `cmd_restore` now covers foreign instances too (it only checked the tracked pid).
+- **F6 recent.bin.** `clean-fixtures` deleted `sdmc:/3DGBA/recent.bin` on existence alone
+  though `stage_fixtures` never created it (PHASE inv. 2). Now: a pre-existing recent.bin is
+  backed up at stage time and **restored** at clean time; only one that appeared during our
+  session is removed. Manifest reshaped to `{"files":[...],"recent_pre_existing":bool}` with
+  legacy bare-list tolerance.
+- **F5 smoke had no trap.** The user's `sdmc:/3DGBA/settings.bin` was snapshotted, then three
+  live phases ran before the restore — a Ctrl-C in between left it mutated with the only copy
+  orphaned in `$TMPDIR` (a 100 B leftover from exactly that was on this machine). Added
+  `trap cleanup EXIT INT TERM` (restore settings.bin, delete temps, stop any azahar).
+- **F4/F18 concurrency.** `state/` is one shared slot (backup, pidfile, fixtures manifest)
+  with no serialisation: an interleaved backup/restore could pin the user's config with no
+  backup left. Added an advisory `flock` (`state/azctl.lock`, 60 s wait, released on exit)
+  around every mutating command, plus an `owner` stamp in the pidfile
+  (`EMUTEST_SESSION`, else ppid) so a cross-session restart/stop is **announced**. Honest
+  limit: only one Azahar may run at a time, so a second session still takes over the
+  instance — it just can no longer do so silently, or corrupt the config while doing it.
+
+### Correctness / anti-vacuous-PASS
+- **F2 press-ctm proved nothing when settings.bin was dirty.** `poll --expect 3` returns 0
+  on the *first* sample if the value already is 3, and the app loads `tiltLevel` from
+  `sdmc:/3DGBA/settings.bin` at startup (settings_load main.c:2102 ← main.c:2562;
+  `_Static_assert offsetof(Settings,tilt)==23*4`) — the very file the movie's taps write.
+  Any interrupted run left 3 on disk and every later press-ctm row was vacuous. smoke now
+  **clears** settings.bin (after snapshotting) before each movie phase and **fails** if
+  `tiltLevel` is already 3. Live: `tiltLevel before movie taps: 0` → `PASS — reached
+  expected 3 after 24 samples`, and `sdmc/3DGBA/` was observably empty mid-phase.
+- **F14 `see`/`see-rec` could pass on Azahar's own game list.** Azahar is single-window
+  (E4's "THE TRAP"); the aspect test is a property of the crop rects and `frac >= 0.003` is
+  true of any bright UI. smoke now reads `g_renderSeq` immediately **before and after** every
+  gate capture and fails the row unless it advanced (live: `renderSeq 37->66`). `see-rec`
+  additionally asserts `ended_reason == "duration"` and `frames_captured == frames_planned`
+  — a clip cut short by `window-gone`/`window-resized` (i.e. the app died mid-clip) used to
+  print PASS.
+- **F8 stale control log.** `sdmc control-status --expect-pickup` took the newest
+  `3DGBA_control_*` with no date filter, so a previous run's log could answer for this one
+  (the app names logs from the pinned RTC, so **filenames repeat across runs** — mtime is
+  the only discriminator; this run and the stale one were both `..._0101_020026.txt`).
+  Added `--since EPOCH` to `control-status`/`latest`; smoke passes the boot's `spawn_ts`,
+  matching what the gs-log check already did.
+- **F11 reads from a parked emulator looked like live state.** The broker handshake halts
+  and deliberately stays halted; `_serve_one`'s read only resumes if it halted *itself*, and
+  `cmd_read`/`read-u32`/`read-u8` had none of `cmd_poll`'s guard. LIVE (before fix):
+  `read-u32 g_renderSeq = 0`, `read-u8 g_appActive = 1` (main.c:85's ELF initialiser),
+  exit 0, emulator frozen forever. Now every read prints a stderr WARNING and appends a
+  `[HALTED — …]` marker to the value line. Re-proven live on a fresh boot.
+- **F12 zombie broker.** The EOF watch was gated on `not rsp.halted`, so a broker left halted
+  (the handshake's own state, and `verify-base` on an un-resumed boot) never noticed the
+  emulator dying, outlived `azctl stop`, and answered the next boot's `gdbio resume` with
+  "app running", exit 0, down a dead socket. The gate is gone (reading here is equivalent to
+  leaving the bytes in the kernel buffer) and every request re-checks. LIVE: halted broker
+  pid 18889 → `azctl stop` → broker log `emulator closed the RSP socket — exiting`,
+  `pgrep -f 'gdbio.py serve'` empty.
+- **F13 the documented liveness one-liner failed on a healthy boot.** `poll` inherited the
+  shared `--timeout`, whose default is the **per-RSP-op** timeout (5.0 s), while E2 measured
+  resume → render loop at 5–10 s. `poll` now owns `--timeout` as a wall-clock deadline
+  (`POLL_TIMEOUT_S = 30`). LIVE: the verbatim SKILL.md line now passes (`changed 0 -> 25
+  after 9 samples`).
+- **F15 a black screen was laundered into a SKIP.** `_uniform()` routed every flat capture to
+  `skip_no_permission()` (exit 75) even though `require_window()` had just proven the grant
+  effective — so the exact defect class this project keeps chasing became a non-failing row.
+  New `_uniform_verdict()`: re-check the grant (revocable mid-run) → 75 only then, otherwise
+  **exit 1** with the real diagnosis. The raw window is now saved *before* the check so the
+  evidence survives the failure.
+- **F7 unbounded kill.** `pid_alive()` reports `PermissionError` as alive and both `os.kill`s
+  swallowed `OSError`, so an unsignalable pid spun forever in `kill_pid` with no diagnostic.
+  The post-SIGKILL wait is now bounded and returns False loudly; `all_azahar_pids()` is
+  scoped to our uid (`pgrep -x -U`) — another account's Azahar can neither see our config nor
+  be killed by us, so counting it only produced an unbootable state.
+
+### Performance / docs
+- **F16 the 0.3 s halt drain was a sleep where a wait-until belonged.** The spurious `$#00`
+  arrives in the *same* TCP burst as the `T05` (raw probe: both at +0.0007 s), so the fixed
+  drain was ~75 % of every halt→read→cont blink (and the reason `see rec --with-state`
+  delivered 1.5 of 4 fps). `_drain` now returns as soon as the artifact is consumed, keeping
+  `secs` as a ceiling — which also makes it *more* robust: a late packet is still absorbed
+  instead of being misread as the next `m` reply. **[M] LIVE: blink 0.4 s → min 0.003 /
+  avg 0.007 / max 0.014 s over 8 samples; 50 back-to-back cycles in 0.03 s, monotonic
+  renderSeq, `verify-base` still 3/3 MATCH.**
+- **F17 shipped comments contradicted E2.** `PROFILE_PINS` said `use_gdbstub=true` "runs
+  freely from boot" and `--gdb`'s help claimed pause-at-start semantics — both disproven by
+  E2 facts 1/2 (every such boot parks pre-first-instruction; `-g` adds nothing on this
+  release). Corrected in the pin comment, the `cmd_boot` comment and `--help`. This exact
+  misreading is what produces the F11 frozen-emulator trap.
+- **F19 rate decimals.** `268111856/4481136 = 59.83122 Hz` and `3.911001` polls/frame; the
+  docs said 59.83400 / 3.9108 (wrong in the 4th significant digit) in ctm.py ×6 and
+  SPEC-protocols S1.5 ×2. Code used exact `Fraction`s throughout, so **no golden bytes
+  moved** (re-verified). The printed seconds figure now derives from a new exact
+  `SCREEN_REFRESH_HZ` instead of a hand-typed decimal.
+- **F3 the harness was not self-contained.** `.gitignore`'s global `*.map` excluded
+  `tests/fixtures/map_snippet.map`, which tracked `test_mapsyms.py` opens unconditionally —
+  a fresh clone could not finish `setup.sh` (host tests fail → `set -e` aborts before the
+  smoke gate). Added the negation to `.gitignore` and to setup.sh's idempotent hunk
+  (`git check-ignore` now clears it; `git add --dry-run` accepts it).
+
+### Live verification (this machine, Azahar 2125.1.2)
+- **`smoke.sh --rom` — ALL SEVEN CHANNELS PASS**: run / read-state / press-ctm / press-d4 /
+  sdmc / see / see-rec. Fixtures staged and cleaned (originals re-hashed untouched), gs log
+  7 data rows, pickup counter 0→1, `see` guarded by renderSeq 37→66.
+- **Real Ctrl-C test** (SIGINT to the process group, mid-phase-2, while the harness owned
+  settings.bin): smoke exits 1, **settings.bin restored byte-identically**, no azahar left,
+  no temp orphans — the F5/F9 pair proven, not asserted.
+- **User data after every run**: `qt-config.ini` sha256 identical to the pre-run snapshot
+  (`dd20792e…`), `settings.bin` identical (`7ac253c6…`), `sdmc/3DGBA/` back to just
+  settings.bin, `sdmc/dual-gba/` untouched, `azctl status` = `process=none profile=CLEAN`.
+- **Host tests: 147 pass** (was 125). New `tests/test_azctl_state.py` (13 tests) pins the
+  blocker + every user-data fix; `test_rsp.py` gains socketpair-driven drain tests and the
+  poll-timeout contract; `test_see_rec.py` pins FAIL-vs-SKIP; `test_ctm.py` pins the rates.
+- Cleaned the 9 zero-byte `emutest-movie*` orphans previous runs had left in `$TMPDIR`
+  (harness-created by prefix; the leak itself is fixed).
+
+**Deviation / honest limit:** the state lock serialises azctl commands but cannot stop a
+second session from restarting the one shared emulator — that is inherent to
+single-instance Azahar. It is now announced (`owner=` in `azctl status`, a NOTE on
+boot/stop) instead of silent, which is what made the review's cross-session kill look like
+an unexplained `press-ctm FAIL`.

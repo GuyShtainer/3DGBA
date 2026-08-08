@@ -34,7 +34,10 @@ Exit codes (SPEC-harness H2): 0 = ok, 1 = fail, 75 = skip (unused here; azctl ne
 """
 
 import argparse
+import contextlib
 import difflib
+import errno
+import fcntl
 import hashlib
 import json
 import os
@@ -120,6 +123,76 @@ def fixtures_manifest_path():
     return os.path.join(state_dir(), "fixtures.json")
 
 
+def lock_path():
+    return os.path.join(state_dir(), "azctl.lock")
+
+
+def recent_backup_path():
+    return os.path.join(state_dir(), "recent.bin.bak")
+
+
+# --------------------------------------------------------------------------- state lock
+# REVIEW FIX (2026-08-09): state/ is a SINGLE shared slot — one qt-config.ini.bak, one
+# azahar.pid, one fixtures manifest — and nothing serialised access to it. Two concurrent
+# azctl users could interleave backup_config() (user cfg -> .bak) with another process's
+# restore_config() (.bak -> user cfg, then DELETE .bak), which permanently pins the
+# harness profile in the user's qt-config.ini with no backup left to restore from
+# (invariant 2 is a user-data invariant, so this is the blocker-grade half of the fix).
+# An advisory flock around every mutating command makes those sections atomic; the
+# `owner` stamp below makes the remaining cross-session case (one session stopping
+# another's emulator — unavoidable, only one Azahar may run at a time) LOUD instead of
+# silent. flock is advisory + released on process exit, so a crashed azctl never wedges
+# the harness.
+LOCK_WAIT_S = 60
+
+
+@contextlib.contextmanager
+def state_lock(what):
+    os.makedirs(state_dir(), exist_ok=True)
+    f = open(lock_path(), "a+")
+    try:
+        deadline = time.time() + LOCK_WAIT_S
+        announced = False
+        while True:
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError as e:
+                if e.errno not in (errno.EAGAIN, errno.EACCES):
+                    raise
+                if not announced:
+                    f.seek(0)
+                    holder = f.read().strip() or "?"
+                    print("azctl: waiting for the state lock — another azctl holds it "
+                          "({}); up to {}s".format(holder, LOCK_WAIT_S))
+                    announced = True
+                if time.time() >= deadline:
+                    raise RuntimeError(
+                        "azctl: could not take the state lock ({}) within {}s — another "
+                        "harness session is mid-command. Wait for it, or remove {} if you "
+                        "are certain no azctl is running.".format(
+                            lock_path(), LOCK_WAIT_S, lock_path()))
+                time.sleep(0.25)
+        f.seek(0)
+        f.truncate()
+        f.write("pid={} cmd={} at={}\n".format(
+            os.getpid(), what, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())))
+        f.flush()
+        yield
+    finally:
+        try:
+            fcntl.flock(f, fcntl.LOCK_UN)
+        finally:
+            f.close()
+
+
+def session_owner():
+    """Who owns a booted instance. EMUTEST_SESSION lets a caller (smoke.sh, a workflow)
+    name itself; otherwise the parent pid is a decent proxy. Recorded in the pidfile so a
+    cross-session stop/restart is reported instead of looking like our own instance."""
+    return os.environ.get("EMUTEST_SESSION") or "ppid:{}".format(os.getppid())
+
+
 GDB_PORT = 24689  # Azahar default (probed qt-config.ini line 215; gdbstub.cpp:162)
 
 # [M] Measured live 2026-08-08 (BUILDLOG E1): cold boot on this machine — process visible in
@@ -152,8 +225,14 @@ PROFILE_PINS = [
                                                   # SPEC-protocols S1.11 golden epoch (l.376)
     ("System", "init_ticks_type", "1"),           # InitTicks::Fixed (l.374)
     ("System", "init_ticks_override", "1000"),    # fixed tick seed (l.372)
-    ("Debugging", "use_gdbstub", "true"),         # INI route: app runs freely from boot,
-                                                  # stub listens (S2.1; l.224)
+    # CORRECTED 2026-08-09 (BUILDLOG E2 fact 1, live-proven; S2.1 was researched from
+    # master and is WRONG for the installed release 2125.1.2): use_gdbstub=true does NOT
+    # mean "runs freely while a stub listens". System::Init calls GDBStub::DeferStart()
+    # unconditionally (release core.cpp:574) and Init(port) sets halt_loop=true then
+    # BLOCKS in accept() on the emu thread (gdbstub.cpp:1157/1203), so EVERY boot with
+    # this pin parks pre-first-instruction until a client connects — and stays halted
+    # until `c`. `tools/emutest/run gdbio resume` is therefore MANDATORY after each boot.
+    ("Debugging", "use_gdbstub", "true"),         # (l.224)
     ("Debugging", "gdbstub_port", str(GDB_PORT)), # explicit, never rely on default (l.215)
     ("Miscellaneous", "check_for_update_on_start", "false"),  # the update dialog hijacked a
                                                   # run + swallowed SIGTERM (l.306)
@@ -266,8 +345,14 @@ def assert_sd_writable(path, allow_netlog_delete=False):
 
 # --------------------------------------------------------------------------- process helpers
 def all_azahar_pids():
-    """pgrep -x azahar (the probed tracking method — `open` detaches, no child pid)."""
-    r = subprocess.run(["pgrep", "-x", "azahar"], capture_output=True, text=True)
+    """pgrep -x azahar (the probed tracking method — `open` detaches, no child pid).
+
+    REVIEW FIX (2026-08-09): scoped to OUR uid (`-U`). Another account's Azahar reads
+    that account's own ~/Library/Application Support/Azahar, so it can neither be
+    affected by our profile nor be killed by us — counting it only produced a boot we
+    could not unblock and (under --force) an unkillable-pid spin in kill_pid()."""
+    r = subprocess.run(["pgrep", "-x", "-U", str(os.getuid()), "azahar"],
+                       capture_output=True, text=True)
     return [int(x) for x in r.stdout.split()] if r.returncode == 0 else []
 
 
@@ -298,27 +383,39 @@ def tracked_live_pid():
 
 def kill_pid(pid, label, log=None):
     """SIGTERM → wait TERM_GRACE_S → SIGKILL (H1.5; a modal dialog swallowed SIGTERM once,
-    hence the unconditional escalation)."""
+    hence the unconditional escalation). Returns True when the pid is gone.
+
+    REVIEW FIX (2026-08-09): the post-SIGKILL wait is now BOUNDED. pid_alive() reports a
+    PermissionError as alive (correct — the process exists), and both os.kill() calls
+    swallow OSError, so an unsignalable pid used to spin here forever with no diagnostic.
+    A pid that survives SIGKILL is reported and the caller decides."""
     if not pid_alive(pid):
-        return
+        return True
     _event(log, "kill: SIGTERM {} pid {}".format(label, pid))
     try:
         os.kill(pid, signal.SIGTERM)
-    except OSError:
-        pass
+    except OSError as e:
+        _event(log, "kill: SIGTERM {} pid {} failed: {}".format(label, pid, e))
     deadline = time.time() + TERM_GRACE_S
     while time.time() < deadline:
         if not pid_alive(pid):
-            return
+            return True
         time.sleep(0.2)
     _event(log, "kill: SIGKILL {} pid {} (survived {}s grace)".format(
         label, pid, TERM_GRACE_S))
     try:
         os.kill(pid, signal.SIGKILL)
-    except OSError:
-        pass
-    while pid_alive(pid):
+    except OSError as e:
+        _event(log, "kill: SIGKILL {} pid {} failed: {}".format(label, pid, e))
+    deadline = time.time() + TERM_GRACE_S
+    while time.time() < deadline:
+        if not pid_alive(pid):
+            return True
         time.sleep(0.1)
+    _event(log, "kill: FAILED — pid {} ({}) still alive after SIGKILL + {}s (not ours to "
+                "signal? another user, or a stuck kernel wait)".format(
+                    pid, label, TERM_GRACE_S))
+    return False
 
 
 def gdb_port_listening(port=GDB_PORT):
@@ -395,6 +492,31 @@ def restore_config(log=None):
     return True
 
 
+def restore_config_guarded(log=None):
+    """restore_config(), but ONLY when no Azahar of ours is alive.
+
+    REVIEW FIX (2026-08-09) — the hole this closes: restore_config() copies the backup
+    back and DELETES it. Azahar saves the INI on exit (S3.2, citra_qt.cpp:1543), so
+    restoring while ANY instance still lives means that instance rewrites the harness
+    profile into the user's qt-config.ini on quit — permanently, because the backup is
+    already gone and the next restore silently returns False. Two reachable triggers were
+    proven in review: (a) cmd_boot's stale-backup recovery ran BEFORE the foreign-instance
+    check, so a user-launched Azahar was live during the restore; (b) `azctl stop` with no
+    pidfile (azctl killed mid-boot) restored while our own orphan was still running.
+    Refusing and KEEPING the backup is always recoverable (`azctl restore` after the user
+    closes Azahar); restoring into a live instance is not."""
+    if not os.path.exists(backup_path()):
+        return True                               # already CLEAN
+    alive = all_azahar_pids()
+    if alive:
+        _event(log, "profile: NOT restoring — azahar still running (pid {}). The backup is "
+                    "KEPT at {}; close Azahar then run: tools/emutest/run azctl restore"
+                    .format(",".join(map(str, alive)), backup_path()))
+        return False
+    restore_config(log)
+    return True
+
+
 def _sha256(path):
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -445,16 +567,37 @@ def wipe_netlogs(run_dir):
 FIXTURE_NAMES = ["gameA.gba", "gameA.sav", "gameB.gba", "gameB.sav"]
 
 
+def recent_path():
+    # rompicker.c:104 RECENT_PATH = "sdmc:/3DGBA/recent.bin" — the app's recent-ROM list,
+    # inside the same dir we stage fixtures into.
+    return os.path.join(az_sd(), "3DGBA", "recent.bin")
+
+
 def stage_fixtures(run_dir):
     """--fresh-sd-fixtures (H4.2): copy the user's dual-gba ROMs+saves into the app's
     ROM_DIR sdmc:/3DGBA (rompicker.h:13) as harness-created fixtures; manifest with
     SHA-256 so stop() can prove the originals were never touched. Copies only — the
-    originals in dual-gba/ are READ-ONLY user data (H4.1)."""
+    originals in dual-gba/ are READ-ONLY user data (H4.1).
+
+    REVIEW FIX (2026-08-09): a PRE-EXISTING recent.bin is now backed up here and restored
+    by clean-fixtures. Before, clean-fixtures deleted recent.bin on existence alone even
+    though stage_fixtures never created it — a user who had ever picked ROMs from
+    sdmc:/3DGBA lost their recent list to any `smoke.sh --rom` (invariant 2: the harness
+    never deletes anything it did not create). The app rewrites the file during a fixture
+    session either way, so a copy is the only honest way to give it back."""
     src_dir = os.path.join(az_sd(), "dual-gba")
     dst_dir = os.path.join(az_sd(), "3DGBA")
     os.makedirs(dst_dir, exist_ok=True)
     old = load_fixture_manifest()
     old_dsts = {e["dst"] for e in old}
+    # recent.bin: snapshot the user's copy if it exists and we have not already snapshotted
+    # it for this staging period (a re-stage without a clean must not clobber the backup).
+    recent_pre = os.path.exists(recent_path())
+    if recent_pre and not os.path.exists(recent_backup_path()):
+        os.makedirs(state_dir(), exist_ok=True)
+        shutil.copy2(recent_path(), recent_backup_path())
+        _event(run_dir, "fixtures: backed up the pre-existing recent.bin ({} bytes) -> {}"
+               .format(os.path.getsize(recent_backup_path()), recent_backup_path()))
     manifest = []
     for name in FIXTURE_NAMES:
         src = os.path.join(src_dir, name)
@@ -475,15 +618,25 @@ def stage_fixtures(run_dir):
     if not any(e["dst"].endswith("gameA.gba") for e in manifest):
         raise RuntimeError("fixtures: dual-gba/gameA.gba not found — nothing to stage")
     with open(fixtures_manifest_path(), "w") as f:
-        json.dump(manifest, f, indent=1)
+        json.dump({"files": manifest, "recent_pre_existing": recent_pre}, f, indent=1)
+
+
+def _fixture_state():
+    """-> {"files": [...], "recent_pre_existing": bool}. Tolerates the legacy bare-list
+    manifest written before the 2026-08-09 review fix."""
+    try:
+        with open(fixtures_manifest_path()) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {"files": [], "recent_pre_existing": False}
+    if isinstance(data, list):                    # legacy shape
+        return {"files": data, "recent_pre_existing": False}
+    return {"files": data.get("files", []),
+            "recent_pre_existing": bool(data.get("recent_pre_existing"))}
 
 
 def load_fixture_manifest():
-    try:
-        with open(fixtures_manifest_path()) as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return []
+    return _fixture_state()["files"]
 
 
 def verify_fixture_originals(run_dir):
@@ -509,7 +662,16 @@ def harvest(run_dir, spawn_ts):
     """Copy evidence into the run dir (H2.8/H4.3): azahar_log.txt + the rotated
     azahar_log.old.txt (rotation happens at OUR launch, so the .old file's mtime is always
     pre-spawn — it is the pre-run log, harvested as-is for context, no mtime filter) and
-    every netlogs file newer than the boot. Copy, never move (S3.4)."""
+    every netlogs file newer than the boot. Copy, never move (S3.4).
+
+    REVIEW FIX (2026-08-09) — THE BLOCKER: spawn_ts used to default to 0 when the pidfile
+    was missing, and the netlog filter `mtime >= spawn_ts - 1` is then true for EVERY file
+    in the user's netlogs dir. A `azctl stop` after the app self-quit therefore copied
+    foreign logs (from earlier sessions, other runs, real hardware pulls) into the run dir
+    and wrote them into events.log as this run's evidence — a ROM-less boot "producing" a
+    4.3 KB gs log with real rows. spawn_ts is now recovered from the run dir's boot.json,
+    and when it is genuinely unknown the netlog harvest is SKIPPED loudly rather than
+    fabricating provenance."""
     if not run_dir:
         return
     for src, name in [(az_log(), "azahar_log.txt"), (az_log_old(), "azahar_log.old.txt")]:
@@ -520,7 +682,11 @@ def harvest(run_dir, spawn_ts):
         except OSError as e:
             _event(run_dir, "harvest: {} failed: {}".format(name, e))
     nl = os.path.join(az_sd(), "cias", "netlogs")
-    if os.path.isdir(nl):
+    if not spawn_ts:
+        _event(run_dir, "harvest: netlogs SKIPPED — this run's spawn_ts is unknown (no "
+                        "pidfile and no boot.json), so newer-than-boot cannot be decided "
+                        "and copying everything would plant foreign logs as evidence")
+    elif os.path.isdir(nl):
         out = os.path.join(run_dir, "netlogs")
         for root, _dirs, files in os.walk(nl):
             for fn in files:
@@ -543,29 +709,49 @@ def cmd_boot(args):
 
     # H1.5 step 1+2, reordered kill-before-restore (deviation recorded in BUILDLOG E1):
     # a still-live tracked instance saves the INI on its SIGTERM exit (S3.2), which would
-    # overwrite a just-restored user config — so any tracked instance dies FIRST, then the
-    # user config is restored before anything else runs.
-    if tracked_live_pid() is not None:
+    # overwrite a just-restored user config — so any tracked instance dies FIRST.
+    tracked = tracked_live_pid()
+    if tracked is not None:
+        prev = (read_pidfile() or {}).get("owner")
+        if prev and prev != session_owner():
+            # REVIEW FIX (2026-08-09): state/ is one shared slot. A second harness session
+            # restarting "the" instance is legal (only one Azahar may run) but must never
+            # look like our own instance — say whose it was.
+            print("azctl: NOTE — the tracked instance was booted by a DIFFERENT harness "
+                  "session (owner {}; we are {}). Restarting it.".format(
+                      prev, session_owner()))
         print("azctl: already booted (ours) — restarting (H2.1: boot while booted = restart)")
         _do_stop(harvest_evidence=True)
-    elif os.path.exists(backup_path()):
-        print("azctl: recovered stale profile backup (previous run died before restore)")
-        restore_config(None)
-        try:
-            os.remove(pidfile_path())
-        except OSError:
-            pass
 
     # H1.5 step 2 — foreign instances: never silently kill an azahar the harness did not
     # start (the user may be running it). --force extends the kill.
+    # REVIEW FIX (2026-08-09): this check now runs BEFORE the stale-backup recovery below.
+    # It used to run after, so a stale backup + a user-launched Azahar meant we restored
+    # the user's qt-config.ini and deleted the only backup while that Azahar was live —
+    # and it then wrote the harness profile back on exit, permanently (see
+    # restore_config_guarded).
     foreign = all_azahar_pids()
     if foreign:
         if not args.force:
             print("azctl: FAIL — azahar already running (pid {}) and not started by the "
                   "harness. Close Azahar or re-run with --force.".format(foreign))
+            if os.path.exists(backup_path()):
+                print("azctl: NOTE — a profile backup is still present ({}); it is being "
+                      "KEPT, not restored, because that live instance would overwrite the "
+                      "restore on exit. Close Azahar, then: azctl restore (or boot again)."
+                      .format(backup_path()))
             return 1
         for pid in foreign:
             kill_pid(pid, "foreign azahar (--force)")
+
+    if os.path.exists(backup_path()):
+        print("azctl: recovered stale profile backup (previous run died before restore)")
+        if not restore_config_guarded(None):
+            return 1                      # a live azahar remains — refuse rather than lose it
+        try:
+            os.remove(pidfile_path())
+        except OSError:
+            pass
 
     run_dir = new_run_dir()
     _event(run_dir, "boot: run dir {}".format(run_dir))
@@ -604,8 +790,11 @@ def cmd_boot(args):
     # Build the launch command. LAUNCH RULE (module docstring): bundle via open(1).
     extra = []
     if args.gdb is not None:
-        # CLI -g = pause-at-first-instruction (process.cpp:266-277) — only for catching
-        # boot code; the profile's INI stub (use_gdbstub=true) is the free-running default.
+        # CORRECTED 2026-08-09 (BUILDLOG E2 fact 2): on release 2125.1.2 `-g PORT` adds
+        # NOTHING over the INI route — it only sets use_gdbstub+gdbstub_port
+        # (citra_qt.cpp:295-300). Master's pause-at-start flag (process.cpp:266-277) does
+        # not exist here, and the profile already parks the boot. Kept as an explicit
+        # port override / self-documentation for movie runs.
         port = args.gdb if args.gdb > 0 else GDB_PORT
         extra += ["-g", str(port)]
     if args.movie:
@@ -620,7 +809,7 @@ def cmd_boot(args):
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         _event(run_dir, "FAIL: open(1) rc={} stderr={}".format(r.returncode, r.stderr.strip()))
-        restore_config(run_dir)
+        restore_config_guarded(run_dir)
         return 1
     _event(run_dir, "boot: launched via {}".format(" ".join(cmd)))
 
@@ -635,7 +824,8 @@ def cmd_boot(args):
                 pid = pids[0]
                 t_pid = time.time() - spawn_ts
                 with open(pidfile_path(), "w") as f:
-                    json.dump({"pid": pid, "spawn_ts": spawn_ts, "run_dir": run_dir}, f)
+                    json.dump({"pid": pid, "spawn_ts": spawn_ts, "run_dir": run_dir,
+                               "owner": session_owner()}, f)
                 _event(run_dir, "boot: pid {} after {:.1f}s".format(pid, t_pid))
         if t_log is None:
             try:
@@ -653,7 +843,7 @@ def cmd_boot(args):
         if pid is not None and not pid_alive(pid):
             _event(run_dir, "FAIL: azahar pid {} exited during boot".format(pid))
             harvest(run_dir, spawn_ts)
-            restore_config(run_dir)
+            restore_config_guarded(run_dir)
             try:
                 os.remove(pidfile_path())
             except OSError:
@@ -670,7 +860,7 @@ def cmd_boot(args):
         if pid is not None:
             kill_pid(pid, "half-booted azahar", run_dir)
         harvest(run_dir, spawn_ts)
-        restore_config(run_dir)
+        restore_config_guarded(run_dir)
         try:
             os.remove(pidfile_path())
         except OSError:
@@ -687,21 +877,47 @@ def cmd_boot(args):
     return 0
 
 
+def _boot_json_spawn_ts(run_dir):
+    """spawn_ts recovered from the run dir's own boot.json — the pidfile is not the only
+    record of when this run started, and it is the one that goes missing (azctl killed
+    mid-run, a concurrent session's stop, a manual rm)."""
+    if not run_dir:
+        return None
+    try:
+        with open(os.path.join(run_dir, "boot.json")) as f:
+            ts = json.load(f).get("spawn_ts")
+        return float(ts) if ts else None
+    except (OSError, ValueError, TypeError):
+        return None
+
+
 def _do_stop(harvest_evidence=True):
     """Shared stop path: kill tracked → harvest → verify fixtures → restore config.
     Every step tolerant of already-done (H1.5 'idempotent')."""
     info = read_pidfile()
     run_dir = (info or {}).get("run_dir") or last_run_dir()
-    spawn_ts = (info or {}).get("spawn_ts", 0)
+    # REVIEW FIX (2026-08-09, the blocker): spawn_ts=0 made harvest() copy EVERY netlog in
+    # the user's dir into this run dir as if it were this run's evidence. Recover it from
+    # boot.json; harvest() itself now skips netlogs when it is still unknown.
+    spawn_ts = (info or {}).get("spawn_ts") or _boot_json_spawn_ts(run_dir)
     rc = 0
     if info and pid_alive(info["pid"]):
+        owner = info.get("owner")
+        if owner and owner != session_owner():
+            _event(run_dir, "stop: NOTE — pid {} was booted by a different harness session "
+                            "(owner {}; we are {})".format(info["pid"], owner,
+                                                           session_owner()))
         kill_pid(info["pid"], "tracked azahar", run_dir)
         _event(run_dir, "stop: pid {} terminated".format(info["pid"]))
     if harvest_evidence and run_dir:
         harvest(run_dir, spawn_ts)
     if not verify_fixture_originals(run_dir):
         rc = 1  # loud: user data hash mismatch is a harness bug (H4.2)
-    restore_config(run_dir)
+    # Guarded: never restore into a live instance (it would rewrite the profile on exit
+    # and the backup would already be deleted) — e.g. `azctl stop` with no pidfile while
+    # our own orphan is still running.
+    if not restore_config_guarded(run_dir):
+        rc = 1
     try:
         os.remove(pidfile_path())
     except OSError:
@@ -719,12 +935,18 @@ def cmd_clean_fixtures(_args):
     movies REQUIRE the ROM-less state — staged fixtures flip the app's boot flow into the
     ROM picker and a from-boot movie's taps land on the wrong screen (E3 follow-up 2;
     rompicker.c: scan_roms()>0). Originals are re-hashed FIRST (H4.2); only files the
-    manifest lists — i.e. files the harness itself created — are ever deleted (H4.1)."""
+    manifest lists — i.e. files the harness itself created — are ever deleted (H4.1).
+
+    REVIEW FIX (2026-08-09): recent.bin is no longer deleted on existence alone. If the
+    user already had sdmc:/3DGBA/recent.bin, stage_fixtures backed it up and we RESTORE
+    it here; only a recent.bin that did not exist before staging is removed (that one the
+    app wrote during our session, so it is ours to clean)."""
     if tracked_live_pid() is not None:
         print("azctl: FAIL — tracked azahar still running; `azctl stop` first "
               "(the app may hold the files open / rewrite recent.bin on exit)")
         return 1
-    manifest = load_fixture_manifest()
+    st = _fixture_state()
+    manifest = st["files"]
     if not manifest:
         print("azctl: no fixtures manifest — nothing staged (already clean)")
         return 0
@@ -739,16 +961,24 @@ def cmd_clean_fixtures(_args):
             assert_sd_writable(dst)
             os.remove(dst)
             n += 1
-    # recent.bin is app-written INTO the fixture dir during a fixture session
-    # (rompicker.c:104 RECENT_PATH) — a harness-session artifact, removed with them.
-    recent = os.path.join(az_sd(), "3DGBA", "recent.bin")
-    if os.path.exists(recent):
+    # recent.bin (rompicker.c:104 RECENT_PATH) — user data if it pre-dated the staging.
+    recent = recent_path()
+    note = ""
+    if st["recent_pre_existing"] and os.path.exists(recent_backup_path()):
+        assert_sd_writable(recent)
+        shutil.copy2(recent_backup_path(), recent)
+        os.remove(recent_backup_path())
+        note = "; restored the user's pre-existing recent.bin"
+    elif st["recent_pre_existing"]:
+        note = "; NOTE: recent.bin pre-existed but its backup is missing — left as-is"
+    elif os.path.exists(recent):
         assert_sd_writable(recent)
         os.remove(recent)
         n += 1
+        note = "; removed the recent.bin the app created during the fixture session"
     os.remove(fixtures_manifest_path())
     print("azctl: cleaned {} fixture files (originals verified untouched); "
-          "sdmc:/3DGBA is ROM-less again".format(n))
+          "sdmc:/3DGBA is ROM-less again{}".format(n, note))
     return 0
 
 
@@ -758,10 +988,13 @@ def cmd_restore(_args):
     if tracked_live_pid() is not None:
         print("azctl: FAIL — tracked azahar still running; use `azctl stop`")
         return 1
-    if restore_config(None):
-        print("azctl: restored (CLEAN)")
-    else:
-        print("azctl: already CLEAN (no backup)")
+    had_backup = os.path.exists(backup_path())
+    # REVIEW FIX (2026-08-09): guarded — a FOREIGN (untracked) instance is just as fatal to
+    # a restore as a tracked one, and the old code only checked the tracked pid.
+    if not restore_config_guarded(None):
+        print("azctl: FAIL — azahar is running; the backup is kept. Close it and retry.")
+        return 1
+    print("azctl: restored (CLEAN)" if had_backup else "azctl: already CLEAN (no backup)")
     return 0
 
 
@@ -778,8 +1011,8 @@ def cmd_status(_args):
     pids = all_azahar_pids()
     if ours is not None:
         info = read_pidfile()
-        print("process=ours pid={} uptime={:.0f}s".format(
-            ours, time.time() - info["spawn_ts"]))
+        print("process=ours pid={} uptime={:.0f}s owner={}".format(
+            ours, time.time() - info["spawn_ts"], info.get("owner", "?")))
     elif pids:
         print("process=foreign pids={}".format(",".join(map(str, pids))))
     else:
@@ -801,8 +1034,10 @@ def main(argv=None):
     b = sub.add_parser("boot", help="apply profile + launch the .3dsx windowed")
     b.add_argument("--gdb", nargs="?", const=GDB_PORT, type=int, default=None,
                    metavar="PORT",
-                   help="pass -g PORT (pause-at-start semantics, S2.1); the INI stub on "
-                        "port {} is always on via the profile".format(GDB_PORT))
+                   help="also pass -g PORT on the CLI. NOTE: on release 2125.1.2 this is "
+                        "redundant (it only sets use_gdbstub+port, citra_qt.cpp:295-300). "
+                        "EVERY boot is parked pre-first-instruction by the profile's "
+                        "use_gdbstub pin and needs `gdbio resume` (BUILDLOG E2 fact 1/2)")
     b.add_argument("--movie", metavar="F.ctm", help="play a CTM movie (-p); implies the "
                    "is_new_3ds=false pin (ir:rst desync guard — see cmd_boot comment)")
     b.add_argument("--record", metavar="F.ctm", help="record a CTM movie (-r); same pin")
@@ -828,7 +1063,17 @@ def main(argv=None):
                    ).set_defaults(fn=cmd_clean_fixtures)
 
     args = ap.parse_args(argv)
-    return args.fn(args)
+    # Every command that MUTATES shared state (the config backup, the pidfile, the fixture
+    # manifest) runs under the advisory state lock; `status` is read-only and stays lock-
+    # free so it can always report, even while a boot is in flight.
+    if args.fn is cmd_status:
+        return args.fn(args)
+    try:
+        with state_lock(args.cmd):
+            return args.fn(args)
+    except RuntimeError as e:
+        print(str(e))
+        return 1
 
 
 if __name__ == "__main__":

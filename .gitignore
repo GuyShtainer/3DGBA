@@ -37,5 +37,9 @@ tools/emutest/.venv/
 tools/emutest/runs/
 tools/emutest/state/
 tools/emutest/emutest.mapsyms
-# E2: the checked-in ELF test fixture must survive the global *.elf ignore
+# E2: the checked-in test fixtures must survive the global *.elf / *.map ignores
+# (verified with `git check-ignore -v` — without these, a fresh clone has no
+# tests/fixtures/tiny.elf or map_snippet.map and tests/run_host_tests.sh fails, so
+# setup.sh aborts before the smoke gate).
 !tools/emutest/tests/fixtures/tiny.elf
+!tools/emutest/tests/fixtures/map_snippet.map

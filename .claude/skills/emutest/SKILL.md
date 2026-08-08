@@ -29,6 +29,9 @@ $T/run azctl boot --gdb            # profile backup+apply, bundle launch, readin
 $T/run gdbio resume                # MANDATORY: this Azahar release parks EVERY
                                    # use_gdbstub boot until a gdb client says continue
 $T/run gdbio read-u32 g_prefs+0x1c # read a global (symbols from 3DGBA.elf via nm)
+                                   # (a read BEFORE `resume` is answered from a PARKED
+                                   #  emulator: it prints a [HALTED] marker + warning —
+                                   #  those bytes are the ELF's initialisers, not state)
 $T/run gdbio poll g_renderSeq --changed          # ~60 Hz liveness
 $T/run see shot both shots/s.png   # top+bottom screen crops (Screen Recording)
 $T/run see rec --seconds 8 --fps 4 --screen both   # PNG frames + manifest + .mp4
@@ -40,7 +43,11 @@ $T/run azctl stop                  # kill + harvest evidence + RESTORE THE USER 
 
 **Always `azctl stop` when done** — it restores the user's `qt-config.ini`
 byte-identically. A crashed session self-heals: the next `boot` restores the stale
-backup first. Per-run evidence lands in `tools/emutest/runs/<UTC stamp>/` (events.log,
+backup first. The restore is refused (and the backup KEPT) while any Azahar is still
+alive, because a live instance rewrites the INI on exit — close it, then `azctl restore`.
+Concurrency: every mutating `azctl` command takes an advisory lock on `state/`, and a
+booted instance is stamped with an owner (`EMUTEST_SESSION`, else the parent pid) so a
+second session's restart/stop is announced instead of looking like your own. Per-run evidence lands in `tools/emutest/runs/<UTC stamp>/` (events.log,
 azahar logs, harvested netlogs, boot timings, screenshots).
 
 Image verdicts: `run compare ref.png new.png --tolerance N --max-diff N` (exit code =
@@ -155,4 +162,13 @@ become a zero-permission state channel:
 - **The capture shows Azahar's GAME LIST, not the 3DS screens** → the emulated app is not
   running (it never booted, or it already quit — a Tier-A movie ends with an in-app QUIT).
   Azahar is single-window: the same window carries the game list and the render surface.
-  Confirm with `run gdbio poll g_renderSeq --changed` before trusting any crop.
+  Confirm with `run gdbio poll g_renderSeq --changed` before trusting any crop — smoke.sh
+  now does exactly this automatically, reading `g_renderSeq` immediately before and after
+  every gate capture and FAILing the `see` row when it did not advance.
+- **`gdbio poll` fails immediately on a healthy boot** → fixed 2026-08-09: `poll --timeout`
+  is a WALL-CLOCK deadline defaulting to 30 s (it used to inherit the 5 s per-RSP-op
+  timeout, which expires before the app reaches its render loop ~5-10 s after `resume`).
+- **`gdbio resume` says "app running" but nothing moves** → was a zombie broker surviving
+  its dead emulator (fixed 2026-08-09: the broker's EOF watch no longer skips while
+  halted, and every request re-checks). If you still see it: `pkill -f "gdbio.py serve"`
+  and `azctl boot` again.

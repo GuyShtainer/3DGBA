@@ -179,5 +179,25 @@ class TestHeaderKnobs(unittest.TestCase):
         self.assertEqual(data[0x64:0x100], b"\x00" * 156)
 
 
+class TestRateConstants(unittest.TestCase):
+    """REVIEW FIX 2026-08-09: the module doc/spec quoted 59.83400 Hz and 3.9108
+    polls/frame — both wrong in the 4th significant digit for the constants the file
+    itself cites. The code path uses exact Fractions (so no golden bytes moved), but a
+    human reading the doc got a number that does not follow from BASE/FRAME_CYCLES.
+    Pinned here as literals derived independently: 268111856/4481136 and 234*that."""
+
+    def test_refresh_and_poll_rate(self):
+        self.assertAlmostEqual(float(ctm.SCREEN_REFRESH_HZ), 59.83122493939, places=9)
+        self.assertAlmostEqual(float(ctm.POLLS_PER_FRAME), 3.91100132476, places=9)
+
+    def test_documented_decimals_match_the_fractions(self):
+        # The headline sentence a reader sees must round-trip to the exact values above.
+        import re
+        m = re.search(r"= ([\d.]+) Hz => ([\d.]+) polls per frame", ctm.__doc__)
+        self.assertIsNotNone(m, "the rate sentence disappeared from the module doc")
+        self.assertAlmostEqual(float(m.group(1)), float(ctm.SCREEN_REFRESH_HZ), places=5)
+        self.assertAlmostEqual(float(m.group(2)), float(ctm.POLLS_PER_FRAME), places=6)
+
+
 if __name__ == "__main__":
     unittest.main()

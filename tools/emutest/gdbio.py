@@ -117,6 +117,10 @@ REPO = os.path.dirname(os.path.dirname(HERE))
 
 GDB_PORT = 24689          # Azahar default port (azctl pins it in the INI profile)
 RSP_TIMEOUT_S = 5.0       # per-op timeout (SPEC-harness H3.4 "Timeout 5 s per read")
+# Wall-clock default for `poll` — deliberately NOT the per-op timeout: BUILDLOG E2 measured
+# resume -> first render-loop tick at 5-10 s on this machine, so any deadline at or below
+# RSP_TIMEOUT_S fails a healthy boot (see main()'s poll parser comment).
+POLL_TIMEOUT_S = 30.0
 MAX_READ_CHUNK = 4096     # far below the 9996-hex-char reply cap (module doc fact 7)
 BROKER_TIMEOUT_S = 12.0   # CLI->broker op timeout (covers autostart + one RSP op)
 
@@ -340,15 +344,35 @@ class RspClient:
 
     # ---- protocol verbs (release dialect — module doc facts 3/4/7) -------------------
     def _drain(self, secs):
-        """Discard any queued events for `secs`. LIVE-PROBED NECESSITY (2026-08-08 wire
-        transcript): the release stub answers 0x03 with TWO packets — `$T05#b9` AND a
-        spurious empty `$#00` — and an unconsumed empty packet shifts every later reply
-        off by one. The stub never waits for reply-acks (ReadCommand ignores '+'), so
-        drained packets need no ack."""
+        """Consume the ONE spurious packet the release sends after a 0x03 halt.
+
+        LIVE-PROBED NECESSITY (2026-08-08 wire transcript): the stub answers 0x03 with TWO
+        packets — `$T05#b9` AND a spurious empty `$#00` — and an unconsumed empty packet
+        shifts every later reply off by one. The stub never waits for reply-acks
+        (ReadCommand ignores '+'), so the drained packet needs no ack.
+
+        REVIEW FIX (2026-08-09): this was a FIXED `while time.time() < end` sleep — it
+        always burned the whole 0.3 s even though the raw-socket probe shows the artifact
+        arriving in the SAME TCP burst as the stop reply (`recv b'$T05#b9'` and
+        `recv b'$#00'` both at +0.0007 s). That made the 0.3 s ~75% of every
+        halt->read->cont blink (and is why `see rec --with-state` delivered 1.5 of 4
+        requested fps). Now it RETURNS AS SOON AS the artifact packet is seen, with `secs`
+        kept as the ceiling — so a late packet is still absorbed (the old code's real
+        failure mode: a >0.3 s packet would be misread as the next `m` reply and surface
+        as the bogus "empty reply … unsupported command?" diagnosis).
+        Returns True when the artifact was consumed."""
         end = time.time() + secs
-        while time.time() < end:
+        while True:
             ev = self._reader.next_event()
             if ev is not None:
+                if ev[0] in ("pkt", "badsum"):
+                    return True                  # the artifact (empty $#00) — done
+                continue                         # lone acks/naks: keep looking
+            remaining = end - time.time()
+            if remaining <= 0:
+                return False
+            r, _w, _x = select.select([self.sock], [], [], min(0.05, remaining))
+            if not r:
                 continue
             try:
                 data = self.sock.recv(65536)
@@ -614,6 +638,31 @@ def lookup(cache, spec):
 # `gdbio serve` owns THE RSP connection (one per boot — module doc). JSON-lines protocol
 # on a unix socket; ops: status / halt / cont / read / detach. Auto-spawned by ensure_broker.
 
+def _rsp_dead(rsp):
+    """True when the emulator has closed the RSP socket. Non-blocking, halted or not:
+    select for readability, then a recv of 0 bytes is EOF; anything else is a stray packet
+    that goes into the reader (harmless — PacketReader skips acks and the halt drain /
+    next _txn consume the rest)."""
+    if rsp.sock is None:
+        return True
+    try:
+        r, _w, _x = select.select([rsp.sock], [], [], 0)
+    except OSError:
+        return True
+    if not r:
+        return False
+    try:
+        data = rsp.sock.recv(4096)
+    except socket.timeout:
+        return False
+    except OSError:
+        return True
+    if not data:
+        return True
+    rsp._reader.feed(data)
+    return False
+
+
 def _serve(args):
     sock_path = broker_sock_path()
     os.makedirs(state_dir(), exist_ok=True)
@@ -637,16 +686,17 @@ def _serve(args):
     try:
         while True:
             # EOF watch on the RSP socket while idle: emulator death ends the broker.
-            r, _w, _x = select.select([rsp.sock], [], [], 0)
-            if r and not rsp.halted:
-                try:
-                    data = rsp.sock.recv(4096)
-                except OSError:
-                    data = b""
-                if not data:
-                    print("broker: emulator closed the RSP socket — exiting", flush=True)
-                    return 0
-                rsp._reader.feed(data)   # stray stop packet (no breakpoints set): keep
+            # REVIEW FIX (2026-08-09): this used to be gated on `not rsp.halted`, so a
+            # broker left HALTED (which is exactly what the handshake above, and
+            # `verify-base` on an un-resumed boot, leave behind) NEVER noticed the
+            # emulator dying. It outlived `azctl stop` — and the next boot's
+            # `gdbio resume` then connected to the ZOMBIE, printed "resume: app running"
+            # and returned 0 while the real emulator stayed parked. Reading here is
+            # equivalent to leaving the bytes in the kernel buffer (the next _txn would
+            # feed them to the same PacketReader), so the gate bought nothing.
+            if _rsp_dead(rsp):
+                print("broker: emulator closed the RSP socket — exiting", flush=True)
+                return 0
             try:
                 cli, _addr = srv.accept()
             except socket.timeout:
@@ -656,6 +706,19 @@ def _serve(args):
                 for line in f:
                     try:
                         req = json.loads(line.decode())
+                        # Same EOF check per request: a client must never get a plausible
+                        # answer (or a silent success) out of a broker whose emulator died
+                        # between the idle check and this op.
+                        if _rsp_dead(rsp):
+                            f.write((json.dumps({
+                                "ok": False,
+                                "err": "emulator closed the RSP socket (azahar gone) — "
+                                       "broker exiting; azctl boot to get a new session"
+                            }) + "\n").encode())
+                            f.flush()
+                            print("broker: emulator closed the RSP socket — exiting",
+                                  flush=True)
+                            return 0
                         resp = _serve_one(rsp, meta, req)
                     except RspError as e:
                         resp = {"ok": False, "err": str(e)}
@@ -908,6 +971,30 @@ def cmd_syms(args):
     return 0
 
 
+HALTED_NOTE = ("[HALTED — the emulator has executed no instructions since this value was "
+               "read; run `gdbio resume` first if you wanted LIVE state]")
+
+
+def _halted_warning(b):
+    """REVIEW FIX (2026-08-09): reading a HALTED target is legitimate (verify-base does it
+    on purpose), but a read as the FIRST gdbio command after `azctl boot` used to be a
+    silent trap: the broker handshake halts and deliberately leaves the app halted, and
+    unlike cmd_poll the read commands had no guard — so `read-u32 g_renderSeq` printed
+    `= 0` and `read-u8 g_appActive` printed `= 1` (main.c:85's ELF initialiser) with exit
+    0, while the emulator stayed parked forever. Reads now carry the caveat in BOTH the
+    stdout line and a stderr warning. Returns a suffix for the printed line."""
+    try:
+        if not b.op(op="status")["halted"]:
+            return ""
+    except RspError:
+        return ""
+    print("gdbio: WARNING — the app is HALTED. These bytes are whatever was last in "
+          "memory (on a fresh boot: the ELF's compile-time initialisers, because the "
+          "release parks every use_gdbstub boot pre-first-instruction — module doc fact "
+          "1). Run `tools/emutest/run gdbio resume` for live state.", file=sys.stderr)
+    return "  " + HALTED_NOTE
+
+
 def _hexdump(addr, data):
     for i in range(0, len(data), 16):
         chunk = data[i:i + 16]
@@ -921,6 +1008,7 @@ def cmd_read(args):
     addr, _size, name = lookup(cache, args.what)
     b = broker_session(args)
     try:
+        note = _halted_warning(b)
         data = b.read_mem(addr, args.length)
     finally:
         b.close()
@@ -928,6 +1016,8 @@ def cmd_read(args):
         with open(args.out, "wb") as f:
             f.write(data)
         print("{} @0x{:08x}: {} bytes -> {}".format(name, addr, len(data), args.out))
+    if note:
+        print("{} @0x{:08x}{}".format(name, addr, note))
     _hexdump(addr, data)
     return 0
 
@@ -937,21 +1027,22 @@ def _read_int(args, spec, width):
     addr, _size, name = lookup(cache, spec)
     b = broker_session(args)
     try:
+        note = _halted_warning(b)
         data = b.read_mem(addr, width)
     finally:
         b.close()
-    return name, addr, int.from_bytes(data, "little")
+    return name, addr, int.from_bytes(data, "little"), note
 
 
 def cmd_read_u32(args):
-    name, addr, val = _read_int(args, args.what, 4)
-    print("{} @0x{:08x} = {} (0x{:08x})".format(name, addr, val, val))
+    name, addr, val, note = _read_int(args, args.what, 4)
+    print("{} @0x{:08x} = {} (0x{:08x}){}".format(name, addr, val, val, note))
     return 0
 
 
 def cmd_read_u8(args):
-    name, addr, val = _read_int(args, args.what, 1)
-    print("{} @0x{:08x} = {} (0x{:02x})".format(name, addr, val, val))
+    name, addr, val, note = _read_int(args, args.what, 1)
+    print("{} @0x{:08x} = {} (0x{:02x}){}".format(name, addr, val, val, note))
     return 0
 
 
@@ -1059,9 +1150,12 @@ def main(argv=None):
     ap = argparse.ArgumentParser(
         description="GDB RSP client + symbol lookup for the 3DGBA app under Azahar "
                     "2125.1.2 (SPEC-harness H2.2; release dialect — see module doc)")
-    common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--port", type=int, default=GDB_PORT,
-                        help="gdb stub TCP port (default {})".format(GDB_PORT))
+    # `common` = the per-op RSP timeout; `port_only` exists because `poll`'s --timeout is a
+    # WALL-CLOCK DEADLINE, not a per-op timeout (see below).
+    port_only = argparse.ArgumentParser(add_help=False)
+    port_only.add_argument("--port", type=int, default=GDB_PORT,
+                           help="gdb stub TCP port (default {})".format(GDB_PORT))
+    common = argparse.ArgumentParser(add_help=False, parents=[port_only])
     common.add_argument("--timeout", type=float, default=RSP_TIMEOUT_S,
                         help="per-op timeout seconds (default {})".format(RSP_TIMEOUT_S))
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1095,7 +1189,13 @@ def main(argv=None):
     s.add_argument("what", metavar="SYM|0xADDR")
     s.set_defaults(fn=cmd_read_u8)
 
-    s = sub.add_parser("poll", parents=[common],
+    # REVIEW FIX (2026-08-09): poll used to inherit `common`'s --timeout, whose default is
+    # the PER-RSP-OP timeout (5.0 s). That made the documented liveness one-liner
+    # (`gdbio poll g_renderSeq --changed`) FAIL on a perfectly healthy boot: E2 measured
+    # resume -> render loop at 5-10 s, so the deadline expired first (live: FAIL after 6
+    # samples / 5.0 s, then PASS with --timeout 30 on the same boot). poll now owns its
+    # --timeout as a WALL-CLOCK DEADLINE with a default that matches the measured boot.
+    s = sub.add_parser("poll", parents=[port_only],
                        help="sample a value until it changes / matches (H3.4 liveness)")
     s.add_argument("symbol", metavar="SYM|0xADDR")
     g = s.add_mutually_exclusive_group(required=True)
@@ -1105,6 +1205,10 @@ def main(argv=None):
                    help="pass when the value equals V")
     s.add_argument("--width", type=int, choices=[1, 2, 4], default=4)
     s.add_argument("--interval", type=int, default=500, metavar="MS")
+    s.add_argument("--timeout", type=float, default=POLL_TIMEOUT_S, metavar="S",
+                   help="WALL-CLOCK deadline for the whole poll, seconds (default {}; the "
+                        "app needs ~5-10 s after `resume` to reach its render loop)"
+                        .format(POLL_TIMEOUT_S))
     s.set_defaults(fn=cmd_poll)
 
     s = sub.add_parser("status", parents=[common], help="broker + stub state")

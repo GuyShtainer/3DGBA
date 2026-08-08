@@ -56,6 +56,58 @@ declare -a ROWS
 FAILED=0
 row() { ROWS+=("$(printf '%-10s %-7s %s' "$1" "$2" "$3")"); [ "$2" = FAIL ] && FAILED=1; }
 
+# --- crash-safe cleanup (REVIEW FIX 2026-08-09) -------------------------------------------
+# smoke used to snapshot the user's sdmc:/3DGBA/settings.bin, run three live Azahar phases,
+# and only restore at the end — with NO trap. A Ctrl-C or a crash in between left the
+# user's prefs permanently mutated by the movie's menu taps and orphaned the only copy in
+# $TMPDIR (a 100 B leftover from such a run was found on this machine). azctl repairs
+# qt-config.ini on the next boot; nothing repairs settings.bin, so smoke must.
+SETTINGS="$AZ_SD/3DGBA/settings.bin"
+SET_SNAP=""      # host copy while a movie phase owns settings.bin
+SET_HAD=0        # 1 = the user had one; 0 = the file must not exist afterwards
+declare -a TMPFILES=()
+
+# NB: registration must happen in THIS shell — a helper that appends to TMPFILES inside a
+# command substitution would lose the append to the subshell, so callers do:
+#   X="$(mktemp -t emutest-foo)"; tmpreg "$X"
+tmpreg() { TMPFILES+=("$@"); }
+
+# settings.bin is DELETED (after snapshotting) before each movie phase, not merely saved:
+# the app loads tiltLevel from it at startup (settings_load, main.c:2102 <- main.c:2562) and
+# the press-ctm assertion is `tiltLevel == 3`. A previous run that died after the tilt taps
+# leaves 3 on disk, and `gdbio poll --expect 3` then PASSES on its first sample without the
+# movie ever driving anything (reproduced: patched settings.bin tilt to 3, booted with NO
+# movie -> "poll: PASS — expected value 3 on first sample"). Booting from defaults makes the
+# 0 -> 3 transition real, and makes the picker/menu geometry deterministic too.
+settings_take() {
+  SET_SNAP="$(mktemp -t emutest-settings)"; tmpreg "$SET_SNAP"
+  SET_HAD=0
+  if [ -f "$SETTINGS" ]; then SET_HAD=1; cp "$SETTINGS" "$SET_SNAP"; fi
+  rm -f "$SETTINGS"
+}
+settings_restore() {
+  [ -n "$SET_SNAP" ] || return 0
+  if [ "$SET_HAD" = 1 ] && [ -f "$SET_SNAP" ]; then
+    cp "$SET_SNAP" "$SETTINGS"
+  else
+    rm -f "$SETTINGS"                       # there was none before us: leave none behind
+  fi
+  rm -f "$SET_SNAP"; SET_SNAP=""
+}
+
+cleanup() {
+  settings_restore
+  # `mktemp -t X` creates $TMPDIR/X.XXXXXXXX; the old code stored "$(mktemp -t X).ctm" and
+  # only ever removed the .ctm, leaking the original on EVERY run (8 orphans found).
+  if [ "${#TMPFILES[@]}" -gt 0 ]; then rm -f "${TMPFILES[@]}"; fi
+  TMPFILES=()
+  if pgrep -x azahar >/dev/null 2>&1; then
+    echo "smoke: cleanup — stopping the tracked azahar (never leave one running)"
+    "$RUN" azctl stop >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT INT TERM
+
 fail_run() { row run FAIL "$1"; finish; }
 finish() {
   echo
@@ -94,11 +146,11 @@ fi
 # =========================================================================================
 # Phase 1 — run + read-state + see (one ROM-less boot serves all three)
 # =========================================================================================
-SNAP="$(mktemp -t emutest-cfg-snap)"
+SNAP="$(mktemp -t emutest-cfg-snap)"; tmpreg "$SNAP"
 cp "$AZ_CFG" "$SNAP"
 
 if ! "$RUN" azctl boot; then
-  rm -f "$SNAP"; fail_run "azctl boot failed (see run dir events.log)"
+  fail_run "azctl boot failed (see run dir events.log)"
 fi
 
 STATUS="$("$RUN" azctl status)"
@@ -128,16 +180,35 @@ PL="$("$RUN" gdbio poll g_renderSeq --changed --timeout 30 --interval 1000)" \
 SEQ="$(echo "$PL" | grep -o 'changed [0-9]* -> [0-9]*' || true)"
 
 # --- see (E4): capture the live window, crop per S4.1, verify content --------------------
-# Runs while the app is provably rendering (renderSeq just advanced). Exit 75 = the
-# Screen Recording SKIP (H2.4); content check = crops exist, keep the 400:240 / 320:240
-# aspect, and are not blank (the app HUD is always drawn — probed E4).
+# Exit 75 = the Screen Recording SKIP (H2.4). Content check = crops exist, keep the
+# 400:240 / 320:240 aspect, and are not blank.
+#
+# REVIEW FIX (2026-08-09) — THE TRAP the aspect+lit check could not see: Azahar is
+# SINGLE-WINDOW (BUILDLOG E4). The very same window shows Azahar's own game list before
+# boot and after the emulated app exits, and that list is bright and fills the same rects,
+# so BOTH sub-checks pass on a capture of the emulator's ROM browser. Aspect is a property
+# of the crop rectangles (always true) and `frac >= 0.003` is trivially true for any UI.
+# The only sound discriminator is the one SKILL.md already prescribes to humans: prove the
+# app is RENDERING across the capture. g_renderSeq is read immediately before and after the
+# shot and must have advanced.
 SEE_DIR="$LRD1/see"
 mkdir -p "$SEE_DIR"
 SEE_ROW_V=""
 SEE_ROW_D=""
+rseq() { "$RUN" gdbio read-u32 g_renderSeq 2>/dev/null | grep -o '= [0-9]*' | head -1 | cut -d' ' -f2; }
+SEQ_PRE="$(rseq)"
 SEE_OUT="$("$RUN" see shot both "$SEE_DIR/screen.png" --raw-window "$SEE_DIR/window.png" 2>&1)"
 SEE_RC=$?
+SEQ_POST="$(rseq)"
 echo "$SEE_OUT" | sed 's/^/smoke: /'
+echo "smoke: see render guard: g_renderSeq ${SEQ_PRE:-?} -> ${SEQ_POST:-?} across the capture"
+RENDER_OK=0
+if [ -n "${SEQ_PRE:-}" ] && [ -n "${SEQ_POST:-}" ] && [ "$SEQ_POST" -gt "$SEQ_PRE" ] 2>/dev/null; then
+  RENDER_OK=1
+fi
+if [ "$SEE_RC" = 0 ] && [ "$RENDER_OK" != 1 ]; then
+  SEE_RC=99   # capture succeeded but the app was NOT rendering -> not our screens
+fi
 if [ "$SEE_RC" = 0 ]; then
   SEE_CHK="$("$PY" - "$SEE_DIR/screen.top.png" "$SEE_DIR/screen.bottom.png" <<'PYEOF'
 import sys
@@ -159,13 +230,17 @@ sys.exit(0 if ok else 1)
 PYEOF
 )"
   if [ $? = 0 ]; then
-    SEE_ROW_V=PASS; SEE_ROW_D="window captured + cropped: $SEE_CHK (crops in $SEE_DIR)"
+    SEE_ROW_V=PASS
+    SEE_ROW_D="window captured + cropped: $SEE_CHK; rendering during capture (renderSeq $SEQ_PRE->$SEQ_POST); crops in $SEE_DIR"
   else
     SEE_ROW_V=FAIL; SEE_ROW_D="capture ok but crops wrong: $SEE_CHK"
   fi
   echo "smoke: see crops: $SEE_CHK"
 elif [ "$SEE_RC" = 75 ]; then
   SEE_ROW_V=SKIP; SEE_ROW_D="Screen Recording not granted -> System Settings grant + restart the host app"
+elif [ "$SEE_RC" = 99 ]; then
+  SEE_ROW_V=FAIL
+  SEE_ROW_D="captured, but g_renderSeq did not advance (${SEQ_PRE:-?} -> ${SEQ_POST:-?}): the app was not rendering, so the crops are probably Azahar's own game list, not the 3DS screens"
 else
   SEE_ROW_V=FAIL; SEE_ROW_D="see shot rc=$SEE_RC (see smoke output above)"
 fi
@@ -189,6 +264,20 @@ d = os.path.dirname(os.path.abspath(sys.argv[1]))
 n = m.get("frames_captured", 0)
 if n < 2:
     print("only %d frame(s) captured" % n); sys.exit(2)
+# REVIEW FIX 2026-08-09: the checker read frames_captured but never ended_reason, so a clip
+# cut short by window-gone / window-resized (see.py:411/425 — i.e. the app DIED or the
+# window changed mid-recording) still printed PASS as long as >=2 frames existed and ffmpeg
+# ran. In this phase the app is not supposed to quit during the 3 s clip, so anything but
+# "duration" is a failure, and a short capture is reported either way.
+reason = m.get("ended_reason")
+planned = m.get("frames_planned")
+if reason != "duration":
+    print("recording ended early: ended_reason=%r after %d/%s frames "
+          "(app quit or window changed mid-clip)" % (reason, n, planned))
+    sys.exit(2)
+if planned and n < planned:
+    print("captured %d of %d planned frames with ended_reason=duration" % (n, planned))
+    sys.exit(2)
 missing = [f["files"]["top"] for f in m["frames"]
            if not os.path.exists(os.path.join(d, f["files"]["top"]))]
 if missing:
@@ -258,14 +347,14 @@ fi
 # to 3 = THE state-global change; then the app quits = azahar's stub socket dies;
 # azahar_log carries "Loaded Movie, ID:" (release movie.cpp:551).
 # settings.bin note: the menu taps settings_save into sdmc:/3DGBA/settings.bin (harness-
-# writable fixture dir, H4.2) — snapshotted before boot and restored after, so the user's
-# emulator-side prefs survive smoke byte-identically.
+# writable fixture dir, H4.2) — snapshotted AND CLEARED before boot (settings_take), then
+# restored after (settings_restore, also on the EXIT trap). Clearing is what makes the
+# tiltLevel assertion non-vacuous: see the settings_take comment at the top.
 PC_OK=1
-SETTINGS="$AZ_SD/3DGBA/settings.bin"
-SET_SNAP=""
-if [ -f "$SETTINGS" ]; then SET_SNAP="$(mktemp -t emutest-settings)"; cp "$SETTINGS" "$SET_SNAP"; fi
-MOVIE="$(mktemp -t emutest-movie).ctm"
-SNAP2="$(mktemp -t emutest-cfg-snap2)"
+settings_take
+MOVIE_BASE="$(mktemp -t emutest-movie)"; MOVIE="$MOVIE_BASE.ctm"
+tmpreg "$MOVIE_BASE" "$MOVIE"           # mktemp -t X creates $TMPDIR/X.XXXXXXXX: BOTH go
+SNAP2="$(mktemp -t emutest-cfg-snap2)"; tmpreg "$SNAP2"
 cp "$AZ_CFG" "$SNAP2"
 BLOG="$HERE/state/gdbio-broker.log"
 B0="$(wc -l < "$BLOG" 2>/dev/null | tr -d ' ' || echo 0)"; B0="${B0:-0}"
@@ -278,6 +367,15 @@ if [ "$PC_OK" = 1 ] && "$RUN" azctl boot --gdb --movie "$MOVIE"; then
   "$RUN" gdbio resume || PC_OK=0
   TILT_BEFORE="$("$RUN" gdbio read-u32 g_prefs+0x1c | grep -o '= [0-9]*' | head -1 | cut -d' ' -f2)"
   echo "smoke: tiltLevel before movie taps: ${TILT_BEFORE:-?}"
+  # THE PRECONDITION (review fix): the assertion below is `--expect 3`, and cmd_poll passes
+  # on sample 1 if the value already IS 3. With settings.bin cleared this must read 0
+  # (theme.h: tiltLevel ships 0); anything already at 3 means the channel would prove
+  # nothing about the movie, so fail loudly instead of printing "tiltLevel 3->3  PASS".
+  if [ "${TILT_BEFORE:-x}" = 3 ]; then
+    echo "smoke: FAIL — tiltLevel is ALREADY 3 before the movie taps; the press-ctm"
+    echo "smoke:        assertion would pass without the movie driving anything."
+    PC_OK=0
+  fi
   # The tilt taps land ~24 s into EMULATED time; poll wide (halt->read->cont blinks).
   PT="$("$RUN" gdbio poll g_prefs+0x1c --expect 3 --timeout 120 --interval 1000)" \
     && echo "$PT" | sed 's/^/smoke: /' || { echo "$PT" | sed 's/^/smoke: /'; PC_OK=0; }
@@ -317,13 +415,9 @@ else
   PC_OK=0
   "$RUN" azctl stop >/dev/null 2>&1 || true
 fi
-# Restore the user's emulator-side settings.bin (mutated by the movie's menu taps);
-# if there was none before the run, remove the one the movie run created.
-if [ -n "$SET_SNAP" ] && [ -f "$SET_SNAP" ]; then
-  cp "$SET_SNAP" "$SETTINGS"; rm -f "$SET_SNAP"
-elif [ -z "$SET_SNAP" ] && [ -f "$SETTINGS" ]; then
-  rm -f "$SETTINGS"
-fi
+# Give the user's emulator-side settings.bin back (the movie's menu taps rewrote it).
+# Also runs from the EXIT trap if we never get here.
+settings_restore
 rm -f "$MOVIE" "$SNAP2"
 if [ "$PC_OK" = 1 ]; then
   row press-ctm PASS "movie menu-drive: tiltLevel ${TILT_BEFORE:-?}->3; quit: ${QUIT_SEEN}; Loaded Movie in log, 0 desyncs"
@@ -349,11 +443,13 @@ if [ "$ROM" = 1 ]; then
     row press-d4 FAIL "no $AZ_SD/dual-gba/gameA.gba to stage as a fixture (H4.2)"
     row sdmc     FAIL "Tier B prerequisites missing (see press-d4)"
   else
-    SET_SNAP3=""
-    if [ -f "$SETTINGS" ]; then SET_SNAP3="$(mktemp -t emutest-settings3)"; cp "$SETTINGS" "$SET_SNAP3"; fi
-    SNAP3="$(mktemp -t emutest-cfg-snap3)"
+    # Same snapshot-and-clear as Tier A: a stale settings.bin can change gameMode/theme and
+    # thus the ROM-picker and pause-menu geometry the movie taps blind.
+    settings_take
+    SNAP3="$(mktemp -t emutest-cfg-snap3)"; tmpreg "$SNAP3"
     cp "$AZ_CFG" "$SNAP3"
-    MOVIE3="$(mktemp -t emutest-movie3).ctm"
+    MOVIE3_BASE="$(mktemp -t emutest-movie3)"; MOVIE3="$MOVIE3_BASE.ctm"
+    tmpreg "$MOVIE3_BASE" "$MOVIE3"
     B0="$(wc -l < "$BLOG" 2>/dev/null | tr -d ' ' || echo 0)"; B0="${B0:-0}"
 
     "$RUN" sdmc arm-control || D4_OK=0                 # the app's opt-in stat (main.c:2521)
@@ -367,7 +463,11 @@ if [ "$ROM" = 1 ]; then
       PK="$("$RUN" gdbio poll g_ctlStat+6 --expect 1 --width 2 --timeout 120 --interval 1000)" \
         && echo "$PK" | sed 's/^/smoke: /' || { echo "$PK" | sed 's/^/smoke: /'; D4_OK=0; }
       "$RUN" sdmc wait-consumed move 1 --timeout 30 || D4_OK=0   # remove-on-pickup ACK
-      CS="$("$RUN" sdmc control-status --expect-pickup)" \
+      # --since $SPAWN3 (review fix): without it, `sdmc control-status` picks the NEWEST
+      # 3DGBA_control_* in the user's netlogs dir regardless of age, so a previous --rom
+      # run's log could satisfy --expect-pickup (and be quoted into D4_DETAIL) when this
+      # session wrote none. The gs check below already filtered by mtime; now both do.
+      CS="$("$RUN" sdmc control-status --expect-pickup --since "$SPAWN3")" \
         && echo "$CS" | sed 's/^/smoke: /' || { echo "$CS" | sed 's/^/smoke: /'; D4_OK=0; }
       D4_DETAIL="$(echo "$CS" | grep '^header:' | head -1)"
       # Quit watch (movie length ~34 s emulated; same PROVEN observable as Tier A).
@@ -426,11 +526,7 @@ PYEOF
     # The app-written netlogs stay in the user's netlogs dir (harvested copies are in the
     # run dir) — the established wipe-only-on-request rule (H4.3).
     "$RUN" azctl clean-fixtures || D4_OK=0
-    if [ -n "$SET_SNAP3" ] && [ -f "$SET_SNAP3" ]; then
-      cp "$SET_SNAP3" "$SETTINGS"; rm -f "$SET_SNAP3"
-    elif [ -z "$SET_SNAP3" ] && [ -f "$SETTINGS" ]; then
-      rm -f "$SETTINGS"
-    fi
+    settings_restore
     rm -f "$MOVIE3" "$SNAP3"
     if [ "$D4_OK" = 1 ]; then
       row press-d4 PASS "move_p1 consumed (pickup ctr 0->1); ${D4_DETAIL:-header ok}; ${QUIT3:-}"

@@ -37,12 +37,15 @@ below is release-verified (movie.cpp line numbers are the release file's):
     pinned epoch in the header (defaults below match azctl's profile pins).
   - Frame<->poll conversion for humans: input index = round(input / 234.0 *
     SCREEN_REFRESH_RATE) (movie.cpp:222-227); SCREEN_REFRESH_RATE = 268111856/4481136
-    ~= 59.83400 Hz => ~3.9108 polls per frame.
+    = 59.83122 Hz => 3.911001 polls per frame. (Corrected 2026-08-09: the decimals here
+    and in SPEC-protocols S1.5 were off in the 4th significant digit; re-derived from the
+    two constants this file already cites. The code path uses the EXACT Fractions below,
+    so no synthesized bytes ever changed — tests/test_ctm.py pins both.)
 
 TIMELINE SCRIPTS (tests as data — the PokeDNA JSON-script rule, H2.3)
 =====================================================================
 `ctm make script.json out.ctm` compiles a JSON list of ops into a movie; times are in
-FRAMES at the 3DS refresh (~59.834 Hz) unless the op says polls. Deterministic: same JSON
+FRAMES at the 3DS refresh (59.83122 Hz) unless the op says polls. Deterministic: same JSON
 -> same bytes (golden-tested, tests/test_ctm.py).
 
   ["wait", n]                   advance n frames, keeping whatever is currently held
@@ -78,11 +81,14 @@ from fractions import Fraction
 
 # ---- rates (release core/core_timing.h:37,42 — same values as master S1.5) -----------------
 BASE_CLOCK_RATE_ARM11 = 268111856
-FRAME_CYCLES = 4481136                     # SCREEN_REFRESH_RATE = BASE/FRAME_CYCLES ~= 59.834
+FRAME_CYCLES = 4481136                     # SCREEN_REFRESH_RATE = BASE/FRAME_CYCLES = 59.83122
 PAD_HZ = 234                               # hid.h:342 pad_update_ticks = BASE/234
 # polls per frame = 234 / (BASE/FRAME_CYCLES) — kept EXACT as a Fraction so poll counts are
-# deterministic (cumulative rounding, no float drift): ~3.910845
+# deterministic (cumulative rounding, no float drift): = 65536614/16756991 ~= 3.911001
 POLLS_PER_FRAME = Fraction(PAD_HZ * FRAME_CYCLES, BASE_CLOCK_RATE_ARM11)
+# The refresh rate as an exact Fraction too, so the human-facing seconds figure printed by
+# `ctm make` is derived from the same constants instead of a hand-typed decimal.
+SCREEN_REFRESH_HZ = Fraction(BASE_CLOCK_RATE_ARM11, FRAME_CYCLES)
 
 MAGIC = b"CTM\x1b"                         # movie.cpp:110 header_magic_bytes
 
@@ -368,7 +374,7 @@ def cmd_make(args):
         f.write(data)
     frames = float(Fraction(len(tl.polls)) / POLLS_PER_FRAME)
     print("ctm: wrote {} — {} bytes, {} polls (~{:.1f} frames ~{:.1f} s emulated), "
-          "revision {}".format(args.out, len(data), len(tl.polls), frames, frames / 59.834,
+          "revision {}".format(args.out, len(data), len(tl.polls), frames, frames / float(SCREEN_REFRESH_HZ),
                                "zeros (desync warning, plays fine)" if revision == DEF_REVISION
                                else revision.hex()[:12] + "…"))
     return 0
@@ -388,7 +394,8 @@ def cmd_inspect(args):
     print("header:")
     for k, v in hdr.items():
         print("  {:<18} {}".format(k, v))
-    print("timeline ({} runs; poll = 1/234 s, ~3.9108 polls/frame):".format(len(runs)))
+    print("timeline ({} runs; poll = 1/234 s, {:.6f} polls/frame):".format(
+        len(runs), float(POLLS_PER_FRAME)))
     for r in runs:
         t = r["touch"]
         desc = r["keys_name"]

@@ -232,17 +232,26 @@ def cmd_netlogs(args):
     return 0
 
 
-def _latest(kind):
+def _latest(kind, since=None):
+    """Newest netlog of `kind`. `since` (an epoch, e.g. a boot's spawn_ts) restricts the
+    search to files this run could have written — REVIEW FIX 2026-08-09: without it,
+    `control-status --expect-pickup` happily asserted against a PREVIOUS run's control
+    log when the current session wrote none, so the row (and its quoted header) could
+    pass on stale evidence. The gs-log check in smoke.sh already did the mtime filter;
+    this makes the control channel match."""
     if kind not in NETLOG_KINDS:
         raise SystemExit("sdmc: unknown netlog kind '{}' (valid: {})".format(
             kind, " ".join(NETLOG_KINDS)))
     pat = re.compile(r"^3DGBA_{}(_p\d|_HOST|_JOIN)?_\d".format(re.escape(kind)))
-    cands = [(m, p) for m, p in _netlog_files() if pat.match(os.path.basename(p))]
+    # -1 s of slack: the same tolerance azctl.harvest() uses for filesystem mtime
+    # granularity vs the recorded spawn timestamp.
+    cands = [(m, p) for m, p in _netlog_files(None if since is None else since - 1)
+             if pat.match(os.path.basename(p))]
     return cands[-1][1] if cands else None
 
 
 def cmd_latest(args):
-    p = _latest(args.kind)
+    p = _latest(args.kind, getattr(args, "since", None))
     if not p:
         extra = (" (D3 CSV is WIRELESS-SESSIONS-ONLY — absence in a solo run is normal, "
                  "H4.4)" if args.kind == "csv" else "")
@@ -274,10 +283,11 @@ _CTL_HDR_RE = re.compile(r"^# control p1=(\S+) p2=(\S+) dir=(\S+)")
 
 
 def cmd_control_status(args):
-    p = _latest("control")
+    p = _latest("control", args.since)
     if not p:
-        print("sdmc: no control log yet — it is created lazily at the FIRST status line "
-              "(main.c:276-285): channel unarmed, or armed with nothing to say")
+        print("sdmc: no{} control log yet — it is created lazily at the FIRST status line "
+              "(main.c:276-285): channel unarmed, or armed with nothing to say".format(
+                  " NEW (mtime >= --since)" if args.since else ""))
         return 1
     with open(p, "r", errors="replace") as f:
         lines = f.read().splitlines()
@@ -337,6 +347,9 @@ def main(argv=None):
 
     s = sub.add_parser("latest", help="print newest 3DGBA_<kind>_* netlog path")
     s.add_argument("kind", choices=NETLOG_KINDS)
+    s.add_argument("--since", type=float, metavar="EPOCH",
+                   help="only consider files with mtime >= EPOCH (a boot spawn_ts) — "
+                        "otherwise a previous run's log can answer for this one")
     s.set_defaults(fn=cmd_latest)
 
     s = sub.add_parser("cat", help="dump a netlog file (kind name resolves to newest)")
@@ -347,6 +360,10 @@ def main(argv=None):
     s = sub.add_parser("control-status", help="parse the newest control log")
     s.add_argument("--expect-pickup", action="store_true",
                    help="exit 0 only if a 'picked up' status line exists")
+    s.add_argument("--since", type=float, metavar="EPOCH",
+                   help="require the log to be NEW (mtime >= EPOCH, e.g. the boot's "
+                        "spawn_ts) — without it a stale log from an earlier run can "
+                        "satisfy --expect-pickup")
     s.set_defaults(fn=cmd_control_status)
 
     args = ap.parse_args(argv)

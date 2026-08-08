@@ -151,5 +151,38 @@ class TestManifestShape(unittest.TestCase):
         self.assertEqual(back["video"]["top"]["path"], "rec_top.mp4")
 
 
+class TestUniformVerdict(unittest.TestCase):
+    """REVIEW FIX 2026-08-09: a flat capture used to jump straight to
+    skip_no_permission() (exit 75) at both call sites — even though require_window() has
+    already preflighted the grant, so reaching that branch normally PROVES the grant
+    works. That laundered a real black-screen defect (the class this project keeps
+    chasing) into a non-failing SKIP row. 75 is now reserved for an actually-missing
+    grant; anything else is exit 1."""
+
+    def _flat(self):
+        from PIL import Image
+        return Image.new("RGB", (12, 12), (0, 0, 0))
+
+    def test_flat_capture_with_the_grant_present_is_a_FAILURE(self):
+        orig = see.screen_recording_granted
+        see.screen_recording_granted = lambda: True
+        try:
+            with self.assertRaises(SystemExit) as cm:
+                see._uniform_verdict(self._flat(), "the captured window")
+            self.assertEqual(cm.exception.code, 1)
+        finally:
+            see.screen_recording_granted = orig
+
+    def test_flat_capture_with_the_grant_gone_is_the_SKIP(self):
+        orig = see.screen_recording_granted
+        see.screen_recording_granted = lambda: False
+        try:
+            with self.assertRaises(SystemExit) as cm:
+                see._uniform_verdict(self._flat(), "the captured window")
+            self.assertEqual(cm.exception.code, 75)
+        finally:
+            see.screen_recording_granted = orig
+
+
 if __name__ == "__main__":
     unittest.main()
