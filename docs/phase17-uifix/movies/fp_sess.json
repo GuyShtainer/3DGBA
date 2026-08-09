@@ -1,0 +1,12 @@
+[
+  ["wait", 300],
+  ["wait", 300],
+  ["touch", 160, 110, 12], ["wait", 400],
+  ["tap", "A"], ["wait", 120],
+  ["tap", "DOWN"], ["wait", 120],
+  ["tap", "A"], ["wait", 200],
+  ["tap", "X"], ["wait", 2400],
+  ["hold", "START+SELECT", 40], ["release"], ["wait", 1000],
+  ["tap", "B"], ["wait", 300],
+  ["hold", "START+SELECT", 40], ["release"], ["wait", 600]
+]

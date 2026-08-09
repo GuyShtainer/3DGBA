@@ -1,0 +1,30 @@
+[
+  ["wait", 1200],
+  ["hold", "START+SELECT", 40],
+  ["release"],
+  ["wait", 120],
+
+  ["touch", 40, 53, 10], ["wait", 240],
+
+  ["touch_hold", 200, 210, 30],
+  ["touch_hold", 200, 190, 30],
+  ["touch_hold", 200, 170, 30],
+  ["touch_hold", 200, 150, 30],
+  ["touch_hold", 200, 130, 30],
+  ["touch_release"], ["wait", 300],
+
+  ["touch", 284, 219, 10], ["wait", 240],
+
+  ["touch_hold", 200,  60, 30],
+  ["touch_hold", 200, 110, 30],
+  ["touch_hold", 200, 170, 30],
+  ["touch_hold", 200, 230, 30],
+  ["touch_release"], ["wait", 300],
+
+  ["touch", 40, 173, 10], ["wait", 300],
+
+  ["touch_hold", 200, 210, 30],
+  ["touch_hold", 200, 180, 30],
+  ["touch_hold", 200, 150, 30],
+  ["touch_release"], ["wait", 600]
+]

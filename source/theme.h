@@ -4,7 +4,13 @@
 // palette: an ACTIVE `Theme` (g_ui) that the existing THEME_* macros now read from, plus
 // 6 presets + a custom (HSL) builder. Fixed role colors (game A/B, quit) stay constant.
 #pragma once
+// PHASE 17 / SPEC-widgets W4.4: theme.c is pure arithmetic over u32 colours, so the palette + the
+// custom builder dual-compile on the PC host harness (test/host/test_theme.c) — the only libctru
+// surface it uses is `u32` and `C2D_Color32`, both provided by test/host/ctr_shim.h under this
+// define. Nothing else in the file changes. (CLAUDE.md rule #4, the same seam tilt/control use.)
+#ifndef THEME_HOST_SHIM
 #include <citro2d.h>
+#endif
 
 // ---- The active theme's tokens (one struct drives every UI color) ----
 typedef struct {
@@ -53,14 +59,51 @@ typedef struct {
 } UiPrefs;
 
 extern Theme   g_ui;                              // the ACTIVE theme (read by all UI draws)
+// PHASE 17 / SPEC-widgets W4.1 + W4.3.a — the palette the EMBEDDED ART was baked from.
+// tools/build_assets.sh bakes exactly ONE theme's plates/widgets into data/ (and stamps which one
+// into assets_gen.h as ASSET_THEME_ID), while every label used to take its colour from the ACTIVE
+// theme. On Daylight that drew Daylight ink (#241C33) on the indigo `fill-secondary-r8` body
+// (#33265A) — contrast 1.2:1, i.e. two different themes on one pixel (sweep D10/D12).
+//
+//   THE RULE: an element's ink token must come from the same theme as the SURFACE it sits on.
+//     procedural surface (ui_fill / ui_border_round)      -> g_ui.*   (the active theme)
+//     baked-art surface  (a plate, a fill-*-r8, a sprite) -> g_art.*  (the art's theme)
+//     constant scrim / raw game pixels                    -> THEME_ON_DARK[_DIM] (invariant)
+//   g_ui.acc stays g_ui.acc everywhere: the accent is drawn procedurally (focus rings, the
+//   segmented pill), so it correctly follows the active theme — and while only one art pack ships
+//   it is the one visible sign that a theme was chosen at all.
+extern Theme   g_art;                             // the palette the BAKED ART was made from
 extern UiPrefs g_prefs;                           // persisted UI-chrome prefs
 extern const Theme g_themePresets[THEME_FIXED_COUNT];
 extern const char* const THEME_NAMES[THEME_PRESET_COUNT];
 
 // Set g_ui from a theme id (custom hues/contrast used only when id==THEME_CUSTOM).
 void  theme_apply(int id, int baseHue, int accentHue, int contrast);
+// Set g_art from the theme id the embedded art pack was BAKED from (assets_init passes
+// ASSET_THEME_ID, which tools/build_assets.sh stamps into the generated header). THEME_CUSTOM maps
+// to the art pack's own seed (205/168/14) — the baked teal cannot follow a user's hues, which is
+// exactly why g_art must exist even after all six packs ship.
+void  theme_init_art(int artThemeId);
+// True when the ACTIVE theme's art is not what is baked in (used to label the theme list honestly).
+int   theme_art_is(int id);
 // Build a custom palette from 3 params (exposed for a live preview in the builder).
 Theme theme_make_custom(int baseHue, int accentHue, int contrast);
+// WCAG relative luminance of a packed citro2d colour. Public because the custom builder picks its
+// `ink` from it AND the host contrast suite grades every pair with it — one implementation, so the
+// rule that makes a palette and the rule that checks it cannot disagree.
+float rel_lum(u32 c);
+// Make a colour safe to draw on the theme-INVARIANT scrims (THEME_HUD_BAR / THEME_MENU_DIM), which
+// sit over unknown game pixels. Returns `c` unchanged when it is already bright enough; otherwise
+// lifts it halfway to white, keeping the hue. Use for the ACCENT on the in-game HUD.
+u32 theme_on_scrim(u32 c);
+// FIX PASS (review finding 5). The ink for a DISABLED control that sits on a SOLID surface: `ink`
+// mixed 38 % toward that surface. Use this instead of the palette's `dim` token whenever the
+// surface is the ACCENT: `dim` is tuned to read on a PANEL, and on the baked gold `fill-primary-r8`
+// it measured 1.51:1 — the picker's primary call-to-action was effectively invisible in its default
+// (nothing picked yet) state, in every theme. The result is opaque, so the host suite can grade it
+// exactly as it grades every other pair; 38 % keeps a legible ~4.2:1 while staying obviously
+// weaker than the enabled ink's ~10.5:1, which is what "not ready yet" has to say.
+u32 theme_ink_disabled(u32 ink, u32 surface);
 
 // ---- Fixed role colors (constant across EVERY theme) ----
 #define THEME_GAME_A    C2D_Color32(0x63, 0xB2, 0x3C, 0xFF)   // green — slot A / top accent / "A" badge

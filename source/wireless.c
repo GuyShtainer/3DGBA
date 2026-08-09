@@ -169,6 +169,7 @@ int wireless_lobby_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 			snprintf(status, sizeof status, "Link closed (left for HOME). Re-host or re-join.");
 		}
 
+		g_renderSeq++;   // app liveness for the emutest harness (ui.h)
 		C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
 		C2D_TextBufClear(txtBuf);
 		bool conn = (phase == 1 || phase == 3) && canStart;
@@ -186,7 +187,7 @@ int wireless_lobby_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 			assets_text_r(txtBuf, FNT_JBM_MED, line, 384.0f, 16.0f, 9.0f, g_ui.acc);
 		}
 		if (!avail) {
-			assets_text(txtBuf, FNT_SG_MED, "Wireless unavailable — install + run the .CIA", 20.0f, 70.0f, 12.0f, g_ui.text);
+			assets_text(txtBuf, FNT_SG_MED, "Wireless unavailable — install + run the .CIA", 20.0f, 70.0f, 12.0f, g_art.text);
 		} else {	// 2x2 seat cards in the map region (x14 y41 w371 h113)
 			int maxN = 4, myNode = -1; bool inLobby = (phase == 1 || phase == 3);
 			DgbaConn* c = haveConn ? &conn2 : NULL;
@@ -198,12 +199,13 @@ int wireless_lobby_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 				bool dis = i >= maxN;
 				u32 bd = occ ? (i == 0 ? g_ui.acc : THEME_GAME_B) : g_ui.line;
 				assets_fill9("fill-card-r8", sx, sy, 181.0f, 52.0f, 8.0f);
-				ui_border(sx, sy, 181.0f, 52.0f, bd, 1.5f);
+				// fix pass (finding 1 family): the ring follows the r8 card, not a square box.
+				ui_border_round(sx, sy, 181.0f, 52.0f, bd, 1.5f, ASSETS_BTN_R);
 				assets_draw_wgt(occ ? (i==0?"dot-gold":"dot-blue") : "dot-dim", sx + 10.0f, sy + 9.0f);
-				assets_text(txtBuf, FNT_SG_MED, occ ? (me?"You":c->names[i]) : "—", sx + 22.0f, sy + 6.0f, 12.0f, occ?g_ui.text:g_ui.dim);
-				assets_text_r(txtBuf, FNT_JBM_MED, i==0?"HOST":(dis?"":(occ?"SEAT":"OPEN")), sx + 172.0f, sy + 8.0f, 8.0f, g_ui.dim);
+				assets_text(txtBuf, FNT_SG_MED, occ ? (me?"You":c->names[i]) : "—", sx + 22.0f, sy + 6.0f, 12.0f, occ?g_art.text:g_art.dim);
+				assets_text_r(txtBuf, FNT_JBM_MED, i==0?"HOST":(dis?"":(occ?"SEAT":"OPEN")), sx + 172.0f, sy + 8.0f, 8.0f, g_art.dim);
 				const char* code = occ ? (me ? myCode : (phase==3 && i==0 ? peerCode : NULL)) : NULL;
-				assets_text(txtBuf, FNT_JBM_MED, (code&&code[0])?code:(occ?"—":"open"), sx + 10.0f, sy + 30.0f, 8.5f, g_ui.dim);
+				assets_text(txtBuf, FNT_JBM_MED, (code&&code[0])?code:(occ?"—":"open"), sx + 10.0f, sy + 30.0f, 8.5f, g_art.dim);
 				if (occ && code && code[0] && myCode[0]) {
 					bool m = !strncmp(code, myCode, 4);
 					assets_text_r(txtBuf, FNT_JBM_MED, m?"○ match":"× diff", sx + 172.0f, sy + 30.0f, 8.5f, m?THEME_GAME_A:THEME_QUIT_TEXT);
@@ -213,9 +215,9 @@ int wireless_lobby_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 			bool live = inLobby && haveConn && conn2.totalNodes >= 2;
 			char v[24];
 			if (live) snprintf(v, sizeof v, "%d ms", rtt); else snprintf(v, sizeof v, "—");
-			assets_text(txtBuf, FNT_JBM_BOLD, v, 25.0f, 184.0f, 13.0f, live?THEME_GAME_A:g_ui.dim);
+			assets_text(txtBuf, FNT_JBM_BOLD, v, 25.0f, 184.0f, 13.0f, live?THEME_GAME_A:g_art.dim);
 			if (live) snprintf(v, sizeof v, "%d %%", drops); else snprintf(v, sizeof v, "—");
-			assets_text(txtBuf, FNT_JBM_BOLD, v, 215.0f, 184.0f, 13.0f, live?THEME_GAME_A:g_ui.dim);
+			assets_text(txtBuf, FNT_JBM_BOLD, v, 215.0f, 184.0f, 13.0f, live?THEME_GAME_A:g_art.dim);
 		}
 		// D6 link-surface verdict (SPEC-suite-hardening.md §D6.6): dim when the two surfaces match,
 		// RED and naming the field when they differ. Blank until the peer's surface arrives — an
@@ -223,39 +225,39 @@ int wireless_lobby_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 		// match. Sits just above the status line (below the RTT/LOSS tiles at y182).
 		if (fpLine[0] && (phase == 1 || phase == 3))
 			assets_text(txtBuf, FNT_JBM_MED, fpLine, 20.0f, 209.0f, 8.5f,
-			            fpVerdict > 0 ? THEME_QUIT_TEXT : g_ui.dim);
+			            fpVerdict > 0 ? THEME_QUIT_TEXT : g_art.dim);
 		if (status[0]) assets_text(txtBuf, FNT_JBM_MED, status, 20.0f, 226.0f, 8.5f, g_ui.acc);
 
 		// =============== BOTTOM: idle actions / scan cards / connected ===============
 		C2D_TargetClear(bot, g_ui.bg); C2D_SceneBegin(bot);
 		if (phase == 0) {
 			assets_draw_plate("wless-idle-bot");
-			assets_button(txtBuf, "btn-primary",   13.0f, 33.0f,  293.0f, 40.0f, "Host a session",   FNT_SG_BOLD, 13.0f, g_ui.ink, sel==0);
-			assets_button(txtBuf, "btn-secondary", 13.0f, 83.0f,  293.0f, 42.0f, "Scan for lobbies",    FNT_SG_BOLD, 13.0f, g_ui.text, sel==1);
-			assets_button(txtBuf, "btn-secondary", 13.0f, 160.0f, 293.0f, 42.0f, "Connect online (soon)", FNT_SG_MED, 12.0f, g_ui.dim, 0);
+			assets_button(txtBuf, "btn-primary",   13.0f, 33.0f,  293.0f, 40.0f, "Host a session",   FNT_SG_BOLD, 13.0f, g_art.ink, sel==0);
+			assets_button(txtBuf, "btn-secondary", 13.0f, 83.0f,  293.0f, 42.0f, "Scan for lobbies",    FNT_SG_BOLD, 13.0f, g_art.text, sel==1);
+			assets_button(txtBuf, "btn-secondary", 13.0f, 160.0f, 293.0f, 42.0f, "Connect online (soon)", FNT_SG_MED, 12.0f, g_art.dim, 0);
 		} else if (phase == 2) {
-			assets_text(txtBuf, FNT_JBM_MED, "NEARBY SESSIONS", 13.0f, 10.0f, 9.0f, g_ui.dim);
-			if (nLob == 0) assets_text_c(txtBuf, FNT_SG_MED, "scanning...", 160.0f, 60.0f, 12.0f, g_ui.dim);
+			assets_text(txtBuf, FNT_JBM_MED, "NEARBY SESSIONS", 13.0f, 10.0f, 9.0f, g_art.dim);
+			if (nLob == 0) assets_text_c(txtBuf, FNT_SG_MED, "scanning...", 160.0f, 60.0f, 12.0f, g_art.dim);
 			int vis = nLob > 4 ? 4 : nLob;
 			for (int i = 0; i < vis; i++) {
 				float by = 40.0f + i * 38.0f; bool s = (i == sel);
 				bool m = !strncmp(lobbies[i].gameCode, myCode, 4);
 				assets_fill9("fill-card-r8", 12.0f, by, 296.0f, 34.0f, 8.0f);
-				if (s) ui_border(12.0f, by, 296.0f, 34.0f, g_ui.acc, 1.5f);
+				if (s) ui_border_round(12.0f, by, 296.0f, 34.0f, g_ui.acc, 1.5f, ASSETS_BTN_R);
 				C2D_DrawRectSolid(12.0f, by, 0.0f, 3.0f, 34.0f, m?THEME_GAME_A:THEME_QUIT);
 				char line[64]; snprintf(line, sizeof line, "%s · %s", lobbies[i].host[0]?lobbies[i].host:"host", game_name(lobbies[i].gameCode));
-				assets_text(txtBuf, FNT_SG_MED, line, 24.0f, by + 4.0f, 12.0f, g_ui.text);
+				assets_text(txtBuf, FNT_SG_MED, line, 24.0f, by + 4.0f, 12.0f, g_art.text);
 				assets_text(txtBuf, FNT_JBM_MED, m?"○ match":"× different game", 24.0f, by + 20.0f, 8.0f, m?THEME_GAME_A:THEME_QUIT_TEXT);
 			}
-			assets_button(txtBuf, "btn-ghost", 13.0f, 210.0f, 293.0f, 26.0f, "« back", FNT_SG_MED, 12.0f, g_ui.dim, 0);
+			assets_button(txtBuf, "btn-ghost", 13.0f, 210.0f, 293.0f, 26.0f, "« back", FNT_SG_MED, 12.0f, g_art.dim, 0);
 		} else {
 			assets_draw_plate("wless-conn-bot");
 			char line[48];
 			if (canStart && rtt >= 0) snprintf(line, sizeof line, "RTT %d ms · loss %d %%", rtt, drops);
 			else snprintf(line, sizeof line, "then open the in-game Cable Club to trade");
-			assets_text_c(txtBuf, FNT_JBM_MED, line, 160.0f, 44.0f, 9.0f, g_ui.dim);
-			assets_button(txtBuf, "btn-accent-outline", 13.0f, 73.0f,  293.0f, 42.0f, "Start linked trade", FNT_SG_BOLD, 13.0f, canStart?g_ui.acc:g_ui.dim, 0);
-			assets_button(txtBuf, "btn-ghost",          13.0f, 124.0f, 293.0f, 32.0f, "Leave", FNT_SG_MED, 12.0f, g_ui.dim, 0);
+			assets_text_c(txtBuf, FNT_JBM_MED, line, 160.0f, 44.0f, 9.0f, g_art.dim);
+			assets_button(txtBuf, "btn-accent-outline", 13.0f, 73.0f,  293.0f, 42.0f, "Start linked trade", FNT_SG_BOLD, 13.0f, canStart?g_ui.acc:g_art.dim, 0);
+			assets_button(txtBuf, "btn-ghost",          13.0f, 124.0f, 293.0f, 32.0f, "Leave", FNT_SG_MED, 12.0f, g_art.dim, 0);
 		}
 
 		C3D_FrameEnd(0);

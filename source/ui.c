@@ -1,12 +1,27 @@
 // ui.c — see ui.h. The shared widget kit for the v2 (1:1) UI pass.
 #include "ui.h"
 #include "theme.h"
+#include "uigeom.h"
+#include "assets.h"   // W4.2 (OQ5, "add the include"): chip labels use the BAKED font at its native
+                      // size — the system font at scale 0.32 is what made the "3D" badge a smudge.
+
+// Phase 17 (SPEC-widgets W2): the shape DECISION lives in the pure-C uigeom module (host-tested by
+// test/host/test_uigeom.c); this file only blits it. The old three-rect approximation was
+// "rectangle minus four SQUARE corners" and degenerated into a literal plus/cross whenever
+// r -> min(w,h)/2 — the HUD dot, the pause chip row and the gamepad swatches (sweep D6).
+// See ui.h — the app-wide "a UI frame was drawn" counter the emutest harness polls for liveness.
+volatile unsigned int g_renderSeq = 0;
 
 void ui_fill(float x, float y, float w, float h, u32 col, float r) {
-	if (r <= 0.0f || w <= 2.0f * r || h <= 2.0f * r) { C2D_DrawRectSolid(x, y, 0.0f, w, h, col); return; }
-	C2D_DrawRectSolid(x + r, y, 0.0f, w - 2.0f * r, h, col);           // full-height center
-	C2D_DrawRectSolid(x, y + r, 0.0f, r, h - 2.0f * r, col);           // left strip
-	C2D_DrawRectSolid(x + w - r, y + r, 0.0f, r, h - 2.0f * r, col);   // right strip
+	UiQuad q[UI_ROUND_MAX_QUADS];
+	int n = ui_round_rect_quads(x, y, w, h, r, q, UI_ROUND_MAX_QUADS);
+	for (int i = 0; i < n; i++) C2D_DrawRectSolid(q[i].x, q[i].y, 0.0f, q[i].w, q[i].h, col);
+}
+
+void ui_border_round(float x, float y, float w, float h, u32 col, float t, float r) {
+	UiQuad q[UI_OUTLINE_MAX_QUADS];
+	int n = ui_round_outline_quads(x, y, w, h, r, t, q, UI_OUTLINE_MAX_QUADS);
+	for (int i = 0; i < n; i++) C2D_DrawRectSolid(q[i].x, q[i].y, 0.0f, q[i].w, q[i].h, col);
 }
 
 void ui_border(float x, float y, float w, float h, u32 col, float t) {
@@ -44,55 +59,73 @@ void ui_text_r(C2D_TextBuf buf, const char* s, float rx, float y, float sz, u32 
 	C2D_DrawText(&t, C2D_WithColor, rx - w, y, 0.0f, sz, sz, col);
 }
 
-float ui_chip_w(C2D_TextBuf buf, const char* s, float x, float y, float w, u32 col) {
-	ui_border(x, y, w, 13.0f, col, 1.0f);
-	ui_text(buf, s, x + 6.0f, y + 1.5f, 0.32f, col);
+// PHASE 17 / SPEC-widgets W4.2 (sweep D11, and D19's HUD half). Two things were wrong with every
+// chip label, and only both together explain the unreadable "3D" badge:
+//   (a) the FRAME and the INK were one colour. The handoff fixes the 3D badge at THEME_3D_TEXT
+//       (#a9d4ff) ON THEME_GAME_B (#3E86D6) — the constant existed in theme.h and was never used,
+//       so the badge drew #3E86D6 glyphs on the near-black HUD bar.
+//   (b) the label was the SYSTEM font at scale 0.32. A stroke then covers about a third of a device
+//       pixel and the rasteriser blends the ink toward the background: measured on the sweep frame,
+//       the brightest "3D" pixels were (26,40,65)…(51,83,130) over a bar at (6,5,10) = 1.4:1…2.8:1,
+//       while the nominal colour pair is 5.6:1. A naive contrast check PASSES an unreadable screen;
+//       the baked FNT_JBM_MED at its ~9 px native size draws near scale 1.0 (learn-skill invariant
+//       4), so coverage is ~1.0 and the nominal contrast is the real one.
+// The frame also becomes ui_border_round (art `chip-focus` measures r=3), matching the design's
+// rounded chips instead of the square 4-strip outline.
+#define UI_CHIP_H  13.0f
+#define UI_CHIP_PX  8.0f
+
+// One measurement for the chip's TOTAL width (label + 12 px padding) — the same number ui_chip*
+// use internally, exposed because a centred/right-flowed chip needs its width before it can be
+// placed (main.c's HUD flows right-to-left). Falls back to the system font if the pack is absent.
+float ui_chip_measure(C2D_TextBuf buf, const char* s) {
+	float w = assets_ready() ? assets_text_w(buf, FNT_JBM_MED, s, UI_CHIP_PX) : 0.0f;
+	if (w <= 0.0f) w = ui_text_w(buf, s, 0.32f);
+	return w + 12.0f;
+}
+
+static void chip_label(C2D_TextBuf buf, const char* s, float x, float y, u32 ink) {
+	if (assets_ready()) assets_text(buf, FNT_JBM_MED, s, x, y, UI_CHIP_PX, ink);
+	else                ui_text(buf, s, x, y, 0.32f, ink);
+}
+
+float ui_chip_2w(C2D_TextBuf buf, const char* s, float x, float y, float w, u32 frame, u32 ink) {
+	ui_border_round(x, y, w, UI_CHIP_H, frame, 1.0f, 3.0f);
+	chip_label(buf, s, x + 6.0f, y + 2.0f, ink);
 	return w;
 }
 
+float ui_chip_2(C2D_TextBuf buf, const char* s, float x, float y, u32 frame, u32 ink) {
+	return ui_chip_2w(buf, s, x, y, ui_chip_measure(buf, s), frame, ink);
+}
+
+float ui_chip_w(C2D_TextBuf buf, const char* s, float x, float y, float w, u32 col) {
+	return ui_chip_2w(buf, s, x, y, w, col, col);
+}
+
 float ui_chip_fill_w(C2D_TextBuf buf, const char* s, float x, float y, float w, u32 bg, u32 fg) {
-	ui_fill(x, y, w, 13.0f, bg, 3.0f);
-	ui_text(buf, s, x + 6.0f, y + 1.5f, 0.32f, fg);
+	ui_fill(x, y, w, UI_CHIP_H, bg, 3.0f);
+	chip_label(buf, s, x + 6.0f, y + 2.0f, fg);
 	return w;
 }
 
 float ui_chip(C2D_TextBuf buf, const char* s, float x, float y, u32 col) {
-	return ui_chip_w(buf, s, x, y, ui_text_w(buf, s, 0.32f) + 12.0f, col);
+	return ui_chip_2w(buf, s, x, y, ui_chip_measure(buf, s), col, col);
 }
 
 float ui_chip_fill(C2D_TextBuf buf, const char* s, float x, float y, u32 bg, u32 fg) {
-	return ui_chip_fill_w(buf, s, x, y, ui_text_w(buf, s, 0.32f) + 12.0f, bg, fg);
+	return ui_chip_fill_w(buf, s, x, y, ui_chip_measure(buf, s), bg, fg);
 }
 
-void ui_segmented(C2D_TextBuf buf, float x, float y, float w, float h,
-                  const char* const* opts, int n, int active, u32 track, u32 acc, u32 ink, u32 dim) {
-	ui_fill(x, y, w, h, track, 4.0f);
-	float ow = w / (float)n;
-	for (int i = 0; i < n; i++) {
-		float ox = x + i * ow;
-		if (i == active) ui_fill(ox + 2.0f, y + 2.0f, ow - 4.0f, h - 4.0f, acc, 4.0f);
-		ui_text_c(buf, opts[i], ox + ow / 2.0f, y + (h - 13.0f) / 2.0f, 0.38f, i == active ? ink : dim);
-	}
-}
-
+// Phase 17 (SPEC-widgets OQ4): ui_segmented / ui_toggle / ui_cart had NO call sites — the
+// on-screen segmented control is assets_seg, the toggles are the baked art sprites and the cart
+// glyph is the tinted `cart-*` sprite. They are deleted rather than carried (and re-fixed) as
+// three more ways to reintroduce the plus/cross. ui_seg_hit stays: main.c hit-tests PK_SEG rows
+// with it, and it must keep matching assets_seg's cell arithmetic exactly.
 int ui_seg_hit(float x, float w, int n, float px) {
 	int i = (int)((px - x) / (w / (float)n));
 	if (i < 0) i = 0; if (i >= n) i = n - 1;
 	return i;
-}
-
-void ui_toggle(float x, float y, int on, u32 acc, u32 off) {
-	ui_fill(x, y, 26.0f, 13.0f, on ? acc : off, 5.0f);
-	float kx = on ? x + 14.0f : x + 2.0f;
-	ui_fill(kx, y + 1.5f, 10.0f, 10.0f, C2D_Color32(0xFF, 0xFF, 0xFF, 0xFF), 4.0f);
-}
-
-void ui_cart(float x, float y, u32 col) {
-	ui_fill(x, y, 12.0f, 13.0f, col, 2.0f);                                        // shell
-	C2D_DrawRectSolid(x + 2.0f, y + 2.0f, 0.0f, 8.0f, 4.0f,                       // label window
-	                  C2D_Color32(0xFF, 0xFF, 0xFF, 0x50));
-	C2D_DrawRectSolid(x + 2.0f, y + 9.0f, 0.0f, 8.0f, 1.5f,                       // grip line
-	                  C2D_Color32(0x00, 0x00, 0x00, 0x50));
 }
 
 void ui_dot(float x, float y, u32 col) {

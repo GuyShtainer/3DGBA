@@ -34,10 +34,17 @@ void  assets_text_r(C2D_TextBuf buf, AFont f, const char* s, float rx, float y, 
 float assets_text_w(C2D_TextBuf buf, AFont f, const char* s, float px);
 
 // ---- composite widgets (used across screens) ----
+// The corner radius every `fill-*-r8` 9-slice is drawn with (the sprite name's own "-r8"). Public
+// so a caller that draws a RING around a button uses the button's radius rather than guessing —
+// see assets_button's focus ring and main.c's selection rings (fix pass, findings 1 + 8).
+#define ASSETS_BTN_R 8.0f
 // A button: blit `sprite` (or `sprite`+"-focus" when focus) stretched to (x,y,w,h) + centered label.
 void assets_button(C2D_TextBuf buf, const char* sprite, float x, float y, float w, float h,
                    const char* label, AFont f, float px, u32 col, int focus);
-// A segmented control: seg-track fit to (x,y,w,h), seg-active over the active cell, labels centered.
+// A segmented control: a g_art.panel track at (x,y,w,h), a g_ui.acc pill over the active cell and
+// centred labels. Procedural (phase 17 W1) — the `seg-active` sprite carries a baked example label.
+// `inkA` is drawn on the ACCENT pill (pass g_ui.ink), `dim` on the TRACK, which is a baked-art
+// surface (pass g_art.dim — g_ui.dim on it measured 2.83:1 on Daylight; see theme.h's rule).
 void assets_seg(C2D_TextBuf buf, float x, float y, float w, float h,
                 const char* const* opts, int n, int active, u32 inkA, u32 dim);
 // A toggle at (x,y): toggle-on / toggle-off sprite.

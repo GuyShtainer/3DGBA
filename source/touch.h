@@ -58,6 +58,25 @@ void touch_log_dump(const char* path);   // flush the ring to an SD file (mkdir'
 u16  touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, bool gvalid,
                   const TouchSmart* sm);
 
-// Draw the overlay for the mode on the bound bottom target. PAD draws the gamepad; SMART draws
-// nothing (it points at the real game UI). `held` lights pressed PAD zones.
+// Draw the overlay for the mode on the bound bottom target. PAD draws the gamepad; SMART draws no
+// BUTTONS (it points at the real game UI) but does draw its mode chip + the "≡ menu" affordance.
+// `held` lights pressed PAD zones. Call it for PAD **and** SMART (SPEC-layout L6.1).
 void touch_draw(TouchMode mode, u16 held, const TouchSmart* sm, C2D_TextBuf buf);
+
+// PHASE 17 / SPEC-layout L6.2 (sweep D17). The raw smart-touch readout ("field p=9,4 key=-", cyan,
+// at (4,224) on the footer baseline) was a development probe — its own comment said "TEMP debug:
+// confirm RAM reads on device" — and it shipped. It is now behind this flag, following control.h's
+// CTL_D5_ENABLE convention: 0 for a shipping build, 1 when a hardware run needs the ctx/px/key
+// triple on screen. The SD-side logging (touch_log_sample) is untouched — that is the real
+// diagnostic channel and it stays on unconditionally.
+#ifndef TOUCH_DIAG_HUD
+#define TOUCH_DIAG_HUD 0
+#endif
+
+// PHASE 17 / SPEC-layout L3.2. The "≡ menu" chip drawn bottom-right of the virtual gamepad was
+// DECORATION: nothing hit-tested it, and pad_keys' A zone (`px > 252 && py > 150`, unbounded
+// downwards) actually resolved a tap there to an A press. With the centred footer hint gone from
+// Gamepad mode (it printed through the START key — REPORT D4) the chip is the only touch route
+// back to the pause menu, so it has to BE one. This is that rect, shared by the draw and the hit
+// test so the two cannot drift; returns 1 when (px,py) is inside it for `mode`.
+int touch_menu_chip(TouchMode mode, int px, int py);

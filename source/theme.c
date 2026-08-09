@@ -14,6 +14,16 @@ Theme g_ui = {
 	RGB(0x0E,0x0B,0x16),
 };
 
+// The palette the BAKED ART was made from (SPEC-widgets W4.3.a). Statically Indigo — which is what
+// tools/build_assets.sh bakes by default — and re-derived from ASSET_THEME_ID in assets_init(), so
+// it FOLLOWS the build rather than hardcoding a guess.
+Theme g_art = {
+	RGB(0x20,0x18,0x30), RGB(0x2A,0x20,0x42), RGB(0x33,0x26,0x5A), RGB(0x3B,0x2E,0x60),
+	RGB(0xF5,0xD0,0x42), RGB(0x20,0x18,0x2F), RGB(0xF4,0xF1,0xFB), RGB(0xB0,0xA8,0xC8),
+	RGB(0x0E,0x0B,0x16),
+};
+static int s_artId = THEME_INDIGO;
+
 // Persisted UI prefs with shipped defaults (Indigo, dual mode, gold pad, round edges; the custom
 // seed = the "Teal" chip 205,168 + contrast 14). The trailing 0 is phase 14's tiltLevel = Off
 // (SPEC-integration I5.8: the other HD-2D effects default ON because they are hardware-proven;
@@ -70,6 +80,18 @@ static u32 lerp_rgb(u32 c, u32 toward, float t) {
 	           clamp8(b + (int)((tb - b) * t)));
 }
 
+// WCAG relative luminance of a packed colour (r | g<<8 | b<<16). Shared with the host contrast
+// suite by construction: test/host/test_theme.c compiles THIS file, so the model that picks `ink`
+// and the model that grades it are one implementation.
+float rel_lum(u32 c) {
+	const float ch[3] = { (float)(c & 0xFF) / 255.0f, (float)((c >> 8) & 0xFF) / 255.0f,
+	                      (float)((c >> 16) & 0xFF) / 255.0f };
+	float lin[3];
+	for (int i = 0; i < 3; i++)
+		lin[i] = (ch[i] <= 0.03928f) ? ch[i] / 12.92f : powf((ch[i] + 0.055f) / 1.055f, 2.4f);
+	return 0.2126f * lin[0] + 0.7152f * lin[1] + 0.0722f * lin[2];
+}
+
 Theme theme_make_custom(int baseHue, int accentHue, int contrast) {
 	const u32 WHITE = RGB(0xFF,0xFF,0xFF);
 	const u32 BLACK = RGB(0x00,0x00,0x00);
@@ -79,9 +101,16 @@ Theme theme_make_custom(int baseHue, int accentHue, int contrast) {
 	// exactly (line 635): panel=mix(bg,100-lift,white) => lerp(bg->white, lift/100); panel2/line
 	// lift more but are clamped so bright themes don't blow out; text/dim are mostly white (readable
 	// on the dark bg); box is bg nudged toward black. (README's text/dim/box %s were inverted.)
+	// PHASE 17 / W4.4 TH6. The caps used to be 0.50 / 0.60, and `dim` was a FIXED 54 % white — so
+	// at the top of the contrast slider panel2 reached 45.6 % white while dim stayed at 54 %, i.e.
+	// dim text on a raised panel came out at 1.30:1. The picker's "settings · ZR" chip and the
+	// presence card's note are exactly that pair, so the highest-contrast custom theme made them
+	// invisible. Two changes, both derivations rather than new magic numbers: the panels stop
+	// climbing at 0.34/0.44, and `dim` is now derived FROM panel2 (62 % of the remaining way to
+	// white), so it cannot converge on the surface it is drawn on at any slider position.
 	float lift = contrast / 100.0f;
-	float t2 = lift * 1.9f; if (t2 > 0.50f) t2 = 0.50f;
-	float t3 = lift * 2.7f; if (t3 > 0.60f) t3 = 0.60f;
+	float t2 = lift * 1.9f; if (t2 > 0.34f) t2 = 0.34f;
+	float t3 = lift * 2.7f; if (t3 > 0.44f) t3 = 0.44f;
 	u32 bg = hsl_rgb((float)(baseHue % 360), 0.24f, 0.09f);
 	Theme t;
 	t.bg     = bg;
@@ -90,10 +119,72 @@ Theme theme_make_custom(int baseHue, int accentHue, int contrast) {
 	t.panel2 = lerp_rgb(bg, WHITE, t2);
 	t.line   = lerp_rgb(bg, WHITE, t3);
 	t.text   = lerp_rgb(bg, WHITE, 0.90f);   // mix(bg,10,white)  = 90% white
-	t.dim    = lerp_rgb(bg, WHITE, 0.54f);   // mix(bg,46,white)  = 54% white
+	t.dim    = lerp_rgb(t.panel2, WHITE, 0.62f);   // always clear of the panel it sits on (see above)
 	t.box    = lerp_rgb(bg, BLACK, 0.14f);   // mix(bg,86,black)  = 14% black
-	t.ink    = RGB(0x0B,0x10,0x14);
+	// PHASE 17 / SPEC-widgets W4 (found by test_theme.c TH6, not by eye). `ink` is the text drawn ON
+	// the accent — the selected segmented pill, the primary button, the "Done" chip — and it used to
+	// be a hardcoded near-black whatever the user's accent hue was. The custom accent is
+	// hsl(hue, 0.72, 0.60), whose relative luminance runs from 0.13 (blue, hue≈240) to 0.72
+	// (yellow): near-black on the blue end measures 3.2:1, i.e. the one theme the user builds
+	// themselves could be the least readable. Pick the ink by the accent's own luminance instead —
+	// the same rule the five FIXED presets already follow by hand (Daylight, the only light accent,
+	// is the only one with a white ink).
+	// 0.179 is the exact black/white crossover: contrast to black is (L+.05)/.05 and to white is
+	// 1.05/(L+.05), which cross at (L+.05)^2 = .0525. Picking the wrong side of it is not a small
+	// error — at L = 0.395 (a mid orange accent) white gives 2.1:1 and black 8.1:1. The worst case
+	// under this rule is 4.58:1, at the crossover itself.
+	t.ink    = (rel_lum(t.acc) > 0.179f) ? RGB(0x0B,0x10,0x14) : RGB(0xF4,0xF1,0xFB);
 	return t;
+}
+
+// W4.3.a step 2. The art pack's `custom` seed is the handoff's own teal chip (205/168 + contrast
+// 14 = g_prefs' shipped default), so THEME_CUSTOM art is reproduced by the same builder rather than
+// hardcoded — if the pack is ever regenerated from a different seed, one constant changes here.
+void theme_init_art(int artThemeId) {
+	s_artId = artThemeId;
+	if (artThemeId == THEME_CUSTOM)              g_art = theme_make_custom(205, 168, 14);
+	else if (artThemeId >= 0 && artThemeId < THEME_FIXED_COUNT) g_art = g_themePresets[artThemeId];
+	else { s_artId = THEME_INDIGO; g_art = g_themePresets[THEME_INDIGO]; }
+}
+
+int theme_art_is(int id) { return id == s_artId; }
+
+// SEEN IN CAPTURE (runs/p17-f5-th2/top_00058.png, Daylight). The HUD bar and the pause dim are
+// theme-INVARIANT black scrims (W4.1 line 3) — but the ACCENT is deliberately still drawn on them,
+// because it is the only thing on the in-game HUD that says which theme is active and which screen
+// has focus. Daylight's accent is a mid bronze (#BE7A16, relative luminance 0.25); over the bar on
+// a bright game frame that measured about 1.5:1, i.e. the focused "59fps" was the least readable
+// thing on the bar. Lift any accent that is too dark for a scrim halfway to white — the hue (and
+// so the "this is your theme" signal) survives, the contrast does not depend on the game frame.
+// 0.30 is chosen, not derived: it is the luminance at which an accent clears 3:1 against the
+// worst-case bar (a 0x90 black scrim over white game pixels).
+u32 theme_on_scrim(u32 c) {
+	return (rel_lum(c) >= 0.30f) ? c : lerp_rgb(c, RGB(0xFF,0xFF,0xFF), 0.50f);
+}
+
+// See theme.h. Deliberately a MIX toward the surface rather than an alpha: the caller's colour goes
+// through assets_text, which blends it over whatever is already in the framebuffer, so an alpha
+// would make the measured contrast depend on the draw order. A mix states the result.
+//
+// The mix is as strong as the pair can AFFORD. 38 % is the target — it reads clearly weaker than
+// the enabled ink while measuring ~4.2:1 on the shipped gold — but a low-headroom pair cannot pay
+// it: the Daylight art pack's own enabled ink (white on #BE7A16) is only 3.5:1, and mixing that by
+// 38 % lands at 2.3:1, i.e. the fix would reintroduce the defect on the pack W4.3.b would add next.
+// So back off in steps until the result clears the same 3.0:1 gate the host suite grades with, and
+// return the full ink if even that is not enough — "as dim as this palette can afford" rather than
+// a constant that happens to work for one pack.
+static float contrast_of(u32 a, u32 b) {
+	float la = rel_lum(a), lb = rel_lum(b);
+	float hi = la > lb ? la : lb, lo = la > lb ? lb : la;
+	return (hi + 0.05f) / (lo + 0.05f);
+}
+
+u32 theme_ink_disabled(u32 ink, u32 surface) {
+	for (float t = 0.38f; t > 0.005f; t -= 0.06f) {
+		u32 c = lerp_rgb(ink, surface, t);
+		if (contrast_of(c, surface) >= 3.0f) return c;
+	}
+	return ink;
 }
 
 void theme_apply(int id, int baseHue, int accentHue, int contrast) {

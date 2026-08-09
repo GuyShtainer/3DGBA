@@ -1,0 +1,31 @@
+[
+  ["wait", 1100],
+  ["wait", 300],
+
+  ["touch_hold", 160, 205, 24],
+  ["touch_hold", 160, 181, 24],
+  ["touch_hold", 160, 157, 24],
+  ["touch_hold", 160, 133, 24],
+  ["touch_hold", 160, 109, 24],
+  ["touch_hold", 160,  85, 24],
+  ["touch_hold", 160,  45, 24],
+  ["touch_release"], ["wait", 300],
+
+  ["touch", 160, 77, 12], ["wait", 240],
+
+  ["touch_hold", 160,  40, 24],
+  ["touch_hold", 160,  90, 24],
+  ["touch_hold", 160, 140, 24],
+  ["touch_hold", 160, 190, 24],
+  ["touch_hold", 160, 235, 24],
+  ["touch_release"], ["wait", 300],
+
+  ["touch_hold", 160, 135, 20],
+  ["touch_hold", 160, 140, 20],
+  ["touch_release"], ["wait", 300],
+
+  ["touch_hold", 160, 135, 20],
+  ["touch_hold", 160, 147, 20],
+  ["touch_hold", 160, 135, 20],
+  ["touch_release"], ["wait", 360]
+]

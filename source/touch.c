@@ -8,6 +8,7 @@
 #include "touch.h"
 #include "theme.h"     // pad color/edge prefs (g_prefs) + the fixed PAD_COLOR_* tints
 #include "ui.h"        // shared widget kit (borders, chips, centered text)
+#include "assets.h"    // baked fonts: the mode/menu chips draw FNT_JBM_MED at its native size
 
 const char* const TOUCH_NAMES[3] = { "Off", "Gamepad", "Smart" };
 
@@ -20,7 +21,50 @@ static u32 pad_tint(u8 alpha) {
 }
 
 // =============================== PAD (virtual gamepad) ======================
+// The "≡ menu" chip: ONE rect for the draw and the hit test (touch.h explains why it needed to
+// become a real control). Bottom-right, clear of the drawn A key (252,150,60,60 -> rows 150..209).
+#define MCHIP_X 266.0f
+#define MCHIP_Y 220.0f
+#define MCHIP_W  48.0f
+#define MCHIP_H  18.0f
+
+int touch_menu_chip(TouchMode mode, int px, int py) {
+	// SPEC-layout L6.3.5: SMART now draws the chip too, so it must hit-test in SMART as well.
+	// (In SMART a bare tap is a POINTER event on the real game UI, so without this the only way
+	//  back to the pause menu was the START+SELECT combo — the mode with the least on-screen
+	//  affordance had the least reachable menu. OFF is unchanged: any tap opens the menu there.)
+	if (mode != TOUCH_PAD && mode != TOUCH_SMART) return 0;
+	return (px >= (int)MCHIP_X && px < (int)(MCHIP_X + MCHIP_W) &&
+	        py >= (int)MCHIP_Y && py < (int)(MCHIP_Y + MCHIP_H)) ? 1 : 0;
+}
+
+// The dark translucent chip both touch modes label themselves with (screenshots 06 + 07). Split
+// out of pad_overlay so PAD and SMART cannot drift, and drawn with the BAKED font at its native
+// size — the system font at scale 0.32 is what made small chip labels a smudge (W4.2).
+static void touch_chip(C2D_TextBuf buf, const char* s, float cx, float y, u32 ink) {
+	float w = ui_chip_measure(buf, s) + 2.0f;
+	ui_fill(cx - w / 2.0f, y, w, 14.0f, C2D_Color32(0x00, 0x00, 0x00, 0x96), 4.0f);
+	assets_text_c(buf, FNT_JBM_MED, s, cx, y + 3.0f, 8.0f, ink);
+}
+
+// The "menu" affordance, drawn at exactly the rect touch_menu_chip() hit-tests.
+// SEEN IN CAPTURE: the chip used to print the string "≡ menu", and once the label moved to the
+// BAKED font (W4.2) the "≡" came out as a solid tofu block — U+2261 is not in JetBrains Mono's
+// coverage, so mkbcfnt cannot bake it. (It survived before only because the system font has it,
+// at the blurry 0.32 scale this phase is removing.) The hamburger is three quads instead: no font
+// dependency, no tofu, and it is what the design's chip actually draws.
+static void touch_menu_chip_draw(C2D_TextBuf buf, u32 ink) {
+	ui_fill(MCHIP_X, MCHIP_Y, MCHIP_W, MCHIP_H, C2D_Color32(0x00, 0x00, 0x00, 0x96), 4.0f);
+	const float BARW = 8.0f, GAP = 4.0f;
+	float lw = assets_text_w(buf, FNT_JBM_MED, "menu", 8.0f);
+	float bx = MCHIP_X + (MCHIP_W - (BARW + GAP + lw)) / 2.0f;
+	float by = MCHIP_Y + MCHIP_H / 2.0f - 3.0f;
+	for (int i = 0; i < 3; i++) C2D_DrawRectSolid(bx, by + (float)i * 2.5f, 0.0f, BARW, 1.0f, ink);
+	assets_text(buf, FNT_JBM_MED, "menu", bx + BARW + GAP, MCHIP_Y + 5.0f, 8.0f, ink);
+}
+
 static u16 pad_keys(int px, int py) {
+	if (touch_menu_chip(TOUCH_PAD, px, py)) return 0;    // the chip is not the A key
 	if (px < 112 && py > 118) {                          // D-pad cross, bottom-left
 		int dx = px - 55, dy = py - 180;
 		if (dx > -24 && dx < 24 && dy < -16) return 1 << GBAKEY_UP;
@@ -37,14 +81,15 @@ static u16 pad_keys(int px, int py) {
 	return 0;
 }
 
-// Fake-rounded rect: two overlapping rects cut the corners by r (Round=4 / Soft=2 / Sharp=0).
+// Rounded key fill (Round=6 / Soft=3 / Sharp=1). Phase 17 (SPEC-widgets W2): this used to be a
+// private COPY of the old three-rect "rectangle minus four SQUARE corners" approximation, so every
+// pad key was a square with four hard corner bites that showed the dark screen through them —
+// sweep D5's "opaque black corner blocks", present only at padEdge=Round where r is largest.
+// ui_fill is now the corrected staircase AND keeps the non-overlap guarantee this call site needs
+// (these fills are translucent; overlapping quads would double-blend the interior). One
+// implementation of "rounded rect" in the binary.
 static void pad_zone(float x, float y, float w, float h, u32 col, float r) {
-	if (r <= 0.0f) { C2D_DrawRectSolid(x, y, 0.0f, w, h, col); return; }
-	// three NON-overlapping rects: overlapping translucent rects double-blend and the zone
-	// interior renders visibly more opaque than its edge strips.
-	C2D_DrawRectSolid(x + r, y, 0.0f, w - 2.0f * r, h, col);              // full-height center
-	C2D_DrawRectSolid(x, y + r, 0.0f, r, h - 2.0f * r, col);              // left strip
-	C2D_DrawRectSolid(x + w - r, y + r, 0.0f, r, h - 2.0f * r, col);      // right strip
+	ui_fill(x, y, w, h, col, r);
 }
 
 // Centered glyph label on a zone (buf may be NULL -> zones only).
@@ -62,14 +107,16 @@ static void pad_overlay(u16 held, C2D_TextBuf buf) {
 	float r = EDGE_R[((unsigned)g_prefs.padEdge) % 3];
 	u32 faint = pad_tint(0x36), lit = pad_tint(0x92);
 	u32 line  = pad_tint(0xB8), glyph = pad_tint(0xE6);
+	// W2: the outline follows the SAME rounded silhouette as the fill (ui_border's square corners
+	// would poke out past a rounded key, and screenshot 06 draws rounded keys with rounded frames).
 	#define ZONE(x,y,w,h,k,g) do { \
 		pad_zone((x), (y), (w), (h), (held & (1 << (k))) ? lit : faint, r); \
-		ui_border((x), (y), (w), (h), line, 1.5f); \
+		ui_border_round((x), (y), (w), (h), line, 1.5f, r); \
 		pad_label(buf, (g), (x), (y), (w), (h), glyph); \
 	} while (0)
 	#define DZONE(x,y,w,h,k,d) do { \
 		pad_zone((x), (y), (w), (h), (held & (1 << (k))) ? lit : faint, r); \
-		ui_border((x), (y), (w), (h), line, 1.5f); \
+		ui_border_round((x), (y), (w), (h), line, 1.5f, r); \
 		ui_tri((x) + (w) / 2.0f, (y) + (h) / 2.0f, 5.0f, (d), glyph); \
 	} while (0)
 	DZONE(33, 138, 44, 30, GBAKEY_UP, 2);    DZONE(33, 192, 44, 30, GBAKEY_DOWN, 3);
@@ -80,12 +127,8 @@ static void pad_overlay(u16 held, C2D_TextBuf buf) {
 	ZONE(4, 4, 52, 22, GBAKEY_L, "L");        ZONE(264, 4, 52, 22, GBAKEY_R, "R");
 	#undef ZONE
 	if (buf) {
-		float w = ui_text_w(buf, "TOUCH · GAMEPAD", 0.32f) + 14.0f;
-		ui_fill((320.0f - w) / 2.0f, 4.0f, w, 14.0f, C2D_Color32(0x00, 0x00, 0x00, 0x96), 4.0f);
-		ui_text_c(buf, "TOUCH · GAMEPAD", 160.0f, 6.0f, 0.32f, glyph);
-		float mw = ui_text_w(buf, "≡ menu", 0.32f) + 12.0f;
-		ui_fill(314.0f - mw, 222.0f, mw, 14.0f, C2D_Color32(0x00, 0x00, 0x00, 0x96), 4.0f);
-		ui_text(buf, "≡ menu", 320.0f - mw, 224.0f, 0.32f, pad_tint(0xC8));
+		touch_chip(buf, "TOUCH · GAMEPAD", 160.0f, 4.0f, glyph);
+		touch_menu_chip_draw(buf, pad_tint(0xC8));
 	}
 }
 
@@ -602,9 +645,13 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 void touch_draw(TouchMode mode, u16 held, const TouchSmart* sm, C2D_TextBuf buf) {
 	(void)sm;
 	if (mode == TOUCH_PAD) pad_overlay(held, buf);
-	else if (mode == TOUCH_SMART && buf) {   // SMART: no overlay — the chip label only (screen 07)
-		float w = ui_text_w(buf, "TOUCH · SMART POINTER", 0.32f) + 14.0f;
-		ui_fill((320.0f - w) / 2.0f, 4.0f, w, 14.0f, C2D_Color32(0x00, 0x00, 0x00, 0x80), 4.0f);
-		ui_text_c(buf, "TOUCH · SMART POINTER", 160.0f, 6.0f, 0.32f, C2D_Color32(0xF5, 0xD0, 0x42, 0xB4));
+	else if (mode == TOUCH_SMART && buf) {
+		// SPEC-layout L6 (sweep D17). This branch ALREADY existed and was simply never reached:
+		// main.c's call site read `if (tmEff == TOUCH_PAD) touch_draw(...)`, so Smart mode drew no
+		// chip at all while a raw cyan `field p=9,4 key=-` developer readout sat on the footer.
+		// Smart draws no BUTTONS by design (the point is that you touch the real game UI) — but it
+		// must still say what mode it is in and offer a way back to the menu (screenshot 07).
+		touch_chip(buf, "TOUCH · SMART POINTER", 160.0f, 4.0f, C2D_Color32(0xF5, 0xD0, 0x42, 0xE6));
+		touch_menu_chip_draw(buf, C2D_Color32(0xF5, 0xD0, 0x42, 0xC8));
 	}
 }

@@ -1,0 +1,22 @@
+[
+  ["wait", 900],
+  ["wait", 120],
+
+  ["tap", "DOWN"], ["wait", 150],
+  ["tap", "A"],    ["wait", 300],
+
+  ["tap", "UP"], ["wait", 200],
+  ["tap", "UP"], ["wait", 200],
+  ["tap", "UP"], ["wait", 200],
+  ["tap", "UP"], ["wait", 200],
+  ["tap", "UP"], ["wait", 200],
+
+  ["tap", "LEFT"],  ["wait", 200],
+  ["tap", "RIGHT"], ["wait", 200],
+  ["tap", "A"],     ["wait", 200],
+
+  ["tap", "DOWN"], ["wait", 150],
+  ["tap", "DOWN"], ["wait", 150],
+  ["tap", "DOWN"], ["wait", 200],
+  ["tap", "A"],    ["wait", 400]
+]

@@ -1,6 +1,9 @@
 [
   ["wait", 1200],
 
+  ["touch", 226, 192, 10],
+  ["wait", 260],
+
   ["hold", "START+SELECT", 40],
   ["release"],
   ["wait", 40],

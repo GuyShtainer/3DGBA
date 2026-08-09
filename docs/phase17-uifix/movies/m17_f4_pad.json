@@ -1,0 +1,20 @@
+[
+  ["wait", 1400],
+
+  ["touch_hold", 55, 180, 40], ["touch_release"], ["wait", 200],
+
+  ["touch", 290, 229, 12], ["wait", 400],
+
+  ["touch", 40, 173, 10], ["wait", 260],
+  ["touch_hold", 200, 210, 30],
+  ["touch_hold", 200, 180, 30],
+  ["touch_hold", 200, 150, 30],
+  ["touch_release"], ["wait", 400],
+
+  ["touch", 40, 83, 10], ["wait", 260],
+  ["touch", 103, 94, 10], ["wait", 150],
+  ["touch", 103, 94, 10], ["wait", 150],
+  ["touch", 103, 94, 10], ["wait", 300],
+
+  ["tap", "B"], ["wait", 400]
+]

@@ -3,7 +3,9 @@
 #include "assets_gen.h"   // ASSET_PLATES / ASSET_WIDGETS X-macro lists (generated)
 #include <string.h>
 #include <stdio.h>
-#include "ui.h"   // ui_border for accent-outline/destructive frames
+#include "ui.h"      // ui_border for accent-outline/destructive frames, ui_fill for the segmented control
+#include "uigeom.h"  // ui_seg_radius — the pill radius ladder measured off the design art
+#include "theme.h"   // g_ui: the segmented control is drawn from the ACTIVE theme, not baked art
 
 // The Makefile's bin2s rule turns data/<sym>.bin into: <sym>_bin[] + <sym>_bin_end[].
 #define X(id, sym) extern const u8 sym##_bin[]; extern const u8 sym##_bin_end[];
@@ -38,7 +40,16 @@ static void load_group(Asset* a, int n) {
 		a[i].ss = C2D_SpriteSheetLoadFromMem(a[i].data, (size_t)(a[i].end - a[i].data));
 }
 
+// Belt and braces: an assets_gen.h generated before phase 17 has no stamp. Indigo is what
+// build_assets.sh has always defaulted to, so the fallback is the truth for every existing tree.
+#ifndef ASSET_THEME_ID
+#define ASSET_THEME_ID 0
+#endif
+
 bool assets_init(void) {
+	// W4.3.a: publish the palette the embedded art was baked from BEFORE anything can draw, so ink
+	// on a baked surface never comes from a different theme than the surface (sweep D10/D12).
+	theme_init_art(ASSET_THEME_ID);
 	load_group(s_plates, N_PLATES);
 	load_group(s_wgts, N_WGTS);
 	s_fonts[FNT_SG_BOLD]  = C2D_FontLoadFromMem(fnt_sg_bold_bin,  (size_t)(fnt_sg_bold_bin_end  - fnt_sg_bold_bin));
@@ -161,20 +172,13 @@ bool assets_img_cell(C2D_Image src, float px, float py, float pw, float ph,
 	return true;
 }
 
-// Horizontal 3-slice for PILLS (rounded left/right ends, straight top/bottom): left cap + stretched
-// middle + right cap, each at FULL height. Avoids the vertical seam a 9-slice makes when r == h/2.
-static void draw_hslice(C2D_Image img, float x, float y, float w, float h, float cap) {
-	if (!img.tex || !img.subtex) return;
-	float sw = (float)img.subtex->width, sh = (float)img.subtex->height;
-	if (cap > sw / 2.0f) cap = sw / 2.0f;
-	if (w < 2.0f * cap) w = 2.0f * cap;
-	float smw = sw - 2.0f * cap, mw = w - 2.0f * cap;
-	C2D_Image sub; Tex3DS_SubTexture st;
-	img_subrect(img, 0, 0, cap, sh, &sub, &st);        C2D_DrawImageAt(sub, x, y, 0.0f, NULL, 1.0f, h / sh);
-	if (smw > 0 && mw > 0) { img_subrect(img, cap, 0, smw, sh, &sub, &st);
-	                         C2D_DrawImageAt(sub, x + cap, y, 0.0f, NULL, mw / smw, h / sh); }
-	img_subrect(img, sw - cap, 0, cap, sh, &sub, &st); C2D_DrawImageAt(sub, x + w - cap, y, 0.0f, NULL, 1.0f, h / sh);
-}
+// (Phase 17 SPEC-widgets W1: draw_hslice — the horizontal 3-slice that stretched `seg-track` and
+//  `seg-active` — is GONE. It had exactly one caller, assets_seg, and `seg-active.png` is the
+//  design pack's EXAMPLE pill with the word "Aspect-fit" rendered into its pixels, so every
+//  selected segment in the app printed that word under its live label, resampled to the call
+//  site's box (2.46x stretched on the picker, 0.40x squashed on the EDGES row). Sweep defect D1.
+//  The control is now drawn procedurally from the active theme — see assets_seg below. Deleting
+//  the helper as well is deliberate: a dead sprite path is a re-entry point for the same bug.)
 
 // Button backgrounds: solid roles 9-slice from the fill-*-r8 sprites (crisp corners at any width);
 // ghost = transparent; accent-outline/destructive keep their thin accent/red frame (drawn by caller).
@@ -185,19 +189,38 @@ void assets_button(C2D_TextBuf buf, const char* sprite, float x, float y, float 
 	else if (!strcmp(sprite, "btn-ghost")) { /* transparent */ }
 	else if (!strcmp(sprite, "btn-accent-outline") || !strcmp(sprite, "btn-destructive")) {
 		assets_fill9("fill-card-r8", x, y, w, h, 8.0f);   // faint card base
-		ui_border(x, y, w, h, col, 1.5f);                  // + a 1.5px accent/red frame
+		ui_border_round(x, y, w, h, col, 1.5f, ASSETS_BTN_R);   // + a 1.5px accent/red frame
 	}
 	else assets_draw_wgt_fit(sprite, x, y, w, h);
-	if (focus) ui_border(x, y, w, h, C2D_Color32(0xFF,0xFF,0xFF,0xE0), 1.5f);
+	// FIX PASS (review findings 1 + 8): the ring FOLLOWS the button's silhouette. Every body above
+	// is a `fill-*-r8` 9-slice with r=8, so a square `ui_border` ring left a white right-angle
+	// sticking out at each corner over the plate (SEEN in runs/p17-f5-empty/bottom_00040.png on the
+	// focused "Rescan"). touch.c:114 and rompicker.c's focus_ring() already round for this reason;
+	// the sprite-backed buttons are the majority of the d-pad chain's stops and were the last
+	// square idiom left. ASSETS_BTN_R is the 9-slice's own radius, so the two cannot drift.
+	if (focus) ui_border_round(x, y, w, h, C2D_Color32(0xFF,0xFF,0xFF,0xE0), 1.5f, ASSETS_BTN_R);
 	if (label && label[0]) assets_text_c(buf, f, label, x + w / 2.0f, y + (h - px) / 2.0f - 0.5f, px, col);
 }
 
+// Segmented control, drawn procedurally (W1.2). The shipped art is a flat fill of the theme token
+// plus a rounded outline plus the example word, so `g_ui.panel` track + `g_ui.acc` pill is
+// pixel-equal to the sprite in all five fixed themes — and MORE correct for `custom`, whose baked
+// teal cannot follow the user's hues. It also follows the active theme even though only one art
+// pack is baked into data/, which is why the sprite route could never satisfy "all six themes".
 void assets_seg(C2D_TextBuf buf, float x, float y, float w, float h,
                 const char* const* opts, int n, int active, u32 inkA, u32 dim) {
-	draw_hslice(assets_wgt("seg-track"), x, y, w, h, h / 2.0f);   // pill: horizontal 3-slice, no seam
+	// FIX PASS (review finding 9). The TRACK is a SURFACE that sits directly on a baked plate, so
+	// theme.h's rule ("baked-art surface -> g_art") governs it, not the active theme: with g_ui.panel
+	// the Daylight track measured pure #FFFFFF on the indigo plate's (31,24,46) — a white slab, the
+	// most visible instance of the one-art-pack gap the phase set out to remove. g_art.panel is
+	// IDENTICAL to g_ui.panel on the shipped Indigo theme (so the default look is byte-for-byte
+	// unchanged) and surface-consistent on the other five. The `active` pill deliberately stays
+	// g_ui.acc — theme.h exempts the accent, and while one art pack ships it is the only thing on
+	// screen that says a theme was chosen at all.
+	ui_fill(x, y, w, h, g_art.panel, ui_seg_radius(h));
 	float ow = w / (float)n;
 	if (active >= 0 && active < n)
-		draw_hslice(assets_wgt("seg-active"), x + active * ow + 2.0f, y + 2.0f, ow - 4.0f, h - 4.0f, (h - 4.0f) / 2.0f);
+		ui_fill(x + active * ow + 2.0f, y + 2.0f, ow - 4.0f, h - 4.0f, g_ui.acc, ui_seg_radius(h - 4.0f));
 	for (int i = 0; i < n; i++)
 		assets_text_c(buf, FNT_SG_MED, opts[i], x + i * ow + ow / 2.0f, y + h / 2.0f - 5.0f,
 		              10.0f, i == active ? inkA : dim);

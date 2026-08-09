@@ -27,6 +27,8 @@
 #include "rompicker.h"
 #include "theme.h"
 #include "ui.h"
+#include "uihit.h"   // phase 17 SPEC-input: one rect table for draw + hit, gesture, content scroll
+#include "uigeom.h"  // ui_seg_radius: the selection ring must use the widget's OWN corner radius
 #include "assets.h"
 
 static u32 dim_color(u32 c, float f);   // fwd (defined near run_splash)
@@ -63,6 +65,18 @@ typedef struct {
 	u16*       fb;          // linear RGB565 framebuffer (stride GBA_FB_STRIDE)
 	C3D_Tex    tex;         // 256x256 RGB565 texture the framebuffer is uploaded into
 	bool       has_tex;
+	// PHASE 17 / SPEC-layout L7.1.2 (sweep D14): false until the first emulated frame has actually
+	// been GX_DisplayTransfer'd into `tex`. The session renders BEFORE any upload on its very first
+	// iteration (the pipeline waits for frame N-1 at the TOP of the next loop), so the first frames
+	// presented whatever linear RAM happened to hold — captured as a solid white video rect on the
+	// top screen and a flat mid-grey one on the bottom, HUD already drawn and reading 0fps. It read
+	// as a missing texture, not a loading state.
+	volatile bool everUploaded;
+	// FIX PASS (review finding 4): the ROM file EXISTS but the core refused it (a truncated /
+	// corrupt / not-actually-a-GBA .gba). Distinct from "there is no file", which is the LABELLED
+	// dead-core path the empty state's "Start without a game" chooses on purpose and the harness's
+	// Tier A is built on — that one stays silent, this one gets a banner. Set by setup_core.
+	bool          loadFailed;
 
 	bool          linked;     // free-run under lockstep when true
 	volatile bool netLinked;  // free-run under the M2.5 net SIO driver (mutually exclusive with linked)
@@ -88,7 +102,7 @@ static EmuInstance* volatile g_netWorker = NULL;   // the lone wireless worker (
 // D1 render loop-seq (SPEC D1.3): bumped once per run_session frame-loop iteration. The render
 // thread is the watchdog's own thread, so this is pass-through context in the STUCK line, not a
 // watched seq (renderSeq frozen == no STUCK lines at all — the accepted D1.8 blind spot).
-static volatile uint32_t g_renderSeq = 0;
+// (definition moved to ui.c so every UI loop can bump it — see ui.h. Declared there.)
 static void apt_hook(APT_HookType t, void* p) {
 	(void)p;
 	if (t == APTHOOK_ONSUSPEND || t == APTHOOK_ONSLEEP) {
@@ -579,7 +593,34 @@ static void emu_start(EmuInstance* e, int id, int core, int prio) {
 }
 
 // Allocate this instance's framebuffer + texture and load its ROM into a real core.
+// Is `path` a plausible GBA ROM?  1 = yes, 0 = a real file that is not one, -1 = no such file.
+// The test is the cartridge header's FIXED byte at 0xB2 (0x96) — the same magic mGBA's own
+// GBAIsROM checks and the one every real cartridge carries — plus "the header is all there".
+// Deliberately NOT the 156-byte Nintendo logo: trained/patched ROMs legitimately differ there and
+// refusing them would be worse than the defect this fixes. Pure stdio, no core involvement, so
+// nothing in the emulation layer changes (phase rule: gbacore/celiolink stay untouched).
+static int rom_header_check(const char* path) {
+	FILE* f = fopen(path, "rb");
+	if (!f) return -1;
+	unsigned char h[0xC0];
+	size_t got = fread(h, 1, sizeof h, f);
+	fclose(f);
+	if (got != sizeof h) return 0;
+	return (h[0xB2] == 0x96) ? 1 : 0;
+}
+
 static bool setup_core(EmuInstance* e, const char* romPath) {
+	e->loadFailed = false;
+	// FIX PASS (review finding 4), and the capture corrected the diagnosis. gbacore_load_rom CANNOT
+	// tell us a file is not a game: it hands the VFile to mCorePreloadVF, which only copies bytes,
+	// so the harness's 256-byte header-only dummies "load" successfully and the ARM core then
+	// executes whatever follows — the flat grey rect with a live "35fps 02:01" HUD over it, SEEN in
+	// runs/fixpass/a-picker/bottom_00175.png with the first version of this fix in the build. So the
+	// header is checked HERE, before the core ever sees the file: `rc` is 1 = plausible GBA ROM,
+	// 0 = a real file that is not one (say so), -1 = no such file (the LABELLED dead-core path the
+	// empty state's "Start without a game" chooses and Tier A is built on — that stays silent).
+	int rc = rom_header_check(romPath);
+	if (rc != 1) { e->loadFailed = (rc == 0); return false; }
 	e->fb   = (u16*)linearAlloc(GBA_FB_STRIDE * 256 * sizeof(u16));
 	e->core = gbacore_create();
 	if (!e->core || !e->fb) { if (e->core) { gbacore_destroy(e->core); e->core = NULL; } return false; }
@@ -587,11 +628,18 @@ static bool setup_core(EmuInstance* e, const char* romPath) {
 	gbacore_set_video_buffer(e->core, e->fb, GBA_FB_STRIDE);
 	if (!gbacore_load_rom(e->core, romPath)) {
 		gbacore_destroy(e->core); e->core = NULL;
+		e->loadFailed = true;   // the header passed but the core still refused it: still worth saying
 		return false;
 	}
 	C3D_TexInit(&e->tex, 256, 256, GPU_RGB565);
+	// L7.1.1: C3D_TexInit does NOT clear its allocation, and this is linear (not VRAM) memory, so a
+	// memset + flush is valid and costs nothing per frame — it runs once per session on the main
+	// thread before the render loop. Without it the texture starts as whatever was last in that
+	// linear block (sweep D14's white/grey first frames).
+	if (e->tex.data) { memset(e->tex.data, 0, e->tex.size); C3D_TexFlush(&e->tex); }
 	C3D_TexSetFilter(&e->tex, GPU_NEAREST, GPU_NEAREST);
 	e->has_tex = true;
+	e->everUploaded = false;
 	return true;
 }
 
@@ -617,6 +665,7 @@ static u16 to_gba_keys(u32 held) {
 }
 
 static void upload_frame(EmuInstance* e) {
+	e->everUploaded = true;   // L7.1.2: from here the texture holds real game pixels
 	GSPGPU_FlushDataCache(e->fb, GBA_FB_STRIDE * GBA_H * sizeof(u16));
 	C3D_SyncDisplayTransfer(
 		(u32*)e->fb,       GX_BUFFER_DIM(GBA_FB_STRIDE, GBA_H),
@@ -1602,10 +1651,17 @@ static void presence_draw_screen(C3D_RenderTarget* tgt,
 			int hasPrompt = (ch->surf & PRES_SURF_PROMPT) ? 1 : 0;
 			float plateY, promptY;
 			presence_pill_y(hy, hasPlate, hasPrompt, screenH, &plateY, &promptY);
+			// FIX PASS (review finding 6): THEME_HUD_BAR is the theme-INVARIANT black scrim over
+			// unknown game pixels, so the accent drawn on it must go through theme_on_scrim() — the
+			// same lift every other accent-on-scrim site in run_session got (main.c's hudAcc). These
+			// two were missed because they live in this helper, outside run_session's scope; on
+			// Daylight the peer's nameplate and the "A - CARD" prompt were bronze #BE7A16 on the bar,
+			// which measured ~1.5:1 (theme.c:152-163 is the same measurement for the fps readout).
+			u32 presAcc = theme_on_scrim(g_ui.acc);
 			if (hasPlate)
 				ui_chip_fill_w(ch->buf, ch->name,
 				               presence_pill_x(hx, ch->plateW, screenW), plateY, ch->plateW,
-				               THEME_HUD_BAR, g_ui.acc);
+				               THEME_HUD_BAR, presAcc);
 			if (hasPrompt)
 				// A5.4.1: the passive prompt — no keypress needed to SEE it, so the player learns
 				// the interaction by walking into it. "A - CARD", not "(A) CARD" with a circled A:
@@ -1613,7 +1669,7 @@ static void presence_draw_screen(C3D_RenderTarget* tgt,
 				// glyphs, which is why ui_tri exists), and an un-renderable glyph in the one chip
 				// that teaches the feature is worse than plain ASCII.
 				ui_chip_w(ch->buf, PRES_PROMPT_TEXT,
-				          presence_pill_x(hx, ch->promptW, screenW), promptY, ch->promptW, g_ui.acc);
+				          presence_pill_x(hx, ch->promptW, screenW), promptY, ch->promptW, presAcc);
 		}
 	}
 }
@@ -1640,7 +1696,7 @@ static void presence_draw_card(C2D_TextBuf buf, const PresCardText* t, float scr
 	// would be a diagnostic surface that disappears exactly when something is wrong.
 	if (assets_ready()) assets_fill9("fill-card-r8", x, y, W, H, 8.0f);
 	else                ui_panel(x, y, W, H, g_ui.panel, g_ui.line, 6.0f);
-	ui_border(x, y, W, H, g_ui.acc, 1.0f);
+	ui_border_round(x, y, W, H, g_ui.acc, 1.0f, ASSETS_BTN_R);   // fix pass: follow the r8 card
 
 	// A4.4.4's four rows, plus A5.5.3's disclosure:
 	//    NILS                    M      <- FNT_SG_BOLD 14 px + the gender field
@@ -1947,6 +2003,18 @@ static void bloom_add(C3D_RenderTarget* tgt, C3D_Tex* glow, int mode, float lvl,
 // invariant 1). Non-NULL = the tilted mesh REPLACES the final blit (SPEC-render R3.1) — the
 // prescale pass 0 survives and becomes its source (R4.7), and the C2D_TargetClear stays in both
 // branches because it paints the letterbox AND the R2.5.2 top-corner wedges (R3.1.1).
+// PHASE 17 / SPEC-layout L7.1.2 (sweep D14). Belt-and-braces beside the L7.1.1 memset: while a
+// core has never uploaded a frame, present the theme background instead of the texture. Black with
+// a HUD reading 0fps is an honest loading frame; an undefined texture is a broken one. It is a
+// CALL-SITE gate on purpose — render_game dispatches to the HD-2D tilt path, which this phase is
+// forbidden to touch, so the function itself stays byte-identical. Mirrors render_game's own
+// `!e->core` early-out (clear, bind, return) so the screen is left bound either way.
+static bool render_game_gate(EmuInstance* e, C3D_RenderTarget* screen, u32 clrBg) {
+	if (e->core && e->everUploaded) return true;
+	C2D_TargetClear(screen, clrBg); C2D_SceneBegin(screen);
+	return false;
+}
+
 static void render_game(EmuInstance* e, C3D_RenderTarget* screen, C3D_RenderTarget* preTgt,
                         C3D_Tex* preTex, float screenW, float screenH,
                         int mode, bool smooth, const C2D_ImageTint* tint, u32 clrBg,
@@ -2166,13 +2234,30 @@ static const char* const PAD_EDGE_NAMES[3] = { "Round", "Soft", "Sharp" };
 static const char* const TILT_NAMES[TILT_LEVELS] = { "Off", "Low", "Mid", "Max" };
 
 enum { PK_TOG, PK_SEG, PK_STEP, PK_BTN, PK_SWATCH };
-typedef struct { unsigned char kind, act, nseg; short x, y, w, h; const char* ov; } PCtl;
+// PHASE 17 / SPEC-layout L8.3 (sweep D19). `ov` is the label for a row the PLATE does not bake.
+// Every one of them used to be drawn the same way — tiny dim 8 px mono, right-aligned to the LEFT
+// of the widget — while the baked labels beside them on the SAME list are ~12 px Space Grotesk in
+// the primary ink. On LINK that put a tiny dim all-caps "CO-OP" under a large bright "Link cable"
+// and "Net link (loopback)": three rows, two typographic worlds, and the code-drawn one read as an
+// afterthought. The plates use exactly TWO label styles, so `ovs` picks between them:
+//   OV_ROW     — a toggle row's name, like the baked "Link cable": SG_MED 12 px, g_art.text, at the
+//                content-column left edge (x=93), vertically centred on the widget.
+//   OV_SECTION — a caption ABOVE a segmented control, like the baked "SCALE · TOP": JBM_MED 9 px
+//                caps, g_art.dim, at x=93, 14 px above the row.
+// Ink comes from g_art (W4.1: the surface under it is baked plate art).
+enum { OV_ROW = 0, OV_SECTION = 1 };
+typedef struct { unsigned char kind, act, nseg; short x, y, w, h; const char* ov; unsigned char ovs; } PCtl;
 static const PCtl PT_SESSION[] = {
   {PK_BTN,ACT_RESUME,0, 93,10,216,40,0},{PK_BTN,ACT_CHANGE,0, 93,59,216,40,0},{PK_BTN,ACT_QUIT,0, 93,108,216,43,0} };
+// PHASE 17 / SPEC-input I2.4.2. The last two rows are back at their MANIFEST y (234 and 263).
+// They had been dragged up to y=224 to make them "fit" a 240 px screen the design never intended
+// them to fit on — which is precisely why they printed through the status hint at y=231 and were
+// clipped by the screen edge (REPORT D8). The content panel is a viewport now (uihit_max_scroll →
+// 53 px of travel here), so a row below the fold is reached by scrolling instead of by squashing.
 static const PCtl PT_DISPLAY[] = {
   {PK_SEG,ACT_SCALE_TOP,3, 93,26,208,30,0},{PK_SEG,ACT_SCALE_BOT,3, 93,81,208,30,0},
   {PK_SEG,ACT_FILTER,2, 93,136,208,30,0},{PK_SEG,ACT_HUD,4, 93,191,208,30,0},
-  {PK_TOG,ACT_SWAP,0, 150,224,34,14,"Swap"},{PK_TOG,ACT_FS,0, 284,224,34,14,"Skip"} };
+  {PK_TOG,ACT_SWAP,0, 268,234,33,18,"Swap screens",OV_ROW},{PK_TOG,ACT_FS,0, 268,263,33,18,"Frameskip",OV_ROW} };
 static const PCtl PT_AUDIO[] = {
   {PK_SEG,ACT_AUDIOMODE,3, 93,26,216,30,0},{PK_STEP,ACT_VOLA,0, 93,82,216,24,0},
   {PK_STEP,ACT_VOLB,0, 93,132,216,24,0},{PK_TOG,ACT_MUTE,0, 276,171,34,18,0} };
@@ -2189,7 +2274,7 @@ static const PCtl PT_AUDIO[] = {
 static const PCtl PT_ENHANCE[] = {
   {PK_TOG,ACT_3D,0, 276,51,34,18,0},{PK_TOG,ACT_DOF,0, 276,83,34,18,0},{PK_TOG,ACT_BLOOM,0, 276,112,34,18,0},
   {PK_TOG,ACT_LIGHT,0, 276,141,34,18,0},{PK_TOG,ACT_VIVID,0, 276,170,34,18,0},
-  {PK_SEG,ACT_TILT,4, 140,198,170,26,"TILT"} };
+  {PK_SEG,ACT_TILT,4, 140,198,170,26,"DIORAMA · TILT",OV_SECTION} };
 // Phase 15 adds the CO-OP row (SPEC-avatar A6.1). It goes on LINK, not ENHANCE, because ENHANCE is
 // measurably full: its five baked toggles end at y=188, the tilt seg takes y198..224 and the status
 // hint sits at y=231 — SEVEN pixels left, and phase 14's open question O6 (new plate art for a 6th
@@ -2204,11 +2289,15 @@ static const PCtl PT_LINK[] = {
   {PK_TOG,ACT_LINK,0, 276,16,34,18,0},{PK_TOG,ACT_NETLINK,0, 276,44,34,18,0},
   {PK_BTN,ACT_WIRELESS,0, 93,74,216,35,0},{PK_BTN,ACT_SAVEST,0, 93,118,104,31,0},
   {PK_BTN,ACT_LOADST,0, 204,118,104,31,0},{PK_BTN,ACT_LOADSAV,0, 93,156,216,31,0},
-  {PK_TOG,ACT_PRESENCE,0, 276,196,34,18,"CO-OP"} };
+  {PK_TOG,ACT_PRESENCE,0, 276,196,34,18,"Co-op presence",OV_ROW} };
+// I2.4.2, the same restoration: the swatch row is the manifest's 93,195,208,31 and the pad-edges
+// seg is a full-width 93,253,208,30 instead of a 172x14 sliver crushed onto the hint line (D9).
+// Its "EDGES" caption cannot sit to its left any more (that column is the tab rail), so
+// menu_ov_label puts it ABOVE the row, in the plate's own caption style — see the function.
 static const PCtl PT_TOUCH[] = {
   {PK_SEG,ACT_TOUCHMODE,3, 93,26,208,30,0},{PK_BTN,ACT_PREVIEW_PAD,0, 93,109,101,44,0},
-  {PK_BTN,ACT_PREVIEW_SMART,0, 201,109,101,44,0},{PK_SWATCH,ACT_PADCOL,0, 93,192,208,26,0},
-  {PK_SEG,ACT_PADEDGE,3, 140,224,172,14,"EDGES"} };
+  {PK_BTN,ACT_PREVIEW_SMART,0, 201,109,101,44,0},{PK_SWATCH,ACT_PADCOL,0, 93,195,208,31,0},
+  {PK_SEG,ACT_PADEDGE,3, 93,253,208,30,"GAMEPAD · EDGES",OV_SECTION} };
 static const PCtl* const PTABS[6] = { PT_SESSION, PT_DISPLAY, PT_AUDIO, PT_ENHANCE, PT_LINK, PT_TOUCH };
 // I4.4: ENHANCE goes 5 -> 6 for the tilt row. Forgetting this is SILENT — the row would never
 // draw (the draw loop is `for (i < nPd)`) and the touch hit-test loop would never reach it.
@@ -2216,6 +2305,144 @@ static const PCtl* const PTABS[6] = { PT_SESSION, PT_DISPLAY, PT_AUDIO, PT_ENHAN
 static const int PTABN[6] = { 3, 6, 4, 6, 7, 5 };
 static const char* const PT_PLATE[6] = { "pause-bot-session","pause-bot-display","pause-bot-audio",
                                          "pause-bot-enhance","pause-bot-link","pause-bot-touch" };
+
+// ---- Phase 17 / SPEC-input §0.2.2: the harness's window into the two menu screens --------------
+// The pause menu's and run_settings' state (tab, row, scroll) is entirely stack-local, so the
+// emutest harness could not read it over GDB and could not prove that a drag scrolled anything.
+// LOGGING ONLY: nothing reads these back and no branch depends on them, so they cannot change
+// behaviour — but they must exist in the SHIPPING build, because the harness is the regression
+// gate and a debug-only symbol would be untestable in the artifact the user installs.
+//   off 0x00 magic 'MNU1' | 0x04 frame | 0x08 screen (0=pause,1=settings) | 0x0c tab | 0x10 row
+//       0x14 scroll | 0x18 maxScroll | 0x1c contentH | 0x20 lastHit | 0x24 lastTapX
+//       0x28 lastTapY | 0x2c tapN | 0x30 dragN
+typedef struct {
+	int32_t magic, frame, screen, tab, row, scroll, maxScroll, contentH,
+	        lastHit, lastTapX, lastTapY, tapN, dragN;
+} MenuDiag;
+MenuDiag g_menuDiag;
+
+// ---- Phase 17 / SPEC-input §0.1.3 + §I2.4: the pause/settings content viewport ------------------
+// ONE rect table per tab, read by BOTH the hit test and the draw loop, so a coordinate can no
+// longer drift between them (the class of bug that produced REPORT D2 and I3.5/I3.6).
+static int pctl_rects(const PCtl* PT, int n, UiRect* out, int cap) {
+	if (n > cap) n = cap;
+	for (int i = 0; i < n; i++) {
+		out[i].x = PT[i].x; out[i].y = PT[i].y; out[i].w = PT[i].w; out[i].h = PT[i].h;
+	}
+	return n;
+}
+
+// The `ov` overlay caption. Default: right-aligned just left of the control — the TILT / CO-OP /
+// toggle-column idiom already in use. If that would print on the TAB RAIL (which is what happens
+// to a full-width row at x=93, e.g. the restored PAD EDGES seg), it goes ABOVE the row instead,
+// left-aligned, matching the plate's own baked captions ("SCALE · TOP" sits ~11 px above its seg).
+static void menu_ov_label(C2D_TextBuf buf, const char* s, int style, float y, float h) {
+	// L8.3.1: one of the plates' own two label styles, at the content column's left edge (x=93) —
+	// measured off the art: "Link cable"'s glyphs start at x=93 with its toggle at y=16..34, and
+	// "SCALE · TOP" sits 14 px above its widget. Both take g_art ink (W4.1) because the surface
+	// under them is the baked plate.
+	if (style == OV_SECTION)
+		assets_text(buf, FNT_JBM_MED, s, (float)UIHIT_MENU_CONTENT_X, y - 14.0f, 9.0f, g_art.dim);
+	else
+		assets_text(buf, FNT_SG_MED, s, (float)UIHIT_MENU_CONTENT_X, y + (h - 12.0f) / 2.0f, 12.0f, g_art.text);
+}
+
+// The plate carries the baked section captions, so scrolling the CONTROLS without the plate would
+// tear every label off its row. Draw the whole plate shifted up, then repaint the tab rail from
+// the unscrolled art (the rail is fixed chrome, not content).
+// MENU_PLATE_KEEP: the plate's last two rows are the clipped TOP of a below-fold caption whose
+// body the 240-tall art does not contain. Dropping them when scrolled is the difference between a
+// clean row and a 2 px glyph sliver stranded in the middle of it.
+#define MENU_PLATE_KEEP 238
+// Paint a rect with the PLATE's OWN content background, sampled from a region that is verified
+// empty in all six tab plates (x82..309, rows 226..233 — pixel-scanned). Sampling the art instead
+// of filling with g_ui.bg matters because only the INDIGO art pack is built today (REPORT D10/D12),
+// so on any other theme g_ui.bg and the plate's background are different colours and a flat fill
+// would be the most visible mismatch on the screen. A uniform source scales exactly.
+static void menu_plate_bg(C2D_Image img, float x, float y, float w, float h) {
+	if (w <= 0.0f || h <= 0.0f) return;
+	C2D_Image sub; Tex3DS_SubTexture st;
+	const float SW = 228.0f, SH = 8.0f;
+	if (assets_img_cell(img, 82.0f, 226.0f, SW, SH, &sub, &st))
+		C2D_DrawImageAt(sub, x, y, 0.0f, NULL, w / SW, h / SH);
+}
+static void menu_draw_plate(const char* id, int scroll) {
+	C2D_Image img = assets_plate(id);
+	if (scroll <= 0) { assets_draw_plate(id); return; }
+	if (!img.tex || !img.subtex) return;
+	C2D_Image sub; Tex3DS_SubTexture st;
+	float h = (float)(MENU_PLATE_KEEP - scroll);
+	if (h > 0.0f && assets_img_cell(img, 0.0f, (float)scroll, 320.0f, h, &sub, &st))
+		C2D_DrawImageAt(sub, 0.0f, 0.0f, 0.0f, NULL, 1.0f, 1.0f);
+	// Below the art there is nothing — and "nothing" in a pause menu is the DIMMED GAME showing
+	// through, which reads as a torn panel. Extend the panel background to the screen edge.
+	if (h < 240.0f)
+		menu_plate_bg(img, (float)UIHIT_MENU_RAIL_W, h > 0.0f ? h : 0.0f,
+		              320.0f - (float)UIHIT_MENU_RAIL_W, 240.0f - (h > 0.0f ? h : 0.0f));
+	C2D_Image rail; Tex3DS_SubTexture rst;
+	if (assets_img_cell(img, 0.0f, 0.0f, (float)UIHIT_MENU_RAIL_W, 240.0f, &rail, &rst))
+		C2D_DrawImageAt(rail, 0.0f, 0.0f, 0.0f, NULL, 1.0f, 1.0f);
+}
+
+// ---- PHASE 17 / SPEC-layout L5 (REPORT D16): the TOUCH tab's mode explainer ---------------------
+// manifests.json `pause-bot-touch` lists {"label":"touch-mode explainer text","type":"text",
+// "x":93,"y":66,"w":208,"h":32} and screenshot pause-tab-6-touch.png fills that band with a
+// paragraph describing the SELECTED mode. The v3 rewrite dropped it, leaving a ~53 px hole between
+// the TOUCH MODE segment (ends y=56) and the Preview buttons (start y=109) — measured on the plate:
+// rows 20..164 of the content column carry no baked ink at all, so nothing else explains what
+// "Off / Gamepad / Smart" mean. It is NOT a PCtl: it must not consume a menuRow (SPEC-layout L5.2).
+//
+// Copy verbatim from design_handoff_3dgba_ui/prototypes/3DGBA Prototype.dc.html:721-723.
+static const char* const TOUCH_EXPLAIN[3] = {
+	"Off — a touch opens the pause menu. No game input from the touch screen.",
+	"Gamepad — a translucent virtual controller (D-pad, A/B, L/R, START) over game B.",
+	"Smart — the touch screen is a pointer on the real Gen-3 UI: tap-to-walk, tap menus/party/targets, double-tap = START.",
+};
+#define TEXPL_X      93.0f
+#define TEXPL_Y      66.0f
+#define TEXPL_W     208
+#define TEXPL_LINES   4    // 4 x 10 px lead from y=66 ends at 105; the Preview buttons start at 109
+#define TEXPL_LEAD   10.0f
+#define TEXPL_PX      9.0f
+#define TEXPL_CAP    72
+
+// The measurement uihit_wrap needs. Deliberately a callback: the arithmetic is host-tested in
+// test_uihit T11, the metrics come from the live bcfnt, and neither has to know about the other.
+static int texpl_meas(const char* str, void* ctx) {
+	return (int)(assets_text_w((C2D_TextBuf)ctx, FNT_JBM_MED, str, TEXPL_PX) + 0.5f);
+}
+
+// L5.2.1: `mode` is read every frame, never cached — flipping the segment must change the
+// paragraph, and this is the only thing on the tab that names the active mode in words.
+static void menu_touch_explainer(C2D_TextBuf buf, int mode, int scroll) {
+	if (mode < 0 || mode > 2) return;
+	char lines[TEXPL_LINES][TEXPL_CAP];
+	int n = uihit_wrap(TOUCH_EXPLAIN[mode], TEXPL_W, TEXPL_LINES, &lines[0][0], TEXPL_CAP,
+	                   texpl_meas, buf);
+	for (int i = 0; i < n; i++)
+		assets_text(buf, FNT_JBM_MED, lines[i], TEXPL_X,
+		            TEXPL_Y + (float)i * TEXPL_LEAD - (float)scroll, TEXPL_PX, g_art.dim);
+}
+
+// Fixed chrome, drawn AFTER the controls so it clips them:
+//  1. the status-hint band is blanked in the content column — a half-scrolled row can no longer
+//     print through the hint (REPORT D8's other half). g_ui.bg is exact, not approximate: every
+//     plate's content background IS the theme's bg (verified per-pixel, indigo 0x201830).
+//  2. the scrollbar column is overpainted and redrawn honestly. pause-bot-display / -touch bake a
+//     near-white track whose thumb is FROZEN at the bottom while the tab renders at scroll-top
+//     (REPORT D18); the other four plates bake nothing there, and neither do we when the tab fits.
+static void menu_draw_chrome(const char* id, int scroll, int maxScroll, int contentH) {
+	C2D_Image img = assets_plate(id);
+	menu_plate_bg(img, (float)UIHIT_MENU_RAIL_W, (float)UIHIT_MENU_VIEW_H,
+	              320.0f - (float)UIHIT_MENU_RAIL_W, 240.0f - (float)UIHIT_MENU_VIEW_H);
+	menu_plate_bg(img, 312.0f, 0.0f, 8.0f, 240.0f);
+	if (maxScroll <= 0) return;
+	const int TY = 6, TH = UIHIT_MENU_VIEW_H - 12;
+	ui_fill(313.0f, (float)TY, 6.0f, (float)TH, g_ui.line, 3.0f);
+	int th = uihit_thumb_h(TH, UIHIT_MENU_VIEW_H, contentH);
+	int ty = uihit_thumb_y(TY, TH, th, scroll, maxScroll);
+	ui_fill(313.0f, (float)ty, 6.0f, (float)th, g_ui.dim, 3.0f);
+}
 
 // ---- Pause-menu widget layout (v2, 1:1): each tab is a list of typed widgets. ----
 // Kinds: SECTION label / SEG segmented / TOGGLE (opt. sublabel) / BUTTON (full or half row) /
@@ -2307,6 +2534,37 @@ static int menu_layout(int tab, MenuW* out) {
 #undef PUSH
 
 
+// FIX PASS (review finding 1). The pause menu's selection ring was a square `ui_border` on widgets
+// the phase made ROUNDED, so every focused control carried a dark right-angle notch at each corner
+// — and on the segmented rows the gold ring FILLED the selected pill's outer corners square while
+// its inner corners stayed round (SEEN: runs/resweep/zooms/z-squarering-rounded-btn.png,
+// z-seg-pill-corner.png, z-focusring-btn.png). rompicker.c's focus_ring() already rounded; this is
+// the same idiom for the menu, with the radius taken from the widget it wraps so the two cannot
+// drift. `pad` is the outset (0 for rings drawn ON the control's own rect).
+static void sel_ring(float x, float y, float w, float h, float r, float pad) {
+	ui_border_round(x - pad, y - pad, w + 2.0f * pad, h + 2.0f * pad, g_ui.acc, 1.5f, r + pad);
+}
+
+// FIX PASS (review finding 4). A .gba the core refuses used to render as a silent dead rect with a
+// live HUD over it — the exact "black session with no explanation" shape D13 fixed for the zero-ROM
+// case. Drawn straight after render_game so the pause dim still covers it, on whichever screen the
+// broken game owns; only ever reached when the FILE EXISTED (setup_core's probe), so the labelled
+// "Start without a game" path stays silent.
+static void draw_load_error(C2D_TextBuf buf, float screenW) {
+	const float W = 244.0f, H = 46.0f;
+	float x = (screenW - W) * 0.5f, y = 96.0f;
+	ui_fill(x, y, W, H, C2D_Color32(0x00, 0x00, 0x00, 0xC8), 6.0f);
+	ui_border_round(x, y, W, H, THEME_QUIT_TEXT, 1.0f, 6.0f);
+	if (assets_ready()) {
+		assets_text_c(buf, FNT_SG_BOLD, "This game could not be loaded",
+		              screenW * 0.5f, y + 8.0f, 12.0f, THEME_QUIT_TEXT);
+		assets_text_c(buf, FNT_JBM_MED, "not a valid .gba - pause menu, Change games",
+		              screenW * 0.5f, y + 27.0f, 8.0f, THEME_ON_DARK_DIM);
+	} else {
+		ui_text_c(buf, "This game could not be loaded", screenW * 0.5f, y + 10.0f, 0.5f, THEME_QUIT_TEXT);
+	}
+}
+
 // Top-screen summary while the pause menu is open (draws to whichever top target is bound):
 // "|| PAUSED", the two game names, a row of active-feature pills, and a pointer to the bottom screen.
 static void draw_paused_summary(C2D_TextBuf buf, const char* nameTop, const char* nameBot,
@@ -2323,9 +2581,14 @@ static void draw_paused_summary(C2D_TextBuf buf, const char* nameTop, const char
 		// I4.15: the arrays were [7] and this pushed up to exactly 7 pills; the Tilt pill makes 8,
 		// so ALL FOUR must widen in the same edit or the 8th push is a stack buffer overrun.
 		// A6.4.3: the phase-15 Co-op pill makes NINE — same trap, same rule, all four widened here.
-		const char* labs[9]; u32 fg[9], bg[9]; int n = 0;
-		#define PILL(L, ON, C) do { labs[n] = (L); fg[n] = (ON) ? g_ui.ink : g_ui.dim; \
-		                            bg[n] = (ON) ? (C) : g_ui.panel2; n++; } while (0)
+		// Phase 17 (SPEC-widgets W3.5): the design draws these as OUTLINED pills — a 1px rounded
+		// frame plus label, both in the role colour, transparent interior (measured off pill-3d /
+		// pill-dof / pill-dim, and visible on screenshots/pause-tab-2-display.png). The code drew
+		// solid accent fills with ink text, and with the old ui_fill those fills rendered as
+		// crosses whose side nubs the longer labels overflowed (sweep D6). One colour per pill now:
+		// the role colour when on, g_ui.dim when off.
+		const char* labs[9]; u32 col[9]; int n = 0;
+		#define PILL(L, ON, C) do { labs[n] = (L); col[n] = (ON) ? (C) : g_ui.dim; n++; } while (0)
 		PILL("3D", s3d, THEME_GAME_B); PILL("DoF", dof, g_ui.acc); PILL("Bloom", bloom, g_ui.acc);
 		PILL("Light", light, g_ui.acc);
 		PILL("Tilt", g_prefs.tiltLevel > 0, g_ui.acc);   // right after Light: the enhance pills stay grouped
@@ -2340,8 +2603,8 @@ static void draw_paused_summary(C2D_TextBuf buf, const char* nameTop, const char
 		for (int i = 0; i < n; i++) { pw[i] = assets_text_w(buf, FNT_JBM_MED, labs[i], 8.0f) + 12.0f; tw += pw[i] + 5.0f; }
 		float x = (400.0f - tw) / 2.0f;
 		for (int i = 0; i < n; i++) {
-			ui_fill(x, 129.0f, pw[i], 15.0f, bg[i], 5.0f);
-			assets_text_c(buf, FNT_JBM_MED, labs[i], x + pw[i] / 2.0f, 132.0f, 8.0f, fg[i]);
+			ui_border_round(x, 129.0f, pw[i], 15.0f, col[i], 1.0f, 5.0f);
+			assets_text_c(buf, FNT_JBM_MED, labs[i], x + pw[i] / 2.0f, 132.0f, 8.0f, col[i]);
 			x += pw[i] + 5.0f;
 		}
 	}
@@ -2364,6 +2627,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	EmuInstance emuA, emuB;
 	emu_start(&emuA, 0, 0,              mainPrio + 1);
 	emu_start(&emuB, 1, isN3DS ? 2 : 1, mainPrio + 1);
+	// setup_core sets it, but emuB's is never called in 1-game mode — these are STACK structs, so
+	// an uninitialised read would draw a random banner (review finding 4).
+	emuA.loadFailed = emuB.loadFailed = false;
 	setup_core(&emuA, pathA);
 	// 1-game mode (UI redesign): no game B — the bottom screen becomes the touch controller.
 	// The PATHS are the source of truth (the picker returns pathB=="" exactly for a 1-game start);
@@ -2531,7 +2797,12 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 #endif
 	int  menuSel = 0;
 	int  menuTab = 0, menuRow = 0;   // tabbed pause menu (UI redesign)
-	int  menuScroll = 0;             // content scroll offset (tall tabs scroll; see menu_layout)
+	int  menuScroll = 0;             // content scroll offset — LIVE since phase 17 (SPEC-input I2.4)
+	UiGesture menuGest;              // tap-vs-drag for the pause menu (one machine, app-wide)
+	memset(&menuGest, 0, sizeof menuGest);
+	memset(&g_menuDiag, 0, sizeof g_menuDiag);
+	g_menuDiag.magic = 0x4D4E5531;   // 'MNU1' — proves the offsets are the ones you think
+	g_menuDiag.lastHit = -1;
 	bool s3dEnabled = true;          // Enhance-tab master 3D toggle (the slider still gates depth)
 	int  result = SESSION_QUIT;
 	gfxSet3D(true);   // enable stereoscopic top screen; the right eye is driven below (slider-gated)
@@ -2585,6 +2856,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		hidScanInput();
 		u32 kDown = hidKeysDown();
 		u32 kHeld = hidKeysHeld();
+		u32 kUp   = hidKeysUp();     // phase 17: the gesture machine needs the release edge
 		u16 tk = 0;             // touch-injected keys for the bottom game this frame
 		u16 ckA = 0, ckB = 0;   // D4 script-injected keys, per GAME SLOT (A = p1, B = p2)
 		TouchSmart sm = { 0 };   // bottom game live state for SMART touch
@@ -2700,7 +2972,17 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			bool combo = (kHeld & KEY_START) && (kHeld & KEY_SELECT);
 			// With the virtual gamepad on, the touchscreen drives the game, so the menu opens
 			// only via the combo; otherwise a tap opens the menu (the original behaviour).
-			if ((touchMode == TOUCH_OFF && (kDown & KEY_TOUCH)) || combo) {
+			// SPEC-layout L3.2: ...except on the "≡ menu" chip, which the pad has always DRAWN
+			// bottom-right and never hit-tested. It is checked on the press edge (the only edge
+			// where hidTouchRead returns a valid point — REPORT D2's lesson), and opening the menu
+			// takes this frame's `else` branch away, so the same tap can never also reach the game.
+			bool chipTap = false;
+			if ((kDown & KEY_TOUCH) && tmEff != TOUCH_OFF) {
+				touchPosition ctp = { 0, 0 };
+				hidTouchRead(&ctp);
+				chipTap = touch_menu_chip(tmEff, ctp.px, ctp.py) != 0;
+			}
+			if ((touchMode == TOUCH_OFF && (kDown & KEY_TOUCH)) || combo || chipTap) {
 				menuOpen = true; menuSel = 0; menuTab = 0; menuRow = 0; menuScroll = 0; status[0] = '\0';
 				if (!linkOn && !netOn && !wlOn && workersRunning) {   // finish the in-flight frame before pausing into the menu
 					DIAG_CRUMB(g_diagMainCrumb, DIAG_SITE_MAIN_PIPE_WAIT, 0);   // D1 site 4000 bracket (post-mortem only)
@@ -3180,32 +3462,64 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 				// ---- Pause menu (v3, plate-composited): PCtl controls at manifest coords. L/R tab,
 				// up/down focus, left/right adjust, A/tap activate. Buttons + link toggles route to the
 				// legacy menuSel dispatch; segs/steppers/swatch/3D/preview handled inline.
-				if (kDown & KEY_L) { menuTab = (menuTab + 5) % 6; menuRow = 0; }
-				if (kDown & KEY_R) { menuTab = (menuTab + 1) % 6; menuRow = 0; }
+				if (kDown & KEY_L) { menuTab = (menuTab + 5) % 6; menuRow = 0; menuScroll = 0; }
+				if (kDown & KEY_R) { menuTab = (menuTab + 1) % 6; menuRow = 0; menuScroll = 0; }
 				const PCtl* PT = PTABS[menuTab]; int nP = PTABN[menuTab];
 				if (menuRow >= nP) menuRow = 0;
+				// The ONE rect table for this tab: hit-tested below, drawn from the same numbers.
+				UiRect mrect[8]; int nRect = pctl_rects(PT, nP, mrect, 8);
+				int contentH  = uihit_content_h(mrect, nRect);
+				int maxScroll = uihit_max_scroll(contentH);
+				if (menuScroll > maxScroll) menuScroll = maxScroll;
+				int rowWas = menuRow;
 				if (kDown & (KEY_DDOWN | KEY_CPAD_DOWN)) menuRow = (menuRow + 1) % nP;
 				if (kDown & (KEY_DUP   | KEY_CPAD_UP))   menuRow = (menuRow - 1 + nP) % nP;
 				if (kDown & KEY_B) menuOpen = false;
 				bool activate = (kDown & KEY_A) != 0;
 				int adj = (kDown & (KEY_DRIGHT | KEY_CPAD_RIGHT)) ? 1 : ((kDown & (KEY_DLEFT | KEY_CPAD_LEFT)) ? -1 : 0);
 				int segSet = -1;
-				if (kDown & KEY_TOUCH) {
+				{	// Touch: the latch idiom + drag-to-scroll (§I2.1/§I2.4.4). The raw point is
+					// consumed only while it is VALID; acting on the release edge is REPORT D2.
 					touchPosition mtp; hidTouchRead(&mtp);
-					if (mtp.px < 86) { int t2 = ((int)mtp.py - 8) / 30; if (t2 < 0) t2 = 0; if (t2 > 5) t2 = 5;
-					                   if (t2 != menuTab) { menuTab = t2; menuRow = 0; PT = PTABS[menuTab]; nP = PTABN[menuTab]; } }
-					else for (int i2 = 0; i2 < nP; i2++) {
-						const PCtl* c2 = &PT[i2];
-						if (mtp.px < c2->x || mtp.px >= c2->x + c2->w || mtp.py < c2->y || mtp.py >= c2->y + c2->h) continue;
-						menuRow = i2;
-						if (c2->kind == PK_SEG)   segSet = ui_seg_hit(c2->x, c2->w, c2->nseg, (float)mtp.px);
-						else if (c2->kind == PK_STEP) adj = (mtp.px < c2->x + 24) ? -1 : (mtp.px > c2->x + c2->w - 24 ? 1 : 0);
-						else if (c2->kind == PK_SWATCH) { int cc = ((int)mtp.px - c2->x) / 30; if (cc<0)cc=0; if (cc>4)cc=4;
-							g_prefs.padColor = cc; settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn); }
-						else activate = true;
-						break;
+					int wasDrag = menuGest.dragged;
+					UiGestEv mev = uihit_gesture_step(&menuGest, (kDown & KEY_TOUCH) != 0,
+					                                  (kHeld & KEY_TOUCH) != 0, (kUp & KEY_TOUCH) != 0,
+					                                  mtp.px, mtp.py);
+					if (mev == GEST_DOWN) menuGest.base = menuScroll;
+					if (!wasDrag && menuGest.dragged) g_menuDiag.dragN++;
+					// A drag on the TAB RAIL must not scroll the content (§I2.4.4) — the rail is a
+					// six-target column, and a finger sliding down it is choosing a tab, not scrolling.
+					if (mev == GEST_DRAG && menuGest.x0 >= UIHIT_MENU_CONTENT_X)
+						menuScroll = uihit_scroll_px(menuGest.base, menuGest.y0 - menuGest.y, maxScroll);
+					if (mev == GEST_TAP) {
+						g_menuDiag.tapN++;
+						g_menuDiag.lastTapX = menuGest.x; g_menuDiag.lastTapY = menuGest.y;
+						g_menuDiag.lastHit = -1;
+						if (menuGest.x < 86) { int t2 = (menuGest.y - 8) / 30; if (t2 < 0) t2 = 0; if (t2 > 5) t2 = 5;
+						                       if (t2 != menuTab) { menuTab = t2; menuRow = 0; menuScroll = 0;
+						                                            PT = PTABS[menuTab]; nP = PTABN[menuTab];
+						                                            nRect = pctl_rects(PT, nP, mrect, 8);
+						                                            contentH = uihit_content_h(mrect, nRect);
+						                                            maxScroll = uihit_max_scroll(contentH); } }
+						else {
+							// Hit-test against the SCROLLED rect (§I2.4.3): the box stays glued to the
+							// art at every offset, and the status-hint band never resolves to a control.
+							int i2 = uihit_index_scrolled(mrect, nRect, menuScroll, menuGest.x, menuGest.y);
+							if (i2 >= 0) {
+								const PCtl* c2 = &PT[i2];
+								menuRow = i2; rowWas = i2; g_menuDiag.lastHit = i2;
+								if (c2->kind == PK_SEG)   segSet = ui_seg_hit(c2->x, c2->w, c2->nseg, (float)menuGest.x);
+								else if (c2->kind == PK_STEP) adj = (menuGest.x < c2->x + 24) ? -1 : (menuGest.x > c2->x + c2->w - 24 ? 1 : 0);
+								else if (c2->kind == PK_SWATCH) { int cc = (menuGest.x - c2->x) / 30; if (cc<0)cc=0; if (cc>4)cc=4;
+									g_prefs.padColor = cc; settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn); }
+								else activate = true;
+							}
+						}
 					}
 				}
+				// §I2.4.5 — a control below the fold must never be focusable-but-invisible.
+				if (menuRow != rowWas && menuRow < nRect)
+					menuScroll = uihit_follow_rect(menuScroll, mrect[menuRow], maxScroll);
 				int act = PT[menuRow].act;
 				int pkind = PT[menuRow].kind;
 				if (pkind == PK_SEG && (segSet >= 0 || adj)) {
@@ -3291,7 +3605,11 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
 					menuOpen = false; activate = false;
 				}
-				
+				// §0.2.2 — the harness's per-frame window into this screen (logging only).
+				g_menuDiag.frame++;  g_menuDiag.screen = 0;   g_menuDiag.tab = menuTab;
+				g_menuDiag.row = menuRow; g_menuDiag.scroll = menuScroll;
+				g_menuDiag.maxScroll = maxScroll; g_menuDiag.contentH = contentH;
+
 			if (activate) menuSel = act;   // route the legacy action into the original dispatch below
 			if (activate) {
 				if      (menuSel == 0) menuOpen = false;         // Resume
@@ -3504,7 +3822,20 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 
 		// ---- text for this frame (single buffer; cleared once) ----
 		C2D_TextBufClear(txtBuf);
-		C2D_Text tHint, tStatus, tToast;
+		C2D_Text tToast;
+		// PHASE 17 / SPEC-widgets W4.2 + SPEC-layout L8.3 (sweep D19's font-path half). The pause
+		// status line and the in-game footer hint used to be C2D_Text parses of the SYSTEM font drawn
+		// at scale 0.30 / 0.34 — a stroke covering about a third of a device pixel, which is the same
+		// mechanism that made the "3D" badge a smudge. They are plain strings now, drawn with the
+		// BAKED FNT_JBM_MED at its ~9 px native size (draw scale ~1.0), so the nominal contrast is
+		// the realised one. Held in the loop's scope because the draw sites are far below.
+		char statusTxt[96], hintBuf[96];
+		statusTxt[0] = hintBuf[0] = '\0';
+		// W4.1 line 3, refined by capture: the HUD bar and the footer hint sit on a CONSTANT black
+		// scrim over unknown game pixels, so an accent that is dark in its own theme (Daylight's
+		// bronze, measured ~1.5:1 there) has to be lifted before it lands there. Computed once per
+		// frame; every other use of g_ui.acc is on a procedural surface and stays exact.
+		const u32 hudAcc = theme_on_scrim(g_ui.acc);
 
 		// HUD text: per-screen game label + a top-screen stat line (FPS / clock / battery).
 		C2D_Text tHudTop, tHudBot, tHudStat;
@@ -3543,19 +3874,14 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		}
 		if (menuOpen) {
 			// Footer: last action result, or a controls cheat-sheet when idle.
-			C2D_TextParse(&tStatus, txtBuf,
-			              status[0] ? status : "L/R tab  A select  B resume  (or tap)");
-			C2D_TextOptimize(&tStatus);
+			snprintf(statusTxt, sizeof statusTxt, "%s",
+			         status[0] ? status : "L/R tab  A select  B resume  (or tap)");
 		} else {
-			char hintBuf[96];
 			if (single)
 				snprintf(hintBuf, sizeof hintBuf, "3D on top · %s · START+SELECT = menu", TOUCH_NAMES[tmEff]);
 			else
-				snprintf(hintBuf, sizeof hintBuf, "%s", touchMode != TOUCH_OFF ? "START+SELECT → pause menu"
-				                                      : "tap screen → pause menu");
-			C2D_TextParse(&tHint, txtBuf, hintBuf);
-
-			C2D_TextOptimize(&tHint);
+				snprintf(hintBuf, sizeof hintBuf, "%s", touchMode != TOUCH_OFF ? "START+SELECT · pause menu"
+				                                      : "tap screen · pause menu");
 			if (toastTimer > 0) { C2D_TextParse(&tToast, txtBuf, toast); C2D_TextOptimize(&tToast); }
 		}
 
@@ -3743,9 +4069,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 				// txtBuf was cleared above (main.c's C2D_TextBufClear), so these parses land in this
 				// frame's buffer exactly like every other chrome measurement.
 				presCh[sc].plateW  = (presCh[sc].surf & PRES_SURF_PLATE)
-				                   ? ui_text_w(txtBuf, presNameTxt[g], 0.32f) + 12.0f : 0.0f;
+				                   ? ui_chip_measure(txtBuf, presNameTxt[g]) : 0.0f;
 				presCh[sc].promptW = (presCh[sc].surf & PRES_SURF_PROMPT)
-				                   ? ui_text_w(txtBuf, PRES_PROMPT_TEXT, 0.32f) + 12.0f : 0.0f;
+				                   ? ui_chip_measure(txtBuf, PRES_PROMPT_TEXT) : 0.0f;
 			}
 		}
 
@@ -3797,13 +4123,15 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		int trSlab = (topMod == 0xFFFFFFFFu) ? 0 : 1;
 		TiltDraw tiltTL = { &tiltVw, topMod,      0,      -1 };
 		TiltDraw tiltTR = { &tiltVw, 0xFFFFFFFFu, trSlab,  0 };
-		render_game(topG, top, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], topTint, clrBg,
-		            tiltTop ? &tiltTL : NULL);
+		if (render_game_gate(topG, top, clrBg))
+			render_game(topG, top, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], topTint, clrBg,
+			            tiltTop ? &tiltTL : NULL);
 		if (popPass) {   // M2: continuous grid warp (stretch, no tile tears); quad-warp fallback if no shader
 			if (warpOk) warp_grid_eye(top, topG, &depth3d, scaleMode[0], +slider3d, sharpTop, &preTex, topMod, 0);
 			else        warp_scenery_eye(top, topG, &depth3d, scaleMode[0], +slider3d);
 			pop_eye(top, topG, &depth3d, scaleMode[0], +slider3d);   // LEFT eye shifts RIGHT -> pops OUT (ramp+char per sprite)
 		}
+		if (topG->loadFailed) draw_load_error(txtBuf, 400.0f);   // review finding 4
 		if (dofPass) dof_bands(top, &dofTexA, scaleMode[0], dofLvlTop, dofLvlBot, warpOk ? +slider3d : 0.0f);   // bands OVER the pops
 		if (bloomPass) bloom_add(top, &bloomTex, scaleMode[0], bloomLvl, 0);   // additive glow, over the blur
 		if (uipop) ui_pop_eye(top, topG, &depth3d, scaleMode[0], +UIPOP3D_PX * slider3d, sharpTop, &preTex);   // UI panels pop hardest
@@ -3831,7 +4159,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 				C2D_DrawText(&tHudTop, C2D_WithColor, 15.0f, 1.0f, 0.0f, 0.4f, 0.4f, THEME_ON_DARK);
 				if (focScreen == 0) {
 					float nw; float nh; C2D_TextGetDimensions(&tHudTop, 0.4f, 0.4f, &nw, &nh);
-					ui_chip(txtBuf, "●FOCUS", 21.0f + nw, 0.5f, g_ui.acc);
+					ui_chip(txtBuf, "●FOCUS", 21.0f + nw, 0.5f, hudAcc);
 				}
 				if (netOn || wlOn) {   // net-diag stat line (dev): keep the dense readout
 					float sw, sh; C2D_TextGetDimensions(&tHudStat, 0.4f, 0.4f, &sw, &sh);
@@ -3843,15 +4171,22 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					{ float bl = 8.0f * (batLvl > 5 ? 5 : batLvl) / 5.0f;
 					  if (bl > 0.5f) C2D_DrawRectSolid(rx - 11.0f, 5.5f, 0.0f, bl, 3.5f, THEME_GAME_A); }
 					rx -= 19.0f;
+					// W4.2 / D19: the baked FNT_JBM_MED at ~9 px native, not the system font at
+					// scale 0.38. At 0.38 a stroke covers under half a device pixel, so the dim
+					// readout realised ~2.2:1 on the bar — the same washing-out that made the 3D
+					// badge unreadable, one row to its right.
 					{ time_t tt2 = time(NULL); struct tm* lt2 = localtime(&tt2);
 					  char clk[8]; snprintf(clk, sizeof clk, "%02d:%02d", lt2 ? lt2->tm_hour : 0, lt2 ? lt2->tm_min : 0);
-					  ui_text_r(txtBuf, clk, rx, 1.5f, 0.38f, THEME_ON_DARK);
-					  rx -= ui_text_w(txtBuf, clk, 0.38f) + 7.0f; }
+					  assets_text_r(txtBuf, FNT_JBM_MED, clk, rx, 2.0f, 9.0f, THEME_ON_DARK);
+					  rx -= assets_text_w(txtBuf, FNT_JBM_MED, clk, 9.0f) + 7.0f; }
 					{ char fs2[12]; snprintf(fs2, sizeof fs2, "%dfps", fps);
-					  ui_text_r(txtBuf, fs2, rx, 1.5f, 0.38f, focScreen == 0 ? g_ui.acc : THEME_ON_DARK_DIM);
-					  rx -= ui_text_w(txtBuf, fs2, 0.38f) + 8.0f; }
-					if (s3dEnabled) { float cw = ui_text_w(txtBuf, "3D", 0.32f) + 12.0f;
-					                  ui_chip(txtBuf, "3D", rx - cw, 0.5f, THEME_GAME_B);
+					  assets_text_r(txtBuf, FNT_JBM_MED, fs2, rx, 2.0f, 9.0f, focScreen == 0 ? hudAcc : THEME_ON_DARK_DIM);
+					  rx -= assets_text_w(txtBuf, FNT_JBM_MED, fs2, 9.0f) + 8.0f; }
+					if (s3dEnabled) { float cw = ui_chip_measure(txtBuf, "3D");
+					                  // W4.2 (sweep D11): the handoff's fixed role PAIR — #a9d4ff ink on a #3E86D6
+					                  // frame. It used to draw the frame colour as the ink too, i.e. dark navy
+					                  // glyphs on the near-black HUD bar.
+					                  ui_chip_2(txtBuf, "3D", rx - cw, 0.5f, THEME_GAME_B, THEME_3D_TEXT);
 					                  rx -= cw + 6.0f; }   // advance so the tilt chip lands to its LEFT
 					// Phase 14 / I6.1: the tilt chip exists so a hardware PHOTO is interpretable.
 					// Unlike the 3D chip (which shows only "enabled"), the COLOUR carries the gate:
@@ -3870,9 +4205,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 						static const char* const TILT_CHIP[TILT_LEVELS] = { "TILT", "TILT1", "TILT2", "TILT3" };
 						int tl = g_prefs.tiltLevel < TILT_LEVELS ? g_prefs.tiltLevel : TILT_LEVELS - 1;
 						const char* tc = TILT_CHIP[tl];
-						float cw = ui_text_w(txtBuf, tc, 0.32f) + 12.0f;
+						float cw = ui_chip_measure(txtBuf, tc);
 						rx -= cw;
-						ui_chip(txtBuf, tc, rx, 0.5f, tilt_active(&tiltTw[0]) ? g_ui.acc : THEME_ON_DARK_DIM);
+						ui_chip(txtBuf, tc, rx, 0.5f, tilt_active(&tiltTw[0]) ? hudAcc : THEME_ON_DARK_DIM);
 					}
 					// Phase 15 / A6.4: the CO-OP chip, immediately LEFT of the tilt chip, same
 					// right-to-left `rx -= cw` flow. The COLOUR carries the gate exactly as the tilt
@@ -3884,9 +4219,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					// Costs nothing while the pref is off, which is the shipped default.
 					if (presenceOn) {
 						const char* pc = "CO-OP";
-						float cw = ui_text_w(txtBuf, pc, 0.32f) + 12.0f;
+						float cw = ui_chip_measure(txtBuf, pc);
 						rx -= cw + 6.0f;
-						ui_chip(txtBuf, pc, rx, 0.5f, presDraw[presTopGame] ? g_ui.acc : THEME_ON_DARK_DIM);
+						ui_chip(txtBuf, pc, rx, 0.5f, presDraw[presTopGame] ? hudAcc : THEME_ON_DARK_DIM);
 					}
 				}
 			} else if (focScreen == 0) {
@@ -3957,13 +4292,15 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 
 		// top RIGHT eye = the SAME (top) game -> single-game stereoscopic depth. Player pops forward
 		// (positive disparity). (Per-eye dual-game retired; can return later as a menu toggle.)
-		render_game(topG, topR, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], NULL, clrBg,
-		            tiltTop ? &tiltTR : NULL);
+		if (render_game_gate(topG, topR, clrBg))
+			render_game(topG, topR, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], NULL, clrBg,
+			            tiltTop ? &tiltTR : NULL);
 		if (popPass) {
 			if (warpOk) warp_grid_eye(topR, topG, &depth3d, scaleMode[0], -slider3d, sharpTop, &preTex, 0xFFFFFFFFu, 1);
 			else        warp_scenery_eye(topR, topG, &depth3d, scaleMode[0], -slider3d);
 			pop_eye(topR, topG, &depth3d, scaleMode[0], -slider3d);   // RIGHT eye shifts LEFT
 		}
+		if (topG->loadFailed) draw_load_error(txtBuf, 400.0f);   // review finding 4 (right eye)
 		if (dofPass) dof_bands(topR, &dofTexA, scaleMode[0], dofLvlTop, dofLvlBot, warpOk ? -slider3d : 0.0f);
 		if (bloomPass) bloom_add(topR, &bloomTex, scaleMode[0], bloomLvl, 1);
 		if (uipop) ui_pop_eye(topR, topG, &depth3d, scaleMode[0], -UIPOP3D_PX * slider3d, sharpTop, &preTex);
@@ -3990,8 +4327,10 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		// the top eyes — botTint is a citro2d tint and the tilt draw is not a citro2d draw.
 		u32 botMod = (focScreen == 1) ? 0xFFFFFFFFu : C2D_Color32(0x80, 0x80, 0x80, 0xFF);
 		TiltDraw tiltBL = { &tiltVwB, botMod, 2, -1 };   // slab 2 = the bottom image (R3.5.1), built
-		render_game(botG, bot, preTgt, &preTex, 320.0f, 240.0f, scaleMode[1], smooth[1], botTint, clrBg,
-		            tiltBot ? &tiltBL : NULL);
+		if (render_game_gate(botG, bot, clrBg))
+			render_game(botG, bot, preTgt, &preTex, 320.0f, 240.0f, scaleMode[1], smooth[1], botTint, clrBg,
+			            tiltBot ? &tiltBL : NULL);
+		if (botG->loadFailed) draw_load_error(txtBuf, 320.0f);   // review finding 4
 		// A2.7: the bottom screen runs none of the pop/DoF/bloom/light passes, so the avatar draws
 		// immediately after render_game and before the HUD. A2.7.1: the PEER here is whichever game
 		// is on the TOP screen — the roles invert — and `swapped` is resolved once, in exactly the
@@ -4010,7 +4349,14 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			// the other screen. Only one can ever be open at a time (the A edge is fed to the
 			// focused game alone), so the two call sites are mutually exclusive in practice.
 			if (presCard[presBotGame].open) presence_draw_card(txtBuf, &presCardTx[presBotGame], 320.0f);
-			if (hudMode & 2) {
+			// SPEC-layout L3.1 (REPORT D3): the virtual gamepad OWNS the bottom screen's top band —
+			// its L and R keys are at (4,4,52,22) and (264,4,52,22), i.e. exactly where the HUD draws
+			// the game name (x=15) and the fps/clock (right-aligned to x=314). The design agrees:
+			// manifest `pad-bot` lists no name/fps/clock rects (only `ingame-dual-bot` does) and
+			// screenshot 06's top band is L | TOUCH · GAMEPAD | R over bare video. So the bar is
+			// suppressed in Gamepad mode and the pad's own chip becomes the header; the TOP screen
+			// keeps its full HUD, which is where the fps and the clock still live.
+			if ((hudMode & 2) && tmEff != TOUCH_PAD) {
 				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 14.0f, THEME_HUD_BAR);
 				if (focScreen == 1) C2D_DrawRectSolid(0.0f, 14.0f, 0.0f, 320.0f, 2.0f, clrHi);
 				ui_dot(6.0f, 4.5f, single ? THEME_GAME_A : (swapped ? THEME_GAME_A : THEME_GAME_B));
@@ -4018,8 +4364,12 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 				{
 					float nw, nh; C2D_TextGetDimensions(&tHudBot, 0.4f, 0.4f, &nw, &nh);
 					float chx = 21.0f + nw;
-					if (focScreen == 1) chx += ui_chip(txtBuf, "●FOCUS", chx, 0.5f, g_ui.acc) + 5.0f;
-					if (linkOn || netOn || wlOn) ui_chip(txtBuf, "⚡LINK", chx, 0.5f, g_ui.acc);
+					if (focScreen == 1) chx += ui_chip(txtBuf, "●FOCUS", chx, 0.5f, hudAcc) + 5.0f;
+					// The bolt is gone with the same font change that fixed the badge: U+26A1 is an
+					// emoji codepoint, absent from both baked faces, so it would draw as tofu (the
+					// "≡" in touch.c proved the failure mode in capture). The chip's ACCENT COLOUR
+					// already carries "a link is live"; a box does not.
+					if (linkOn || netOn || wlOn) ui_chip(txtBuf, "LINK", chx, 0.5f, hudAcc);
 				}
 				if (netOn || wlOn) {
 					float bsw, bsh; C2D_TextGetDimensions(&tHudStat, 0.4f, 0.4f, &bsw, &bsh);
@@ -4028,18 +4378,23 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					float rx = 314.0f;
 					{ time_t tt2 = time(NULL); struct tm* lt2 = localtime(&tt2);
 					  char clk[8]; snprintf(clk, sizeof clk, "%02d:%02d", lt2 ? lt2->tm_hour : 0, lt2 ? lt2->tm_min : 0);
-					  ui_text_r(txtBuf, clk, rx, 1.5f, 0.38f, THEME_ON_DARK);
-					  rx -= ui_text_w(txtBuf, clk, 0.38f) + 7.0f; }
+					  assets_text_r(txtBuf, FNT_JBM_MED, clk, rx, 2.0f, 9.0f, THEME_ON_DARK);
+					  rx -= assets_text_w(txtBuf, FNT_JBM_MED, clk, 9.0f) + 7.0f; }
 					{ char fs2[12]; snprintf(fs2, sizeof fs2, "%dfps", fps);
-					  ui_text_r(txtBuf, fs2, rx, 1.5f, 0.38f, focScreen == 1 ? g_ui.acc : THEME_ON_DARK_DIM); }
+					  assets_text_r(txtBuf, FNT_JBM_MED, fs2, rx, 2.0f, 9.0f, focScreen == 1 ? hudAcc : THEME_ON_DARK_DIM); }
 				}
 			} else if (focScreen == 1) {
 				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 4.0f, clrHi);
 			}
-			if (tmEff == TOUCH_PAD) {   // virtual gamepad overlay (SMART draws nothing -> real UI)
+			// SPEC-layout L6.1 (sweep D17). touch_draw already branched on the mode internally —
+			// PAD gets the gamepad, SMART gets its "TOUCH · SMART POINTER" chip + "≡ menu", OFF gets
+			// nothing — but this gate said PAD only, so Smart mode was the one mode with no label
+			// and no touch route to the pause menu.
+			if (tmEff == TOUCH_PAD || tmEff == TOUCH_SMART) {
 				touch_draw(tmEff, tk, &sm, txtBuf);
 			}
-			if (tmEff == TOUCH_SMART && sm.valid) {   // TEMP debug: confirm RAM reads on device
+#if TOUCH_DIAG_HUD
+			if (tmEff == TOUCH_SMART && sm.valid) {   // developer readout, off by default (L6.2)
 				static const char* const CTXN[] = { "none", "field", "b.act", "b.move", "b.tgt", "party", "fmenu", "bag", "b.oth" };
 				char kb[8]; int ki = 0;   // decode the key touch is injecting this frame (on-device diagnostic)
 				if (tk & (1 << GBAKEY_UP))    kb[ki++] = 'U';
@@ -4052,20 +4407,31 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 				kb[ki] = '\0';
 				char gs[64]; snprintf(gs, sizeof gs, "%s p=%d,%d key=%s", CTXN[sm.ctx], sm.px, sm.py, kb);
 				C2D_Text tg; C2D_TextParse(&tg, txtBuf, gs); C2D_TextOptimize(&tg);
-				C2D_DrawText(&tg, C2D_WithColor, 4.0f, 224.0f, 0.0f, 0.40f, 0.40f, C2D_Color32(0x42, 0xF5, 0xD0, 0xFF));
+				// L6.2: moved OFF the footer baseline (was y=224, sharing a line with the centred
+				// hint) so an enabled diagnostic never overlaps user-facing chrome.
+				C2D_DrawText(&tg, C2D_WithColor, 4.0f, 208.0f, 0.0f, 0.40f, 0.40f, C2D_Color32(0x42, 0xF5, 0xD0, 0xFF));
 			}
+#endif
 		}
 		if (menuOpen) {
 			C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 240.0f, clrDim);
 			// ---- Pause menu (v3): the pause-bot-<tab> PLATE (rail + highlight + labels baked) + the
 			// interactive widget states at manifest coords, drawn on top. ----
 			const PCtl* PTd = PTABS[menuTab]; int nPd = PTABN[menuTab];
-			assets_draw_plate(PT_PLATE[menuTab]);
+			// The content panel is a VIEWPORT (§I2.4): the plate scrolls WITH its controls, because
+			// the section captions ("SCALE · TOP", …) are baked into it — scrolling one without the
+			// other would tear every label off its row.
+			UiRect drect[8]; int nDr = pctl_rects(PTd, nPd, drect, 8);
+			int dContentH = uihit_content_h(drect, nDr), dMaxScroll = uihit_max_scroll(dContentH);
+			if (menuScroll > dMaxScroll) menuScroll = dMaxScroll;
+			menu_draw_plate(PT_PLATE[menuTab], menuScroll);
+			if (menuTab == 5) menu_touch_explainer(txtBuf, touchMode, menuScroll);   // L5
 			int fsd = swapped ? (focused ^ 1) : focused;
 			for (int i = 0; i < nPd; i++) {
-				const PCtl* c = &PTd[i]; float x = c->x, y = c->y, w = c->w, h = c->h;
+				const PCtl* c = &PTd[i]; float x = c->x, y = (float)(c->y - menuScroll), w = c->w, h = c->h;
+				if (y + h <= 0.0f || y >= 240.0f) continue;    // scrolled out of the panel entirely
 				bool sel = (i == menuRow);
-				if (c->ov) assets_text_r(txtBuf, FNT_JBM_MED, c->ov, x - 6.0f, y + h / 2.0f - 4.0f, 8.0f, g_ui.dim);
+				if (c->ov) menu_ov_label(txtBuf, c->ov, c->ovs, y, h);
 				switch (c->kind) {
 				case PK_TOG: {
 					int on = 0;
@@ -4074,7 +4440,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 						case ACT_LIGHT: on=lightOn; break; case ACT_VIVID: on=vividOn; break; case ACT_LINK: on=linkOn; break;
 						case ACT_NETLINK: on=netOn; break; case ACT_PRESENCE: on=presenceOn; break; }   // A6.2 site 2
 					assets_toggle(on, x, y);
-					if (sel) ui_border(x - 2.0f, y - 2.0f, w + 4.0f, h + 4.0f, g_ui.acc, 1.5f);
+					if (sel) sel_ring(x, y, w, h, h * 0.5f, 2.0f);
 					break;
 				}
 				case PK_SEG: {
@@ -4088,51 +4454,70 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 						case ACT_AUDIOMODE:o=S_AUD;cur=audioMode;break;case ACT_TOUCHMODE:o=S_TCH;cur=touchMode;break;
 						case ACT_TILT:o=TILT_NAMES;cur=g_prefs.tiltLevel;break;   // phase 14 (I4.6 label table)
 						default:o=S_EDG;cur=g_prefs.padEdge;break;}
-					assets_seg(txtBuf, x, y, w, h, o, c->nseg, cur, g_ui.ink, g_ui.dim);
-					if (sel) ui_border(x, y, w, h, g_ui.acc, 1.5f);
+					assets_seg(txtBuf, x, y, w, h, o, c->nseg, cur, g_ui.ink, g_art.dim);
+					if (sel) sel_ring(x, y, w, h, ui_seg_radius(h), 0.0f);
 					break;
 				}
 				case PK_STEP: {
 					int v = (c->act == ACT_VOLA) ? volA : volB;
 					assets_fill9("fill-secondary-r8", x, y+2, 20, h-4, 7.0f);
-					assets_text_c(txtBuf, FNT_SG_BOLD, "-", x+10, y+2, 12.0f, g_ui.text);
+					assets_text_c(txtBuf, FNT_SG_BOLD, "-", x+10, y+2, 12.0f, g_art.text);
 					assets_fill9("fill-secondary-r8", x+w-20, y+2, 20, h-4, 7.0f);
-					assets_text_c(txtBuf, FNT_SG_BOLD, "+", x+w-10, y+2, 12.0f, g_ui.text);
+					assets_text_c(txtBuf, FNT_SG_BOLD, "+", x+w-10, y+2, 12.0f, g_art.text);
 					float bx=x+28, bw=w-56; ui_fill(bx, y+h/2-3, bw, 6, g_ui.line, 3.0f);
 					if (v>0) ui_fill(bx, y+h/2-3, bw*v/256.0f, 6, g_ui.acc, 3.0f);
-					assets_text_r(txtBuf, FNT_JBM_MED, (c->act==ACT_VOLA)?"A":"B", x+26, y-1, 8.0f, g_ui.dim);
-					if (sel) ui_border(x, y, w, h, g_ui.acc, 1.5f);
+					// SPEC-layout L4 (REPORT D15). The old draw here was a channel tag — a lone "A"/"B"
+					// right-aligned to x+26, 1 px ABOVE the row, i.e. jammed against the "−" button and
+					// half on the bar's top edge. It is a leftover from the pre-plate UI: the plate already
+					// BAKES "VOLUME · A" / "VOLUME · B" as this row's caption (measured: glyph rows 68..75
+					// and 118..125 of pause-bot-audio), so the tag duplicated the label and nothing showed
+					// the actual LEVEL. Draw the level instead, at the manifest's "vol A/B value" rect
+					// (298,66,11,12) / (298,117,11,12) — right-aligned above the bar's right end, the
+					// caption's own baseline, in the handoff's caps/values face.
+					{ char lv[16]; snprintf(lv, sizeof lv, "%d", (v * 100 + 128) / 256);
+					  assets_text_r(txtBuf, FNT_JBM_BOLD, lv, x + w, y - 16.0f, 10.0f, g_art.dim); }
+					if (sel) sel_ring(x, y, w, h, 7.0f, 0.0f);
 					break;
 				}
 				case PK_BTN: {
-					const char* spr="btn-secondary"; const char* lab=""; u32 col=g_ui.text;
+					const char* spr="btn-secondary"; const char* lab=""; u32 col=g_art.text;
 					switch (c->act){
-					case ACT_RESUME: spr="btn-primary"; lab="Resume"; col=g_ui.ink; break;
+					case ACT_RESUME: spr="btn-primary"; lab="Resume"; col=g_art.ink; break;
 					case ACT_CHANGE: lab="Change games"; break;
 					case ACT_QUIT: spr="btn-destructive"; lab="Quit"; col=THEME_QUIT_TEXT; break;
-					case ACT_WIRELESS: spr="btn-primary"; lab=wlOn?"Wireless: ON":"Wireless lobby..."; col=g_ui.ink; break;
+					case ACT_WIRELESS: spr="btn-primary"; lab=wlOn?"Wireless: ON":"Wireless lobby..."; col=g_art.ink; break;
 					case ACT_SAVEST: lab="Save state"; break; case ACT_LOADST: lab="Load state"; break;
 					case ACT_LOADSAV: lab="Load .sav"; break;
 					case ACT_PREVIEW_PAD: lab="Preview Gamepad"; break; case ACT_PREVIEW_SMART: lab="Preview Smart"; break; }
 					assets_button(txtBuf, spr, x, y, w, h, lab, FNT_SG_BOLD, 13.0f, col, 0);
-					if (sel) ui_border(x, y, w, h, g_ui.acc, 1.5f);
+					if (sel) sel_ring(x, y, w, h, ASSETS_BTN_R, 0.0f);
 					break;
 				}
 				case PK_SWATCH: {
 					const u32 pc[5]={PAD_COLOR_0,PAD_COLOR_1,PAD_COLOR_2,PAD_COLOR_3,PAD_COLOR_4};
 					for (int cc=0; cc<5; cc++){ float sx=x+cc*30;
-						if (cc==g_prefs.padColor) ui_border(sx-2, y, 26, h, g_ui.text, 1.5f);
+						if (cc==g_prefs.padColor) ui_border_round(sx-2, y, 26, h, g_art.text, 1.5f, 6.0f);
 						ui_fill(sx, y+3, 22, h-6, pc[cc], 4.0f); }
-					if (sel) ui_border(x-3, y-2, 156, h+4, g_ui.acc, 1.5f);
+					if (sel) sel_ring(x-3, y-2, 156, h+4, 6.0f, 0.0f);
 					break;
 				}
 				}
 			}
-			{ float sw2, sh2; C2D_TextGetDimensions(&tStatus, 0.3f, 0.3f, &sw2, &sh2);
-			  C2D_DrawText(&tStatus, C2D_WithColor, 314.0f - sw2, 231.0f, 0.0f, 0.3f, 0.3f, g_ui.dim); }
-		} else {
-			{ float hw, hh2; C2D_TextGetDimensions(&tHint, 0.34f, 0.34f, &hw, &hh2);
-			  C2D_DrawText(&tHint, C2D_WithColor, (320.0f - hw) / 2.0f, 229.0f, 0.0f, 0.34f, 0.34f, dim_color(g_ui.acc, 0.85f)); }
+			// Fixed chrome LAST so it clips the scrolled content: blank the hint band, then the
+			// honest scrollbar (the baked one is REPORT D18).
+			menu_draw_chrome(PT_PLATE[menuTab], menuScroll, dMaxScroll, dContentH);
+			assets_text_r(txtBuf, FNT_JBM_MED, statusTxt, 310.0f, 231.0f, 9.0f, g_art.dim);
+		} else if (tmEff == TOUCH_OFF) {
+			// SPEC-layout L3.2 (REPORT D4): this centred hint sits at y=229 and the virtual gamepad's
+			// START key is at (128,214,64,22) — the glyphs run straight through the button's lower
+			// half, which is what made START look clipped. screenshot 06 carries no footer hint at
+			// all; the "≡ menu" chip is the affordance there (and it is a REAL tap target now, see
+			// touch_menu_chip). screenshot 04 (touch = Off) DOES carry the hint, so it stays there.
+			// PHASE 17 F5: the gate is now `== TOUCH_OFF`, the spec's letter. F4 had to leave SMART
+			// in the hint's branch because Smart drew NO affordance at all then (F4 deviation 3);
+			// L6.1/L6.3.5 above give it the same chip PAD has, so the exception is retired — and
+			// screenshot 07 carries no centred hint either.
+			assets_text_c(txtBuf, FNT_JBM_MED, hintBuf, 160.0f, 229.0f, 9.0f, dim_color(hudAcc, 0.85f));
 		}
 
 		{ float wms = (svcGetSystemTick() - wfStart) * 1000.0f / SYSCLOCK_ARM11; if (wms > worstMs) worstMs = wms; }
@@ -4239,35 +4624,70 @@ static void run_settings(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextB
 	#define SETSAVE() settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn)
 	static const int TABS[4] = { 1, 2, 3, 5 };   // Display, Audio, Enhance, Touch (indices into PTABS/PT_PLATE)
 	int ti = 0, row = 0;
+	// §I2.4.7 — run_settings reuses PTABS/PT_PLATE, so it inherits the same viewport and the same
+	// rules. Its "Done" chip is FIXED CHROME: excluded from the scroll transform, and its hit rect
+	// is now the rect it draws (it used to be a whole quadrant, `py>=224 && px>=240`).
+	static const UiRect DONE = { 244, 224, 72, 14 };
+	int scroll = 0;
+	UiGesture gest; memset(&gest, 0, sizeof gest);
+	memset(&g_menuDiag, 0, sizeof g_menuDiag);
+	g_menuDiag.magic = 0x4D4E5531;   // 'MNU1' — the settings screen writes it too (§0.2.2)
+	g_menuDiag.screen = 1;
+	g_menuDiag.lastHit = -1;
 
 	while (aptMainLoop()) {
 		hidScanInput();
-		u32 k = hidKeysDown();
+		u32 k = hidKeysDown(), kHeld = hidKeysHeld(), kUp = hidKeysUp();
 		int tab = TABS[ti]; const PCtl* PT = PTABS[tab]; int nP = PTABN[tab];
-		if (k & KEY_L) { ti = (ti + 3) % 4; row = 0; }
-		if (k & KEY_R) { ti = (ti + 1) % 4; row = 0; }
+		if (k & KEY_L) { ti = (ti + 3) % 4; row = 0; scroll = 0; }
+		if (k & KEY_R) { ti = (ti + 1) % 4; row = 0; scroll = 0; }
 		tab = TABS[ti]; PT = PTABS[tab]; nP = PTABN[tab];
 		if (row >= nP) row = 0;
+		UiRect srect[8]; int nSr = pctl_rects(PT, nP, srect, 8);
+		int contentH = uihit_content_h(srect, nSr), maxScroll = uihit_max_scroll(contentH);
+		if (scroll > maxScroll) scroll = maxScroll;
+		int rowWas = row;
 		if (k & (KEY_DDOWN | KEY_CPAD_DOWN)) row = (row + 1) % nP;
 		if (k & (KEY_DUP   | KEY_CPAD_UP))   row = (row - 1 + nP) % nP;
 		if (k & (KEY_B | KEY_START)) break;
 		bool activate = (k & KEY_A) != 0;
+		bool done = false;
 		int adj = (k & (KEY_DRIGHT | KEY_CPAD_RIGHT)) ? 1 : ((k & (KEY_DLEFT | KEY_CPAD_LEFT)) ? -1 : 0);
 		int segSet = -1;
-		if (k & KEY_TOUCH) {
-			touchPosition mtp; hidTouchRead(&mtp);
-			if (mtp.py >= 224 && mtp.px >= 240) break;   // "Done" corner
-			else if (mtp.px < 86) { int t2 = ((int)mtp.py - 8) / 30;   // rail: map to the 4 exposed tabs
-				for (int j = 0; j < 4; j++) if (TABS[j] == (t2 < 0 ? 0 : t2 > 5 ? 5 : t2)) { ti = j; row = 0; } }
-			else for (int i2 = 0; i2 < nP; i2++) { const PCtl* c2 = &PT[i2];
-				if (mtp.px < c2->x || mtp.px >= c2->x + c2->w || mtp.py < c2->y || mtp.py >= c2->y + c2->h) continue;
-				row = i2;
-				if (c2->kind == PK_SEG) segSet = ui_seg_hit(c2->x, c2->w, c2->nseg, (float)mtp.px);
-				else if (c2->kind == PK_STEP) adj = (mtp.px < c2->x + 24) ? -1 : 1;
-				else if (c2->kind == PK_SWATCH) { int cc = ((int)mtp.px - c2->x) / 30; g_prefs.padColor = cc<0?0:cc>4?4:cc; SETSAVE(); }
-				else activate = true;
-				break; }
+		{	touchPosition mtp; hidTouchRead(&mtp);
+			int wasDrag = gest.dragged;
+			UiGestEv ev = uihit_gesture_step(&gest, (k & KEY_TOUCH) != 0, (kHeld & KEY_TOUCH) != 0,
+			                                 (kUp & KEY_TOUCH) != 0, mtp.px, mtp.py);
+			if (ev == GEST_DOWN) gest.base = scroll;
+			if (!wasDrag && gest.dragged) g_menuDiag.dragN++;
+			if (ev == GEST_DRAG && gest.x0 >= UIHIT_MENU_CONTENT_X)
+				scroll = uihit_scroll_px(gest.base, gest.y0 - gest.y, maxScroll);
+			if (ev == GEST_TAP) {
+				g_menuDiag.tapN++; g_menuDiag.lastTapX = gest.x; g_menuDiag.lastTapY = gest.y;
+				g_menuDiag.lastHit = -1;
+				if (uihit_in(DONE, gest.x, gest.y)) done = true;
+				else if (gest.x < 86) { int t2 = (gest.y - 8) / 30;   // rail: map to the 4 exposed tabs
+					for (int j = 0; j < 4; j++) if (TABS[j] == (t2 < 0 ? 0 : t2 > 5 ? 5 : t2)) { ti = j; row = 0; scroll = 0; } }
+				else {
+					int i2 = uihit_index_scrolled(srect, nSr, scroll, gest.x, gest.y);
+					if (i2 >= 0) { const PCtl* c2 = &PT[i2];
+						row = i2; rowWas = i2; g_menuDiag.lastHit = i2;
+						if (c2->kind == PK_SEG) segSet = ui_seg_hit(c2->x, c2->w, c2->nseg, (float)gest.x);
+						else if (c2->kind == PK_STEP) adj = (gest.x < c2->x + 24) ? -1 : 1;
+						else if (c2->kind == PK_SWATCH) { int cc = (gest.x - c2->x) / 30; g_prefs.padColor = cc<0?0:cc>4?4:cc; SETSAVE(); }
+						else activate = true; }
+				}
+			}
 		}
+		if (done) break;
+		if (row != rowWas && row < nSr) scroll = uihit_follow_rect(scroll, srect[row], maxScroll);
+		tab = TABS[ti]; PT = PTABS[tab]; nP = PTABN[tab];
+		if (row >= nP) row = 0;
+		nSr = pctl_rects(PT, nP, srect, 8);
+		contentH = uihit_content_h(srect, nSr); maxScroll = uihit_max_scroll(contentH);
+		if (scroll > maxScroll) scroll = maxScroll;
+		g_menuDiag.frame++; g_menuDiag.tab = tab; g_menuDiag.row = row;
+		g_menuDiag.scroll = scroll; g_menuDiag.maxScroll = maxScroll; g_menuDiag.contentH = contentH;
 		int act = PT[row].act, pk = PT[row].kind;
 		if (pk == PK_SEG && (segSet >= 0 || adj)) {
 			int cur, ns = PT[row].nseg;
@@ -4295,6 +4715,7 @@ static void run_settings(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextB
 		}
 
 		C2D_TextBufClear(txtBuf);
+		g_renderSeq++;   // app liveness for the emutest harness (ui.h)
 		C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
 		C2D_TargetClear(top, g_ui.bg); C2D_SceneBegin(top);
 		assets_text(txtBuf, FNT_SG_BOLD, "Settings", 20.0f, 20.0f, 20.0f, g_ui.text);
@@ -4310,16 +4731,18 @@ static void run_settings(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextB
 		assets_text(txtBuf, FNT_JBM_MED, "B  done", 22.0f, 224.0f, 9.0f, g_ui.dim);
 
 		C2D_TargetClear(bot, g_ui.bg); C2D_SceneBegin(bot);
-		assets_draw_plate(PT_PLATE[tab]);
+		menu_draw_plate(PT_PLATE[tab], scroll);
+		if (tab == 5) menu_touch_explainer(txtBuf, touchMode, scroll);   // L5
 		int fsd = focused;
 		for (int i = 0; i < nP; i++) {
-			const PCtl* c = &PT[i]; float x=c->x, y=c->y, w=c->w, h=c->h; bool sel=(i==row);
-			if (c->ov) assets_text_r(txtBuf, FNT_JBM_MED, c->ov, x-6.0f, y+h/2.0f-4.0f, 8.0f, g_ui.dim);
+			const PCtl* c = &PT[i]; float x=c->x, y=(float)(c->y - scroll), w=c->w, h=c->h; bool sel=(i==row);
+			if (y + h <= 0.0f || y >= 240.0f) continue;
+			if (c->ov) menu_ov_label(txtBuf, c->ov, c->ovs, y, h);
 			switch (c->kind) {
 			case PK_TOG: { int on=0; switch(c->act){case ACT_SWAP:on=swapped;break;case ACT_FS:on=fsOn;break;case ACT_MUTE:on=muted;break;
 				case ACT_3D:on=s3dEnabled;break;case ACT_DOF:on=dofOn;break;case ACT_BLOOM:on=bloomOn;break;case ACT_LIGHT:on=lightOn;break;
 				case ACT_VIVID:on=vividOn;break;case ACT_PRESENCE:on=presenceOn;break;}   // A6.2 site 4
-				assets_toggle(on,x,y); if(sel) ui_border(x-2,y-2,w+4,h+4,g_ui.acc,1.5f); break; }
+				assets_toggle(on,x,y); if(sel) sel_ring(x,y,w,h,h*0.5f,2.0f); break; }
 			case PK_SEG: { static const char* const A[3]={"1:1","Aspect-fit","Stretch"};static const char* const F[2]={"Sharp","Smooth"};
 				static const char* const H[4]={"off","top","bottom","both"};static const char* const M[3]={"Solo","Mixed","Split"};
 				static const char* const T[3]={"Off","Gamepad","Smart"};static const char* const E[3]={"Round","Soft","Sharp"};
@@ -4327,21 +4750,26 @@ static void run_settings(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextB
 				case ACT_FILTER:o=F;cur=smooth[fsd];break;case ACT_HUD:o=H;cur=hudMode;break;case ACT_AUDIOMODE:o=M;cur=audioMode;break;
 				case ACT_TOUCHMODE:o=T;cur=touchMode;break;case ACT_TILT:o=TILT_NAMES;cur=g_prefs.tiltLevel;break;
 				default:o=E;cur=g_prefs.padEdge;break;}
-				assets_seg(txtBuf,x,y,w,h,o,c->nseg,cur,g_ui.ink,g_ui.dim); if(sel) ui_border(x,y,w,h,g_ui.acc,1.5f); break; }
+				assets_seg(txtBuf,x,y,w,h,o,c->nseg,cur,g_ui.ink,g_art.dim); if(sel) sel_ring(x,y,w,h,ui_seg_radius(h),0.0f); break; }
 			case PK_STEP: { int v=(c->act==ACT_VOLA)?volA:volB; assets_fill9("fill-secondary-r8",x,y+2,20,h-4,7.0f);
-				assets_text_c(txtBuf,FNT_SG_BOLD,"-",x+10,y+2,12.0f,g_ui.text); assets_fill9("fill-secondary-r8",x+w-20,y+2,20,h-4,7.0f);
-				assets_text_c(txtBuf,FNT_SG_BOLD,"+",x+w-10,y+2,12.0f,g_ui.text); float bx=x+28,bw=w-56; ui_fill(bx,y+h/2-3,bw,6,g_ui.line,3.0f);
+				assets_text_c(txtBuf,FNT_SG_BOLD,"-",x+10,y+2,12.0f,g_art.text); assets_fill9("fill-secondary-r8",x+w-20,y+2,20,h-4,7.0f);
+				assets_text_c(txtBuf,FNT_SG_BOLD,"+",x+w-10,y+2,12.0f,g_art.text); float bx=x+28,bw=w-56; ui_fill(bx,y+h/2-3,bw,6,g_ui.line,3.0f);
 				if(v>0)ui_fill(bx,y+h/2-3,bw*v/256.0f,6,g_ui.acc,3.0f);
-				assets_text_r(txtBuf,FNT_JBM_MED,(c->act==ACT_VOLA)?"A":"B",x+26,y-1,8.0f,g_ui.dim); if(sel)ui_border(x,y,w,h,g_ui.acc,1.5f); break; }
+				{ char lv[16]; snprintf(lv,sizeof lv,"%d",(v*100+128)/256);   // L4: the level, not a channel tag
+				  assets_text_r(txtBuf,FNT_JBM_BOLD,lv,x+w,y-16.0f,10.0f,g_art.dim); }
+				if(sel){sel_ring(x,y,w,h,7.0f,0.0f);} break; }
 			case PK_BTN: { const char* lab=(c->act==ACT_PREVIEW_PAD)?"Preview Gamepad":"Preview Smart";
-				assets_button(txtBuf,"btn-secondary",x,y,w,h,lab,FNT_SG_BOLD,13.0f,g_ui.text,0); if(sel)ui_border(x,y,w,h,g_ui.acc,1.5f); break; }
+				assets_button(txtBuf,"btn-secondary",x,y,w,h,lab,FNT_SG_BOLD,13.0f,g_art.text,0); if(sel)sel_ring(x,y,w,h,ASSETS_BTN_R,0.0f); break; }
 			case PK_SWATCH: { const u32 pc[5]={PAD_COLOR_0,PAD_COLOR_1,PAD_COLOR_2,PAD_COLOR_3,PAD_COLOR_4};
-				for(int cc=0;cc<5;cc++){float sx=x+cc*30; if(cc==g_prefs.padColor)ui_border(sx-2,y,26,h,g_ui.text,1.5f); ui_fill(sx,y+3,22,h-6,pc[cc],4.0f);}
-				if(sel)ui_border(x-3,y-2,156,h+4,g_ui.acc,1.5f); break; }
+				for(int cc=0;cc<5;cc++){float sx=x+cc*30; if(cc==g_prefs.padColor)ui_border_round(sx-2,y,26,h,g_art.text,1.5f,6.0f); ui_fill(sx,y+3,22,h-6,pc[cc],4.0f);}
+				if(sel)sel_ring(x-3,y-2,156,h+4,6.0f,0.0f); break; }
 			}
 		}
-		ui_fill(244.0f, 224.0f, 72.0f, 14.0f, g_ui.acc, 5.0f);
-		assets_text_c(txtBuf, FNT_SG_BOLD, "Done", 280.0f, 225.0f, 11.0f, g_ui.ink);
+		// Fixed chrome, drawn after the content so it clips it; the Done chip is drawn at its HIT
+		// rect (§I2.4.7) and sits INSIDE the blanked hint band, so it goes last of all.
+		menu_draw_chrome(PT_PLATE[tab], scroll, maxScroll, contentH);
+		ui_fill((float)DONE.x, (float)DONE.y, (float)DONE.w, (float)DONE.h, g_ui.acc, 5.0f);
+		assets_text_c(txtBuf, FNT_SG_BOLD, "Done", DONE.x + DONE.w / 2.0f, DONE.y + 1.0f, 11.0f, g_ui.ink);
 		C3D_FrameEnd(0);
 	}
 	#undef SETSAVE
@@ -4354,9 +4782,11 @@ static void run_splash(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 		if (hidKeysDown() & (KEY_A | KEY_B | KEY_START | KEY_TOUCH)) break;
 		float t = (float)f / DUR;
 		float fade  = t > 0.94f ? (t - 0.94f) / 0.06f : 0.0f;
-		float pulse = 0.6f + 0.4f * ((f / 20) % 2);
+		// (W1.5: the old `pulse` local is gone with the sprite blit — the design's splash button
+		//  does not pulse, and assets_button has no tint parameter to feed it.)
 
 		C2D_TextBufClear(txtBuf);
+		g_renderSeq++;   // app liveness for the emutest harness (ui.h)
 		C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
 
 		// TOP: the full splash chrome plate is the art (logo glyph + wordmark + divider + tagline).
@@ -4367,13 +4797,15 @@ static void run_splash(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 		// BOTTOM: chrome plate + the pulsing primary button; label drawn in the baked font.
 		C2D_TargetClear(bot, g_ui.bg); C2D_SceneBegin(bot);
 		assets_draw_plate("splash-bot");
-		{	// manifest splash-bot: btn-primary at x72 y101 w175 h42
-			C2D_Image b = assets_wgt("btn-primary");
-			if (b.tex) C2D_DrawImageAt(b, 72.0f, 101.0f, 0.6f, NULL,
-			           175.0f / (b.subtex ? b.subtex->width : 175.0f), 42.0f / (b.subtex ? b.subtex->height : 42.0f));
-			(void)pulse;
-			assets_text_c(txtBuf, FNT_SG_BOLD, "TAP TO START", 159.0f, 113.0f, 15.0f, g_ui.ink);
-		}
+		// manifest splash-bot: btn-primary at x72 y101 w175 h42.
+		// Phase 17 (SPEC-widgets W1.5): this used to blit the `btn-primary` SPRITE at depth 0.6 and
+		// then draw the label at depth 0.0 — citro2d's depth test is GEQUAL, so the sprite (which
+		// has "> START" baked into its pixels) WON and hid the correct "TAP TO START" the code
+		// already drew (sweep D21; the learn skill's design-handoff invariant #1). assets_button
+		// 9-slices the label-free fill-primary-r8 at depth 0.0 and centres the label after it, so
+		// the order is right, the copy is right, and a 121px sprite is no longer stretched to 175.
+		assets_button(txtBuf, "btn-primary", 72.0f, 101.0f, 175.0f, 42.0f,
+		              "TAP TO START", FNT_SG_BOLD, 15.0f, g_art.ink, 0);
 		if (warn && warn[0]) assets_text(txtBuf, FNT_JBM_MED, warn, 6.0f, 4.0f, 8.0f, C2D_Color32(0xFF, 0x80, 0x40, 0xFF));
 		if (fade > 0.0f) C2D_DrawRectSolid(0, 0, 0, 320, 240, C2D_Color32(0x0A, 0x07, 0x12, (u8)(fade * 255)));
 
