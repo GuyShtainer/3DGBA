@@ -447,9 +447,25 @@ static void test_universes(void) {
 	EQI(presence_game_id("BPEE"), PRES_GAME_HOENN, "BPEE -> Hoenn");
 	EQI(presence_game_id("BPRE"), PRES_GAME_KANTO, "BPRE -> Kanto");
 	EQI(presence_game_id("BPGE"), PRES_GAME_KANTO, "BPGE -> Kanto (FR/LG share one map table)");
-	EQI(presence_game_id("AXVE"), PRES_GAME_NONE,  "Ruby is NOT assumed to be Hoenn-compatible");
+	// PHASE 18 / SPEC-coop P3.1.4. Ruby and Sapphire now HAVE a universe — their own, never
+	// Emerald's. This assertion used to read "AXVE -> NONE (Ruby is not assumed Hoenn-compatible)";
+	// the assumption it guarded against is still banned, and now it is banned by a DIFFERENT id
+	// rather than by having no id at all. The evidence (re-derived independently 2026-08-13):
+	// pret/pokeruby and pret/pokeemerald data/maps/map_groups.json share 393 (group, num) slots and
+	// 76 of them name a DIFFERENT map, with the divergence starting at group 0 index 50
+	// (Underwater1 vs Underwater_Route124). See presence.h's PRES_GAME_HOENN_RS note.
+	EQI(presence_game_id("AXVE"), PRES_GAME_HOENN_RS, "AXVE -> Hoenn RS, its OWN universe");
+	EQI(presence_game_id("AXPE"), PRES_GAME_HOENN_RS, "AXPE -> Hoenn RS (Ruby and Sapphire are one build)");
+	CHECK(PRES_GAME_HOENN_RS != PRES_GAME_HOENN, "Ruby is NOT assumed to be Emerald-compatible");
+	CHECK(PRES_GAME_HOENN_RS != PRES_GAME_KANTO, "...nor Kanto");
+	CHECK(PRES_GAME_HOENN_RS != PRES_GAME_NONE,  "...and it IS a real universe, not 'no profile'");
 	EQI(presence_game_id("XXXX"), PRES_GAME_NONE,  "unknown code -> none");
 	EQI(presence_game_id(NULL),   PRES_GAME_NONE,  "NULL -> none");
+	// The four pair cases P3.1.4 names, at the level the gate actually uses (id equality).
+	CHECK(presence_game_id("AXVE") == presence_game_id("AXPE"), "AXVE + AXPE = same universe");
+	CHECK(presence_game_id("AXVE") != presence_game_id("BPEE"), "AXVE + BPEE = different");
+	CHECK(presence_game_id("AXPE") != presence_game_id("BPEE"), "AXPE + BPEE = different");
+	CHECK(presence_game_id("AXVE") != presence_game_id("BPRE"), "AXVE + BPRE = different");
 
 	PresenceState ps; PresenceOut o;
 	PeerPresence em = rec_ok(10, 10, 0, 0);                          // Emerald
@@ -472,6 +488,28 @@ static void test_universes(void) {
 	// s8 round trip: a >=128 map number must compare equal to itself, not wrap into a false match.
 	{ PeerPresence a = frSelf, b = lg; a.mapNum = (int8_t)0x80; b.mapNum = (int8_t)0x80;
 	  EQI(presence_same_map(&a, &b), 1, "mapNum 0x80 compares equal to itself"); }
+
+	// PHASE 18 / SPEC-coop P3.1 — the Ruby/Sapphire universe, driven through the REAL ladder, not
+	// just through presence_game_id. The three pairs that matter, all with IDENTICAL coordinates so
+	// the only thing under test is the universe rule:
+	//   Ruby + Sapphire  -> DRAWS      (one build, one map table)
+	//   Ruby + Emerald   -> OFF_UNIVERSE  (76 of 393 shared slots name a different map)
+	//   Ruby + FireRed   -> OFF_UNIVERSE
+	PeerPresence ru = rec_ok(12, 10, 0, 0); ru.gameId = PRES_GAME_HOENN_RS;
+	PeerPresence sa = rec_ok(12, 10, 0, 0); sa.gameId = PRES_GAME_HOENN_RS;
+	PeerPresence ruSelf = ru; ruSelf.px = 10; ruSelf.objX = 17;
+	EQI(solve_once(&ps, &ruSelf, &sa, 1, 0, 0, &o), 1, "Ruby + Sapphire -> allowed");
+	EQI(presence_same_map(&ruSelf, &sa), 1, "same_map is true within Hoenn RS");
+	EQI(solve_once(&ps, &ruSelf, &em, 1, 0, 0, &o), 0, "Ruby + Emerald -> OFF");
+	EQI(o.reason, PRES_OFF_UNIVERSE, "-> UNIVERSE: Ruby's (3,12) is not Emerald's (3,12)");
+	EQI(presence_same_map(&ruSelf, &em), 0, "same_map is false Ruby vs Emerald");
+	EQI(solve_once(&ps, &ruSelf, &fr, 1, 0, 0, &o), 0, "Ruby + FireRed -> OFF");
+	EQI(o.reason, PRES_OFF_UNIVERSE, "-> UNIVERSE");
+	// ...and the symmetric direction, because a one-sided gate would draw a peer on exactly one of
+	// the two screens — the most confusing failure this module could produce.
+	{ PeerPresence emSelf = em; emSelf.px = 10; emSelf.objX = 17;
+	  EQI(solve_once(&ps, &emSelf, &ru, 1, 0, 0, &o), 0, "Emerald + Ruby -> OFF (the other way round)");
+	  EQI(o.reason, PRES_OFF_UNIVERSE, "-> UNIVERSE, symmetrically"); }
 }
 
 // ============================================================================================

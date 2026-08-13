@@ -128,10 +128,23 @@ static u32 cart_tint(const char* code) {
 #define RECENT_PATH "sdmc:/3DGBA/recent.bin"
 typedef struct { char a[256]; char b[256]; } RecentPair;
 
+// PHASE 18 FIX PASS (review finding 2). ONE predicate for the hazard, used by the writer, the
+// reader and the picker's own refusal, so the three cannot disagree: two slots naming the SAME
+// resolved file means two live mGBA cores open the SAME .sav (gbacore_load_rom derives the
+// battery save from the ROM path, gbacore.c:107-112/165-171), both holding a writable VFile and
+// both flushing whole save images over each other. That is save CORRUPTION, and "emerald &
+// emerald" — the user's own words — walks straight into it.
+static bool recent_same_file(const char* a, const char* b) {
+	return a && b && b[0] && !strcmp(a, b);
+}
+
 void rompicker_save_recent(const char* pathA, const char* pathB) {
 	RecentPair r;
 	snprintf(r.a, sizeof r.a, "%s", pathA);
 	snprintf(r.b, sizeof r.b, "%s", pathB);
+	// Never PERSIST the hazard either: the picker refuses to assign it, but a stale recent.bin
+	// from any earlier build is exactly what finding 2 is about, so the writer closes the loop.
+	if (recent_same_file(r.a, r.b)) r.b[0] = '\0';
 	FILE* f = fopen(RECENT_PATH, "wb");
 	if (!f) return;
 	fwrite(&r, 1, sizeof r, f);
@@ -140,6 +153,7 @@ void rompicker_save_recent(const char* pathA, const char* pathB) {
 
 // Load the saved pairing into r; true only if the files still exist (b=="" = a 1-game pairing).
 static bool load_recent(RecentPair* r) {
+	g_pickDiag.magic = 0x50494B31;                 // 'PIK1' before the first read can happen
 	FILE* f = fopen(RECENT_PATH, "rb");
 	if (!f) return false;
 	size_t n = fread(r, 1, sizeof *r, f);
@@ -147,19 +161,22 @@ static bool load_recent(RecentPair* r) {
 	if (n != sizeof *r) return false;
 	r->a[sizeof r->a - 1] = '\0';
 	r->b[sizeof r->b - 1] = '\0';
+	// FIX PASS (review finding 2): the READ side of the same rule. rompicker_run's guarded
+	// assignment sites are all DOWNSTREAM of the resume early-return, so a recent.bin written by
+	// a pre-fix build resurrected the P2.4 save-corruption hazard on the first screen of the
+	// boot. Degrade to a one-game pairing rather than refuse the prompt outright: the resume is
+	// still one button, the prompt already renders slot B as "(single mode)" in the dim ink, and
+	// "Pick new games" is right underneath with the explanation.
+	if (recent_same_file(r->a, r->b)) { r->b[0] = '\0'; g_pickDiag.recentDup++; }
+	g_pickDiag.recentB = r->b[0] ? 1 : 0;
 	FILE* fa = fopen(r->a, "rb"); if (!fa) return false; fclose(fa);
 	if (r->b[0]) { FILE* fb = fopen(r->b, "rb"); if (!fb) return false; fclose(fb); }
 	return true;
 }
 
-// A slot card (game select + resume): full colored border, caps label, chip + name.
-static void slot_card(C2D_TextBuf buf, float x, float y, float w, float h,
-                      u32 col, const char* label, const char* name, int hasGame) {
-	ui_panel(x, y, w, h, g_ui.panel, hasGame ? col : g_ui.line, 4.0f);
-	ui_text(buf, label, x + 10.0f, y + 5.0f, 0.32f, hasGame ? col : g_art.dim);
-	if (hasGame) ui_fill(x + 10.0f, y + 21.0f, 10.0f, 12.0f, col, 2.0f);
-	ui_text(buf, name, x + (hasGame ? 26.0f : 10.0f), y + 20.0f, 0.45f, hasGame ? g_art.text : g_art.dim);
-}
+// (The phase-16 `slot_card` helper was deleted in the phase-18 fix pass: the plate art has drawn
+// the A/B slot cards since phase 17, nothing had called it since, it warned as unused on every
+// build, and it held the last two SYSTEM-font ui_text draws outside a !assets_ready() fallback.)
 
 // Boot prompt offering the last pairing (screen 02). 1 = use recent, 0 = pick new, -1 = defaults.
 static int recent_prompt(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txtBuf,
@@ -200,14 +217,14 @@ static int recent_prompt(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextB
 		// TOP: chrome plate (heading + A/B cards baked) + the two dynamic game names.
 		C2D_TargetClear(top, g_ui.bg); C2D_SceneBegin(top);
 		assets_draw_plate("resume-top");
-		assets_text(txtBuf, FNT_SG_MED, na, 42.0f, 120.0f, 13.0f, g_art.text);
-		assets_text(txtBuf, FNT_SG_MED, nb, 236.0f, 120.0f, 13.0f, r->b[0] ? g_art.text : g_art.dim);
+		assets_text(txtBuf, TXT_BODY, na, 42.0f, 120.0f, g_art.text);
+		assets_text(txtBuf, TXT_BODY, nb, 236.0f, 120.0f, r->b[0] ? g_art.text : g_art.dim);
 		// BOTTOM: chrome plate + the three button widgets with labels.
 		C2D_TargetClear(bot, g_ui.bg); C2D_SceneBegin(bot);
 		assets_draw_plate("resume-bot");
-		assets_button(txtBuf, "btn-primary",   BTN[0].x, BTN[0].y, BTN[0].w, BTN[0].h, "Resume this pairing", FNT_SG_BOLD, 13.0f, g_art.ink,  sel == 0);
-		assets_button(txtBuf, "btn-secondary", BTN[1].x, BTN[1].y, BTN[1].w, BTN[1].h, "Pick new games",      FNT_SG_BOLD, 13.0f, g_art.text, sel == 1);
-		assets_button(txtBuf, "btn-ghost",     BTN[2].x, BTN[2].y, BTN[2].w, BTN[2].h, "Use defaults",        FNT_SG_MED,  12.0f, g_art.dim,  sel == 2);
+		assets_button(txtBuf, "btn-primary",   BTN[0].x, BTN[0].y, BTN[0].w, BTN[0].h, "Resume this pairing", TXT_BUTTON, g_art.ink,  sel == 0);
+		assets_button(txtBuf, "btn-secondary", BTN[1].x, BTN[1].y, BTN[1].w, BTN[1].h, "Pick new games",      TXT_BUTTON, g_art.text, sel == 1);
+		assets_button(txtBuf, "btn-ghost",     BTN[2].x, BTN[2].y, BTN[2].w, BTN[2].h, "Use defaults",        TXT_BODY, g_art.dim,  sel == 2);
 		C3D_FrameEnd(0);
 	}
 	return -1;
@@ -301,10 +318,10 @@ static void pick_blank_cards(const char* plateId) {
 // Step 3, drawn last so the chip is never under a widget.
 static void pick_footer_chip(C2D_TextBuf buf, UiRect rSet) {
 	ui_fill((float)rSet.x, (float)rSet.y, (float)rSet.w, (float)rSet.h, g_ui.panel2, 5.0f);
-	assets_text(buf, FNT_JBM_MED, "settings · ZR", (float)rSet.x + 6.0f,
-	            // W4.1: the chip's fill is PROCEDURAL (g_ui.panel2), so its ink is the ACTIVE
-	            // theme's — unlike everything drawn on the baked plate around it, which is g_art.
-	            (float)rSet.y + ((float)rSet.h - 8.0f) / 2.0f, 8.0f, g_ui.dim);
+	// W4.1: the chip's fill is PROCEDURAL (g_ui.panel2), so its ink is the ACTIVE theme's —
+	// unlike everything drawn on the baked plate around it, which is g_art.
+	assets_text(buf, TXT_CHIP, "settings · ZR", (float)rSet.x + 6.0f,
+	            (float)rSet.y + ((float)rSet.h - typo_role_px(TXT_CHIP)) / 2.0f, g_ui.dim);
 }
 
 // ---- PHASE 17 / SPEC-layout L7.2 (sweep D13): the ROM-less empty state -------------------------
@@ -360,18 +377,18 @@ static int empty_state_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_Tex
 		assets_draw_plate("select-dual-top");
 		// The card sits in the list's own band (manifest x16 y37 w369 h197) — there are no rows to
 		// draw, so nothing is covered.
-		assets_text_c(txtBuf, FNT_SG_BOLD, "No games found", 200.0f, 96.0f, 16.0f, g_art.text);
-		assets_text_c(txtBuf, FNT_JBM_MED, "put .gba files in " ROM_DIR "/", 200.0f, 122.0f, 9.0f, g_art.dim);
+		assets_text_c(txtBuf, TXT_TITLE, "No games found", 200.0f, 96.0f, g_art.text);
+		assets_text_c(txtBuf, TXT_SECTION, "put .gba files in " ROM_DIR "/", 200.0f, 122.0f, g_art.dim);
 
 		C2D_TargetClear(bot, g_ui.bg); C2D_SceneBegin(bot);
 		assets_draw_plate("select-dual-bot");
 		pick_blank_cards("select-dual-bot");     // review finding 3: no empty labelled slot cards
-		assets_text_c(txtBuf, FNT_JBM_MED, "put .gba files in " ROM_DIR "/, then Rescan",
-		              160.0f, 104.0f, 9.0f, g_art.dim);
+		assets_text_c(txtBuf, TXT_SECTION, "put .gba files in " ROM_DIR "/, then Rescan",
+		              160.0f, 104.0f, g_art.dim);
 		assets_button(txtBuf, "btn-primary", (float)rRe.x, (float)rRe.y, (float)rRe.w, (float)rRe.h,
-		              "Rescan", FNT_SG_BOLD, 13.0f, g_art.ink, sel == 0);
+		              "Rescan", TXT_BUTTON, g_art.ink, sel == 0);
 		assets_button(txtBuf, "btn-secondary", (float)rGo.x, (float)rGo.y, (float)rGo.w, (float)rGo.h,
-		              "Start without a game", FNT_SG_MED, 11.0f, g_art.text, sel == 1);
+		              "Start without a game", TXT_BODY, g_art.text, sel == 1);
 		pick_footer_band("select-dual-bot", 0);  // review finding 7: no "tap a game above" here
 		pick_footer_chip(txtBuf, rSet);
 		C3D_FrameEnd(0);
@@ -408,7 +425,23 @@ bool rompicker_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txt
 	int navRow = NAV_LIST;                                // d-pad focus zone (§I3.2)
 	int actSel = 0;                                       // 0 = START, 1 = START—LINKED
 	int hintT  = 0;                                       // frames left of the "pick a game first" hint
-	memset(&g_pickDiag, 0, sizeof g_pickDiag);
+	// ---- Phase 18 / SPEC-coop P2.4: the same-file-in-both-slots refusal --------------------------
+	// gbacore_load_rom derives the battery save from the ROM PATH (gbacore.c:107-112, 165-171), so
+	// two cores loaded from the SAME path open the SAME .sav, both hold a writable VFile on it, and
+	// both flush a whole save image over each other. That is save CORRUPTION, not a cosmetic clash —
+	// and it is precisely what the user's "make emerald&emerald work" asks for, so it is the first
+	// thing they would hit. There is no configuration in which one file in two slots is what anyone
+	// wanted, so the picker refuses the assignment instead of explaining it afterwards.
+	int dupT = 0;                                         // frames left of the refusal message
+	// The comparison is by RESOLVED FILE, not by list row (P2.4.4): a future rescan or re-sort must
+	// not be able to let the same file through under two different indices.
+	#define PICK_SAME_FILE(i, j) ((i) >= 0 && (j) >= 0 && !strcmp(names[i], names[j]))
+	// FIX PASS: the recent-pairing counters are written BEFORE this screen exists (load_recent
+	// runs at the top of rompicker_run), so they are carried across the clear — otherwise
+	// "the guard fired, then the user chose Pick new games" would read as "the guard never fired".
+	{ int32_t dupWas = g_pickDiag.recentDup, bWas = g_pickDiag.recentB;
+	  memset(&g_pickDiag, 0, sizeof g_pickDiag);
+	  g_pickDiag.recentDup = dupWas; g_pickDiag.recentB = bWas; }
 	g_pickDiag.magic = 0x50494B31;                        // 'PIK1'
 	g_pickDiag.lastHit = PICK_NONE;
 	g_pickDiag.idxA = g_pickDiag.idxB = -1;
@@ -420,6 +453,7 @@ bool rompicker_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txt
 		bool single = (g_prefs.gameMode == 1);
 		if (single && navRow == NAV_SLOTB) navRow = NAV_ACT;
 		if (hintT > 0) hintT--;
+		if (dupT  > 0) dupT--;
 
 		// ---- the ONE place the raw touch point is consumed (§I1.2.2) --------------------------
 		// Reading it on the release frame is REPORT D2: HID reports (0,0) there, which used to
@@ -501,10 +535,27 @@ bool rompicker_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txt
 			if (g_prefs.gameMode == 1) idxB = -1;
 			single = (g_prefs.gameMode == 1);
 		}
-		if (fire == PICK_SLOT_A) idxA = (idxA == sel) ? -1 : sel;   // a card is its own undo
-		if (fire == PICK_SLOT_B && !single) idxB = (idxB == sel) ? -1 : sel;
+		// P2.4.3 — each of the three assignment sites is guarded the same way: an assignment that
+		// would put ONE FILE in BOTH slots is simply not made, and the refusal is said out loud.
+		// Un-assigning (a card is its own undo) is never blocked, only the duplicate assignment is.
+		if (fire == PICK_SLOT_A) {
+			if (idxA == sel) idxA = -1;                                   // undo, always allowed
+			else if (!single && PICK_SAME_FILE(sel, idxB)) dupT = 120;    // ~2 s of "use a copy"
+			else idxA = sel;
+		}
+		if (fire == PICK_SLOT_B && !single) {
+			if (idxB == sel) idxB = -1;
+			else if (PICK_SAME_FILE(sel, idxA)) dupT = 120;
+			else idxB = sel;
+		}
 		if (fire == PICK_SETTINGS) { snprintf(pathA, cap, "%s", "__SETTINGS__"); return true; }
-		if (confirmRow) { if (idxA < 0 || single) idxA = sel; else idxB = sel; }
+		if (confirmRow) {
+			if (idxA < 0 || single) {
+				if (!single && PICK_SAME_FILE(sel, idxB)) dupT = 120; else idxA = sel;
+			} else {
+				if (PICK_SAME_FILE(sel, idxA)) dupT = 120; else idxB = sel;
+			}
+		}
 
 		bool ready = single ? (idxA >= 0) : (idxA >= 0 && idxB >= 0);
 		if (fire == PICK_START || fire == PICK_LINKED) {
@@ -535,9 +586,13 @@ bool rompicker_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txt
 		assets_draw_plate(single ? "select-single-top" : "select-dual-top");
 		{
 			// hintT: START pressed with no game picked yet — say so instead of doing nothing.
-			const char* pk = hintT > 0 ? "PICK A GAME FIRST"
+			// dupT (P2.4.3): the same file was just aimed at both slots — say THAT instead of
+			// silently ignoring the tap, which would read as a broken picker.
+			const char* pk = dupT > 0  ? "SAME FILE IN BOTH SLOTS"
+			               : hintT > 0 ? "PICK A GAME FIRST"
 			                           : (ready ? "READY" : (single ? "1 GAME" : (idxA < 0 ? "A · TOP" : "B · BOTTOM")));
-			assets_text_r(txtBuf, FNT_JBM_MED, pk, 384.0f, 15.0f, 9.0f, hintT > 0 ? THEME_QUIT_TEXT : g_ui.acc);
+			assets_text_r(txtBuf, TXT_SECTION, pk, 384.0f, 15.0f,
+			              (hintT > 0 || dupT > 0) ? THEME_QUIT_TEXT : g_ui.acc);
 		}
 		for (int i = 0; i < LIST_ROWS && topRow + i < n; i++) {
 			int gi = topRow + i;
@@ -555,10 +610,10 @@ bool rompicker_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txt
 			// `cart-tinted` is columns 3..12, rows 3..5 — 10x3 at (+3,+3) from the sprite origin.
 			assets_draw_wgt("cart-blank", 18.0f, y + 1.0f);
 			ui_fill(21.0f, y + 4.0f, 10.0f, 3.0f, cart_tint(codes[gi]), 1.0f);
-			assets_text(txtBuf, FNT_SG_MED, disp[gi], 40.0f, y + 3.0f, 12.0f, g_art.text);
+			assets_text(txtBuf, TXT_BODY, disp[gi], 40.0f, y + 3.0f, g_art.text);
 			if (gi == idxA)      assets_draw_wgt("badge-a", 360.0f, y + 2.0f);
 			else if (gi == idxB) assets_draw_wgt("badge-b", 360.0f, y + 2.0f);
-			else                 assets_text_r(txtBuf, FNT_JBM_MED, codes[gi], 384.0f, y + 4.0f, 8.5f, g_art.dim);
+			else                 assets_text_r(txtBuf, TXT_CHIP, codes[gi], 384.0f, y + 4.0f, g_art.dim);
 		}
 		// An honest scrollbar for the list (§I2.4.6's rule applied to the row scroll). Until now a
 		// 13-ROM library gave the player NO indication that eight rows were not all of them, and no
@@ -597,14 +652,22 @@ bool rompicker_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txt
 		// themes had got WORSE). theme_ink_disabled keeps the "not ready" signal at ~4.2:1. LINKED is
 		// left on g_art.dim: its body is `fill-card-r8` (#2A2042), where dim measures ~6.5:1.
 		if (single) {
-			assets_text(txtBuf, FNT_SG_MED, idxA >= 0 ? disp[idxA] : "pick a game (d-pad + A)", 49.0f, 81.0f, 13.0f, idxA >= 0 ? g_art.text : g_art.dim);
-			assets_button(txtBuf, "btn-primary",        rSt.x, rSt.y, rSt.w, rSt.h, "START", FNT_SG_BOLD, 13.0f, ready ? g_art.ink : theme_ink_disabled(g_art.ink, g_art.acc), navRow == NAV_ACT && actSel == 0);
-			assets_button(txtBuf, "btn-accent-outline", rLk.x, rLk.y, rLk.w, rLk.h, "LINK A FRIEND", FNT_SG_BOLD, 12.0f, ready ? g_ui.acc : g_art.dim, navRow == NAV_ACT && actSel == 1);
+			assets_text(txtBuf, TXT_BODY, idxA >= 0 ? disp[idxA] : "pick a game (d-pad + A)", 49.0f, 81.0f, idxA >= 0 ? g_art.text : g_art.dim);
+			assets_button(txtBuf, "btn-primary",        rSt.x, rSt.y, rSt.w, rSt.h, "START", TXT_BUTTON, ready ? g_art.ink : theme_ink_disabled(g_art.ink, g_art.acc), navRow == NAV_ACT && actSel == 0);
+			assets_button(txtBuf, "btn-accent-outline", rLk.x, rLk.y, rLk.w, rLk.h, "LINK A FRIEND", TXT_BUTTON, ready ? g_ui.acc : g_art.dim, navRow == NAV_ACT && actSel == 1);
 		} else {
-			assets_text(txtBuf, FNT_SG_MED, idxA >= 0 ? disp[idxA] : "pick game A", 47.0f, 78.0f, 12.0f, idxA >= 0 ? g_art.text : g_art.dim);
-			assets_text(txtBuf, FNT_SG_MED, idxB >= 0 ? disp[idxB] : "pick game B", 47.0f, 139.0f, 12.0f, idxB >= 0 ? g_art.text : g_art.dim);
-			assets_button(txtBuf, "btn-primary",        rSt.x, rSt.y, rSt.w, rSt.h, "START", FNT_SG_BOLD, 13.0f, ready ? g_art.ink : theme_ink_disabled(g_art.ink, g_art.acc), navRow == NAV_ACT && actSel == 0);
-			assets_button(txtBuf, "btn-accent-outline", rLk.x, rLk.y, rLk.w, rLk.h, "START — LINKED", FNT_SG_BOLD, 12.0f, ready ? g_ui.acc : g_art.dim, navRow == NAV_ACT && actSel == 1);
+			assets_text(txtBuf, TXT_BODY, idxA >= 0 ? disp[idxA] : "pick game A", 47.0f, 78.0f, idxA >= 0 ? g_art.text : g_art.dim);
+			// P2.4.3 — the WHAT-TO-DO half of the refusal. The top-screen label says what went
+			// wrong; this says how to fix it, in the slot that could not be filled. Kept short
+			// enough for the 320 px bottom screen at TXT_BODY (~30 chars); the full workflow is in
+			// README.md ("To play the same game twice, put two copies on the card").
+			assets_text(txtBuf, TXT_BODY,
+			            dupT > 0     ? "copy it: game1.gba / game2.gba"
+			            : idxB >= 0  ? disp[idxB] : "pick game B",
+			            47.0f, 139.0f,
+			            dupT > 0 ? THEME_QUIT_TEXT : (idxB >= 0 ? g_art.text : g_art.dim));
+			assets_button(txtBuf, "btn-primary",        rSt.x, rSt.y, rSt.w, rSt.h, "START", TXT_BUTTON, ready ? g_art.ink : theme_ink_disabled(g_art.ink, g_art.acc), navRow == NAV_ACT && actSel == 0);
+			assets_button(txtBuf, "btn-accent-outline", rLk.x, rLk.y, rLk.w, rLk.h, "START — LINKED", TXT_BUTTON, ready ? g_ui.acc : g_art.dim, navRow == NAV_ACT && actSel == 1);
 		}
 		if (navRow == NAV_SLOTA) focus_ring(rA, 6.0f);
 		if (navRow == NAV_SLOTB) focus_ring(rB, 6.0f);
@@ -615,6 +678,7 @@ bool rompicker_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txt
 		if (navRow == NAV_SET) focus_ring(rSet, 5.0f);
 		C3D_FrameEnd(0);
 	}
+	#undef PICK_SAME_FILE
 	return false;
 }
 
@@ -663,28 +727,28 @@ bool savpicker_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txt
 		if (sel >= topRow + VIS_ROWS) topRow = sel - VIS_ROWS + 1;
 
 		C2D_TextBufClear(txtBuf);
-		C2D_Text tTitle, tHelp, rows[VIS_ROWS];
-		C2D_TextParse(&tTitle, txtBuf, "Pick a .sav to load");            C2D_TextOptimize(&tTitle);
-		C2D_TextParse(&tHelp,  txtBuf, "Up/Down: move   A: load   B: cancel"); C2D_TextOptimize(&tHelp);
 		int shown = 0;
-		for (int i = 0; i < VIS_ROWS && topRow + i < n; i++) {
-			C2D_TextParse(&rows[i], txtBuf, names[topRow + i]); C2D_TextOptimize(&rows[i]); shown++;
-		}
+		for (int i = 0; i < VIS_ROWS && topRow + i < n; i++) shown++;
 
 		g_renderSeq++;   // app liveness for the emutest harness (ui.h)
 		C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
 		C2D_TargetClear(top, clrBg);
 		C2D_SceneBegin(top);
-		C2D_DrawText(&tTitle, C2D_WithColor, 8.0f, 6.0f, 0.0f, 0.6f, 0.6f, clrSel);
+		// FIX PASS: the whole screen drew through the SYSTEM font at 0.6 / 0.5 / 0.45 — the last
+		// user-facing SCREEN in the app still on the blurry path (reached from the pause menu's
+		// LINK tab, "Load .sav"). Baked ladder rungs now, at texel scale 1.0: title -> TXT_TITLE,
+		// rows -> TXT_BODY (the game/list-row role, and NARROWER than the old 0.5 system font, so
+		// a long .sav name fits better than before), help -> TXT_SECTION. Widths held by T10.
+		assets_text(txtBuf, TXT_TITLE, "Pick a .sav to load", 8.0f, 6.0f, clrSel);
 		for (int i = 0; i < shown; i++) {
 			float y = 30.0f + i * ROW_H;
 			bool s = (topRow + i == sel);
 			if (s) C2D_DrawRectSolid(6.0f, y - 1.0f, 0.0f, 388.0f, ROW_H - 1.0f, clrSel);
-			C2D_DrawText(&rows[i], C2D_WithColor, 12.0f, y, 0.0f, 0.5f, 0.5f, s ? clrSelTxt : clrTxt);
+			assets_text(txtBuf, TXT_BODY, names[topRow + i], 12.0f, y, s ? clrSelTxt : clrTxt);
 		}
 		C2D_TargetClear(bot, clrBg);
 		C2D_SceneBegin(bot);
-		C2D_DrawText(&tHelp, C2D_WithColor, 8.0f, 214.0f, 0.0f, 0.45f, 0.45f, clrDim);
+		assets_text(txtBuf, TXT_SECTION, "Up/Down: move   A: load   B: cancel", 8.0f, 214.0f, clrDim);
 		C3D_FrameEnd(0);
 	}
 	return false;

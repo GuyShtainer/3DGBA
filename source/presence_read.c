@@ -21,7 +21,9 @@ void presence_ident_reset(PresenceIdent* id) {
 //   returns 1 = a well-formed identity was latched, 0 = nothing changed
 static int ident_refresh(GbaCore* c, const GameProfile* p, PresenceIdent* id) {
 	if (!c || !p || !p->sb2ptr || !id) return 0;          // D1.9: sb2ptr == 0 -> identity off
-	uint32_t sb2 = gbacore_read32(c, p->sb2ptr);
+	// SPEC-coop P3.2.4 — call site 2 of 2. On Ruby/Sapphire (sbDirect) gSaveBlock2 is a static
+	// struct, not a pointer: the column IS the address. See gamestate.h's sbDirect note.
+	uint32_t sb2 = p->sbDirect ? p->sb2ptr : gbacore_read32(c, p->sb2ptr);
 	if ((sb2 >> 24) != 0x02u) return 0;                   // not an EWRAM pointer -> not ready
 	uint8_t nm[8];
 	for (int i = 0; i < 8; i++) nm[i] = gbacore_read8(c, sb2 + (uint32_t)i);
@@ -29,6 +31,18 @@ static int ident_refresh(GbaCore* c, const GameProfile* p, PresenceIdent* id) {
 	// (a fresh boot, a title screen). Latching that would freeze an empty nameplate for the whole
 	// session, because D2.3 keeps the FIRST well-formed result — so it does not count as one.
 	if (nm[0] == 0xFF) return 0;
+	// SPEC-coop P3.2.5 — the direct-block profiles need a SECOND emptiness test, because their
+	// validity signal is genuinely weaker: gSaveBlock2 exists (zeroed) from the first frame after
+	// boot, so the deref check above can no longer say "a save is loaded". A zeroed block gives
+	// nm[0] == 0x00, which the Gen-3 charmap decodes to ' ' — well-formed by the 0xFF test, and
+	// therefore latched FOREVER as a blank nameplate. Rejecting an all-zero name is cheap, exact,
+	// and cannot reject a real one (Gen-3 name entry cannot produce eight leading spaces with no
+	// terminator). Pointer profiles are unaffected: their deref fails long before this.
+	if (p->sbDirect) {
+		int allZero = 1;
+		for (int i = 0; i < 8; i++) if (nm[i] != 0x00) { allZero = 0; break; }
+		if (allZero) return 0;
+	}
 	memcpy(id->name, nm, sizeof id->name);
 	id->gender = (uint8_t)(gbacore_read8(c, sb2 + 0x08u) == 1u ? 1 : 0);   // MALE 0 / FEMALE 1
 	id->tid    = gbacore_read16(c, sb2 + 0x0Au);                           // trainer_card.c:722's LE u16

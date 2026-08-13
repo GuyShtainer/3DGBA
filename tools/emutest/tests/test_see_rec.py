@@ -163,25 +163,57 @@ class TestUniformVerdict(unittest.TestCase):
         from PIL import Image
         return Image.new("RGB", (12, 12), (0, 0, 0))
 
+    # PHASE 18: _uniform_verdict now has THREE outcomes, so every test here pins the two
+    # environment probes it consults. Before this, the grant was stubbed but the display
+    # state was read from the REAL machine — so the "flat capture is a FAILURE" test failed
+    # whenever the developer's display happened to be asleep, which is exactly the condition
+    # the new branch exists for.
+    def _stub(self, granted, asleep):
+        self._orig = (see.screen_recording_granted, see.display_asleep)
+        see.screen_recording_granted = lambda: granted
+        see.display_asleep = lambda: asleep
+
+    def tearDown(self):
+        if hasattr(self, "_orig"):
+            see.screen_recording_granted, see.display_asleep = self._orig
+
     def test_flat_capture_with_the_grant_present_is_a_FAILURE(self):
-        orig = see.screen_recording_granted
-        see.screen_recording_granted = lambda: True
-        try:
-            with self.assertRaises(SystemExit) as cm:
-                see._uniform_verdict(self._flat(), "the captured window")
-            self.assertEqual(cm.exception.code, 1)
-        finally:
-            see.screen_recording_granted = orig
+        self._stub(granted=True, asleep=False)
+        with self.assertRaises(SystemExit) as cm:
+            see._uniform_verdict(self._flat(), "the captured window")
+        self.assertEqual(cm.exception.code, 1)
 
     def test_flat_capture_with_the_grant_gone_is_the_SKIP(self):
-        orig = see.screen_recording_granted
-        see.screen_recording_granted = lambda: False
+        self._stub(granted=False, asleep=False)
+        with self.assertRaises(SystemExit) as cm:
+            see._uniform_verdict(self._flat(), "the captured window")
+        self.assertEqual(cm.exception.code, 75)
+
+    def test_flat_capture_with_a_SLEEPING_DISPLAY_is_the_SKIP(self):
+        """The real cause of the 'see returns pure black' defect that three phase-18 slices
+        recorded as unexplained and shipped without pixel evidence for (SEVEN reproductions).
+        A black PNG from a sleeping display is not a rendering defect and not a permission
+        problem, so neither exit 1 nor the permission SKIP text is the honest answer."""
+        self._stub(granted=True, asleep=True)
+        with self.assertRaises(SystemExit) as cm:
+            see._uniform_verdict(self._flat(), "the captured window")
+        self.assertEqual(cm.exception.code, 75)
+
+    def test_require_window_skips_on_a_sleeping_display_before_looking_for_a_window(self):
+        """Ordering matters: the display check must come BEFORE find_window(), or a sleeping
+        display reports as 'no Azahar window' (exit 1) and sends the next session hunting a
+        boot problem that does not exist."""
+        self._stub(granted=True, asleep=True)
+        called = []
+        orig_find = see.find_window
+        see.find_window = lambda: called.append(1)
         try:
             with self.assertRaises(SystemExit) as cm:
-                see._uniform_verdict(self._flat(), "the captured window")
+                see.require_window()
             self.assertEqual(cm.exception.code, 75)
+            self.assertEqual(called, [], "find_window() ran despite a sleeping display")
         finally:
-            see.screen_recording_granted = orig
+            see.find_window = orig_find
 
 
 if __name__ == "__main__":

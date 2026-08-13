@@ -36,6 +36,15 @@ typedef struct {
 	int32_t dragN;      // 0x2c  drags that crossed the threshold
 	int32_t dragRows;   // 0x30  rows moved by the current/last drag (signed)
 	int32_t startN;     // 0x34  START / START—LINKED activations
+	// PHASE 18 FIX PASS (review finding 2). APPENDED — every offset above is unchanged.
+	// The boot "Resume this pairing" prompt returns recent.a/recent.b straight to main() and
+	// never passes through the picker's same-file refusal, so a recent.bin written by a pre-fix
+	// build could put ONE FILE IN BOTH SLOTS with one tap. `recentDup` counts the times
+	// load_recent has caught and degraded that pairing; `recentB` is 1 when the loaded pairing
+	// still has a second game after the guard. Both survive a "Resume" (which returns before
+	// g_pickDiag is cleared), which is what makes the fix provable from outside the console.
+	int32_t recentDup;  // 0x38  same-file pairings degraded to one game (0 = the file was clean)
+	int32_t recentB;    // 0x3c  1 = the loaded pairing still names a second game
 } PickDiag;
 extern PickDiag g_pickDiag;
 

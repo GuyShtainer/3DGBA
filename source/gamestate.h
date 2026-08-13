@@ -120,6 +120,36 @@ typedef struct {
 	                        //   0x030022C0 (sym:894), FR/LG 0x030030F0 (sym:745) == mainCb2-4, which
 	                        //   also retires the "derived" caveat on the vblankCtr ADDRESS above.
 	                        //   VERIFIED-SYM base + VERIFIED-SRC offset (include/main.h:8-33).
+	// --- phase 18 smart-touch warp routing (SPEC-door T4.1). gMapHeader again, but a SEPARATE
+	// field from `mapHeader` above ON PURPOSE: main.c:885 gates the phase-14 HD-2D metatile-layer
+	// depth path on `!p->mapHeader`, so filling that zero for FR/LG would silently switch on an
+	// untested 3D path for two games — a render change this phase is forbidden to make. Values are
+	// VERIFIED-SYM against pret's byte-matched `symbols` branch, re-read 2026-08-12:
+	//   BPEE 0x02037318 (pokeemerald.sym "gMapHeader")
+	//   BPRE 0x02036DFC (pokefirered.sym AND pokefirered_rev1.sym — identical; the user's FR is rev1)
+	//   BPGE 0x02036DFC (pokeleafgreen.sym AND pokeleafgreen_rev1.sym, which live on the
+	//                    pokefirered `symbols` branch — LG's OWN map, not FR-derived)
+	// Note the trap the house rule catches: the plausible derivation `gObjectEvents - 0x38` holds
+	// in Emerald and is WRONG for FRLG (it gives 0x02036E00). 0 = not mapped -> fieldpath.c
+	// classifies nothing and the router keeps its pre-phase-18 behaviour. Appending is the only
+	// safe edit here: PROFILES[] in gamestate.c is POSITIONAL-initialised.
+	uint32_t mapHeaderPath; // gMapHeader for warp classification (MapLayout -> Tileset -> attrs)
+	// --- phase 18 Ruby/Sapphire support (SPEC-coop P3.2). "RS is Emerald with different
+	// addresses" is FALSE in exactly one structural way: Ruby/Sapphire have NO gSaveBlock1Ptr /
+	// gSaveBlock2Ptr — the pointer indirection is an Emerald/FRLG-era change. pokeruby declares
+	// `extern struct SaveBlock1 gSaveBlock1;` (include/global.h:668,756) and the symbol maps carry
+	// the STRUCT, not a pointer to it: pokeruby.sym:106 `02025734 g 00003ac0 gSaveBlock1`,
+	// :105 `02024ea4 g 00000890 gSaveBlock2`, and there is no *Ptr symbol in any of the four maps
+	// (pokeruby / pokesapphire / pokeruby_rev1 / pokesapphire_rev1, all re-read + diffed
+	// 2026-08-13: 727 RAM symbols, ZERO differences across all four).
+	//   0 = sb1ptr/sb2ptr are POINTERS to deref (BPEE/BPRE/BPGE — unchanged behaviour)
+	//   1 = sb1ptr/sb2ptr ARE the struct addresses (AXVE/AXPE)
+	// Ignoring this is not a cosmetic bug: game_read's `(deref >> 24) == 0x02` validity test would
+	// read SaveBlock1.pos (x | y<<16) as a pointer, sb1Valid would be false forever, and presence
+	// would report OFF_FIELD on every frame. Exactly TWO call sites branch on it (game_read here
+	// and ident_refresh in presence_read.c) — the only two `grep sb1ptr|sb2ptr source/` finds.
+	// Appending is again the only safe edit: PROFILES[] is POSITIONAL-initialised.
+	uint8_t  sbDirect;      // 1 = sb1ptr/sb2ptr are the structs themselves (RS), 0 = pointers
 } GameProfile;
 
 // One-pass snapshot of the live game.

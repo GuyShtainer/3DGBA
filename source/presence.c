@@ -123,6 +123,9 @@ int presence_game_id(const char* code4) {
 	if (!code4) return PRES_GAME_NONE;
 	if (!strncmp(code4, "BPEE", 4))                                   return PRES_GAME_HOENN;
 	if (!strncmp(code4, "BPRE", 4) || !strncmp(code4, "BPGE", 4))     return PRES_GAME_KANTO;
+	// Ruby + Sapphire are one build and one map table, but NOT Emerald's — see presence.h's
+	// PRES_GAME_HOENN_RS note for the map_groups.json diff that settles it (SPEC-coop P3.1).
+	if (!strncmp(code4, "AXVE", 4) || !strncmp(code4, "AXPE", 4))     return PRES_GAME_HOENN_RS;
 	return PRES_GAME_NONE;   // no profile => presence silently OFF for the pair (invariant 5)
 }
 

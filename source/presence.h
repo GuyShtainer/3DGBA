@@ -77,9 +77,23 @@
 // category error it is. FR<->LG is the ONE cross-title pair allowed, because they share both the
 // RAM map (docs/kb/gen3-ram-touch.md:14) and the map table. Ruby/Sapphire, if ever added, get
 // their own id and must be argued separately against Emerald — do NOT assume PRES_GAME_HOENN.
-#define PRES_GAME_NONE  0
-#define PRES_GAME_HOENN 1   // BPEE
-#define PRES_GAME_KANTO 2   // BPRE, BPGE
+//
+// Phase 18 added them, and the argument was made with DATA rather than intuition (SPEC-coop
+// P3.1.2, re-derived independently 2026-08-13): pret/pokeruby and pret/pokeemerald
+// data/maps/map_groups.json were both fetched and compared slot by slot. Ruby has 394 maps in 34
+// groups, Emerald 518 in 34; of the 393 (group, num) slots the two tables SHARE, **76 name a
+// different map**, and the divergence starts inside group 0 (index 50 is `Underwater1` in Ruby and
+// `Underwater_Route124` in Emerald) — after which every later index in that group is shifted.
+// Group 5 index 1 is `FallarborTown_ContestLobby` in Ruby, `FallarborTown_BattleTentLobby` in
+// Emerald. A shared id would put an Emerald player's avatar on a Ruby player's screen at a
+// completely unrelated location, which is the exact category error this enum exists to prevent.
+// Ruby and Sapphire share ONE id because they are ONE build: pret/pokeruby is a single decomp for
+// both, one map table, and their RAM symbol maps are byte-identical (gamestate.c's RS row proves
+// this over all 727 RAM symbols, both revisions included).
+#define PRES_GAME_NONE     0
+#define PRES_GAME_HOENN    1   // BPEE
+#define PRES_GAME_KANTO    2   // BPRE, BPGE
+#define PRES_GAME_HOENN_RS 3   // AXVE, AXPE — NOT PRES_GAME_HOENN (see above)
 
 // flags (D3.3)
 #define PRES_F_SB1VALID (1u << 0)   // save loaded: px/py/map* meaningful

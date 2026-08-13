@@ -5,9 +5,12 @@
 // text + widgets from the manifest on top. See assets_3ds/README-IMPLEMENTATION.md.
 #pragma once
 #include <citro2d.h>
-
-// The four baked faces (Space Grotesk + JetBrains Mono, OFL). Sizes per FONTS.md roles.
-typedef enum { FNT_SG_BOLD, FNT_SG_MED, FNT_JBM_MED, FNT_JBM_BOLD, FNT_COUNT } AFont;
+// PHASE 18 / SPEC-crisp: the type ladder lives in typography.h (pure C, host-tested). Text is
+// addressed by ROLE — TXT_TITLE / TXT_BUTTON / TXT_BODY / TXT_SEG / TXT_SECTION / TXT_CHIP /
+// TXT_VALUE — and the role carries its own size, so there is no `px` argument to get wrong.
+// Every role's face is baked with lineFeed == its draw px, i.e. every glyph draws at texel
+// scale exactly 1.0. Read typography.h before adding a size.
+#include "typography.h"
 
 // Load every plate/widget/font. Call once after C2D_Init(). Returns false if the pack is
 // missing (data/ not built) so callers can fall back to the code-drawn UI.
@@ -26,12 +29,20 @@ void assets_draw_wgt(const char* id, float x, float y);
 // Blit a widget stretched to fill (x,y,w,h) — for 9-slice-ish fills / focus rings.
 void assets_draw_wgt_fit(const char* id, float x, float y, float w, float h);
 
-// Text via a baked bcfnt. `px` = target cap/line pixel height (scaled from the native bake).
-C2D_Font assets_font(AFont f);
-void  assets_text  (C2D_TextBuf buf, AFont f, const char* s, float x,  float y, float px, u32 col);
-void  assets_text_c(C2D_TextBuf buf, AFont f, const char* s, float cx, float y, float px, u32 col);
-void  assets_text_r(C2D_TextBuf buf, AFont f, const char* s, float rx, float y, float px, u32 col);
-float assets_text_w(C2D_TextBuf buf, AFont f, const char* s, float px);
+// Text via a baked bcfnt, at the role's own size (typography.h). `y` is the TOP of the line
+// box, whose height is exactly typo_role_px(r). Origins are rounded to whole pixels inside
+// assets_text, so `_c` / `_r` cannot land a glyph on a half-pixel either (SPEC-crisp C4).
+C2D_Font assets_font(TxtRole r);
+// Harness/self-check: publish the texel scale + lineFeed each role actually draws at into
+// g_txtTexelScale[] / g_txtLineFeed[], so `gdbio read` can prove R1 holds in the SHIPPED binary
+// (a screenshot cannot). Call once after assets_init.
+extern float g_txtTexelScale[TXT_COUNT];
+extern int   g_txtLineFeed[TXT_COUNT];
+void assets_dbg_publish_scales(void);
+void  assets_text  (C2D_TextBuf buf, TxtRole r, const char* s, float x,  float y, u32 col);
+void  assets_text_c(C2D_TextBuf buf, TxtRole r, const char* s, float cx, float y, u32 col);
+void  assets_text_r(C2D_TextBuf buf, TxtRole r, const char* s, float rx, float y, u32 col);
+float assets_text_w(C2D_TextBuf buf, TxtRole r, const char* s);
 
 // ---- composite widgets (used across screens) ----
 // The corner radius every `fill-*-r8` 9-slice is drawn with (the sprite name's own "-r8"). Public
@@ -40,7 +51,7 @@ float assets_text_w(C2D_TextBuf buf, AFont f, const char* s, float px);
 #define ASSETS_BTN_R 8.0f
 // A button: blit `sprite` (or `sprite`+"-focus" when focus) stretched to (x,y,w,h) + centered label.
 void assets_button(C2D_TextBuf buf, const char* sprite, float x, float y, float w, float h,
-                   const char* label, AFont f, float px, u32 col, int focus);
+                   const char* label, TxtRole r, u32 col, int focus);
 // A segmented control: a g_art.panel track at (x,y,w,h), a g_ui.acc pill over the active cell and
 // centred labels. Procedural (phase 17 W1) — the `seg-active` sprite carries a baked example label.
 // `inkA` is drawn on the ACCENT pill (pass g_ui.ink), `dim` on the TRACK, which is a baked-art

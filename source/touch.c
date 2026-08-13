@@ -8,7 +8,8 @@
 #include "touch.h"
 #include "theme.h"     // pad color/edge prefs (g_prefs) + the fixed PAD_COLOR_* tints
 #include "ui.h"        // shared widget kit (borders, chips, centered text)
-#include "assets.h"    // baked fonts: the mode/menu chips draw FNT_JBM_MED at its native size
+#include "assets.h"    // baked fonts: the mode/menu chips draw TXT_CHIP at its native size
+#include "fieldpath.h" // phase 18: warp classification + the elevation-correct router (pure C)
 
 const char* const TOUCH_NAMES[3] = { "Off", "Gamepad", "Smart" };
 
@@ -44,7 +45,7 @@ int touch_menu_chip(TouchMode mode, int px, int py) {
 static void touch_chip(C2D_TextBuf buf, const char* s, float cx, float y, u32 ink) {
 	float w = ui_chip_measure(buf, s) + 2.0f;
 	ui_fill(cx - w / 2.0f, y, w, 14.0f, C2D_Color32(0x00, 0x00, 0x00, 0x96), 4.0f);
-	assets_text_c(buf, FNT_JBM_MED, s, cx, y + 3.0f, 8.0f, ink);
+	assets_text_c(buf, TXT_CHIP, s, cx, y + 3.0f, ink);
 }
 
 // The "menu" affordance, drawn at exactly the rect touch_menu_chip() hit-tests.
@@ -56,11 +57,11 @@ static void touch_chip(C2D_TextBuf buf, const char* s, float cx, float y, u32 in
 static void touch_menu_chip_draw(C2D_TextBuf buf, u32 ink) {
 	ui_fill(MCHIP_X, MCHIP_Y, MCHIP_W, MCHIP_H, C2D_Color32(0x00, 0x00, 0x00, 0x96), 4.0f);
 	const float BARW = 8.0f, GAP = 4.0f;
-	float lw = assets_text_w(buf, FNT_JBM_MED, "menu", 8.0f);
+	float lw = assets_text_w(buf, TXT_CHIP, "menu");
 	float bx = MCHIP_X + (MCHIP_W - (BARW + GAP + lw)) / 2.0f;
 	float by = MCHIP_Y + MCHIP_H / 2.0f - 3.0f;
 	for (int i = 0; i < 3; i++) C2D_DrawRectSolid(bx, by + (float)i * 2.5f, 0.0f, BARW, 1.0f, ink);
-	assets_text(buf, FNT_JBM_MED, "menu", bx + BARW + GAP, MCHIP_Y + 5.0f, 8.0f, ink);
+	assets_text(buf, TXT_CHIP, "menu", bx + BARW + GAP, MCHIP_Y + 5.0f, ink);
 }
 
 static u16 pad_keys(int px, int py) {
@@ -93,11 +94,16 @@ static void pad_zone(float x, float y, float w, float h, u32 col, float r) {
 }
 
 // Centered glyph label on a zone (buf may be NULL -> zones only).
+// FIX PASS: the BAKED TXT_BUTTON at texel scale 1.0, not the system font at 0.42. These are the
+// A / B / L / R / START glyphs on the virtual gamepad — chrome the user stares at for a whole
+// session in Gamepad mode, and the last on-screen control labels still going through the blurry
+// path SPEC-crisp removed everywhere else. TXT_BUTTON is the role typography.h names for button
+// labels and is the closest rung to the old size (cap height 7 px vs ~8), so no key changes shape.
+// Centred on the ROLE's px rather than a measured line height: at scale 1.0 the line box is the
+// bake's own, and this is the same idiom menu_ov_label uses.
 static void pad_label(C2D_TextBuf buf, const char* s, float x, float y, float w, float h, u32 col) {
 	if (!buf) return;
-	C2D_Text t; C2D_TextParse(&t, buf, s); C2D_TextOptimize(&t);
-	float tw, th; C2D_TextGetDimensions(&t, 0.42f, 0.42f, &tw, &th);
-	C2D_DrawText(&t, C2D_WithColor, x + (w - tw) / 2.0f, y + (h - th) / 2.0f, 0.0f, 0.42f, 0.42f, col);
+	assets_text_c(buf, TXT_BUTTON, s, x + w / 2.0f, y + (h - typo_role_px(TXT_BUTTON)) / 2.0f, col);
 }
 
 static void pad_overlay(u16 held, C2D_TextBuf buf) {
@@ -206,24 +212,104 @@ static int battler_index_for_pos(const TouchSmart* sm, int pos) {
 
 // ===================== SMART: hybrid tap-to-walk + steer =====================
 // HOLD / SLIDE the screen -> steer toward the touch (dominant of the 4 axes), at any speed incl. bike.
-// QUICK TAP a tile -> BFS-route there over the live collision grid (doors/ladders/NPCs included as the
-// path terminal). Tap your own tile = A. The camera centers the player at screen tile (7,5).
-#define WBOX  65          // BFS window edge (tiles); ~+-32 around the player
-#define WHALF 32
-#define TAP_FRAMES 12     // released within this many frames AND barely moved => a "tap" -> BFS route
+// QUICK TAP a tile -> route there over the live grid. Tap your own tile = A. The camera centers the
+// player at screen tile (7,5).
+//
+// PHASE 18 / SPEC-door. The classification, the walkability rule and the search now live in
+// fieldpath.c (pure C, host-tested against the user's real ROM maps); this file keeps the gesture
+// handling, the per-frame emit and the new TERMINAL HOLD. What changed, and why:
+//   * a DOOR is retargeted to the tile SOUTH of it and finished with a HELD UP, because
+//     TryDoorWarp is gated `direction == DIR_NORTH` in both engines. Before, the path's last step
+//     was INTO the impassable door tile and the route just stalled and pressed A.
+//   * an ARROW / stair warp is routed ONTO and finished with its own held direction. Before, the
+//     router arrived and stopped — which is why "tap the exit mat to leave the building" did
+//     nothing at all, in every building, in both games (512 + 263 such tiles).
+//   * a STEP warp (ladder / escalator / warp pad) needs no hold: arriving fires it.
+//   * the route dies the moment SaveBlock1.location changes, so the warp it just triggered cannot
+//     leave a stale route driving the player around the arrival map.
+#define TAP_FRAMES 12     // released within this many frames AND barely moved => a "tap" -> route
 #define DOUBLE_FRAMES 16  // second tap-on-self within this many frames => START
+// How long to HOLD the terminal direction. The game needs heldDirection2 AND
+// dpadDirection == playerDirection (pokeemerald FieldGetPlayerInput / ProcessPlayerFieldInput), and
+// the first frames are spent turning the avatar to face the door — so this is a sustained press,
+// never a pulse. 30 emulated frames ~ 0.5 s at 60 fps. VERIFY-ON-HW-PENDING in the same sense as
+// control.h's tap constants (SPEC-door T4.5.4 / Open Q6): it must be re-counted at the app's real
+// frame rate and at the degraded rate of a wireless session.
+#define TERM_FRAMES 30
+#define REPLAN_MAX  2     // a stalled route re-reads the NPCs and re-plans at most this many times
 static const u16 s_keyDir[4] = { 1 << GBAKEY_RIGHT, 1 << GBAKEY_LEFT, 1 << GBAKEY_DOWN, 1 << GBAKEY_UP };
 
 static int s_aPulse = 0;
-static bool s_walking = false;                          // BFS route active (from a tap)
+static bool s_walking = false;                          // route active (from a tap)
 static int  s_goalX = -1, s_goalY = -1, s_stall, s_lpx, s_lpy;
+static int  s_appX = -1, s_appY = -1;                   // terminal tile the path actually ends on
 static int  s_mapW, s_mapH; static uint32_t s_mapPtr;
-static int8_t s_pathDir[WBOX * WBOX]; static int s_pathLen, s_pathPos;
+static int  s_mapG = -1, s_mapN = -1;                   // SaveBlock1.location at plan time
+static int8_t s_pathDir[FP_WBOX * FP_WBOX]; static int s_pathLen, s_pathPos;
+static int  s_termDir = FP_NODIR, s_termFrames = 0; static bool s_termActive = false;
+static FpKind s_kind = FP_WK_NONE; static int s_replans = 0;
 static int  s_touchFrames = 0, s_downGx, s_downGy, s_downPx, s_downPy; static bool s_moved;
+static int  s_downMapG = -1, s_downMapN = -1;                    // map at press time (tap staleness)
 static int  s_tick = 0, s_lastSelfTap = -999, s_startPulse = 0;   // double-tap-self -> START
 static int  s_npcN = 0; static short s_npcG[16][2];              // active object-event grid coords (+7 space)
 static void walk_reset(void) {
 	s_aPulse = 0; s_startPulse = 0; s_walking = false; s_pathLen = s_pathPos = 0; s_touchFrames = 0; s_moved = false;
+	s_termActive = false; s_termDir = FP_NODIR; s_termFrames = 0; s_kind = FP_WK_NONE; s_replans = 0;
+}
+
+// --- the gdb/harness mirror (LOGGING ONLY; nothing reads it back) -------------------------------
+// SPEC-door T4.11. A screenshot cannot prove a warp fired — a door animation without a warp looks
+// the same for several frames — so the objective instrument is this struct plus the game's own
+// SaveBlock1.location, read over the emutest gdb channel (`run gdbio read-u32 g_fieldDbg+N`,
+// `poll --changed`, `see rec --with-state g_fieldDbg`). planSeq increments once per planning
+// ATTEMPT so a poll can latch on it. Deliberately non-static: the harness resolves it by name out
+// of 3DGBA.elf.
+FieldDbg g_fieldDbg = { 0 };
+static void fdbg_plan(int px, int py, int mapG, int mapN, const FpPlan* pl) {
+	g_fieldDbg.px = px; g_fieldDbg.py = py; g_fieldDbg.mapGroup = mapG; g_fieldDbg.mapNum = mapN;
+	g_fieldDbg.goalX = pl->goalX; g_fieldDbg.goalY = pl->goalY;
+	g_fieldDbg.approachX = pl->approachX; g_fieldDbg.approachY = pl->approachY;
+	g_fieldDbg.kind = (int32_t)pl->kind; g_fieldDbg.termDir = pl->termDir;
+	g_fieldDbg.pathLen = pl->pathLen; g_fieldDbg.pElev = pl->pElev;
+	g_fieldDbg.behaviour = pl->behaviour; g_fieldDbg.outcome = pl->outcome;
+	g_fieldDbg.warpGroup = pl->warpGroup; g_fieldDbg.warpNum = pl->warpNum;
+	g_fieldDbg.headRetarget = pl->headRetarget ? 1 : 0;
+	g_fieldDbg.routeEnd = FDBG_END_NONE;
+	g_fieldDbg.planSeq++;
+}
+static void fdbg_end(int how) { g_fieldDbg.routeEnd = how; g_fieldDbg.endSeq++; }
+static void fplog_push(GbaCore* core, int isEnd);
+static void route_end(GbaCore* core, int how) { fdbg_end(how); fplog_push(core, 1); }
+
+// --- the SD-side plan log (SPEC-door T4.10) -----------------------------------------------------
+// g_fieldDbg is the EMULATOR instrument (one live snapshot over gdb). On real hardware there is no
+// gdb, so every planning attempt and every route end also lands in this ring, flushed with the
+// touch log on session close. These columns are the difference between "the user says it bumped"
+// and knowing WHICH of the candidate causes it was: the tapped tile, the behaviour byte we read
+// there, the kind we decided, where the path was actually aimed, and how the route finished.
+#define FPLOG_N 128
+typedef struct {
+	uint32_t frame; int16_t px, py, goalX, goalY, appX, appY;
+	int16_t mapG, mapN, behaviour, pathLen, pElev, warpG, warpN;
+	uint8_t kind, termDir, outcome, head, end, isEnd;
+} FpLogEntry;
+static FpLogEntry s_fpLog[FPLOG_N];
+static uint32_t   s_fpLogN = 0;
+static void fplog_push(GbaCore* core, int isEnd) {
+	FpLogEntry* e = &s_fpLog[s_fpLogN % FPLOG_N];
+	memset(e, 0, sizeof *e);
+	e->frame = core ? gbacore_frame_counter(core) : 0;
+	e->px = (int16_t)g_fieldDbg.px; e->py = (int16_t)g_fieldDbg.py;
+	e->goalX = (int16_t)g_fieldDbg.goalX; e->goalY = (int16_t)g_fieldDbg.goalY;
+	e->appX = (int16_t)g_fieldDbg.approachX; e->appY = (int16_t)g_fieldDbg.approachY;
+	e->mapG = (int16_t)g_fieldDbg.mapGroup; e->mapN = (int16_t)g_fieldDbg.mapNum;
+	e->behaviour = (int16_t)g_fieldDbg.behaviour; e->pathLen = (int16_t)g_fieldDbg.pathLen;
+	e->pElev = (int16_t)g_fieldDbg.pElev;
+	e->warpG = (int16_t)g_fieldDbg.warpGroup; e->warpN = (int16_t)g_fieldDbg.warpNum;
+	e->kind = (uint8_t)g_fieldDbg.kind; e->termDir = (uint8_t)(g_fieldDbg.termDir & 0xFF);
+	e->outcome = (uint8_t)g_fieldDbg.outcome; e->head = (uint8_t)g_fieldDbg.headRetarget;
+	e->end = (uint8_t)g_fieldDbg.routeEnd; e->isEnd = (uint8_t)isEnd;
+	s_fpLogN++;
 }
 
 // Read active overworld object-events (NPCs) so the BFS routes AROUND them. Skips slot 0 (the player).
@@ -246,61 +332,62 @@ static bool map_read(GbaCore* core, const GameProfile* p, int* w, int* h, uint32
 	*ptr =        gbacore_read32(core, p->mapLayout + 8);
 	return (*ptr >> 24) == 0x02 && *w > 0 && *w <= 512 && *h > 0 && *h <= 512;
 }
-static bool walkable(GbaCore* core, uint32_t ptr, int w, int h, int wx, int wy) {
-	int gx_ = wx + 7, gy_ = wy + 7;                      // MAP_OFFSET border
-	if (gx_ < 0 || gx_ >= w || gy_ < 0 || gy_ >= h) return false;
-	for (int i = 0; i < s_npcN; i++) if (s_npcG[i][0] == gx_ && s_npcG[i][1] == gy_) return false;   // NPC here
-	uint16_t block = gbacore_read16(core, ptr + 2u * (uint32_t)(gx_ + w * gy_));
-	if (block == 0x03FF) return false;                  // MAPGRID_UNDEFINED
-	return ((block & 0x0C00) >> 10) == 0;               // collision bits clear
+// --- fieldpath bus adapter: the classifier is pure C and reads the game through these ----------
+static uint8_t  fp_r8 (void* c, uint32_t a) { return gbacore_read8 ((GbaCore*)c, a); }
+static uint16_t fp_r16(void* c, uint32_t a) { return gbacore_read16((GbaCore*)c, a); }
+static uint32_t fp_r32(void* c, uint32_t a) { return gbacore_read32((GbaCore*)c, a); }
+
+// BPRE / BPGE use the FRLG metatile-behaviour numbering, tileset attribute offset (+0x14, u32),
+// primary-tileset size (640) and mask (0x1FF); BPEE uses RSE's. The 0x60-0x71 block genuinely
+// disagrees between them, so this must never collapse into one table.
+static FpEngine fp_engine(const GameProfile* p) {
+	return (p->code[2] == 'R' || p->code[2] == 'G') ? FP_ENG_FRLG : FP_ENG_RSE;
 }
-// BFS from (sx,sy) to (gxw,gyw) within +-WHALF. A blocked GOAL is allowed as the terminal (door/NPC).
-static bool plan_bfs(GbaCore* core, const GameProfile* p, int sx, int sy, int gxw, int gyw) {
+
+// Plan a route to the tapped tile. Returns true and arms the follow loop; false means NOTHING is
+// injected — which for a door with no reachable approach is the whole point (a documented no-op
+// beats tackling the wall next to it).
+static bool walk_plan(GbaCore* core, const GameProfile* p, int px, int py, int gx, int gy,
+                      int mapG, int mapN) {
 	int w, h; uint32_t ptr;
-	if (!map_read(core, p, &w, &h, &ptr)) return false;
-	if (abs(gxw - sx) > WHALF || abs(gyw - sy) > WHALF) return false;
-	read_npcs(core, p);   // NPCs block transit so the route goes AROUND them
-	s_mapW = w; s_mapH = h; s_mapPtr = ptr;
-	static int16_t parent[WBOX * WBOX];
-	static int8_t  dirOf[WBOX * WBOX];
-	static int16_t q[WBOX * WBOX];
-	for (int i = 0; i < WBOX * WBOX; i++) parent[i] = -1;
-	const int dxs[4] = { 1, -1, 0, 0 }, dys[4] = { 0, 0, 1, -1 };
-	int start = WHALF + WBOX * WHALF;
-	int goal  = (gxw - sx + WHALF) + WBOX * (gyw - sy + WHALF);
-	int head = 0, tail = 0;
-	parent[start] = start; q[tail++] = start;
-	bool found = false;
-	while (head < tail) {
-		int cur = q[head++];
-		if (cur == goal) { found = true; break; }
-		int clx = cur % WBOX, cly = cur / WBOX;
-		for (int d = 0; d < 4; d++) {
-			int nlx = clx + dxs[d], nly = cly + dys[d];
-			if (nlx < 0 || nlx >= WBOX || nly < 0 || nly >= WBOX) continue;
-			int nidx = nlx + WBOX * nly;
-			if (parent[nidx] != -1) continue;
-			if (nidx != goal && !walkable(core, ptr, w, h, sx + nlx - WHALF, sy + nly - WHALF)) continue;
-			parent[nidx] = cur; dirOf[nidx] = (int8_t)d; q[tail++] = nidx;
-		}
+	// STATIC, not a stack local: FpPlan carries the 4225-entry path array (~4.3 KB), and this runs
+	// on the render thread, deep inside the per-frame call chain. Single-threaded by construction
+	// (touch_update is only ever called from the main/render thread — CLAUDE.md #2: workers never
+	// touch this path), so one shared instance is safe and the frame stack stays small.
+	static FpPlan pl;
+	if (!map_read(core, p, &w, &h, &ptr)) {
+		memset(&pl, 0, sizeof pl); pl.outcome = FP_OUT_BADMAP; pl.termDir = FP_NODIR;
+		pl.goalX = gx; pl.goalY = gy; pl.approachX = gx; pl.approachY = gy; pl.behaviour = -1;
+		pl.warpGroup = pl.warpNum = -1;
+		fdbg_plan(px, py, mapG, mapN, &pl);
+		fplog_push(core, 0);
+		return false;
 	}
-	if (!found) return false;
-	int n = 0, cur = goal;
-	static int8_t tmp[WBOX * WBOX];
-	while (cur != start) { tmp[n++] = dirOf[cur]; cur = parent[cur]; if (n >= WBOX * WBOX) return false; }
-	s_pathLen = n; s_pathPos = 0;
-	for (int i = 0; i < n; i++) s_pathDir[i] = tmp[n - 1 - i];   // start->goal order
-	s_goalX = gxw; s_goalY = gyw;
+	read_npcs(core, p);   // NPCs block transit so the route goes AROUND them
+	FpBus bus = { fp_r8, fp_r16, fp_r32, core };
+	FpMap m = { fp_engine(p), p->mapHeaderPath, p->mapObjects, ptr, w, h };
+	bool ok = fieldpath_plan(&bus, &m, px, py, gx, gy, s_npcG, s_npcN, &pl);
+	fdbg_plan(px, py, mapG, mapN, &pl);
+	fplog_push(core, 0);
+	if (!ok) return false;
+	s_mapW = w; s_mapH = h; s_mapPtr = ptr; s_mapG = mapG; s_mapN = mapN;
+	s_goalX = pl.goalX; s_goalY = pl.goalY;
+	s_appX = pl.approachX; s_appY = pl.approachY;
+	s_kind = pl.kind; s_termDir = pl.termDir;
+	s_pathLen = pl.pathLen; s_pathPos = 0;
+	for (int i = 0; i < pl.pathLen; i++) s_pathDir[i] = pl.path[i];
+	s_termActive = false; s_termFrames = 0;
 	return true;
 }
 
-static u16 walk_update(bool touching, bool newPress, bool gvalid, int gx, int gy,
-                       int px, int py, GbaCore* core, const GameProfile* p) {
+static u16 walk_update_inner(bool touching, bool newPress, bool gvalid, int gx, int gy,
+                             int px, int py, int mapG, int mapN, GbaCore* core, const GameProfile* p) {
 	s_tick++;
 	if (s_startPulse > 0) { s_startPulse--; return 1 << GBAKEY_START; }
 	if (s_aPulse > 0)     { s_aPulse--;     return 1 << GBAKEY_A; }
 
-	if (newPress && gvalid) { s_downGx = gx; s_downGy = gy; s_downPx = px; s_downPy = py; s_touchFrames = 0; s_moved = false; }
+	if (newPress && gvalid) { s_downGx = gx; s_downGy = gy; s_downPx = px; s_downPy = py; s_touchFrames = 0; s_moved = false;
+	                          s_downMapG = mapG; s_downMapN = mapN; }
 	if (touching && gvalid) { s_touchFrames++; if (abs(gx - s_downGx) > 8 || abs(gy - s_downGy) > 8) s_moved = true; }
 
 	// No loaded overworld map (title / intro / main menu): a tap = A, a double-tap = START. No walking.
@@ -331,25 +418,99 @@ static u16 walk_update(bool touching, bool newPress, bool gvalid, int gx, int gy
 				if (s_tick - s_lastSelfTap < DOUBLE_FRAMES) s_startPulse = 3;   // double-tap self -> START
 				else s_aPulse = 3;                                              // single -> A (interact/advance)
 				s_lastSelfTap = s_tick;
-			} else if (plan_bfs(core, p, px, py, s_downPx + ddx, s_downPy + ddy)) {   // route to the tapped tile
-				s_walking = true; s_lpx = px; s_lpy = py; s_stall = 0;
+			} else if (mapG == s_downMapG && mapN == s_downMapN &&
+			           abs(px - s_downPx) <= 1 && abs(py - s_downPy) <= 1) {
+				// SPEC-door T5.12, tightened (see the BUILDLOG deviation note). The tapped WORLD
+				// tile is (press-time player tile + screen offset): the camera was anchored on the
+				// player when the finger went down, so that anchor is the correct one even though
+				// the BFS starts from where the player is NOW. What is genuinely unsafe is a WARP
+				// or a teleport between press and release — then the offset names a tile on a map
+				// that is no longer on screen. Refuse those (map changed, or the player jumped
+				// further than the one tile a step in flight can cover) rather than route to a
+				// tile the user never pointed at.
+				if (walk_plan(core, p, px, py, s_downPx + ddx, s_downPy + ddy, mapG, mapN)) {
+					s_walking = true; s_lpx = px; s_lpy = py; s_stall = 0; s_replans = 0;
+				}
 			}
 		}
 		if (s_startPulse > 0) { s_startPulse--; return 1 << GBAKEY_START; }
 		if (s_aPulse > 0)     { s_aPulse--;     return 1 << GBAKEY_A; }
 	}
 
-	if (!s_walking || !core || !p) return 0;            // BFS path-follow (released, routing)
+	if (!s_walking || !core || !p) return 0;            // path-follow (released, routing)
 	int w, h; uint32_t ptr;
-	if (!map_read(core, p, &w, &h, &ptr) || ptr != s_mapPtr || w != s_mapW || h != s_mapH) { s_walking = false; return 0; }
-	if ((px == s_goalX && py == s_goalY) || s_pathPos >= s_pathLen) { s_walking = false; return 0; }
-	if (px != s_lpx || py != s_lpy) {                   // a step completed -> advance the path
-		s_pathPos++; s_lpx = px; s_lpy = py; s_stall = 0;
-		if (s_pathPos >= s_pathLen) { s_walking = false; return 0; }
-	} else if (++s_stall > 24) { s_walking = false; s_aPulse = 3; return 0; }   // blocked -> face + A
+	// THE WARP KILL-SWITCH (T4.6). SaveBlock1.location changing IS the proof the warp fired, and it
+	// is the only reliable signal: gBackupMapLayout.map is a FIXED EWRAM buffer, so the old
+	// ptr/w/h check cannot see a same-size map swap and a stale route survives into the arrival
+	// map. Both nets are kept.
+	if (mapG != s_mapG || mapN != s_mapN) {
+		s_walking = false; s_termActive = false; route_end(core, FDBG_END_MAPCHANGE); return 0;
+	}
+	if (!map_read(core, p, &w, &h, &ptr) || ptr != s_mapPtr || w != s_mapW || h != s_mapH) {
+		s_walking = false; s_termActive = false; route_end(core, FDBG_END_MAPCHANGE); return 0;
+	}
+
+	if (s_termActive) {
+		// THE TERMINAL HOLD — continuous, never pulsed: the game wants heldDirection2 AND
+		// dpadDirection == playerDirection, and the first frames go on turning the avatar.
+		if (px != s_lpx || py != s_lpy) {          // a DIR/STEP tile moved us: the hold did its job
+			s_walking = false; s_termActive = false; route_end(core, FDBG_END_MOVED); return 0;
+		}
+		if (++s_termFrames > TERM_FRAMES) {
+			// Time out SILENTLY. Never the legacy A pulse here: A at a door is at best a no-op and
+			// at worst opens a sign or starts an NPC conversation.
+			s_walking = false; s_termActive = false; route_end(core, FDBG_END_TIMEOUT); return 0;
+		}
+		return s_keyDir[s_termDir];
+	}
+
+	if (px != s_lpx || py != s_lpy) { s_pathPos++; s_lpx = px; s_lpy = py; s_stall = 0; }   // a step completed
+	else if (++s_stall > 24) {
+		// Blocked. NPCs are sampled once at plan time, so the commonest cause is one that has since
+		// walked into the path — re-read them and re-plan toward the same terminal before giving
+		// up. Only a WK_NONE route (a sign, an NPC, a cuttable tree — what the behaviour was
+		// written for) still ends with the A press.
+		//
+		// FIX PASS (review finding 1): NOT at a WK_NONE terminal. That stall is the route
+		// ARRIVING at a deliberately blocked goal, the replan always succeeds, and three rounds
+		// of it turned a ~0.4 s tap-a-sign into ~1.25 s of the avatar bumping the sign — plus two
+		// whole-window BFS floods on the render thread while both GBA workers are saturated.
+		// fieldpath_should_replan is the rule (host-graded, TEST 14); mid-route stalls on a
+		// WK_NONE route still replan, and every other kind is untouched.
+		if (fieldpath_should_replan(s_kind, s_pathPos, s_pathLen) &&
+		    s_replans < REPLAN_MAX && walk_plan(core, p, px, py, s_goalX, s_goalY, mapG, mapN)) {
+			s_replans++; s_lpx = px; s_lpy = py; s_stall = 0;
+			route_end(core, FDBG_END_REPLANNED);
+		} else {
+			s_walking = false; s_termActive = false;
+			if (s_kind == FP_WK_NONE) s_aPulse = 3;
+			route_end(core, FDBG_END_STALLED);
+			return 0;
+		}
+	}
+
+	if (px == s_appX && py == s_appY) s_pathPos = s_pathLen;   // arrived (also covers a zero-step plan)
+	if (s_pathPos >= s_pathLen) {
+		if (s_termDir >= 0 && s_termDir < 4) { s_termActive = true; s_termFrames = 1; return s_keyDir[s_termDir]; }
+		s_walking = false; route_end(core, FDBG_END_ARRIVED); return 0;   // WK_STEP / WK_NONE: nothing more to do
+	}
 	int d = s_pathDir[s_pathPos];
-	if (d < 0 || d > 3) { s_walking = false; return 0; }
+	if (d < 0 || d > 3) { s_walking = false; route_end(core, FDBG_END_ARRIVED); return 0; }
 	return s_keyDir[d];
+}
+
+// LOGGING ONLY. Everything latched in g_fieldDbg above is from PLAN time; this stamps the LIVE
+// state every overworld frame, which is what makes a warp provable from outside the emulated
+// console — the harness reads the game's own SaveBlock1.location over gdb and watches it change.
+static u16 walk_update(bool touching, bool newPress, bool gvalid, int gx, int gy,
+                       int px, int py, int mapG, int mapN, GbaCore* core, const GameProfile* p) {
+	u16 k = walk_update_inner(touching, newPress, gvalid, gx, gy, px, py, mapG, mapN, core, p);
+	g_fieldDbg.curMapGroup = mapG; g_fieldDbg.curMapNum = mapN;
+	g_fieldDbg.curPx = px; g_fieldDbg.curPy = py;
+	g_fieldDbg.curKeys = k;
+	g_fieldDbg.curFrame = core ? (int32_t)gbacore_frame_counter(core) : 0;
+	g_fieldDbg.walking = s_termActive ? 2 : (s_walking ? 1 : 0);
+	return k;
 }
 
 // =================== SMART: general field menu (sMenu) =======================
@@ -484,7 +645,8 @@ static int  s_tDownSx = 0, s_tDownSy = 0;
 static uint32_t s_tLastRet = 0xFFFFFFFFu, s_tLastCurs = 0xFFFFFFFFu, s_tLastBeat = 0;
 
 void touch_log_reset(void) {
-	s_tLogN = 0; s_tWasTouch = false; s_tDrag = false;
+	s_tLogN = 0; s_fpLogN = 0; memset(&g_fieldDbg, 0, sizeof g_fieldDbg);
+	s_tWasTouch = false; s_tDrag = false;
 	s_tDownSx = s_tDownSy = 0;
 	s_tLastRet = 0xFFFFFFFFu; s_tLastCurs = 0xFFFFFFFFu; s_tLastBeat = 0;
 }
@@ -527,6 +689,37 @@ static void touch_log_sample(const TouchSmart* sm, bool touching, bool newPress,
 	s_tWasTouch = touching;
 }
 
+// PHASE 18 / SPEC-door T4.10. Appended to the touch log rather than given its own file: a route
+// row and the touch rows that produced it belong in one place, and the harness already harvests
+// this path. Nothing is written when no plan was ever made.
+static void fplog_dump(FILE* f) {
+	if (s_fpLogN == 0) return;
+	static const char* const KN[4] = { "none", "door", "dir", "step" };
+	static const char* const ON[5] = { "planned", "unreachable", "no-approach", "window", "badmap" };
+	static const char* const EN[7] = { "-", "arrived", "moved", "timeout", "stalled", "replanned", "mapchange" };
+	static const char* const DN[4] = { "R", "L", "D", "U" };
+	fprintf(f, "\n# 3DGBA fieldpath PLAN log (phase 18 / SPEC-door): one row per planning attempt (row=plan)\n");
+	fprintf(f, "#   and one per route end (row=end). THE DOOR PROOF: a tap on a door must read beh=0x69,\n");
+	fprintf(f, "#   kind=door, term=U and an approach one tile SOUTH of the goal; the route then ends\n");
+	fprintf(f, "#   'mapchange' (= the warp fired) and NOT 'timeout'. outcome=no-approach means the router\n");
+	fprintf(f, "#   deliberately injected nothing because the door's south tile was blocked.\n");
+	fprintf(f, "#   beh = the raw metatile behaviour we read (-1 = unreadable -> legacy behaviour);\n");
+	fprintf(f, "#   pElev = the player elevation the walkability rule used (0 = rule disarmed);\n");
+	fprintf(f, "#   warp = the destination map of the confirming warp EVENT (-1/-1 = none, so kind=none).\n");
+	fprintf(f, "row,frame,map,px,py,goal,approach,kind,term,beh,pathLen,pElev,warp,outcome,head,end\n");
+	uint32_t n    = (s_fpLogN < FPLOG_N) ? s_fpLogN : FPLOG_N;
+	uint32_t base = (s_fpLogN < FPLOG_N) ? 0u : (s_fpLogN % FPLOG_N);
+	for (uint32_t i = 0; i < n; i++) {
+		const FpLogEntry* e = &s_fpLog[(base + i) % FPLOG_N];
+		fprintf(f, "%s,%lu,%d/%d,%d,%d,%d/%d,%d/%d,%s,%s,%d,%d,%d,%d/%d,%s,%u,%s\n",
+		        e->isEnd ? "end" : "plan", (unsigned long)e->frame, e->mapG, e->mapN,
+		        e->px, e->py, e->goalX, e->goalY, e->appX, e->appY,
+		        KN[e->kind & 3], (e->termDir < 4) ? DN[e->termDir] : "-",
+		        e->behaviour, e->pathLen, e->pElev, e->warpG, e->warpN,
+		        ON[(e->outcome < 5) ? e->outcome : 4], e->head, EN[(e->end < 7) ? e->end : 0]);
+	}
+}
+
 void touch_log_dump(const char* path) {
 	if (s_tLogN == 0) return;            // nothing captured -> don't litter SD with an empty file
 	mkdir("sdmc:/cias", 0777);
@@ -562,6 +755,7 @@ void touch_log_dump(const char* path) {
 		        (unsigned long)e->taskFp[0], (unsigned long)e->taskFp[1], (unsigned long)e->taskFp[2], (unsigned long)e->taskFp[3],
 		        (unsigned long)e->taskFp[4], (unsigned long)e->taskFp[5], (unsigned long)e->taskFp[6], (unsigned long)e->taskFp[7]);
 	}
+	fplog_dump(f);
 	fclose(f);
 }
 
@@ -614,7 +808,8 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 		break;
 	case GCTX_OVERWORLD:
 		battle_reset(); party_reset(); target_reset(); fmenu_reset(); bag_reset();
-		ret = walk_update(touching, newPress, gvalid, gx, gy, sm->px, sm->py, sm->core, sm->prof);
+		ret = walk_update(touching, newPress, gvalid, gx, gy, sm->px, sm->py,
+		                  sm->mapGroup, sm->mapNum, sm->core, sm->prof);
 		break;
 	case GCTX_FIELDMENU:
 		battle_reset(); walk_reset(); party_reset(); target_reset(); bag_reset();

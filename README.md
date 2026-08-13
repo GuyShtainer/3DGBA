@@ -38,8 +38,24 @@ games or other content.
   time-of-day color grade, all toggleable in the pause menu.
 - **Wireless multi-console lobby** *(in progress)* — host/scan/join over local wireless
   (UDS) with a live seat map; the emulation-over-the-air link is a later milestone.
+- **Same-console co-op presence** *(experimental)* — with both slots holding games from the
+  **same world**, each screen can draw the other player's avatar walking around the shared
+  map. Turn it on with **Co-op presence** on the pause menu's LINK tab, or on the pre-game
+  Settings screen (ZR on the ROM picker) before you start.
 - Save states, per-game `.sav` loading, scaling/filter options, audio mix modes, and a
   ROM picker.
+
+### Playing the same game twice (co-op)
+
+Co-op needs **two games from the same world**: Emerald + Emerald, Ruby + Sapphire, or
+FireRed + LeafGreen. Emerald and FireRed are *different* map tables, so that pair can never
+show a peer — the app says so with a toast at session start and marks the HUD chip `CO-OP x`.
+
+To play the same game twice, **put two copies of the ROM on the card** — e.g.
+`emerald1.gba` and `emerald2.gba`. Each ROM gets its own battery save derived from its own
+filename, so two copies means two independent saves. The picker **refuses** to put one file
+in both slots: two cores loaded from the same path would open the same `.sav` and write over
+each other, which corrupts it.
 
 ## Status & roadmap
 

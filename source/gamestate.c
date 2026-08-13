@@ -30,7 +30,15 @@ static const GameProfile PROFILES[] = {
                vs pret's symbols branch, re-read 2026-08-04. EM: gSaveBlock2Ptr 0x03005D90
                (pokeemerald.sym:962), gSpriteCoordOffsetX 0x02021BBC (:20; Y = +2, :21),
                gMain.vblankCounter2 = gMain(0x030022C0, :894) + 0x24. */
-            0x03005D90u, 0x02021BBCu, 0x030022E4u },
+            0x03005D90u, 0x02021BBCu, 0x030022E4u,
+            /* phase 18 mapHeaderPath (SPEC-door T4.1): gMapHeader, pokeemerald.sym. VERIFIED-SYM.
+               Same value as `mapHeader` above by construction; kept as its own field so the
+               phase-14 depth gate (main.c:885 `!p->mapHeader`) is not disturbed for FR/LG. */
+            0x02037318u,
+            /* sbDirect (SPEC-coop P3.2.3): Emerald HAS gSaveBlock1Ptr/gSaveBlock2Ptr, so the two
+               columns above stay POINTERS. Written explicitly rather than left to C's zero-fill —
+               an implicit zero in a table this long is how a future append goes wrong (P3.5.2). */
+            0 },
   { "BPRE", 0x03005008u, 0x02022B4Cu, 0x02023FF8u, 0x02023FFCu, 0x02023BE4u, 0x02022976u,
             0x0203B0A0u, 0x02024029u, 0x030030F4u, 0x0811EBA0u, 0x0811EBD0u, 0x0303011Eu,
             0x03004FE0u, 0x0802E674u, 0x03004FF4u, 0x02023BD6u, 0x02023BCCu, 0x02023D70u, 0x02023BC4u, 0x03005040u,
@@ -52,7 +60,13 @@ static const GameProfile PROFILES[] = {
             /* phase 15 presence (SPEC-data D1.7): FR values read from pokefirered.sym (rev0 AND
                rev1 agree): gSaveBlock2Ptr 0x0300500C (:810), gSpriteCoordOffsetX 0x02021BC8 (:23;
                Y = +2, :24), gMain.vblankCounter2 = gMain(0x030030F0, :745) + 0x24. */
-            0x0300500Cu, 0x02021BC8u, 0x03003114u },
+            0x0300500Cu, 0x02021BC8u, 0x03003114u,
+            /* phase 18 mapHeaderPath (SPEC-door T4.1): gMapHeader 0x02036DFC, read from
+               pokefirered.sym AND pokefirered_rev1.sym (identical) — the user's FR is rev1.
+               VERIFIED-SYM. NOT gObjectEvents-0x38 (that Emerald derivation is wrong here). */
+            0x02036DFCu,
+            /* sbDirect: FireRed has gSaveBlock1Ptr/gSaveBlock2Ptr -> pointers (P3.2.3). */
+            0 },
   { "BPGE", 0x03005008u, 0x02022B4Cu, 0x02023FF8u, 0x02023FFCu, 0x02023BE4u, 0x02022976u,
             0x0203B0A0u, 0x02024029u, 0x030030F4u, 0x0811EBA0u, 0x0811EBD0u, 0x0303011Eu,
             0x03004FE0u, 0x0802E674u, 0x03004FF4u, 0x02023BD6u, 0x02023BCCu, 0x02023D70u, 0x02023BC4u, 0x03005040u,
@@ -69,7 +83,117 @@ static const GameProfile PROFILES[] = {
                from LEAFGREEN'S OWN symbol map, not FR-derived — pokeleafgreen.sym:810 / :23-24 / :745
                (rev0 and rev1 agree): gSaveBlock2Ptr 0x0300500C, gSpriteCoordOffsetX 0x02021BC8,
                gMain.vblankCounter2 = gMain(0x030030F0) + 0x24. VERIFIED-SYM. */
-            0x0300500Cu, 0x02021BC8u, 0x03003114u },
+            0x0300500Cu, 0x02021BC8u, 0x03003114u,
+            /* phase 18 mapHeaderPath (SPEC-door T4.1): read from LEAFGREEN'S OWN maps —
+               pokeleafgreen.sym and pokeleafgreen_rev1.sym (both on pret/pokefirered's
+               `symbols` branch; there is no separate pokeleafgreen repo). Both give
+               gMapHeader 0x02036DFC. VERIFIED-SYM, not FR-derived. */
+            0x02036DFCu,
+            /* sbDirect: LeafGreen has gSaveBlock1Ptr/gSaveBlock2Ptr -> pointers (P3.2.3). */
+            0 },
+
+  // ===================== Ruby / Sapphire (SPEC-coop §P3) =====================================
+  // Every RAM value below is VERIFIED-SYM against pret's byte-matched `symbols` branch, all FOUR
+  // maps downloaded and diffed on 2026-08-13: pokeruby.sym, pokesapphire.sym, pokeruby_rev1.sym,
+  // pokesapphire_rev1.sym. Whole-map comparison of every 0x02*/0x03* symbol: **727 symbols, ZERO
+  // differences across all four maps** — Ruby == Sapphire and rev0 == rev1 in RAM. That is what
+  // licenses ONE row body for two titles and two revisions (P3.3.2), and it is also the rule that
+  // bans ROM addresses here: the 0x08 space differs between all four (Task_StartMenu alone is
+  // 0x08071254 / 0x08071258 / 0x08071274 / 0x08071278), so any 0x08... value that is not
+  // identical in all four maps would be wrong for three of the four cartridges it meets.
+  //
+  // The struct LAYOUTS were read from pret/pokeruby master this session and are byte-identical to
+  // Emerald's for every field this app touches (VERIFIED-SRC):
+  //   SaveBlock1  pos +0x00, location(WarpData: s8 mapGroup +0x04, s8 mapNum +0x05)  global.h:668-681
+  //   SaveBlock2  playerName[8] +0x00, playerGender +0x08, playerTrainerId[4] +0x0A  global.h:841-847
+  //   ObjectEvent active:1 @+0x00 bit0, currentCoords +0x10, facingDirection low nibble +0x18,
+  //               previousElevation high nibble +0x0B, stride 0x24 (sym size 0x240 = 16*0x24)
+  //   Main        callback1 +0x00, callback2 +0x04, vblankCounter1 +0x20, vblankCounter2 +0x24,
+  //               newKeys +0x2E (main.h:10-44) — and unlike FR/LG, RS's vblankCounter1 is a real u32
+  //   FieldCamera curMovementOffsetX +0x10 / Y +0x14, size 0x18 (field_camera.h:4-12; sym size 0x18)
+  //   MapHeader   mapLayout +0x00 ... ; Tileset metatileAttributes +0x10 as const u16* (the RSE
+  //               shape fieldpath.c assumes); MAPGRID_* masks identical -> fp_engine()'s code[2]
+  //               test ('V'/'P' -> FP_ENG_RSE) is correct for AXVE/AXPE, and pokeruby's
+  //               metatile_behaviors.h numbering matches the RSE table row for row (0x69
+  //               MB_ANIMATED_DOOR, 0x60-0x6D block, 0x0E/0x0F/0x1B/0x1C/0x29) — re-read, not assumed.
+  //
+  // THE ONE STRUCTURAL DIFFERENCE is sbDirect=1 (last column): RS has no gSaveBlock1Ptr at all.
+  //
+  // Every 0 below is a NAMED degradation, never a guess (P3.4):
+  //  * ROM function pointers (cb2UpdParty, cb2InitParty, chooseTarget, startCbInput, cb2BagRun,
+  //    bagHandler, partyTask, yesNoTask, multiTask, selMenuTask, startMenuTask, mapNameTask) -> 0.
+  //    Rev/title-sensitive per the rule above, and several (Task_HandleChooseMonInput, Task_Bag*,
+  //    MapNamePopup*, HandleInputChooseTarget) DO NOT EXIST in the RS decomp — pokeruby still has
+  //    those regions as sub_XXXXXXXX. Degradation: task_active() returns false for a 0 handler
+  //    (gamestate.c:85) and find_bag_list_task finds nothing, so RS reports GCTX_OVERWORLD where
+  //    Emerald would report GCTX_FIELDMENU/GCTX_PARTY/GCTX_BAG. CONCRETELY: smart touch's
+  //    menu/bag/party/target features do not work on Ruby/Sapphire, and a peer avatar can be drawn
+  //    while the RS player has the START menu open. Both fail-safe (the overworld still WALKS).
+  //  * partyMenu, multiCursor, gWindowsBase, linkErrBuf, linkNotRecv -> 0: gPartyMenu,
+  //    gMultiUsePlayerCursor, gWindows, sLinkErrorBuffer and gRemoteLinkPlayersNotReceived have NO
+  //    symbol in any RS map (checked, all four). Two of the five link-diagnostic log columns are
+  //    blank for RS; the rest are already guarded `p->x ? read : 0` (gamestate.c:131-135).
+  //  * sMenuBase -> 0 (DEVIATION from SPEC-coop P3.3.3, which listed sMenu 0x020388B8): the RS
+  //    symbol's SIZE is 4 bytes (pokeruby.sym:312) while touch.c:510-524 reads +1/+2/+4/+5/+8 —
+  //    i.e. Emerald's `struct Menu` layout is NOT proven for RS, and a wrong-layout read is exactly
+  //    what the house rule bans. Costs nothing: gWindowsBase is 0 and no menu task resolves, so the
+  //    GCTX_FIELDMENU path is unreachable on RS regardless.
+  //  * mapHeader -> 0 ON PURPOSE (not "unknown"): main.c:885 gates the phase-14 HD-2D metatile
+  //    depth path on `!p->mapHeader`, and switching an untested render path on for a new game is a
+  //    render change this phase is forbidden to make. mapHeaderPath (last-but-one column) carries
+  //    the same gMapHeader for warp classification, which is the field this phase needs.
+  //  * spriteCoordOff -> 0: gSpriteCoordOffsetX 0x030024D0 (:535) and ...Y 0x030027E0 (:540) are
+  //    0x310 APART, not +2, and the field's whole contract is "Y = this + 2" (gamestate.h). It is
+  //    diagnostic-only (the shipped sub-tile source is fieldCamera+0x10/+0x14, which RS has and
+  //    which is verified above), so 0 costs nothing and a value here would read a wrong address.
+  //
+  // TWO columns are verify-on-hw-pending and must NOT be promoted without a run:
+  //  * battleMainCb 0x0800F808 (BattleMainCB2, pokeruby.sym:1378) — THE ONE ROM ADDRESS SHIPPED,
+  //    and only because all four maps give the identical value. It is load-bearing: without it
+  //    inBattle is always false, RS always reports GCTX_OVERWORLD, and a peer avatar would be
+  //    painted over battle screens. Promoted by one run that enters an RS battle and sees ctx leave
+  //    the field.
+  //  * partyCount 0x03004350 — IWRAM, symbol size 4, read as a u8. Only read inside the partyTask
+  //    branch, which RS never enters (partyTask = 0), so it is inert today.
+  //
+  // NOT ONE of these addresses has been EXECUTED: no Ruby or Sapphire ROM exists on this machine
+  // (sdmc:/dual-gba/ holds BPEE + BPRE only), so the whole row is VERIFIED-SYM / VERIFY-ON-HW.
+  // The cheap proof, per P3.6: boot Ruby in one core and Sapphire in the other and confirm smart
+  // touch's tap-to-walk works on both — that exercises sb1ptr + mapObjects + mapLayout, i.e. the
+  // exact three columns presence depends on, before a single avatar is drawn.
+  //
+  // AXVE and AXPE are TWO LITERAL ROWS with IDENTICAL BODIES, never one prefix match: the 4-char
+  // code is the app's only game identity and profile_for compares all four bytes (P3.5.1).
+  //   ***  IF YOU EDIT ONE OF THE NEXT TWO ROWS, EDIT THE OTHER — they are pinned together.  ***
+  #define RS_PROFILE_BODY \
+            /* sb1ptr(DIRECT) battleFlags  actionCur    moveCur      battleMons   bg0y        */ \
+            0x02025734u, 0x020239F8u, 0x02024E60u, 0x02024E64u, 0x02024A80u, 0x030042A0u,       \
+            /* partyMenu=0   partyCount   mainCb2      cb2Upd=0     cb2Init=0    newKeys     */ \
+            0x00000000u, 0x03004350u, 0x03001774u, 0x00000000u, 0x00000000u, 0x0300179Eu,       \
+            /* ctrlFuncs     chooseTgt=0  multiCur=0   battlerPos   battlersCnt  absentFlg      activeBat    mapLayout */ \
+            0x03004330u, 0x00000000u, 0x00000000u, 0x02024A72u, 0x02024A68u, 0x02024C0Cu, 0x02024A60u, 0x03004870u, \
+            /* startCb       startCbIn=0  sMenuBase=0  gWindows=0   startCursor  gTasks         cb2BagRun=0  bagHandler=0 bagOpen=0 */ \
+            0x03004AE8u, 0x00000000u, 0x00000000u, 0x00000000u, 0x0202E8FCu, 0x03004B20u, 0x00000000u, 0x00000000u, 0x00000000u, \
+            /* partyTask=0   yesNoTask=0  multiTask=0  selMenu=0    startMenu=0  mapHeader=0 */ \
+            0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,       \
+            /* battleMainCb (the one ROM addr)  mapObjects */                                   \
+            0x0800F808u, 0x030048A0u,                                                           \
+            /* fieldMsgMode  mapNameTask=0 fieldCamera */                                       \
+            0x030005A8u, 0x00000000u, 0x03004880u,                                              \
+            /* link diag: gLinkStatus gLinkErrorOccurred sLinkErrorBuffer=0 gRemoteLinkPlayersNotReceived=0 */ \
+            0x03002A60u, 0x0300295Cu, 0x00000000u, 0x00000000u,                                 \
+            /* vblankCtr = gMain+0x20 — a REAL u32 on RS (not FR/LG's NULL pointer), so the D2
+               Tier-B hang watch actually works here */                                         \
+            0x03001790u,                                                                        \
+            /* sb2ptr(DIRECT)  spriteCoordOff=0  hbCtr = gMain+0x24 */                          \
+            0x02024EA4u, 0x00000000u, 0x03001794u,                                              \
+            /* mapHeaderPath = gMapHeader (warp classification; NOT the HD-2D `mapHeader`) */    \
+            0x0202E828u,                                                                        \
+            /* sbDirect = 1: sb1ptr/sb2ptr above ARE the structs, not pointers (P3.2) */         \
+            1
+  { "AXVE", RS_PROFILE_BODY },   // Pokemon Ruby      (US, rev0 and rev1 — the RAM maps are identical)
+  { "AXPE", RS_PROFILE_BODY },   // Pokemon Sapphire  (US, rev0 and rev1 — same body, pinned above)
+  #undef RS_PROFILE_BODY
 };
 
 const GameProfile* profile_for(GbaCore* c) {
@@ -112,7 +236,12 @@ bool game_read(GbaCore* c, const GameProfile* p, GameState* out) {
 	if (!c || !p) return false;
 	out->valid = true;
 
-	uint32_t sb1 = gbacore_read32(c, p->sb1ptr);
+	// SPEC-coop P3.2.4 — call site 1 of 2. Ruby/Sapphire have no gSaveBlock1Ptr, so for those
+	// profiles the column IS the struct address and there is nothing to deref. The (>> 24) == 0x02
+	// EWRAM sanity test is KEPT in both cases: for a direct block it is a constant-true "mapped"
+	// check rather than a "loaded" check, which is honest — and the weaker signal is compensated
+	// where it actually matters (the identity latch; presence_read.c ident_refresh, P3.2.5).
+	uint32_t sb1 = p->sbDirect ? p->sb1ptr : gbacore_read32(c, p->sb1ptr);
 	out->sb1Valid = (sb1 >> 24) == 0x02;
 	if (out->sb1Valid) {
 		out->px = (int16_t)gbacore_read16(c, sb1);

@@ -68,24 +68,25 @@ void ui_text_r(C2D_TextBuf buf, const char* s, float rx, float y, float sz, u32 
 //       pixel and the rasteriser blends the ink toward the background: measured on the sweep frame,
 //       the brightest "3D" pixels were (26,40,65)…(51,83,130) over a bar at (6,5,10) = 1.4:1…2.8:1,
 //       while the nominal colour pair is 5.6:1. A naive contrast check PASSES an unreadable screen;
-//       the baked FNT_JBM_MED at its ~9 px native size draws near scale 1.0 (learn-skill invariant
-//       4), so coverage is ~1.0 and the nominal contrast is the real one.
+//       the baked TXT_CHIP face draws at texel scale EXACTLY 1.0 (phase 18 / SPEC-crisp R1: the
+//       face's lineFeed IS its draw px), so coverage is 1.0 and the nominal contrast is the real
+//       one. NB phase 17 asserted this via the learn skill's design-handoff invariant 4, whose
+//       measurement recipe was wrong — the real scale then was 0.667x. See typography.h.
 // The frame also becomes ui_border_round (art `chip-focus` measures r=3), matching the design's
 // rounded chips instead of the square 4-strip outline.
-#define UI_CHIP_H  13.0f
-#define UI_CHIP_PX  8.0f
+#define UI_CHIP_H  13.0f   // the chip box; its label is TXT_CHIP (7 px, typography.h)
 
 // One measurement for the chip's TOTAL width (label + 12 px padding) — the same number ui_chip*
 // use internally, exposed because a centred/right-flowed chip needs its width before it can be
 // placed (main.c's HUD flows right-to-left). Falls back to the system font if the pack is absent.
 float ui_chip_measure(C2D_TextBuf buf, const char* s) {
-	float w = assets_ready() ? assets_text_w(buf, FNT_JBM_MED, s, UI_CHIP_PX) : 0.0f;
+	float w = assets_ready() ? assets_text_w(buf, TXT_CHIP, s) : 0.0f;
 	if (w <= 0.0f) w = ui_text_w(buf, s, 0.32f);
 	return w + 12.0f;
 }
 
 static void chip_label(C2D_TextBuf buf, const char* s, float x, float y, u32 ink) {
-	if (assets_ready()) assets_text(buf, FNT_JBM_MED, s, x, y, UI_CHIP_PX, ink);
+	if (assets_ready()) assets_text(buf, TXT_CHIP, s, x, y, ink);
 	else                ui_text(buf, s, x, y, 0.32f, ink);
 }
 

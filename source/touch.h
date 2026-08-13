@@ -24,6 +24,12 @@ typedef struct {
 	int      moveCursor;     // 0..3 or -1 (debug only)
 	bool     moveValid[4];
 	int      px, py;         // player tile (for tap-to-walk), -1 if unknown
+	// PHASE 18 / SPEC-door T4.6: SaveBlock1.location, already read every frame by gamestate.c —
+	// no new addresses. A route must DIE the instant the map changes, which is exactly what
+	// happens when the warp it just triggered fires; the old `ptr/w/h` check cannot see that
+	// (gBackupMapLayout.map is a FIXED EWRAM buffer, so the pointer never changes across a warp)
+	// and a surviving route keeps driving the player around inside the building it just entered.
+	int      mapGroup, mapNum;   // -1 if the save block is not ready
 	GbaCore* core;           // bottom game's core, for deterministic menu-cursor writes + RAM reads
 	uint32_t actionAddr;     // gActionSelectionCursor[0]
 	uint32_t moveAddr;       // gMoveSelectionCursor[0]
@@ -42,6 +48,43 @@ typedef struct {
 	uint8_t  nTask;           // count of active-task func ptrs in taskFp[]
 	uint32_t taskFp[8];       // active gTasks func pointers (Thumb stripped, sorted) — disambiguate cb2-ambiguous screens
 } TouchSmart;
+
+// --- PHASE 18 / SPEC-door T4.11: the gdb-readable route mirror (LOGGING ONLY) ------------------
+// A screenshot cannot prove a warp fired: a door animation without a warp looks identical for
+// several frames. The objective instrument is this struct, read over the emutest gdb channel
+// (`tools/emutest/run gdbio read-u32 g_fieldDbg+N`, `gdbio poll g_fieldDbg --changed`,
+// `see rec --with-state g_fieldDbg`) alongside the game's own SaveBlock1.location. `planSeq`
+// increments once per planning ATTEMPT and `endSeq` once per route end, so a poll can latch on
+// either. All int32_t so every field is one aligned gdb word at a known offset.
+enum { FDBG_END_NONE = 0, FDBG_END_ARRIVED, FDBG_END_MOVED, FDBG_END_TIMEOUT,
+       FDBG_END_STALLED, FDBG_END_REPLANNED, FDBG_END_MAPCHANGE };
+typedef struct {
+	int32_t planSeq;        // +0x00  bumped on every planning attempt
+	int32_t px, py;         // +0x04  player tile the plan started from
+	int32_t mapGroup, mapNum;   // +0x0C  SaveBlock1.location at plan time
+	int32_t goalX, goalY;   // +0x14  the warp tile (after any door-graphic head retarget)
+	int32_t approachX, approachY;   // +0x1C  the tile the path actually ends on
+	int32_t kind;           // +0x24  FpKind: 0 none / 1 door / 2 dir / 3 step
+	int32_t termDir;        // +0x28  0 R / 1 L / 2 D / 3 U, -1 none
+	int32_t pathLen;        // +0x2C
+	int32_t pElev;          // +0x30  player elevation used (0 = the rule was disarmed)
+	int32_t behaviour;      // +0x34  raw metatile behaviour, -1 if unreadable
+	int32_t outcome;        // +0x38  FpOutcome
+	int32_t warpGroup, warpNum;   // +0x3C  the confirming warp event's destination, -1 if none
+	int32_t headRetarget;   // +0x44  1 = the tap hit the wall above a door and was moved onto it
+	int32_t routeEnd;       // +0x48  FDBG_END_*
+	int32_t endSeq;         // +0x4C  bumped on every route end
+	// --- the LIVE mirror, restamped every overworld frame (everything above is latched at plan
+	// time). THIS is what makes a warp provable from outside the emulated console: the game's own
+	// SaveBlock1.location, readable over gdb at any moment. `frame` advances with the emulated
+	// core, so a reader can also tell a frozen game from a running one.
+	int32_t curMapGroup, curMapNum;   // +0x50
+	int32_t curPx, curPy;             // +0x58
+	int32_t curKeys;                  // +0x60  the key mask the router injected this frame
+	int32_t curFrame;                 // +0x64  gbacore_frame_counter of the bottom game
+	int32_t walking;                  // +0x68  1 = a route is being followed, 2 = terminal hold
+} FieldDbg;
+extern FieldDbg g_fieldDbg;
 
 // --- Touch-event instrumentation logger (LOGGING ONLY — never changes touch/gameplay) ---------------
 // Self-contained ring in touch.c: touch_update records a row on each touch EVENT (a new press; plus

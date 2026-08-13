@@ -53,7 +53,7 @@ float ui_chip_fill_w(C2D_TextBuf buf, const char* s, float x, float y, float w, 
 // PHASE 17 / W4.2: the outlined chip when the FRAME and the INK are different roles — the handoff
 // fixes the "3D" badge at THEME_3D_TEXT on a THEME_GAME_B frame, and ui_chip's single `col` could
 // not express it (sweep D11). ui_chip(…, col) == ui_chip_2(…, col, col), so every old caller is
-// unchanged. All four chip helpers now draw the label with the BAKED FNT_JBM_MED at its native
+// unchanged. All four chip helpers now draw the label with the BAKED TXT_CHIP face at its native
 // size instead of the system font at scale 0.32.
 float ui_chip_2 (C2D_TextBuf buf, const char* s, float x, float y,          u32 frame, u32 ink);
 float ui_chip_2w(C2D_TextBuf buf, const char* s, float x, float y, float w, u32 frame, u32 ink);

@@ -93,6 +93,17 @@ int uihit_follow_sel  (int topRow, int sel, int visRows, int n);    // scroll fo
 #define UIHIT_THUMB_MIN       24   // §I2.4.6 — a thumb below this is not a grabbable object
 #define UIHIT_MENU_LEAD       14   // caption band pulled in with a focused control (see follow_rect)
 
+// ---- PHASE 18 FIX PASS (review finding 3): the pre-game LINK tab's "why are these faded" note --
+// It is content (it scrolls) but it is drawn OUTSIDE the control table, so uihit_content_h cannot
+// see it and menu_draw_chrome's repaint of y >= UIHIT_MENU_VIEW_H clipped it. Its y and its string
+// live here rather than as literals at the draw site so the host suite grades the SHIPPED values:
+// test_typography T11 asserts the line box (y + the face's own cellHeight, read out of
+// data/fnt_jbm_med_9.bin) clears UIHIT_MENU_VIEW_H, and T10 asserts the string fits the column.
+// The LINK tab's last control is PT_LINK's presence toggle at y196 h18 -> bottom edge 214, and its
+// contentH is therefore 240 => maxScroll 0, so this line NEVER scrolls: it has to fit where it is.
+#define SET_LINK_NOTE_Y      215
+#define SET_LINK_DISABLED_NOTE "Link actions need a running game"
+
 // Content height = max(y+h) over the tab's controls, floored at the screen height. Derived, not
 // tabulated, so it CANNOT drift from the control table the way PTABN[] historically did.
 int uihit_content_h (const UiRect* tbl, int n);

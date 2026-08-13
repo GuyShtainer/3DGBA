@@ -3,6 +3,7 @@
 #include "assets_gen.h"   // ASSET_PLATES / ASSET_WIDGETS X-macro lists (generated)
 #include <string.h>
 #include <stdio.h>
+#include <math.h>    // floorf — SPEC-crisp C4 integer draw origins
 #include "ui.h"      // ui_border for accent-outline/destructive frames, ui_fill for the segmented control
 #include "uigeom.h"  // ui_seg_radius — the pill radius ladder measured off the design art
 #include "theme.h"   // g_ui: the segmented control is drawn from the ACTIVE theme, not baked art
@@ -12,10 +13,19 @@
 ASSET_PLATES
 ASSET_WIDGETS
 #undef X
-extern const u8 fnt_sg_bold_bin[],  fnt_sg_bold_bin_end[];
-extern const u8 fnt_sg_med_bin[],   fnt_sg_med_bin_end[];
-extern const u8 fnt_jbm_med_bin[],  fnt_jbm_med_bin_end[];
-extern const u8 fnt_jbm_bold_bin[], fnt_jbm_bold_bin_end[];
+// PHASE 18 / SPEC-crisp: one bcfnt per ladder rung, each baked with lineFeed == its draw px.
+// Order MUST match TxtRole in typography.h (asserted at load, see assets_init).
+#define ASSET_FONTS \
+	X(TXT_TITLE,   fnt_sg_bold_17)  \
+	X(TXT_BUTTON,  fnt_sg_bold_12)  \
+	X(TXT_BODY,    fnt_sg_med_12)   \
+	X(TXT_SEG,     fnt_sg_med_10)   \
+	X(TXT_SECTION, fnt_jbm_med_9)   \
+	X(TXT_CHIP,    fnt_jbm_med_7)   \
+	X(TXT_VALUE,   fnt_jbm_bold_11)
+#define X(role, sym) extern const u8 sym##_bin[]; extern const u8 sym##_bin_end[];
+ASSET_FONTS
+#undef X
 
 typedef struct { const char* id; const u8* data; const u8* end; C2D_SpriteSheet ss; } Asset;
 static Asset s_plates[] = {
@@ -31,8 +41,11 @@ static Asset s_wgts[] = {
 static const int N_PLATES = (int)(sizeof s_plates / sizeof s_plates[0]);
 static const int N_WGTS   = (int)(sizeof s_wgts   / sizeof s_wgts[0]);
 
-static C2D_Font s_fonts[FNT_COUNT];
-static float s_native[FNT_COUNT];   // MEASURED px line-height at scale 1.0 (auto, not the bake pt)
+static C2D_Font s_fonts[TXT_COUNT];
+// Each face's own FINF.lineFeed / TGLP.cellHeight, read out of the LOADED font (not assumed from
+// the bake script), so the draw scale is derived from the bytes that actually shipped.
+static int  s_lineFeed[TXT_COUNT];
+static int  s_cellH[TXT_COUNT];
 static bool s_ready = false;
 
 static void load_group(Asset* a, int n) {
@@ -52,27 +65,52 @@ bool assets_init(void) {
 	theme_init_art(ASSET_THEME_ID);
 	load_group(s_plates, N_PLATES);
 	load_group(s_wgts, N_WGTS);
-	s_fonts[FNT_SG_BOLD]  = C2D_FontLoadFromMem(fnt_sg_bold_bin,  (size_t)(fnt_sg_bold_bin_end  - fnt_sg_bold_bin));
-	s_fonts[FNT_SG_MED]   = C2D_FontLoadFromMem(fnt_sg_med_bin,   (size_t)(fnt_sg_med_bin_end   - fnt_sg_med_bin));
-	s_fonts[FNT_JBM_MED]  = C2D_FontLoadFromMem(fnt_jbm_med_bin,  (size_t)(fnt_jbm_med_bin_end  - fnt_jbm_med_bin));
-	s_fonts[FNT_JBM_BOLD] = C2D_FontLoadFromMem(fnt_jbm_bold_bin, (size_t)(fnt_jbm_bold_bin_end - fnt_jbm_bold_bin));
-	// MEASURE each face's native px height at scale 1.0 so assets_text draws near scale 1.0 (crisp,
-	// no blurry up/downscaling) regardless of mkbcfnt's pt->px conversion.
-	{
-		C2D_TextBuf mb = C2D_TextBufNew(64);
-		for (int f = 0; f < FNT_COUNT; f++) {
-			s_native[f] = 14.0f;
-			if (!s_fonts[f]) continue;
-			C2D_Text t; C2D_TextFontParse(&t, s_fonts[f], mb, "Ag"); C2D_TextOptimize(&t);
-			float w, h; C2D_TextGetDimensions(&t, 1.0f, 1.0f, &w, &h);
-			if (h > 1.0f) s_native[f] = h;
-			C2D_TextBufClear(mb);
+#define X(role, sym) s_fonts[role] = C2D_FontLoadFromMem(sym##_bin, (size_t)(sym##_bin_end - sym##_bin));
+	ASSET_FONTS
+#undef X
+	// PHASE 18 / SPEC-crisp C2.1.1 + C3.1. Two things per face, both load-time, both one-shot:
+	//
+	//  (1) The draw scale is DERIVED from the face's own FINF/TGLP, not measured through
+	//      citro2d. C2D_TextGetDimensions(1.0) returns ceil(lineFeed*30/cellH) — citro2d's
+	//      NORMALISED height, ~26 for every face whatever its bake — so the phase-16/17 "measure
+	//      the native size" recipe reported 26/27/24/24 for faces whose lineFeeds were 19/17/12/14
+	//      and every draw came out at 0.58x-1.05x. typo_draw_scale(px, lineFeed, cellH) makes the
+	//      texel scale exactly px/lineFeed, which the ladder pins at 1.0.
+	//
+	//  (2) NEAREST on the glyph sheets. citro2d writes param 0x1106 (MAG|MIN = GPU_LINEAR) into
+	//      every sheet in C2Di_PostLoadFont, so the filter is the font's own, not inherited from
+	//      the game blit — and C2D_FontSetFilter is the only supported way to change it. At
+	//      texel scale 1.0 NEAREST and LINEAR are BIT-IDENTICAL (the bilinear taps collapse onto
+	//      texel centres), so this line does not improve today's pixels: it is a tripwire that
+	//      makes any future off-1.0 draw look obviously wrong instead of quietly soft. Do not
+	//      "clean it up", and never land it without (1) — NEAREST at 0.67x drops one texel row
+	//      in three and shatters a 9 px glyph.
+	for (int f = 0; f < TXT_COUNT; f++) {
+		s_lineFeed[f] = 0; s_cellH[f] = 0;           // 0/0 => typo_draw_scale returns 1.0
+		if (!s_fonts[f]) continue;
+		C2D_FontSetFilter(s_fonts[f], GPU_NEAREST, GPU_NEAREST);
+		FINF_s* fi = C2D_FontGetInfo(s_fonts[f]);
+		if (fi && fi->tglp && fi->tglp->cellHeight) {
+			s_lineFeed[f] = fi->lineFeed;
+			s_cellH[f]    = fi->tglp->cellHeight;
 		}
-		C2D_TextBufDelete(mb);
 	}
 	// ready iff at least the splash plates + one font loaded (a torn/absent pack -> code-drawn fallback)
-	s_ready = s_plates[0].ss && s_fonts[FNT_SG_BOLD];
+	s_ready = s_plates[0].ss && s_fonts[TXT_TITLE];
 	return s_ready;
+}
+
+// Debug/self-check surface for the harness: the texel scale a role actually draws at, read live
+// over gdb. R1 says every one of these is 1.0. (Costs 7 floats; it is the only way to prove the
+// law holds in the SHIPPED binary rather than in the bake.)
+float g_txtTexelScale[TXT_COUNT];
+int   g_txtLineFeed[TXT_COUNT];
+void assets_dbg_publish_scales(void) {
+	for (int f = 0; f < TXT_COUNT; f++) {
+		g_txtLineFeed[f]   = s_lineFeed[f];
+		g_txtTexelScale[f] = s_cellH[f]
+			? typo_texel_scale(typo_role_px((TxtRole)f), s_lineFeed[f], s_cellH[f]) : 0.0f;
+	}
 }
 bool assets_ready(void) { return s_ready; }
 
@@ -100,25 +138,36 @@ void assets_draw_wgt_fit(const char* id, float x, float y, float w, float h) {
 	C2D_DrawImageAt(img, x, y, 0.0f, NULL, sx, sy);
 }
 
-C2D_Font assets_font(AFont f) { return (f >= 0 && f < FNT_COUNT) ? s_fonts[f] : NULL; }
+C2D_Font assets_font(TxtRole r) { return (r >= 0 && r < TXT_COUNT) ? s_fonts[r] : NULL; }
 
-void assets_text(C2D_TextBuf buf, AFont f, const char* s, float x, float y, float px, u32 col) {
-	if (!s_ready || f < 0 || f >= FNT_COUNT || !s_fonts[f]) return;
-	float sc = px / s_native[f];
-	C2D_Text t; C2D_TextFontParse(&t, s_fonts[f], buf, s); C2D_TextOptimize(&t);
+void assets_text(C2D_TextBuf buf, TxtRole r, const char* s, float x, float y, u32 col) {
+	if (!s_ready || r < 0 || r >= TXT_COUNT || !s_fonts[r]) return;
+	float sc = typo_draw_scale(typo_role_px(r), s_lineFeed[r], s_cellH[r]);
+	// SPEC-crisp C4: SNAP THE ORIGIN. A glyph quad starting at x=12.5 is sampled halfway
+	// between two texel columns, and a half-pixel origin at perfect scale measured as blurry
+	// as the 0.71x downscale we just removed (22-32 grey levels vs 14). Rounding here rather
+	// than at the call sites means _c/_r inherit it and no caller can opt out. Once scale is
+	// 1.0 the per-glyph advances are whole numbers too (integer charWidth x 1.0), so one
+	// rounded origin keeps the entire run on the pixel grid — there is nothing to accumulate.
+	x = floorf(x + 0.5f);
+	y = floorf(y + 0.5f);
+	C2D_Text t; C2D_TextFontParse(&t, s_fonts[r], buf, s); C2D_TextOptimize(&t);
 	C2D_DrawText(&t, C2D_WithColor, x, y, 0.0f, sc, sc, col);
 }
-float assets_text_w(C2D_TextBuf buf, AFont f, const char* s, float px) {
-	if (f < 0 || f >= FNT_COUNT || !s_fonts[f]) return 0.0f;
-	float sc = px / s_native[f];
-	C2D_Text t; C2D_TextFontParse(&t, s_fonts[f], buf, s); C2D_TextOptimize(&t);
+float assets_text_w(C2D_TextBuf buf, TxtRole r, const char* s) {
+	if (r < 0 || r >= TXT_COUNT || !s_fonts[r]) return 0.0f;
+	float sc = typo_draw_scale(typo_role_px(r), s_lineFeed[r], s_cellH[r]);
+	C2D_Text t; C2D_TextFontParse(&t, s_fonts[r], buf, s); C2D_TextOptimize(&t);
 	float w, h; C2D_TextGetDimensions(&t, sc, sc, &w, &h); return w;
 }
-void assets_text_c(C2D_TextBuf buf, AFont f, const char* s, float cx, float y, float px, u32 col) {
-	assets_text(buf, f, s, cx - assets_text_w(buf, f, s, px) / 2.0f, y, px, col);
+// C4.2: the measured width is NOT rounded — it also drives layout flow (the HUD's right-to-left
+// run, uihit_wrap), where rounding every step would accumulate drift. Only the final origin snaps,
+// which assets_text does for us.
+void assets_text_c(C2D_TextBuf buf, TxtRole r, const char* s, float cx, float y, u32 col) {
+	assets_text(buf, r, s, cx - assets_text_w(buf, r, s) / 2.0f, y, col);
 }
-void assets_text_r(C2D_TextBuf buf, AFont f, const char* s, float rx, float y, float px, u32 col) {
-	assets_text(buf, f, s, rx - assets_text_w(buf, f, s, px), y, px, col);
+void assets_text_r(C2D_TextBuf buf, TxtRole r, const char* s, float rx, float y, u32 col) {
+	assets_text(buf, r, s, rx - assets_text_w(buf, r, s), y, col);
 }
 
 
@@ -183,7 +232,7 @@ bool assets_img_cell(C2D_Image src, float px, float py, float pw, float ph,
 // Button backgrounds: solid roles 9-slice from the fill-*-r8 sprites (crisp corners at any width);
 // ghost = transparent; accent-outline/destructive keep their thin accent/red frame (drawn by caller).
 void assets_button(C2D_TextBuf buf, const char* sprite, float x, float y, float w, float h,
-                   const char* label, AFont f, float px, u32 col, int focus) {
+                   const char* label, TxtRole r, u32 col, int focus) {
 	if (!strcmp(sprite, "btn-primary"))        assets_fill9("fill-primary-r8", x, y, w, h, 8.0f);
 	else if (!strcmp(sprite, "btn-secondary")) assets_fill9("fill-secondary-r8", x, y, w, h, 8.0f);
 	else if (!strcmp(sprite, "btn-ghost")) { /* transparent */ }
@@ -199,7 +248,12 @@ void assets_button(C2D_TextBuf buf, const char* sprite, float x, float y, float 
 	// the sprite-backed buttons are the majority of the d-pad chain's stops and were the last
 	// square idiom left. ASSETS_BTN_R is the 9-slice's own radius, so the two cannot drift.
 	if (focus) ui_border_round(x, y, w, h, C2D_Color32(0xFF,0xFF,0xFF,0xE0), 1.5f, ASSETS_BTN_R);
-	if (label && label[0]) assets_text_c(buf, f, label, x + w / 2.0f, y + (h - px) / 2.0f - 0.5f, px, col);
+	// Phase 18 C4.3: the `- 0.5f` nudge is GONE. It was there to fight the blur this phase
+	// removed (a resampled glyph looked low, so someone lifted it half a pixel); with the line
+	// box exactly typo_role_px(r) tall, (h - px)/2 is the true optical centre and assets_text
+	// snaps it to the grid.
+	if (label && label[0])
+		assets_text_c(buf, r, label, x + w / 2.0f, y + (h - typo_role_px(r)) / 2.0f, col);
 }
 
 // Segmented control, drawn procedurally (W1.2). The shipped art is a flat fill of the theme token
@@ -221,9 +275,12 @@ void assets_seg(C2D_TextBuf buf, float x, float y, float w, float h,
 	float ow = w / (float)n;
 	if (active >= 0 && active < n)
 		ui_fill(x + active * ow + 2.0f, y + 2.0f, ow - 4.0f, h - 4.0f, g_ui.acc, ui_seg_radius(h - 4.0f));
+	// TXT_SEG is the ladder's 10 px Space Grotesk Medium rung — the segmented control's cells are
+	// the tightest boxes in the app, which is why it keeps its own rung instead of folding into
+	// TXT_BODY's 12 px. `y + (h - px)/2` is the same centre the old `y + h/2 - 5` expressed.
 	for (int i = 0; i < n; i++)
-		assets_text_c(buf, FNT_SG_MED, opts[i], x + i * ow + ow / 2.0f, y + h / 2.0f - 5.0f,
-		              10.0f, i == active ? inkA : dim);
+		assets_text_c(buf, TXT_SEG, opts[i], x + i * ow + ow / 2.0f,
+		              y + (h - typo_role_px(TXT_SEG)) / 2.0f, i == active ? inkA : dim);
 }
 
 void assets_toggle(int on, float x, float y) { assets_draw_wgt(on ? "toggle-on" : "toggle-off", x, y); }

@@ -226,6 +226,8 @@ def _uniform_verdict(im, where):
         print("see: capture is a uniform image AND the Screen Recording grant is gone "
               "(revoked mid-run?)")
         skip_no_permission()
+    if display_asleep():          # PHASE 18: the display can fall asleep MID-session too
+        skip_display_asleep()
     lo, _hi = im.convert("L").getextrema()
     print("see: FAIL — {} is a single flat colour (luminance {}) while the Screen "
           "Recording grant IS effective. That is NOT a permission problem: the window is "
@@ -235,10 +237,36 @@ def _uniform_verdict(im, where):
     raise SystemExit(1)
 
 
+def display_asleep():
+    """True when the main display is asleep — every capture is then uniformly black.
+
+    PHASE 18. This is the real cause of the 'see returns pure black' defect that three
+    phase-18 slices recorded as an unexplained environmental problem and shipped without
+    pixel evidence for (SPEC-crisp Q1, SEVEN reproductions). It is not Azahar and not TCC:
+    the sessions ran late on an idle machine, the display slept, and `screencapture` of the
+    WHOLE display returns a 1-colour image in that state too. Nothing warned, because a
+    black PNG is a perfectly valid PNG."""
+    q = _quartz()
+    try:
+        return bool(q.CGDisplayIsAsleep(q.CGMainDisplayID()))
+    except Exception:
+        return False       # can't tell -> don't invent a failure
+
+
+def skip_display_asleep():
+    print("see: SKIP — the main display is ASLEEP, so every capture would be uniform black.")
+    print("  Wake it and keep it awake for the capture session:")
+    print("    nohup caffeinate -u -t 900 >/dev/null 2>&1 &")
+    print("  (a SKIP is never a pass — PHASE invariant 4)")
+    raise SystemExit(EXIT_SKIP)
+
+
 def require_window(context=""):
     """Preflight the TCC grant + locate the window, or exit 75 / 1 with instructions."""
     if not screen_recording_granted():
         skip_no_permission()
+    if display_asleep():
+        skip_display_asleep()
     win = find_window()
     if win is None:
         print("see: FAIL — no Azahar window on screen{} (boot first: "
@@ -559,6 +587,8 @@ def main(argv=None):
     s.add_argument("out", help="output PNG ('both' writes OUT.top.png + OUT.bottom.png)")
     s.add_argument("--raw-window", metavar="FULL.png",
                    help="also save the uncropped window capture")
+    s.add_argument("--wake", action="store_true",
+                   help="wake a sleeping display first (synchronous `caffeinate -u -t 3`). A background caffeinate is NOT reliable — observed four live caffeinate processes with the display asleep anyway; a short synchronous one immediately before the grab is. Off by default: waking the user's display is a side effect they should ask for.")
     s.set_defaults(fn=cmd_shot)
 
     s = sub.add_parser("rec", help="timed capture loop -> PNG frames + manifest + video")
@@ -577,6 +607,8 @@ def main(argv=None):
                    help="bytes per --with-state read (default 4 = u32)")
     s.add_argument("--format", choices=["mp4", "gif", "none"], default="mp4",
                    help="ffmpeg assembly of the frame sequence (default mp4)")
+    s.add_argument("--wake", action="store_true",
+                   help="wake a sleeping display first (synchronous `caffeinate -u -t 3`). A background caffeinate is NOT reliable — observed four live caffeinate processes with the display asleep anyway; a short synchronous one immediately before the grab is. Off by default: waking the user's display is a side effect they should ask for.")
     s.add_argument("--keep-window", action="store_true",
                    help="also keep the uncropped window frames")
     s.set_defaults(fn=cmd_rec)
@@ -585,6 +617,11 @@ def main(argv=None):
     s.set_defaults(fn=cmd_win)
 
     args = ap.parse_args(argv)
+    if getattr(args, "wake", False):
+        try:
+            subprocess.run(["caffeinate", "-u", "-t", "3"], timeout=10)
+        except Exception as e:
+            print("see: --wake failed (%s); continuing" % e, file=sys.stderr)
     return args.fn(args)
 
 

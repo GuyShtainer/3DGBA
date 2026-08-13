@@ -216,6 +216,13 @@ PROFILE_PINS = [
     ("Layout", "screen_top_stretch", "false"),    # stretch replaces S4 rects (l.292)
     ("Layout", "screen_bottom_stretch", "false"), # (l.284)
     ("Layout", "use_integer_scaling", "false"),   # pins MaxRectangle branch (l.356)
+    # PHASE 18. NEAREST screen filter. Without this the window upscale is bilinear, so a
+    # capture can never answer a question about individual framebuffer pixels — which is
+    # exactly what three phase-18 slices needed and went without. With it, the 2.25x upscale
+    # is a verbatim pixel copy and the 400x240 / 320x240 framebuffer can be recovered
+    # BYTE-EXACTLY from an ordinary `see shot` (tools/emutest/native.py --verify proves it by
+    # re-expanding and diffing). This is what makes text-sharpness measurable off-hardware.
+    ("Layout", "filter_mode", "false"),           # NEAREST window filter
     ("Layout", "render_3d", "0"),                 # stereo off — no touch remap (l.278)
     ("Layout", "factor_3d", "0"),                 # 3D slider off (l.264)
     # aspect_ratio: deliberately NOT pinned — no such key in 2125.1.2's file (probed);
