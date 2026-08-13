@@ -1,0 +1,10 @@
+[
+  ["wait", 1500],
+  ["touch", 226, 192, 14], ["wait", 300],
+  ["hold", "START+SELECT", 40], ["release"], ["wait", 260],
+  ["touch", 40, 173, 14], ["wait", 260],
+  ["touch", 256, 131, 14], ["wait", 420],
+  ["hold", "START+SELECT", 40], ["release"], ["wait", 260],
+  ["touch", 40, 143, 14], ["wait", 260],
+  ["touch", 201, 91, 14], ["wait", 800]
+]

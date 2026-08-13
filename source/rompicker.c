@@ -33,8 +33,13 @@ PickDiag g_pickDiag;
 
 #define MAX_ROMS     128
 #define NAME_LEN     128
-#define VIS_ROWS     13
-#define ROW_H        16.0f
+// PHASE 19 / SPEC-legible L3.2.5 — the .sav picker's list. TXT_BODY's line box is 18 px now, so
+// a 16 px row pitch overlapped the row below it outright. ROW_H 20 gives 2 px of separation; the
+// visible count drops 13 -> 9 so the last row's top is y=190 (ink 195..206), clear of the help
+// line's ink at 218..226. The list ALREADY scrolls (the topRow follow logic below), so fewer
+// visible rows costs a scroll, not a file — remedy 3 in support of remedy 1.
+#define VIS_ROWS      9
+#define ROW_H        20.0f
 
 // Map the GBA header game code (offset 0xAC) to a friendly name for the games we care about.
 static const char* known_game(const char* code) {
@@ -320,8 +325,15 @@ static void pick_footer_chip(C2D_TextBuf buf, UiRect rSet) {
 	ui_fill((float)rSet.x, (float)rSet.y, (float)rSet.w, (float)rSet.h, g_ui.panel2, 5.0f);
 	// W4.1: the chip's fill is PROCEDURAL (g_ui.panel2), so its ink is the ACTIVE theme's —
 	// unlike everything drawn on the baked plate around it, which is g_art.
+	// PHASE 19 FIX PASS (verify finding V2/C3): this was the LAST surviving
+	// `boxY + (boxH - typo_role_px(r)) / 2` line-box centring in the tree — the idiom L3.2.7
+	// replaced everywhere else. typo_role_px(TXT_CHIP) went 7 -> 12, so with PICK_SETTINGS =
+	// {6,223,88,16} the draw y was 225 and the ink landed on rows 229..237 in a pill of 223..238:
+	// six blank rows above, one below, the "g" descender flush with the bottom edge (captured:
+	// tools/emutest/runs/p19-verify/shots/DEFECT-settings-chip-zoom.png). typo_center_y gives
+	// y=223 -> ink 227..235, 4 above / 3 below. T10 now measures this label and T18 grades the box.
 	assets_text(buf, TXT_CHIP, "settings · ZR", (float)rSet.x + 6.0f,
-	            (float)rSet.y + ((float)rSet.h - typo_role_px(TXT_CHIP)) / 2.0f, g_ui.dim);
+	            typo_center_y(TXT_CHIP, (float)rSet.y, (float)rSet.h), g_ui.dim);
 }
 
 // ---- PHASE 17 / SPEC-layout L7.2 (sweep D13): the ROM-less empty state -------------------------
@@ -378,13 +390,14 @@ static int empty_state_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_Tex
 		// The card sits in the list's own band (manifest x16 y37 w369 h197) — there are no rows to
 		// draw, so nothing is covered.
 		assets_text_c(txtBuf, TXT_TITLE, "No games found", 200.0f, 96.0f, g_art.text);
-		assets_text_c(txtBuf, TXT_SECTION, "put .gba files in " ROM_DIR "/", 200.0f, 122.0f, g_art.dim);
+		// L3.3.3: prose off the mono rung. 176 px at TXT_BODY on a 400 px screen.
+		assets_text_c(txtBuf, TXT_BODY, "put .gba files in " ROM_DIR "/", 200.0f, 122.0f, g_art.dim);
 
 		C2D_TargetClear(bot, g_ui.bg); C2D_SceneBegin(bot);
 		assets_draw_plate("select-dual-bot");
 		pick_blank_cards("select-dual-bot");     // review finding 3: no empty labelled slot cards
-		assets_text_c(txtBuf, TXT_SECTION, "put .gba files in " ROM_DIR "/, then Rescan",
-		              160.0f, 104.0f, g_art.dim);
+		assets_text_c(txtBuf, TXT_BODY, "put .gba files in " ROM_DIR "/, then Rescan",
+		              160.0f, 104.0f, g_art.dim);   // L3.3.3
 		assets_button(txtBuf, "btn-primary", (float)rRe.x, (float)rRe.y, (float)rRe.w, (float)rRe.h,
 		              "Rescan", TXT_BUTTON, g_art.ink, sel == 0);
 		assets_button(txtBuf, "btn-secondary", (float)rGo.x, (float)rGo.y, (float)rGo.w, (float)rGo.h,

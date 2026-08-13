@@ -10,6 +10,7 @@
 #include "ui.h"        // shared widget kit (borders, chips, centered text)
 #include "assets.h"    // baked fonts: the mode/menu chips draw TXT_CHIP at its native size
 #include "fieldpath.h" // phase 18: warp classification + the elevation-correct router (pure C)
+#include "uihit.h"     // phase 19 / L3.2.8: the chip boxes, shared with the host suite
 
 const char* const TOUCH_NAMES[3] = { "Off", "Gamepad", "Smart" };
 
@@ -24,10 +25,14 @@ static u32 pad_tint(u8 alpha) {
 // =============================== PAD (virtual gamepad) ======================
 // The "≡ menu" chip: ONE rect for the draw and the hit test (touch.h explains why it needed to
 // become a real control). Bottom-right, clear of the drawn A key (252,150,60,60 -> rows 150..209).
-#define MCHIP_X 266.0f
-#define MCHIP_Y 220.0f
-#define MCHIP_W  48.0f
-#define MCHIP_H  18.0f
+// PHASE 19 / SPEC-legible L3.2.8: the box grows 18 -> 20 for the taller TXT_CHIP cell. It moves
+// UP two rows with it (220 -> 218) rather than growing downward: at y=220 a 20 px box ends
+// exactly on row 240, i.e. its rounded bottom corners fall off the panel. W stays 48 (bars 8 +
+// gap 4 + "menu" 20 = 32 <= 48). One rect, so the hit test follows the art automatically.
+#define MCHIP_X ((float)UIHIT_MCHIP_X)
+#define MCHIP_Y ((float)UIHIT_MCHIP_Y)
+#define MCHIP_W ((float)UIHIT_MCHIP_W)
+#define MCHIP_H ((float)UIHIT_MCHIP_H)
 
 int touch_menu_chip(TouchMode mode, int px, int py) {
 	// SPEC-layout L6.3.5: SMART now draws the chip too, so it must hit-test in SMART as well.
@@ -42,10 +47,13 @@ int touch_menu_chip(TouchMode mode, int px, int py) {
 // The dark translucent chip both touch modes label themselves with (screenshots 06 + 07). Split
 // out of pad_overlay so PAD and SMART cannot drift, and drawn with the BAKED font at its native
 // size — the system font at scale 0.32 is what made small chip labels a smudge (W4.2).
+// PHASE 19 / SPEC-legible L3.2.8: box 14 -> 17 (the TXT_CHIP cell is 15 px now, so 14 clipped
+// it outright), label centred by ink instead of the hand-typed +3.
+#define TCHIP_H ((float)UIHIT_TOUCH_CHIP_H)
 static void touch_chip(C2D_TextBuf buf, const char* s, float cx, float y, u32 ink) {
 	float w = ui_chip_measure(buf, s) + 2.0f;
-	ui_fill(cx - w / 2.0f, y, w, 14.0f, C2D_Color32(0x00, 0x00, 0x00, 0x96), 4.0f);
-	assets_text_c(buf, TXT_CHIP, s, cx, y + 3.0f, ink);
+	ui_fill(cx - w / 2.0f, y, w, TCHIP_H, C2D_Color32(0x00, 0x00, 0x00, 0x96), 4.0f);
+	assets_text_c(buf, TXT_CHIP, s, cx, typo_center_y(TXT_CHIP, y, TCHIP_H), ink);
 }
 
 // The "menu" affordance, drawn at exactly the rect touch_menu_chip() hit-tests.
@@ -61,7 +69,7 @@ static void touch_menu_chip_draw(C2D_TextBuf buf, u32 ink) {
 	float bx = MCHIP_X + (MCHIP_W - (BARW + GAP + lw)) / 2.0f;
 	float by = MCHIP_Y + MCHIP_H / 2.0f - 3.0f;
 	for (int i = 0; i < 3; i++) C2D_DrawRectSolid(bx, by + (float)i * 2.5f, 0.0f, BARW, 1.0f, ink);
-	assets_text(buf, TXT_CHIP, "menu", bx + BARW + GAP, MCHIP_Y + 5.0f, ink);
+	assets_text(buf, TXT_CHIP, "menu", bx + BARW + GAP, typo_center_y(TXT_CHIP, MCHIP_Y, MCHIP_H), ink);
 }
 
 static u16 pad_keys(int px, int py) {
@@ -101,9 +109,13 @@ static void pad_zone(float x, float y, float w, float h, u32 col, float r) {
 // labels and is the closest rung to the old size (cap height 7 px vs ~8), so no key changes shape.
 // Centred on the ROLE's px rather than a measured line height: at scale 1.0 the line box is the
 // bake's own, and this is the same idiom menu_ov_label uses.
+// PHASE 19 / SPEC-legible L3.2.7 + L4.6: TXT_BUTTON goes cap 7 -> cap 9 here, the chrome a
+// Gamepad-mode player stares at for a whole session, and NO key rect changes ("START" is 37 px
+// in a 64 px key). The centre is the ink box's, not the line box's — at cap 9 in a 22 px key
+// the old line-box centre put the glyphs 3 px low, visibly riding the key's bottom edge.
 static void pad_label(C2D_TextBuf buf, const char* s, float x, float y, float w, float h, u32 col) {
 	if (!buf) return;
-	assets_text_c(buf, TXT_BUTTON, s, x + w / 2.0f, y + (h - typo_role_px(TXT_BUTTON)) / 2.0f, col);
+	assets_text_c(buf, TXT_BUTTON, s, x + w / 2.0f, typo_center_y(TXT_BUTTON, y, h), col);
 }
 
 static void pad_overlay(u16 held, C2D_TextBuf buf) {
@@ -133,7 +145,7 @@ static void pad_overlay(u16 held, C2D_TextBuf buf) {
 	ZONE(4, 4, 52, 22, GBAKEY_L, "L");        ZONE(264, 4, 52, 22, GBAKEY_R, "R");
 	#undef ZONE
 	if (buf) {
-		touch_chip(buf, "TOUCH · GAMEPAD", 160.0f, 4.0f, glyph);
+		touch_chip(buf, "TOUCH · GAMEPAD", 160.0f, (float)UIHIT_TOUCH_CHIP_Y, glyph);
 		touch_menu_chip_draw(buf, pad_tint(0xC8));
 	}
 }
@@ -846,7 +858,7 @@ void touch_draw(TouchMode mode, u16 held, const TouchSmart* sm, C2D_TextBuf buf)
 		// chip at all while a raw cyan `field p=9,4 key=-` developer readout sat on the footer.
 		// Smart draws no BUTTONS by design (the point is that you touch the real game UI) — but it
 		// must still say what mode it is in and offer a way back to the menu (screenshot 07).
-		touch_chip(buf, "TOUCH · SMART POINTER", 160.0f, 4.0f, C2D_Color32(0xF5, 0xD0, 0x42, 0xE6));
+		touch_chip(buf, "TOUCH · SMART POINTER", 160.0f, (float)UIHIT_TOUCH_CHIP_Y, C2D_Color32(0xF5, 0xD0, 0x42, 0xE6));
 		touch_menu_chip_draw(buf, C2D_Color32(0xF5, 0xD0, 0x42, 0xC8));
 	}
 }

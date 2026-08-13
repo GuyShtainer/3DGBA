@@ -1,5 +1,5 @@
-// test_typography.c — PC host unit test for the phase-18 type ladder (source/typography.h)
-// and the seven baked faces in data/.
+// test_typography.c — PC host unit test for the type ladder (source/typography.h) and the
+// five baked faces in data/ (phase 18's crispness law; phase 19's sizes).
 //
 // This is the regression barrier for SPEC-crisp R1: "every text draw is at texel scale EXACTLY
 // 1.0 with an integer origin". The blur the user reported on hardware was not a subtle
@@ -28,16 +28,26 @@
 // T11 text drawn under the menu content clears the fixed chrome repaint  FIX PASS finding 3
 // T12 the system-font budget: no NEW draw bypasses the role ladder     FIX PASS
 // T13 the bake is stem-snapped: solid ink, not grey mush   PHASE 18 second cause
+// T14 the touch explainer wraps inside its rect, in all three copies         PHASE 19 / G2
+// T15 the alias contract: 7 roles, 5 faces, and data/ holds exactly those  PHASE 19
+// T16 vertical fit: every fixed-offset row keeps its INK inside its box     PHASE 19 / G2
+// T17 cap height per rung — the "it is actually bigger" claim, from the bytes  PHASE 19
+// T18 the declared ink box (typography.h) matches the shipped bytes         PHASE 19 / G2
+// T19 one module per band: the bottom HUD bar vs the touch mode chip     PHASE 19 FIX PASS
 //
-//   clang -std=c11 -Wall -Wextra -O2 -I source test/host/test_typography.c -lm -o /tmp/tty && /tmp/tty
-//   (run from the project root — T1/T5/T6 read data/, T6b/T9 read source/)
+//   clang -std=c11 -Wall -Wextra -O2 -I source test/host/test_typography.c source/uihit.c \
+//         -lm -o /tmp/tty && /tmp/tty
+//   (run from the project root — T1/T5/T6 read data/, T6b/T9 read source/. source/uihit.c is
+//    linked as of phase 19: T14 drives the SHIPPED uihit_wrap rather than a copy of it.)
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <dirent.h>
 #include "../../source/typography.h"
 #include "../../source/uihit.h"       // FIX PASS: T11 grades a real viewport constant
+#include "../../source/presence_ui.h" // PHASE 19: T10 grades the presence card's own copy
 
 static int g_checks = 0, g_fail = 0;
 #define CHECK(cond, ...) do { \
@@ -161,6 +171,50 @@ static int sheet_nib(const Font* f, int x, int y) {
 	return (m & 1) ? (b >> 4) : (b & 0x0F);
 }
 
+// Ink row extent of a glyph inside its cell -> cap height in device px (PHASE 19 / T17).
+// Returns the number of rows that carry ANY ink, or -1 if the cell is not decodable. Measured on
+// 'H' this is the cap height ISO 9241-303 means by "character height", i.e. the quantity the whole
+// legibility argument in SPEC-legible L1 is denominated in — read from the bytes that ship, so
+// "the text got bigger" is an assertion here and not a screenshot impression.
+static int glyph_ink_rows(const Font* f, int gi, int* top) {
+	int per = f->nCols * f->nRows;
+	if (per <= 0 || gi < 0 || gi >= per) return -1;
+	int line = gi / f->nCols, col = gi % f->nCols;
+	int x0 = col * (f->cellW + 1) + 1, y0 = line * (f->cellH + 1) + 1;
+	int lo = -1, hi = -1;
+	for (int y = 0; y < f->cellH; y++)
+		for (int x = 0; x < f->cellW; x++) {
+			int nib = sheet_nib(f, x0 + x, y0 + y);
+			if (nib < 0) return -1;
+			if (nib) { if (lo < 0) lo = y; hi = y; break; }
+		}
+	if (lo < 0) return 0;
+	if (top) *top = lo;
+	return hi - lo + 1;
+}
+
+// PHASE 19 / SPEC-legible L3.2 — the ink extent of a whole RUN inside its line box.
+// Vertical fit is not a cap-height question: a row overflows when its DESCENDERS hit the thing
+// below it, and it collides upward when its ASCENDERS do. So the quantity every §L3.2 number is
+// denominated in is the ink box over "AHgpy1:9" (caps, ascender, descenders, digits, colon) —
+// the tallest and deepest thing any UI string can contain. Measured here from the shipped bytes
+// and cross-checked against typography.h's declared table by T18.
+static int str_ink_extent(const Font* f, const char* s, int* top, int* bottom) {
+	int lo = -1, hi = -1;
+	for (const unsigned char* p = (const unsigned char*)s; *p; p++) {
+		int gi = font_glyph(f, *p);
+		if (gi < 0) continue;
+		int gt = -1, rows = glyph_ink_rows(f, gi, &gt);
+		if (rows <= 0 || gt < 0) continue;
+		if (lo < 0 || gt < lo) lo = gt;
+		if (gt + rows - 1 > hi) hi = gt + rows - 1;
+	}
+	if (lo < 0) return 0;
+	if (top) *top = lo;
+	if (bottom) *bottom = hi;
+	return hi - lo + 1;
+}
+
 // Ink histogram (16 buckets) over a glyph's cell, accumulated into h[].
 static int glyph_hist(const Font* f, int gi, long* h) {
 	int per = f->nCols * f->nRows;
@@ -177,6 +231,16 @@ static int glyph_hist(const Font* f, int gi, long* h) {
 }
 
 // ---------------------------------------------------------------- helpers
+
+// T14 drives the SHIPPED uihit_wrap, which measures through a callback so the arithmetic and the
+// metrics stay independent (uihit.h's own note). On the device the callback is assets_text_w; here
+// it is the same sum of charWidths the rest of this suite uses, over the same face.
+static const Font* g_measFont = NULL;
+static int run_width(const Font* f, const char* s);
+static int meas_cb(const char* str, void* ctx) {
+	(void)ctx;
+	return g_measFont ? run_width(g_measFont, str) : 0;
+}
 
 static const char* role_name(TxtRole r) {
 	switch (r) {
@@ -358,11 +422,19 @@ int main(void) {
 		       (double)fc.px, (double)texel, (double)ceilTex);
 	}
 
-	// ---------------- T5 — the phase-17 pack must be gone
-	printf("\nT5: the four phase-17 faces are removed from data/\n");
+	// ---------------- T5 — every superseded pack must be gone
+	// Two vintages now: the phase-17 four (no call site could draw them at 1.0) and the phase-18
+	// seven (baked 0.78x too small — SPEC-legible L1.4). A leftover .bin is ~527 KB that bin2s
+	// embeds into the ELF whether or not anything references it, and it is also how a half-run of
+	// build_assets.sh hides a stale ladder.
+	printf("\nT5: superseded faces are removed from data/\n");
 	{
-		static const char* dead[] = { "fnt_sg_bold", "fnt_sg_med", "fnt_jbm_med", "fnt_jbm_bold" };
-		for (int i = 0; i < 4; i++) {
+		static const char* dead[] = {
+			"fnt_sg_bold", "fnt_sg_med", "fnt_jbm_med", "fnt_jbm_bold",           /* phase 17 */
+			"fnt_sg_bold_17", "fnt_sg_bold_12", "fnt_sg_med_12", "fnt_sg_med_10",  /* phase 18 */
+			"fnt_jbm_med_9", "fnt_jbm_med_7", "fnt_jbm_bold_11",
+		};
+		for (unsigned i = 0; i < sizeof dead / sizeof dead[0]; i++) {
 			char path[256];
 			snprintf(path, sizeof path, "data/%s.bin", dead[i]);
 			FILE* fp = fopen(path, "rb");
@@ -445,13 +517,22 @@ int main(void) {
 		CHECK(a.px == floorf(a.px), "T7 %s: px %.2f is fractional — lineFeed is an integer, so a "
 		      "fractional draw size can never be 1.0", role_name((TxtRole)i), (double)a.px);
 		CHECK(a.pt > 0 && a.pt < 40, "T7 %s: implausible bake pt %d", role_name((TxtRole)i), a.pt);
-		for (int j = i + 1; j < TXT_COUNT; j++)
-			CHECK(strcmp(a.sym, typo_face((TxtRole)j).sym) != 0,
-			      "T7 %s and %s share the face %s — one of them is a wasted 525 KB",
-			      role_name((TxtRole)i), role_name((TxtRole)j), a.sym);
+		// PHASE 19: two roles MAY share a face (SEG=BODY, CHIP=SECTION — L2.3) and that is the
+		// point, not a leak. What must never happen is a *disagreeing* share: the same .bin
+		// claimed at two different draw sizes is the phase-17 defect with a new name, because only
+		// one of them can be lineFeed. So: same sym => identical rung, in every field.
+		for (int j = i + 1; j < TXT_COUNT; j++) {
+			TxtFace b = typo_face((TxtRole)j);
+			if (strcmp(a.sym, b.sym) != 0) continue;
+			CHECK(a.px == b.px && a.pt == b.pt && strcmp(a.ttf, b.ttf) == 0,
+			      "T7 %s and %s share the face %s but disagree (%.1f px/pt %d vs %.1f px/pt %d) — "
+			      "one .bin has one lineFeed, so one of them cannot be at texel scale 1.0",
+			      role_name((TxtRole)i), role_name((TxtRole)j), a.sym,
+			      (double)a.px, a.pt, (double)b.px, b.pt);
+		}
 	}
 	CHECK(typo_face((TxtRole)TXT_COUNT).px == 0.0f, "T7 out-of-range role must return an empty face");
-	CHECK(typo_role_px(TXT_SECTION) == 9.0f, "T7 typo_role_px disagrees with typo_face");
+	CHECK(typo_role_px(TXT_SECTION) == 12.0f, "T7 typo_role_px disagrees with typo_face");
 	// the arithmetic helpers themselves
 	CHECK(typo_s_native_citro(12, 15) == 24.0f, "T7 typo_s_native_citro(12,15) should be 24.0");
 	CHECK(typo_texel_scale(12.0f, 12, 15) == 1.0f, "T7 texel scale identity");
@@ -525,7 +606,7 @@ int main(void) {
 			{ TXT_SECTION, "GAMEPAD \xC2\xB7 EDGES",   208, "pause section label" },
 			// ---- PHASE 18 FIX PASS: everything this pass moved onto the ladder ----
 			// the pre-game LINK tab's note: content column x=93 .. the scrollbar at x=312
-			{ TXT_SECTION, SET_LINK_DISABLED_NOTE,  219, "settings LINK disabled note" },
+			{ TXT_BODY, SET_LINK_DISABLED_NOTE,     151, "settings LINK disabled note" },
 			// the HUD bar's game name: x=15, and the right-hand cluster (clock+fps+up to three
 			// chips) starts around x=230 on the 400-px top bar; the FOCUS chip follows the name.
 			{ TXT_BODY,   "Pokemon LeafGreen",     150, "HUD top game name" },
@@ -542,6 +623,126 @@ int main(void) {
 			{ TXT_BUTTON, "START",                  64, "pad START key" },
 			{ TXT_BUTTON, "A",                      60, "pad A key" },
 			{ TXT_BUTTON, "L",                      52, "pad L key" },
+			// ---- PHASE 19 / SPEC-legible L3.1: the ladder moved up 1-2 rungs, so every box in
+			// the app is now measured against a WIDER string. These are the pause tabs' own
+			// controls (source/main.c PT_* tables), whose geometry phase 19 does NOT change — a
+			// seg cell is w/nseg and a PK_BTN label is centred in w. This is the half of the
+			// corpus that must fit as-is; the boxes that DO move are graded after G2 re-fits them.
+			{ TXT_SEG,    "1:1",                    69, "PT_DISPLAY scale seg (208/3)" },
+			{ TXT_SEG,    "Aspect-fit",             69, "PT_DISPLAY scale seg (208/3)" },
+			{ TXT_SEG,    "Stretch",                69, "PT_DISPLAY scale seg (208/3)" },
+			{ TXT_SEG,    "Sharp",                 104, "PT_DISPLAY filter seg (208/2)" },
+			{ TXT_SEG,    "Smooth",                104, "PT_DISPLAY filter seg (208/2)" },
+			{ TXT_SEG,    "off",                    52, "PT_DISPLAY hud seg (208/4)" },
+			{ TXT_SEG,    "bottom",                 52, "PT_DISPLAY hud seg (208/4)" },
+			{ TXT_SEG,    "Solo",                   72, "PT_AUDIO mode seg (216/3)" },
+			{ TXT_SEG,    "Mixed",                  72, "PT_AUDIO mode seg (216/3)" },
+			{ TXT_SEG,    "Split",                  72, "PT_AUDIO mode seg (216/3)" },
+			{ TXT_SEG,    "Off",                    69, "PT_TOUCH mode seg (208/3)" },
+			{ TXT_SEG,    "Gamepad",                69, "PT_TOUCH mode seg (208/3)" },
+			{ TXT_SEG,    "Smart",                  69, "PT_TOUCH mode seg (208/3)" },
+			{ TXT_SEG,    "Round",                  69, "PT_TOUCH padEdge seg (208/3)" },
+			{ TXT_SEG,    "Max",                    42, "PT_ENHANCE tilt seg (170/4)" },
+			{ TXT_BUTTON, "Resume",                216, "PT_SESSION resume" },
+			{ TXT_BUTTON, "Change games",          216, "PT_SESSION change" },
+			{ TXT_BUTTON, "Quit",                  216, "PT_SESSION quit" },
+			{ TXT_BUTTON, "Wireless lobby...",     216, "PT_LINK wireless" },
+			{ TXT_BUTTON, "Wireless: ON",          216, "PT_LINK wireless on" },
+			{ TXT_BUTTON, "Save state",            104, "PT_LINK save state" },
+			{ TXT_BUTTON, "Load state",            104, "PT_LINK load state" },
+			{ TXT_BUTTON, "Load .sav",             216, "PT_LINK load sav" },
+			{ TXT_BUTTON, "Preview Smart",         101, "PT_TOUCH preview smart" },
+			{ TXT_SECTION,"DIORAMA \xC2\xB7 TILT",    170, "PT_ENHANCE tilt caption" },
+			{ TXT_SECTION,"Co-op presence",        219, "PT_LINK presence OV_ROW label" },
+			{ TXT_SECTION,"L/R tab  A select  B resume (or tap)", 312, "pause status hint" },
+			{ TXT_SECTION,"L / R  switch tab",     300, "run_settings hint" },
+			{ TXT_SECTION,"B  done",               300, "run_settings hint" },
+
+			// ================= PHASE 19 / SLICE G2 — THE RE-FIT'S OWN CORPUS =================
+			// L5.2.1 asks for >= 93 boxes: every literal that reaches assets_text* / assets_button /
+			// assets_seg, against its SHIPPED box. The rows above are the half that did not move;
+			// these are the boxes G2 changed, the strings G2 re-roled (L3.3.3), and the
+			// table/macro-driven labels the spec's own extraction reached only in prose. Anything
+			// that is drawn but not listed here is a hole in the gate, not a passing test.
+
+			// --- L3.1.3: the ONE horizontal overflow, now graded against the box it SHIPS with.
+			{ TXT_BUTTON, "Preview Gamepad",       106, "PT_TOUCH preview pad (box grew 101->106)" },
+			{ TXT_BUTTON, "Preview Smart",         106, "PT_TOUCH preview smart" },
+
+			// (The touch explainer's LINES are deliberately NOT here. They are wrapper OUTPUT, and
+			//  a greedy wrapper's job is to fill the column — every last line it emits is within
+			//  one word of the box by construction, so the >98% ceiling below would fire on a
+			//  correctly wrapped paragraph forever. T14 owns them: it re-wraps the shipped copy at
+			//  the shipped width and asserts both the per-line fit and the line COUNT, which is
+			//  the invariant that actually protects the Preview buttons underneath.)
+
+			// --- L3.3.3: the strings that moved from the mono rung to TXT_BODY. Each is a full
+			//     sentence, which FONTS.md never assigned to JetBrains Mono — the app did.
+			// The box is the DONE chip's left edge (244) minus the content column's x (93). The
+			// full 219 px column is NOT available on this row: run_settings draws the Done pill
+			// over it, last, as fixed chrome.
+			{ TXT_BODY,   SET_LINK_DISABLED_NOTE,  151, "settings LINK note (vs the Done chip at x244)" },
+			{ TXT_BODY,   "configure before you pick a game",   300, "run_settings subtitle" },
+			{ TXT_BODY,   "Tilt is set, but this is an Old 3DS - it stays flat.", 300, "run_settings O3DS warning" },
+			{ TXT_BODY,   "put .gba files in /3ds/dual-gba/",   400, "picker empty state (top)" },
+			{ TXT_BODY,   "put .gba files in /3ds/dual-gba/, then Rescan", 320, "picker empty state (bottom)" },
+			{ TXT_BODY,   "not a valid .gba - pause menu, Change games", 320, "dead-core panel line 2" },
+			{ TXT_BUTTON, "This game could not be loaded",      320, "dead-core panel line 1" },
+			{ TXT_BODY,   "Wireless unavailable \xE2\x80\x94 install + run the .CIA", 300, "wireless unavailable" },
+
+			// --- L3.2.4: the presence card's rows, incl. the union note G2 had to WRAP.
+			{ TXT_VALUE,  "01234",                  80, "presence id" },
+			{ TXT_VALUE,  "M",                      30, "presence gender" },
+			{ TXT_CHIP,   PRES_CARD_READONLY_NOTE, 194, "presence read-only note" },
+			{ TXT_CHIP,   PRES_CARD_UNION_NOTE_1,  194, "presence union note L1" },
+			{ TXT_CHIP,   PRES_CARD_UNION_NOTE_2,  194, "presence union note L2" },
+			{ TXT_CHIP,   PRES_PROMPT_TEXT,        194, "presence prompt pill" },
+
+			// --- L3.2.8 / L4.6: the chips, in the boxes uihit.h now owns.
+			{ TXT_CHIP,   "menu",                   36, "touch menu chip (48 - 8 bars - 4 gap)" },
+			{ TXT_CHIP,   "TOUCH \xC2\xB7 GAMEPAD",       300, "touch mode chip" },
+			{ TXT_CHIP,   "TOUCH \xC2\xB7 SMART POINTER", 300, "touch mode chip" },
+			{ TXT_BUTTON, "B",                       60, "pad B key" },
+			{ TXT_BUTTON, "R",                       52, "pad R key" },
+
+			// --- L4.1: the remaining seg cells and stepper glyphs on the six pause tabs.
+			{ TXT_SEG,    "Smooth",                104, "PT_DISPLAY filter seg" },
+			{ TXT_SEG,    "top",                    52, "PT_DISPLAY hud seg" },
+			{ TXT_SEG,    "both",                   52, "PT_DISPLAY hud seg" },
+			{ TXT_SEG,    "Soft",                   69, "PT_TOUCH padEdge seg" },
+			{ TXT_SEG,    "Sharp",                  69, "PT_TOUCH padEdge seg" },
+			{ TXT_SEG,    "Off",                    42, "PT_ENHANCE tilt seg (170/4)" },
+			{ TXT_SEG,    "Low",                    42, "PT_ENHANCE tilt seg" },
+			{ TXT_SEG,    "Mid",                    42, "PT_ENHANCE tilt seg" },
+			{ TXT_BUTTON, "-",                      20, "PK_STEP minus pad" },
+			{ TXT_BUTTON, "+",                      20, "PK_STEP plus pad" },
+			{ TXT_VALUE,  "100",                    30, "PK_STEP volume value" },
+			{ TXT_BUTTON, "Wireless link",         216, "run_settings LINK wireless" },
+			{ TXT_BODY,   "Swap screens",          175, "PT_DISPLAY OV_ROW (x93 .. toggle x268)" },
+			{ TXT_BODY,   "Frameskip",             175, "PT_DISPLAY OV_ROW" },
+			{ TXT_BODY,   "Co-op presence",        183, "PT_LINK OV_ROW (x93 .. toggle x276)" },
+
+			// --- L4.3 / L4.5: the pickers and the lobby, worst-case content.
+			{ TXT_TITLE,  "No games found",        369, "picker empty title" },
+			{ TXT_BODY,   "pick a game (d-pad + A)", 250, "picker slot A placeholder (single)" },
+			{ TXT_BODY,   "pick game A",           250, "picker slot A placeholder (dual)" },
+			{ TXT_BODY,   "pick game B",           250, "picker slot B placeholder" },
+			{ TXT_BODY,   "copy it: game1.gba / game2.gba", 250, "picker duplicate-file refusal" },
+			{ TXT_SECTION,"SAME FILE IN BOTH SLOTS", 300, "picker state tag (longest)" },
+			{ TXT_SECTION,"PICK A GAME FIRST",     300, "picker state tag" },
+			{ TXT_SECTION,"B \xC2\xB7 BOTTOM",          300, "picker state tag" },
+			{ TXT_BODY,   "You",                   150, "wireless seat (self)" },
+			{ TXT_SECTION,"NEARBY SESSIONS",       290, "wireless scan caption" },
+			{ TXT_SECTION,"UDS \xC2\xB7 local \xC2\xB7 2 seats linked", 300, "wireless transport line" },
+			{ TXT_SECTION,"then open the in-game Cable Club to trade", 300, "wireless conn hint" },
+			{ TXT_SECTION,"RTT 999 ms \xC2\xB7 loss 100 %", 300, "wireless RTT line" },
+			{ TXT_CHIP,   "link-surface DIFF: gameCode(BPEE!=BPRE),gameRev(0!=1)", 380, "wireless fp verdict" },
+			{ TXT_CHIP,   "Link closed (left for HOME). Re-host or re-join.", 380, "wireless status (longest)" },
+
+			// --- L3.2.2 / L3.2.9: the hint band, with the strings the app really formats.
+			{ TXT_SECTION,"L/R tab  A select  B resume  (or tap)", 228, "pause status hint (shipped copy)" },
+			{ TXT_SECTION,"3D on top \xC2\xB7 Gamepad \xC2\xB7 START+SELECT = menu", 320, "in-game hint (single)" },
+			{ TXT_SECTION,"START+SELECT \xC2\xB7 pause menu", 320, "in-game hint (dual)" },
 		};
 		for (unsigned k = 0; k < sizeof FIT / sizeof FIT[0]; k++) {
 			int i = (int)FIT[k].r;
@@ -553,10 +754,23 @@ int main(void) {
 			      (double)typo_role_px(FIT[k].r), FIT[k].box);
 			if (w > FIT[k].box)
 				continue;
+			// L5.2.2 — a HARD FAIL at >98%. "It fits" and "it fits by one pixel" are different
+			// states: the second one is broken by the next copy edit, the next ladder move, or a
+			// font update, and it breaks on the user's hardware rather than here. Below 98% but
+			// above 90% is a printed note, so a tightening trend is visible run over run.
+			CHECK(w * 100 <= FIT[k].box * 98,
+			      "T10 %s: \"%s\" is %d px in a %d px box (%.1f%%) — over the 98%% ceiling. Grow "
+			      "the box or shorten the copy; a label this tight is one edit from overflowing.",
+			      FIT[k].where, FIT[k].s, w, FIT[k].box, 100.0 * (double)w / (double)FIT[k].box);
 			if (w > FIT[k].box * 9 / 10)
-				printf("    note: %-22s %-24s %3d/%3d px (>90%% of the box)\n",
+				printf("    note: %-34s %-38s %3d/%3d px (>90%% of the box)\n",
 				       FIT[k].where, FIT[k].s, w, FIT[k].box);
 		}
+		printf("    %u boxes measured\n", (unsigned)(sizeof FIT / sizeof FIT[0]));
+
+		// (T10b is retired. It graded ONE pending overflow — "Preview Gamepad" at 103 px in a
+		// 101 px button — against the box SPEC-legible L3.1.3 promised it. G2 shipped that box,
+		// so the row is an ordinary T10 entry now and the phase has no pending overflow left.)
 	}
 
 	// ---------------- T11 — the menu viewport's fixed chrome does not eat a glyph
@@ -568,8 +782,14 @@ int main(void) {
 	// guessing the app is broken. This grades the SHIPPED constant against the SHIPPED font.
 	printf("\nT11: text under the menu content clears the fixed chrome band\n");
 	{
+		// PHASE 19 / SPEC-legible L3.3.3: the note is PROSE, so it draws at TXT_BODY now, whose
+		// line box is 18 px rather than the mono rung's 15. Both legs of the squeeze moved with it
+		// (uihit.h): the note to 208 and PT_LINK's presence toggle to y190 (bottom edge 208).
+		// The role is part of what is graded — reading it from a table here means a future
+		// re-roling of the note fails this test instead of clipping on hardware.
+		enum { PT_LINK_LAST_BOTTOM = 208 };   /* ACT_PRESENCE y190 h18 (main.c PT_LINK) */
 		static const struct { TxtRole r; int y; const char* what; } UNDER[] = {
-			{ TXT_SECTION, SET_LINK_NOTE_Y, "run_settings LINK disabled note" },
+			{ TXT_BODY, SET_LINK_NOTE_Y, "run_settings LINK disabled note" },
 		};
 		for (unsigned k = 0; k < sizeof UNDER / sizeof UNDER[0]; k++) {
 			int i = (int)UNDER[k].r;
@@ -579,9 +799,11 @@ int main(void) {
 			CHECK(bottom <= UIHIT_MENU_VIEW_H,
 			      "T11 %s: line box y %d..%d overlaps the chrome repaint at y >= %d",
 			      UNDER[k].what, UNDER[k].y, bottom, UIHIT_MENU_VIEW_H);
-			// ...and it must still sit below the tab's last control (PT_LINK's presence toggle
-			// ends at y = 214), or it would print on top of the row it is explaining.
-			CHECK(UNDER[k].y >= 214, "T11 %s: y %d collides with the last row", UNDER[k].what, UNDER[k].y);
+			// ...and it must still sit below the tab's last control (PT_LINK's presence toggle,
+			// y190 h18 since SPEC-legible L3.2.2 + L3.3.3, ends at y = 208), or it would print on
+			// top of the row it is explaining. Both legs move together or the note is squeezed out.
+			CHECK(UNDER[k].y >= PT_LINK_LAST_BOTTOM, "T11 %s: y %d collides with the last row (bottom %d)",
+			      UNDER[k].what, UNDER[k].y, PT_LINK_LAST_BOTTOM);
 		}
 	}
 
@@ -602,7 +824,17 @@ int main(void) {
 			// two ui_text_c are the load-error and PAUSED !assets_ready() fallbacks; three
 			// C2D_DrawText are the two net-diag stat lines and the #if'd gamestate probe — dev
 			// readouts that cram ~72 characters into 400 px, which no 12 px face holds.
-			{ "source/main.c",       13, "assets_ready fallbacks + the dev diag readouts" },
+			// PHASE 20 raises this 13 -> 14, with the reason this test demands. The new draw is the
+			// peer-SPRITE readout (`spr:OK 16x32 t0148 p5 F-1 u37` / `spr:AFFINE g00`), the second
+			// line of the co-op debug pair at y = 216/226. It is the SAME KIND of surface as the
+			// CO-OP line directly under it — a dev diagnostic that must stay terse and must match
+			// its sibling's face — and it is the only thing that answers "why is my friend still
+			// magenta?" from a photograph. Routing it through assets_text(role) would make the two
+			// halves of one readout disagree in font and size, and the baked faces are ~2x wider at
+			// their smallest, which is what pushed these lines off the 400 px screen in the first
+			// place. If the co-op debug pair is ever promoted to real chrome, both lines go baked
+			// together and this budget drops to 12.
+			{ "source/main.c",       14, "assets_ready fallbacks + the dev diag readouts" },
 			{ "source/rompicker.c",   0, "picker, resume prompt, empty state and .sav picker are all baked" },
 			{ "source/wireless.c",    0, "the whole lobby is baked" },
 			{ "source/touch.c",       0, "pad key glyphs and both chips are baked" },
@@ -679,6 +911,467 @@ int main(void) {
 			      role_name((TxtRole)i), typo_face((TxtRole)i).sym, midPct);
 			printf("     %-12s %-12s opaque %5.1f%%  solid %5.1f%%  stranded %5.1f%%\n",
 			       role_name((TxtRole)i), typo_face((TxtRole)i).sym, opaquePct, solidPct, midPct);
+		}
+	}
+
+	// ---------------- T15 — THE ALIAS CONTRACT (PHASE 19 / SPEC-legible L5.2.4)
+	// Merging TXT_SEG into TXT_BODY and TXT_CHIP into TXT_SECTION is what pays for the growth:
+	// a .bcfnt is a fixed 1024x1024 A4 sheet (~527 KB) whatever its point size, so seven faces
+	// were 3.53 MB in the ELF *and* 3.53 MB of linear heap at runtime (C2D_FontLoadFromMem
+	// linearAllocs + memcpys the whole file). Five faces are 2.52 MB of each. This test pins all
+	// three halves of that: the aliases resolve to the same sym, the ladder resolves to exactly
+	// TXT_DISTINCT_FACES syms, and data/ holds exactly those and nothing else — a stale sixth
+	// .bin is silently embedded by bin2s and would give back the megabyte.
+	printf("\nT15: the alias contract — %d roles resolve to %d faces\n", TXT_COUNT, TXT_DISTINCT_FACES);
+	{
+		CHECK(strcmp(typo_face(TXT_SEG).sym, typo_face(TXT_BODY).sym) == 0,
+		      "T15 TXT_SEG (%s) must alias TXT_BODY (%s)",
+		      typo_face(TXT_SEG).sym, typo_face(TXT_BODY).sym);
+		CHECK(strcmp(typo_face(TXT_CHIP).sym, typo_face(TXT_SECTION).sym) == 0,
+		      "T15 TXT_CHIP (%s) must alias TXT_SECTION (%s)",
+		      typo_face(TXT_CHIP).sym, typo_face(TXT_SECTION).sym);
+
+		const char* distinct[TXT_COUNT]; int nd = 0;
+		for (int i = 0; i < TXT_COUNT; i++) {
+			const char* s = typo_face((TxtRole)i).sym;
+			int seen = 0;
+			for (int k = 0; k < nd; k++) if (!strcmp(distinct[k], s)) { seen = 1; break; }
+			if (!seen) distinct[nd++] = s;
+		}
+		CHECK(nd == TXT_DISTINCT_FACES,
+		      "T15 the ladder resolves to %d distinct faces, TXT_DISTINCT_FACES says %d — every "
+		      "extra face is ~527 KB in the ELF AND ~527 KB of linear heap", nd, TXT_DISTINCT_FACES);
+
+		// data/ must contain exactly the distinct faces. (The T5 idiom, but exhaustive: T5 names
+		// the vintages we know about, this catches a face nobody remembered to name.)
+		DIR* d = opendir("data");
+		CHECK(d != NULL, "T15 cannot open data/ (run the suite from the project root)");
+		if (d) {
+			int nfound = 0;
+			struct dirent* e;
+			while ((e = readdir(d))) {
+				if (strncmp(e->d_name, "fnt_", 4) || !strstr(e->d_name, ".bin")) continue;
+				nfound++;
+				char stem[128];
+				snprintf(stem, sizeof stem, "%s", e->d_name + 4);
+				char* dot = strstr(stem, ".bin"); if (dot) *dot = 0;
+				int wanted = 0;
+				for (int k = 0; k < nd; k++) if (!strcmp(distinct[k], stem)) { wanted = 1; break; }
+				CHECK(wanted, "T15 data/%s is not on the ladder — a stale bake bin2s still embeds",
+				      e->d_name);
+			}
+			closedir(d);
+			CHECK(nfound == nd, "T15 data/ holds %d fnt_*.bin, the ladder needs %d", nfound, nd);
+		}
+	}
+
+	// ---------------- T17 — THE RUNG ACTUALLY GREW (PHASE 19, the size claim itself)
+	// SPEC-legible L1 argues in CAP HEIGHT: ISO 9241-303 / ANSI-HFES want >= 16 arcmin of
+	// character height, which at 0.1905 mm/px (133 ppi bottom panel) and 30 cm is 7.33 device px,
+	// and the game text the user reads happily on the same panel is cap 12. Phase 18 shipped cap
+	// 4-10; phase 19 targets 11/9/9/9/7/7/7. Screenshots cannot settle this (Azahar upscales
+	// 320x240 by 2.25x), so it is settled here, in the shipped font bytes: the ink rows of 'H'.
+	printf("\nT17: cap height per rung — the size claim, measured in the shipped bytes\n");
+	{
+		static const int WANT_CAP[TXT_COUNT] = { 11, 9, 9, 9, 7, 7, 7 };
+		static const int WAS_CAP[TXT_COUNT]  = { 10, 7, 7, 6, 5, 4, 7 };   /* phase 18, for the log */
+		for (int i = 0; i < TXT_COUNT; i++) {
+			if (!ok[i]) continue;
+			int gi = font_glyph(&f[i], 'H'), top = -1;
+			int cap = (gi >= 0) ? glyph_ink_rows(&f[i], gi, &top) : -1;
+			CHECK(cap == WANT_CAP[i],
+			      "T17 %s (%s): cap height %d px, the ladder is designed for %d — the rung moved "
+			      "without SPEC-legible L1.5.2 moving with it",
+			      role_name((TxtRole)i), typo_face((TxtRole)i).sym, cap, WANT_CAP[i]);
+			if (cap <= 0) continue;
+			// The floor the whole phase exists to clear, restated at the point of measurement.
+			double arcmin = (double)cap * 0.1905 / 300.0 * 3437.75;
+			CHECK(cap >= 7, "T17 %s: cap %d px = %.1f arcmin at 30 cm — under the 16' floor by more "
+			      "than the one rung SPEC-legible L1.5.5 knowingly accepts",
+			      role_name((TxtRole)i), cap, arcmin);
+			printf("     %-12s %-12s cap %2d px (was %2d)  ink top %2d of cell %2d  %5.1f arcmin@30cm\n",
+			       role_name((TxtRole)i), typo_face((TxtRole)i).sym, cap, WAS_CAP[i], top,
+			       f[i].cellH, arcmin);
+		}
+	}
+
+	// ---------------- T18 — THE INK TABLE IS THE FONT'S, NOT A GUESS (PHASE 19 / L3.2.7)
+	// typography.h now DECLARES cellH / inkTop / inkH per role, because typo_center_y and every
+	// §L3.2 vertical number are computed from them. A declared metric that the bake can move is
+	// exactly the failure phase 18 shipped (a ladder whose numbers were read off a design table
+	// instead of the produced file), so the same guard applies: re-measure the shipped bytes and
+	// assert exact equality. Measured over "AHgpy1:9" — cap, ascender, descenders, digits, colon.
+	printf("\nT18: the declared ink box matches the shipped bytes (per rung)\n");
+	{
+		static const char PROBE[] = "AHgpy1:9";
+		for (int i = 0; i < TXT_COUNT; i++) {
+			if (!ok[i]) continue;
+			TxtFace tf = typo_face((TxtRole)i);
+			CHECK(f[i].cellH == tf.cellH,
+			      "T18 %s (%s): TGLP.cellHeight is %d, typography.h declares %d — typo_center_y "
+			      "and every L3.2 offset are computed from that number",
+			      role_name((TxtRole)i), tf.sym, f[i].cellH, tf.cellH);
+			int top = -1, bot = -1;
+			int h = str_ink_extent(&f[i], PROBE, &top, &bot);
+			CHECK(h > 0, "T18 %s: no ink measured over \"%s\"", role_name((TxtRole)i), PROBE);
+			if (h <= 0) continue;
+			CHECK(top == tf.inkTop,
+			      "T18 %s (%s): ink starts on row %d of the line box, typography.h declares %d",
+			      role_name((TxtRole)i), tf.sym, top, tf.inkTop);
+			CHECK(h == tf.inkH,
+			      "T18 %s (%s): ink is %d rows, typography.h declares %d",
+			      role_name((TxtRole)i), tf.sym, h, tf.inkH);
+			CHECK(typo_ink_bottom((TxtRole)i) <= tf.cellH,
+			      "T18 %s: the ink box (%d..%d) leaves the %d px line box",
+			      role_name((TxtRole)i), tf.inkTop, typo_ink_bottom((TxtRole)i), tf.cellH);
+			printf("     %-12s %-12s cell %2d  ink rows %2d..%-2d (h %2d)  padding %d above / %d below\n",
+			       role_name((TxtRole)i), tf.sym, tf.cellH, top, bot, h, top, tf.cellH - 1 - bot);
+		}
+		// ...and the centring rule itself, on the boxes the app actually uses. This is arithmetic,
+		// not a font read, but it is the arithmetic five widgets depend on: assert the ink lands
+		// INSIDE the box and no more than one row off dead centre (0.5 px is unreachable on an
+		// integer grid, which is the whole reason the helper rounds).
+		static const struct { TxtRole r; int boxH; const char* what; } CTR[] = {
+			{ TXT_BUTTON, 40, "PT_SESSION Resume button" },
+			{ TXT_BUTTON, 43, "PT_SESSION Quit button" },
+			{ TXT_BUTTON, 44, "PT_TOUCH preview button" },
+			{ TXT_BUTTON, 22, "pad START key" },
+			{ TXT_BUTTON, 42, "wireless / splash button" },
+			{ TXT_SEG,    30, "PT_DISPLAY seg cell" },
+			{ TXT_SEG,    26, "PT_ENHANCE tilt seg" },
+			{ TXT_BODY,   18, "OV_ROW toggle row" },
+			{ TXT_CHIP,   UIHIT_CHIP_H,       "ui.c pill chip" },
+			{ TXT_CHIP,   UIHIT_TOUCH_CHIP_H, "touch mode chip" },
+			{ TXT_CHIP,   UIHIT_MCHIP_H,      "menu affordance chip" },
+			{ TXT_CHIP,   UIHIT_PILL_H,       "pause-top feature pill" },
+			// PHASE 19 FIX PASS (verify findings V1/C2 + V2/C3): the two boxes that were still
+			// placed by a hand-typed literal after L3.2.7 converted the rest. Both are hand-rolled
+			// ui_fill + assets_text sites rather than assets_button/ui_chip calls, which is exactly
+			// why the sweep missed them; grading their BOX HEIGHTS here is what makes the miss
+			// impossible to repeat. run_settings DONE = {244,224,72,14}; PICK_SETTINGS = {6,223,88,16}.
+			{ TXT_BUTTON, 14, "run_settings Done pill" },
+			{ TXT_CHIP,   16, "ROM picker settings-ZR chip" },
+		};
+		for (unsigned k = 0; k < sizeof CTR / sizeof CTR[0]; k++) {
+			TxtRole r = CTR[k].r;
+			float y = typo_center_y(r, 0.0f, (float)CTR[k].boxH);
+			CHECK(y == (float)(int)y, "T18 %s: typo_center_y returned %.2f, not an integer row",
+			      CTR[k].what, (double)y);
+			int inkTop = (int)y + typo_ink_top(r), inkBot = (int)y + typo_ink_bottom(r);
+			CHECK(inkTop >= 0 && inkBot <= CTR[k].boxH,
+			      "T18 %s: ink %d..%d leaves the %d px box", CTR[k].what, inkTop, inkBot, CTR[k].boxH);
+			int slackTop = inkTop, slackBot = CTR[k].boxH - inkBot;
+			CHECK(slackTop - slackBot <= 1 && slackBot - slackTop <= 1,
+			      "T18 %s: %d px above the ink, %d below — that is not centred",
+			      CTR[k].what, slackTop, slackBot);
+		}
+	}
+
+	// ---------------- T14 — THE WRAPPED PARAGRAPH FITS ITS RECT (PHASE 19 / L5.2.3)
+	// The TOUCH tab's explainer is the only text in the app whose LAYOUT is computed rather than
+	// placed, and it is computed against a real font at runtime. Phase 19 moved it to a bigger
+	// face (TXT_BODY, cell 18) in a slightly wider column and REWROTE one copy because the old
+	// one contained a 19-character unbreakable token. Any of those three could silently give back
+	// a fourth line — and a fourth line lands on the Preview buttons at y=109, over a plate that
+	// BAKES its own caption and cannot move. So this runs the SHIPPED uihit_wrap over the SHIPPED
+	// copy with the SHIPPED font metrics and grades the result geometrically.
+	printf("\nT14: the touch explainer wraps inside its rect, in all three copies\n");
+	{
+		enum { TEXPL_W = 216, TEXPL_Y = 62, TEXPL_LEAD = 15, TEXPL_LINES = 3, TEXPL_CAP = 72,
+		       PREVIEW_ROW_Y = 109 };
+		// Verbatim from main.c's TOUCH_EXPLAIN[] — including L3.2.3's rewrite of copy [2].
+		static const char* const EXPLAIN[3] = {
+			"Off \xE2\x80\x94 a touch opens the pause menu. No game input from the touch screen.",
+			"Gamepad \xE2\x80\x94 a translucent virtual controller (D-pad, A/B, L/R, START) over game B.",
+			"Smart \xE2\x80\x94 point at the real game UI: tap to walk, tap menus, party and targets. Double-tap = START.",
+		};
+		if (ok[TXT_BODY]) {
+			g_measFont = &f[TXT_BODY];
+			for (int m = 0; m < 3; m++) {
+				char lines[TEXPL_LINES + 1][TEXPL_CAP];
+				memset(lines, 0, sizeof lines);
+				int n = uihit_wrap(EXPLAIN[m], TEXPL_W, TEXPL_LINES, &lines[0][0], TEXPL_CAP,
+				                   meas_cb, NULL);
+				CHECK(n > 0 && n <= TEXPL_LINES,
+				      "T14 copy %d wraps to %d lines, TEXPL_LINES is %d", m, n, TEXPL_LINES);
+				int truncated = 0;
+				for (int i = 0; i < n; i++) {
+					int w = run_width(&f[TXT_BODY], lines[i]);
+					CHECK(w <= TEXPL_W, "T14 copy %d line %d (\"%s\") is %d px in a %d px column",
+					      m, i, lines[i], w, TEXPL_W);
+					size_t L = strlen(lines[i]);
+					if (L >= 3 && !strcmp(lines[i] + L - 3, "...")) truncated = 1;
+				}
+				// uihit_wrap ELLIPSISES rather than overflowing when the text does not fit, so a
+				// too-small TEXPL_LINES would pass the width check while silently eating the end of
+				// the sentence. That is a copy defect, not a layout one, and it is invisible on a
+				// screenshot unless you already know the full string.
+				CHECK(!truncated,
+				      "T14 copy %d was ELLIPSISED to fit %d lines — the explainer is losing words, "
+				      "which is worse than the overflow it is avoiding", m, TEXPL_LINES);
+				// ...and the geometric leg: the last line's INK must clear the Preview row.
+				int lastY = TEXPL_Y + (n - 1) * TEXPL_LEAD;
+				int inkBot = lastY + typo_ink_bottom(TXT_BODY);
+				CHECK(inkBot <= PREVIEW_ROW_Y,
+				      "T14 copy %d: last line at y=%d puts ink through row %d, and PT_TOUCH's "
+				      "Preview buttons start at y=%d", m, lastY, inkBot - 1, PREVIEW_ROW_Y);
+				printf("     copy %d: %d lines, last ink row %d (buttons at %d)\n",
+				       m, n, inkBot - 1, PREVIEW_ROW_Y);
+			}
+			g_measFont = NULL;
+		}
+	}
+
+	// ---------------- T16 — VERTICAL FIT (PHASE 19 / L5.2.5)
+	// T10 is the horizontal gate; this is the vertical one, and it is the gate the phase actually
+	// needed. Every rung's LINE BOX grew 1-6 px, so every hard-coded `y` in the app changed meaning
+	// on the same day — the status hint fell off the bottom of the screen, the presence card's last
+	// three rows landed on each other, and a 16 px .sav row could no longer hold an 18 px line.
+	// §L3.2 is a table of numbers precisely so this can be a table of numbers: for each fixed-offset
+	// row, assert the INK (read from the shipped bytes, not the line box) lies inside the box it is
+	// drawn in. A test that used cellH instead of ink would demand padding the design does not have
+	// and would fail correct layouts; a test that used cap height would miss every descender.
+	printf("\nT16: every fixed-offset row keeps its ink inside its box\n");
+	{
+		static const struct { TxtRole r; int y, top, bottom; const char* what; } FITV[] = {
+			// --- L3.2.1 the in-game HUD bar (both screens are identical)
+			{ TXT_BODY,    UIHIT_HUD_NAME_Y,    0, UIHIT_HUD_BAR_H, "HUD game name" },
+			{ TXT_SECTION, UIHIT_HUD_READOUT_Y, 0, UIHIT_HUD_BAR_H, "HUD clock / fps" },
+			// --- L3.2.2 the status-hint band + the LINK note (the three-way squeeze)
+			{ TXT_SECTION, UIHIT_MENU_VIEW_H,   UIHIT_MENU_VIEW_H, UIHIT_SCREEN_H, "pause status hint" },
+			{ TXT_SECTION, UIHIT_MENU_VIEW_H,   UIHIT_MENU_VIEW_H, UIHIT_SCREEN_H, "in-game touch-off hint" },
+			{ TXT_BODY,    SET_LINK_NOTE_Y,     208, UIHIT_MENU_VIEW_H, "settings LINK disabled note" },
+			// --- L3.2.4 the presence card (214x108, rows hard-offset from its own top)
+			{ TXT_BUTTON,   6, 0, 108, "presence card: name" },
+			{ TXT_VALUE,    8, 0, 108, "presence card: gender" },
+			{ TXT_CHIP,    30, 0, 108, "presence card: ID label" },
+			{ TXT_VALUE,   30, 0, 108, "presence card: id value" },
+			{ TXT_CHIP,    48, 0, 108, "presence card: location" },
+			{ TXT_CHIP,    64, 0, 108, "presence card: read-only note" },
+			{ TXT_CHIP,    78, 0, 108, "presence card: union note L1" },
+			{ TXT_CHIP,    92, 0, 108, "presence card: union note L2" },
+			// --- L3.2.5 the .sav picker: title, first row, last visible row, help line
+			{ TXT_TITLE,    6,  0,  30, "sav picker: title (above row 0 at y=30)" },
+			{ TXT_BODY,    30, 30,  50, "sav picker: row 0 in its 20 px pitch" },
+			{ TXT_BODY,   190, 30, 214, "sav picker: last visible row (30 + 8*20)" },
+			{ TXT_SECTION,214, 214, UIHIT_SCREEN_H, "sav picker: help line" },
+			// --- L3.2.9 the standalone settings screen's chrome
+			{ TXT_BODY,    48,  40,  71, "run_settings: subtitle (must clear the O3DS warning ink at 71)" },
+			{ TXT_BODY,    66,  66,  90, "run_settings: Old-3DS warning" },
+			{ TXT_SECTION,206, 200, 222, "run_settings: L/R hint (above the B hint)" },
+			{ TXT_SECTION,222, 222, UIHIT_SCREEN_H, "run_settings: B done hint" },
+			// --- L3.2.10 / L4.5 the wireless lobby
+			{ TXT_CHIP,   206, 200, 224, "wireless: fingerprint verdict (above status)" },
+			{ TXT_CHIP,   224, 224, UIHIT_SCREEN_H, "wireless: status line" },
+			{ TXT_BODY,     6,  0,  30, "wireless seat card: name (52 px card)" },
+			{ TXT_CHIP,     8,  0,  30, "wireless seat card: HOST/SEAT tag" },
+			{ TXT_CHIP,    30, 30,  52, "wireless seat card: game code row" },
+			{ TXT_BODY,     2,  0,  22, "wireless scan card: host line (34 px card)" },
+			{ TXT_CHIP,    21, 21,  34, "wireless scan card: match chip" },
+			{ TXT_VALUE,  184, 178, 206, "wireless: RTT / LOSS tile value" },
+			// --- L4.3 the ROM picker's list rows (ROWH 23.5, card y-1 .. y+20.5)
+			{ TXT_BODY,     3,  0,  21, "ROM picker: row name in its card" },
+			{ TXT_CHIP,     4,  0,  21, "ROM picker: row game-code chip" },
+			// --- L3.2.6 the code-drawn OV_SECTION captions, 17 px above their control
+			// The upper bound is the plate's OWN baked ink, measured off the shipped
+			// pause-bot-enhance.png: "Vivid mode" occupies rows 175..183, so the caption may not
+			// start before 184. That is why the tilt row is at y=200 and not the manifest's 198.
+			// PHASE 19 FIX PASS (verify finding C4): the tilt caption uses OV_SECTION_TIGHT (13 px,
+			// not 17) — see the OV_* enum in main.c. 13 is the FLOOR: typo_ink_bottom(TXT_SECTION)
+			// is 13, so this row asserts the tightest legal binding, and 12 would put a
+			// descender on the seg's first row.
+			{ TXT_SECTION, 200 - 13, 184, 200, "OV_SECTION_TIGHT caption above the tilt seg (y200)" },
+			{ TXT_SECTION, 253 - 17, 220, 253, "OV_SECTION caption above the pad-edges seg (y253)" },
+			// --- L4.1 the AUDIO tab's volume value, 18 px above its row
+			{ TXT_SEG,     200,    200, 226, "PT_ENHANCE tilt seg label in its 26 px row" },
+			{ TXT_VALUE,   82 - 18, 56, 82, "PK_STEP volume value above the y82 row" },
+			{ TXT_VALUE,  132 - 18, 106, 132, "PK_STEP volume value above the y132 row" },
+			// --- the dead-core panel
+			{ TXT_BUTTON,   8,  0, 27, "dead-core panel: title" },
+			{ TXT_BODY,    27, 27, 56, "dead-core panel: explanation" },
+			// --- the pause-top summary: the two game names, then the pill row at y129
+			{ TXT_BODY,    96, 80, UIHIT_PILL_Y, "paused summary: game name" },
+		};
+		for (unsigned k = 0; k < sizeof FITV / sizeof FITV[0]; k++) {
+			int i = (int)FITV[k].r;
+			if (!ok[i]) continue;
+			int inkTop = FITV[k].y + typo_ink_top(FITV[k].r);
+			int inkBot = FITV[k].y + typo_ink_bottom(FITV[k].r);   /* exclusive */
+			CHECK(inkTop >= FITV[k].top,
+			      "T16 %s: ink starts at row %d, above its box top %d", FITV[k].what, inkTop, FITV[k].top);
+			CHECK(inkBot <= FITV[k].bottom,
+			      "T16 %s: %s at y=%d puts ink through row %d, and its box ends at %d — this is the "
+			      "clipping the phase-19 ladder introduces wherever a `y` was tuned for the old cell",
+			      FITV[k].what, role_name(FITV[k].r), FITV[k].y, inkBot - 1, FITV[k].bottom);
+		}
+
+		// ---- the two rows that are CENTRED rather than offset: the pause-top pill row and the
+		// pad key glyphs. Same rule, but the y comes out of typo_center_y instead of a table.
+		{
+			float py = typo_center_y(TXT_CHIP, (float)UIHIT_PILL_Y, (float)UIHIT_PILL_H);
+			int t = (int)py + typo_ink_top(TXT_CHIP), b = (int)py + typo_ink_bottom(TXT_CHIP);
+			CHECK(t >= UIHIT_PILL_Y && b <= UIHIT_PILL_Y + UIHIT_PILL_H,
+			      "T16 pause-top pill: ink %d..%d leaves the pill box %d..%d",
+			      t, b, UIHIT_PILL_Y, UIHIT_PILL_Y + UIHIT_PILL_H);
+		}
+		{	// the virtual gamepad's tallest key row: START at (128,214,64,22) — L4.6 keeps the
+			// geometry and only the glyphs grow, so this is the check that says "and it still fits".
+			float ky = typo_center_y(TXT_BUTTON, 214.0f, 22.0f);
+			int t = (int)ky + typo_ink_top(TXT_BUTTON), b = (int)ky + typo_ink_bottom(TXT_BUTTON);
+			CHECK(t >= 214 && b <= 236,
+			      "T16 pad START key: ink %d..%d leaves the key box 214..236", t, b);
+			CHECK(b <= UIHIT_SCREEN_H, "T16 pad START key: ink runs off the screen at row %d", b - 1);
+		}
+		{	// the "menu" affordance: a HIT TARGET as well as art, so its box must stay on-screen.
+			CHECK(UIHIT_MCHIP_Y + UIHIT_MCHIP_H <= UIHIT_SCREEN_H,
+			      "T16 menu chip: box %d..%d runs off the %d px screen",
+			      UIHIT_MCHIP_Y, UIHIT_MCHIP_Y + UIHIT_MCHIP_H, UIHIT_SCREEN_H);
+			float my = typo_center_y(TXT_CHIP, (float)UIHIT_MCHIP_Y, (float)UIHIT_MCHIP_H);
+			int b = (int)my + typo_ink_bottom(TXT_CHIP);
+			CHECK(b <= UIHIT_MCHIP_Y + UIHIT_MCHIP_H, "T16 menu chip label: ink through %d, box ends %d",
+			      b - 1, UIHIT_MCHIP_Y + UIHIT_MCHIP_H);
+		}
+		// ---- and the ROW-PITCH rule the .sav picker broke: consecutive rows must not have their
+		// ink boxes overlap. This is what a 16 px pitch under an 18 px cell actually costs.
+		{
+			enum { SAV_ROW_H = 20, SAV_VIS = 9, SAV_Y0 = 30, SAV_HELP_Y = 214 };
+			CHECK(SAV_ROW_H >= typo_ink_h(TXT_BODY) + 2,
+			      "T16 sav picker: a %d px row pitch cannot separate a %d px ink box",
+			      SAV_ROW_H, typo_ink_h(TXT_BODY));
+			int lastTop = SAV_Y0 + (SAV_VIS - 1) * SAV_ROW_H;
+			CHECK(lastTop + typo_ink_bottom(TXT_BODY) <= SAV_HELP_Y + typo_ink_top(TXT_SECTION),
+			      "T16 sav picker: the last of %d rows (y=%d) collides with the help line at y=%d",
+			      SAV_VIS, lastTop, SAV_HELP_Y);
+		}
+		// ---- the HUD bar's horizontal cluster rule (L3.2.1's other half): the left cluster
+		// (dot + name + FOCUS chip [+ LINK chip]) must not reach the right cluster's leftmost
+		// element. Both are laid out from MEASURED widths, so this is arithmetic on the shipped
+		// font rather than a box in a table.
+		if (ok[TXT_BODY] && ok[TXT_SECTION] && ok[TXT_CHIP]) {
+			const int CHIP_PAD = 12;   /* ui_chip_measure: label + 12 */
+			struct { const char* name; int screenW; int withLink; } BAR[2] = {
+				{ "Pokemon LeafGreen", 400, 0 }, { "Pokemon LeafGreen", 320, 1 },
+			};
+			for (int b = 0; b < 2; b++) {
+				int left = 21 + run_width(&f[TXT_BODY], BAR[b].name);
+				left += run_width(&f[TXT_CHIP], "\xE2\x97\x8F" "FOCUS") + CHIP_PAD;   /* the FOCUS chip */
+				if (BAR[b].withLink) left += 5 + run_width(&f[TXT_CHIP], "LINK") + CHIP_PAD;
+				int rx = BAR[b].screenW - 6;
+				if (!BAR[b].withLink) rx -= 19;                                    /* battery glyph */
+				rx -= run_width(&f[TXT_SECTION], "88:88") + 7;
+				rx -= run_width(&f[TXT_SECTION], "60fps") + 8;
+				if (!BAR[b].withLink) {                                            /* top bar only */
+					rx -= run_width(&f[TXT_CHIP], "3D")     + CHIP_PAD + 6;
+					rx -= run_width(&f[TXT_CHIP], "TILT3")  + CHIP_PAD;
+					rx -= run_width(&f[TXT_CHIP], "CO-OP x")+ CHIP_PAD + 6;
+				}
+				CHECK(left <= rx,
+				      "T16 HUD bar (%d px): the left cluster ends at x=%d and the right cluster "
+				      "starts at x=%d — at the phase-19 widths they overlap", BAR[b].screenW, left, rx);
+				printf("     HUD %3d px bar: left cluster ends %3d, right cluster starts %3d (%d px clear)\n",
+				       BAR[b].screenW, left, rx, rx - left);
+			}
+		}
+		// ---- the pause-top pill row, summed on the shipped face at its WORST case (nine pills,
+		// longest variant of every dynamic label). L3.1.4 spends padding rather than type here.
+		if (ok[TXT_CHIP]) {
+			static const char* const PILLS[9] = { "3D", "DoF", "Bloom", "Light", "Tilt", "Vivid",
+			                                      "Touch Off", "Co-op", "Wireless" };
+			int tw = 0;
+			for (int k = 0; k < 9; k++) tw += run_width(&f[TXT_CHIP], PILLS[k]) + UIHIT_PILL_PAD + UIHIT_PILL_GAP;
+			CHECK(tw <= UIHIT_PILL_ROW_W,
+			      "T16 pause-top pill row: nine pills sum to %d px on a %d px screen", tw, UIHIT_PILL_ROW_W);
+			CHECK(tw <= UIHIT_PILL_ROW_W - 20,
+			      "T16 pause-top pill row: %d px leaves only %d px of margin — the row needs to read "
+			      "as centred chrome, not as a strip jammed edge to edge", tw, UIHIT_PILL_ROW_W - tw);
+			printf("     pause-top pills: 9 worst-case pills = %d px on %d (%d px margins)\n",
+			       tw, UIHIT_PILL_ROW_W, (UIHIT_PILL_ROW_W - tw) / 2);
+			// PHASE 19 FIX PASS (verify finding C5). The finding's FRAMING is refuted and its
+			// measurement is banked here instead. C5 said "the plate dims native x 80..320 and the row
+			// now overhangs that band". The shipped pause-top.png does no such thing: every row of it is
+			// a UNIFORM full-screen scrim — row 137 is RGBA (9,7,13,189) for all 400 columns — so there
+			// is no 80..320 band in the ART. The 240 px band the capture shows is the GAME IMAGE at
+			// SCALE_1X (240x160 centred on 400x240), i.e. a user setting; the pills are outlined chrome
+			// over a scrim and read at least as well over plain letterbox as over dimmed game pixels.
+			// What IS true, measured: the design's own widget rect for this row is pause-top
+			// "active-feature pills" = x 56 y 129 w 288, and at the phase-19 chip the row exceeds 288 px
+			// for most real states (8 pills with the longest dynamic labels = 313 px; 9 = 352 px). That
+			// is a deviation from a design HINT with no visual consequence on this plate — nothing is
+			// baked outside x 56..344 to collide with — so the gates that mean something are asserted:
+			// the row stays on the screen with real margins (above), and it stays CENTRED on the
+			// manifest rect's own centre, which is what makes it read as chrome belonging to that band.
+			{
+				enum { MANIFEST_X = 56, MANIFEST_W = 288 };
+				static const char* const PILLS8[8] = { "3D", "DoF", "Bloom", "Light", "Tilt",
+				                                       "Touch Off", "Co-op", "Wireless" };
+				int t8 = 0;
+				for (int k = 0; k < 8; k++)
+					t8 += run_width(&f[TXT_CHIP], PILLS8[k]) + UIHIT_PILL_PAD + UIHIT_PILL_GAP;
+				int row8 = t8 - UIHIT_PILL_GAP;            /* no trailing gap is drawn */
+				int left8 = (UIHIT_PILL_ROW_W - t8) / 2;   /* main.c: x = (400 - tw) / 2 */
+				CHECK(2 * left8 + row8 >= UIHIT_PILL_ROW_W - 6 &&
+				      2 * left8 + row8 <= UIHIT_PILL_ROW_W + 6,
+				      "T16 pause-top pill row: 8 pills span x %d..%d, whose centre is %d — the manifest "
+				      "rect's centre (and the screen's) is %d", left8, left8 + row8,
+				      left8 + row8 / 2, MANIFEST_X + MANIFEST_W / 2);
+				CHECK(left8 >= 20 && left8 + row8 <= UIHIT_PILL_ROW_W - 20,
+				      "T16 pause-top pill row: 8 pills span x %d..%d on a %d px screen — under 20 px of "
+				      "margin it stops reading as centred chrome", left8, left8 + row8, UIHIT_PILL_ROW_W);
+				printf("     pause-top pills: 8-pill worst row = %d px at x %d..%d "
+				       "(design widget rect %d..%d, centre %d)\n",
+				       row8, left8, left8 + row8, MANIFEST_X, MANIFEST_X + MANIFEST_W,
+				       MANIFEST_X + MANIFEST_W / 2);
+			}
+		}
+	}
+
+	// ---------------- T19 — ONE MODULE PER BAND (PHASE 19 FIX PASS, verify finding C1)
+	// The blocker this fix pass answered was not a string overflowing its box — T10 and T16 both
+	// passed while it shipped — it was TWO MODULES drawing into the SAME 20 px band with no shared
+	// constant between them. main.c's bottom HUD bar (game name + ●FOCUS/LINK chips + fps/clock)
+	// and touch.c's mode chip ("TOUCH · SMART POINTER") both own the top of the 320 px screen, and
+	// the phase-19 rungs made them collide: the name was cut mid-word and the FOCUS chip vanished
+	// underneath the mode chip. A per-string test can never see that, so this one is written from
+	// the other end: PROVE the two are geometrically incompatible, then assert main.c gates the bar
+	// so that they can never both be drawn.
+	printf("\nT19: the bottom screen's top band has exactly one owner per touch mode\n");
+	if (ok[TXT_BODY] && ok[TXT_CHIP]) {
+		const int CHIP_PAD = 12;              /* ui_chip_measure: label + 12 */
+		/* touch.c: ui_fill(cx - w/2, y, w, TCHIP_H) with w = ui_chip_measure(s) + 2 */
+		struct { const char* s; } MODE[2] = { { "TOUCH \xC2\xB7 SMART POINTER" },
+		                                      { "TOUCH \xC2\xB7 GAMEPAD" } };
+		for (int m = 0; m < 2; m++) {
+			int cw    = run_width(&f[TXT_CHIP], MODE[m].s) + CHIP_PAD + 2;
+			int chipL = 160 - cw / 2, chipR = chipL + cw;
+			/* the bar's left cluster for the longest real game name, exactly as main.c lays it out */
+			int nameL = 15, nameR = nameL + run_width(&f[TXT_BODY], "Pokemon Emerald");
+			int focL  = 21 + run_width(&f[TXT_BODY], "Pokemon Emerald");
+			int focR  = focL + run_width(&f[TXT_CHIP], "\xE2\x97\x8F" "FOCUS") + CHIP_PAD;
+			/* vertical: the bar owns 0..HUD_BAR_H-1 plus a 2 px focus rule; the chip owns its own box */
+			int barBot  = UIHIT_HUD_BAR_H + 2;                       /* exclusive */
+			int chipTop = UIHIT_TOUCH_CHIP_Y;
+			int yOverlap = (chipTop < barBot);
+			int xOverlap = (chipL < focR && chipR > nameL);
+			CHECK(yOverlap && xOverlap,
+			      "T19 %s: the mode chip (x %d..%d, y from %d) and the HUD bar's left cluster "
+			      "(name %d..%d, FOCUS %d..%d, bar+rule rows 0..%d) do NOT overlap — if that is really "
+			      "true the gate below is over-strict and the bar could come back",
+			      MODE[m].s, chipL, chipR, chipTop, nameL, nameR, focL, focR, barBot - 1);
+			printf("     %-24s chip x %3d..%3d vs name %3d..%3d / FOCUS %3d..%3d -> %s\n",
+			       MODE[m].s, chipL, chipR, nameL, nameR, focL, focR,
+			       (yOverlap && xOverlap) ? "COLLIDES (so only one may draw)" : "clear");
+		}
+		/* ...and main.c must gate the bottom bar on TOUCH_OFF, not on "not the pad". The source text
+		   is the only place this rule lives; count_ident is comment- and string-blind, so TOUCH_PAD
+		   appearing here would be a REAL gate, not prose. The bar block is the only site that names
+		   the mode alongside `hudMode`, and phase 19 replaced its `tmEff != TOUCH_PAD` with
+		   `tmEff == TOUCH_OFF`; every other TOUCH_PAD use is input routing or the pad's own draw. */
+		{
+			int nOff = count_ident("source/main.c", "TOUCH_OFF");
+			CHECK(nOff >= 5,
+			      "T19: source/main.c names TOUCH_OFF %d times; the bottom HUD bar's gate is one of "
+			      "them (`(hudMode & 2) && tmEff == TOUCH_OFF`) and it must not be rewritten back to a "
+			      "\"not the pad\" test — Smart mode owns the same band", nOff);
 		}
 	}
 

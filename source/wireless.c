@@ -223,10 +223,13 @@ int wireless_lobby_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 		// RED and naming the field when they differ. Blank until the peer's surface arrives — an
 		// unknown verdict is drawn as nothing here and logged as `unknown` in the netlog, never as a
 		// match. Sits just above the status line (below the RTT/LOSS tiles at y182).
+		// PHASE 19 / SPEC-legible L3.2.10: the two bottom readouts come up 3 and 2 rows. Their
+		// cell grew 9 -> 15 px, so at 209/226 the two ink boxes touched and the second one's line
+		// box ran off the 240 px screen. At 206/224 the ink is 210..218 and 228..236.
 		if (fpLine[0] && (phase == 1 || phase == 3))
-			assets_text(txtBuf, TXT_CHIP, fpLine, 20.0f, 209.0f,
+			assets_text(txtBuf, TXT_CHIP, fpLine, 20.0f, 206.0f,
 			            fpVerdict > 0 ? THEME_QUIT_TEXT : g_art.dim);
-		if (status[0]) assets_text(txtBuf, TXT_CHIP, status, 20.0f, 226.0f, g_ui.acc);
+		if (status[0]) assets_text(txtBuf, TXT_CHIP, status, 20.0f, 224.0f, g_ui.acc);
 
 		// =============== BOTTOM: idle actions / scan cards / connected ===============
 		C2D_TargetClear(bot, g_ui.bg); C2D_SceneBegin(bot);
@@ -246,8 +249,12 @@ int wireless_lobby_run(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf
 				if (s) ui_border_round(12.0f, by, 296.0f, 34.0f, g_ui.acc, 1.5f, ASSETS_BTN_R);
 				C2D_DrawRectSolid(12.0f, by, 0.0f, 3.0f, 34.0f, m?THEME_GAME_A:THEME_QUIT);
 				char line[64]; snprintf(line, sizeof line, "%s · %s", lobbies[i].host[0]?lobbies[i].host:"host", game_name(lobbies[i].gameCode));
-				assets_text(txtBuf, TXT_BODY, line, 24.0f, by + 4.0f, g_art.text);
-				assets_text(txtBuf, TXT_CHIP, m?"○ match":"× different game", 24.0f, by + 20.0f, m?THEME_GAME_A:THEME_QUIT_TEXT);
+				// L4.5: by+4 / by+20 put the two ink boxes 1 px apart at the new cells. by+2 / by+21
+				// restores the separation INSIDE the same 34 px card: ink by+7..by+18 and
+				// by+25..by+33, i.e. 6 clear rows between them and the last one on the card's last
+				// row. (L4.5 says by+22, which is one row too far — T16 measured it.)
+				assets_text(txtBuf, TXT_BODY, line, 24.0f, by + 2.0f, g_art.text);
+				assets_text(txtBuf, TXT_CHIP, m?"○ match":"× different game", 24.0f, by + 21.0f, m?THEME_GAME_A:THEME_QUIT_TEXT);
 			}
 			assets_button(txtBuf, "btn-ghost", 13.0f, 210.0f, 293.0f, 26.0f, "« back", TXT_BODY, g_art.dim, 0);
 		} else {

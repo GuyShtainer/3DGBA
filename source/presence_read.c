@@ -115,3 +115,44 @@ void presence_read_fill(PeerPresence* r, int seat, GbaCore* c, const GameProfile
 
 	presence_fill_core(r, seat, gameId, &s);
 }
+
+// ---- phase 20: the peer's genuine trainer frame ----------------------------------------------
+// The bus. THREE READS AND NO WRITE — that is the whole shape of PsprBus, and it is deliberate:
+// the type system, not a code review, is what keeps the phase-15 read-only invariant (SPEC I1).
+static uint8_t  pspr_rd8 (void* ctx, uint32_t a) { return gbacore_read8 ((GbaCore*)ctx, a); }
+static uint16_t pspr_rd16(void* ctx, uint32_t a) { return gbacore_read16((GbaCore*)ctx, a); }
+static uint32_t pspr_rd32(void* ctx, uint32_t a) { return gbacore_read32((GbaCore*)ctx, a); }
+
+int presence_read_sprite(GbaCore* c, const GameProfile* p, const GameState* gs,
+                         int gateDraw, int surfOk, int texOk, PsprCapture* cap) {
+	if (!cap) return 0;
+	PsprCaptureIn in;
+	memset(&in, 0, sizeof in);
+	in.gateDraw = gateDraw ? 1u : 0u;
+	in.remote   = 0;          // same-console core. An M4 UDS record sets this and lands on
+	                          //   PSPR_R_REMOTE by design (SPEC S2.5: their VRAM is on another
+	                          //   console, and the 292-byte wire record that would fix it is
+	                          //   specified there and deliberately NOT built).
+	in.surfOk   = surfOk ? 1u : 0u;
+	in.texOk    = texOk  ? 1u : 0u;
+	// Clause 5, and it is the SAME predicate the anchor already uses — not a second, weaker one.
+	// It is what keeps us out of gSprites when the peer is in a BATTLE: ResetSpriteData frees the
+	// field sprites and gSprites[spriteId] is reused by a battle sprite, so reading it would give a
+	// Pokemon's OAM. Four independent refusals cover that case (this, `inUse`, the gPlayerAvatar
+	// cross-check, and the w,h <= 32 test) — SPEC S2.1's failure table.
+	in.ctxOk = (gs && gs->valid && gs->ctx == GCTX_OVERWORLD && gs->sb1Valid) ? 1u : 0u;
+	if (p) {
+		in.mapObjects   = p->mapObjects;
+		in.sprites      = p->sprites;
+		in.plttUnfaded  = p->plttUnfaded;
+		in.playerAvatar = p->playerAvatar;
+	}
+	if (!c) { in.gateDraw = 0; }
+
+	PsprBus bus;
+	bus.rd8  = pspr_rd8;
+	bus.rd16 = pspr_rd16;
+	bus.rd32 = pspr_rd32;
+	bus.ctx  = c;
+	return pspr_capture(&bus, &in, cap);
+}

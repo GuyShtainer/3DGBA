@@ -46,17 +46,24 @@ EOF
 	printf '  fnt_%-12s -s %-2s  lineFeed=%-3s cell=%sx%-3s  (drawn at %s px, scale 1.000)\n' \
 	       "$3" "$2" "$LF" "$CW" "$CH" "$4"
 }
+# PHASE 19 / SPEC-legible L1.5.2. Same law (lineFeed == draw px), higher rungs: mkbcfnt -s N is
+# POINTS at 96 dpi (em = N*4/3, lineFeed ~= 1.28*em), so phase 18's "-s 7 gives 12 px" faces were
+# em 9.3 where the design says em 12 — 0.78x, uniformly, which is the whole "everything is too
+# small" complaint. Five faces now, not seven: TXT_SEG draws the BODY face and TXT_CHIP draws the
+# SECTION face (typography.h), which removes two ~527 KB bakes and ~2 MB of runtime linear heap.
 #              ttf          pt  data/fnt_<sym>.bin  lineFeed == draw px
-bake_checked sg-bold.ttf   10  sg_bold_17          17   # TXT_TITLE   screen titles
-bake_checked sg-bold.ttf    7  sg_bold_12          12   # TXT_BUTTON  button labels, steppers
-bake_checked sg-med.ttf     7  sg_med_12           12   # TXT_BODY    list rows, names, prose
-bake_checked sg-med.ttf     6  sg_med_10           10   # TXT_SEG     segmented-control labels
-bake_checked jbm-med.ttf    5  jbm_med_9            9   # TXT_SECTION section labels, HUD, hints
-bake_checked jbm-med.ttf    4  jbm_med_7            7   # TXT_CHIP    chips, badges, ROM codes
-bake_checked jbm-bold.ttf   6  jbm_bold_11         11   # TXT_VALUE   caps / emphasised values
-# The four phase-17 faces (fnt_sg_bold/sg_med/jbm_med/jbm_bold) are GONE: none of them could be
-# drawn at 1.0 by any call site in the app. Remove stale copies so bin2s cannot resurrect them.
-rm -f "$DATA/fnt_sg_bold.bin" "$DATA/fnt_sg_med.bin" "$DATA/fnt_jbm_med.bin" "$DATA/fnt_jbm_bold.bin"
+bake_checked sg-bold.ttf   11  sg_bold_19          19   # TXT_TITLE            screen titles
+bake_checked sg-bold.ttf    9  sg_bold_15          15   # TXT_BUTTON           button labels, steppers
+bake_checked sg-med.ttf     9  sg_med_15           15   # TXT_BODY + TXT_SEG   rows, names, prose, segs
+bake_checked jbm-med.ttf    7  jbm_med_12          12   # TXT_SECTION + TXT_CHIP  captions, HUD, chips
+bake_checked jbm-bold.ttf   7  jbm_bold_12         12   # TXT_VALUE            caps / emphasised values
+# Stale faces MUST go before sharpen.py runs (it globs data/fnt_*.bin) and before bin2s sees them:
+# a leftover .bin is another ~527 KB embedded, and T5 in the host suite fails on it. Two vintages
+# to clear: the phase-17 four (drawable at 1.0 by nobody) and the phase-18 seven (0.78x too small).
+rm -f "$DATA/fnt_sg_bold.bin" "$DATA/fnt_sg_med.bin" "$DATA/fnt_jbm_med.bin" "$DATA/fnt_jbm_bold.bin" \
+      "$DATA/fnt_sg_bold_17.bin" "$DATA/fnt_sg_bold_12.bin" "$DATA/fnt_sg_med_12.bin" \
+      "$DATA/fnt_sg_med_10.bin"  "$DATA/fnt_jbm_med_9.bin"  "$DATA/fnt_jbm_med_7.bin" \
+      "$DATA/fnt_jbm_bold_11.bin"
 
 # PHASE 18 / the SECOND cause of the blur the user reported. Getting the draw to texel scale
 # 1.0 (above) stops the app RESAMPLING the bitmap; it cannot fix a bitmap that was soft when
@@ -71,11 +78,44 @@ rm -f "$DATA/fnt_sg_bold.bin" "$DATA/fnt_sg_med.bin" "$DATA/fnt_jbm_med.bin" "$D
 # --force: sharpen.py's default refuses a face that already clears the solidity floor, which is
 # the right guard for a HAND run (the pass is not idempotent — its gain stage renormalises
 # against the face's own distribution). Here every .bin was rasterised fresh by mkbcfnt three
-# lines ago, so all seven get the same treatment; skipping the bold cuts would leave the ladder
+# lines ago, so all five get the same treatment; skipping the bold cuts would leave the ladder
 # with two different edge profiles.
 echo "== stem-snap (alpha LUT) =="
 python3 "$ROOT/tools/fontlab/sharpen.py" apply "$DATA" --force || {
 	echo "  !! sharpen.py failed or a face stayed below the solidity floor." >&2; exit 1; }
+
+# PHASE 19 / SPEC-legible L3.2.7 — THE INK BOX, reported at bake time.
+# source/typography.h now DECLARES cellH / inkTop / inkH per rung, because typo_center_y (every
+# "centre a label in a box" site in the app) and every fixed row offset in §L3.2 are computed from
+# them. lineFeed is guarded above by bake_checked; this is the same class of number and it moves
+# for the same reason (an mkbcfnt bump changes the rasterisation), so the bake PRINTS it and the
+# host suite ASSERTS it: test_typography T18 re-measures these bytes and fails on any drift, and
+# T16 then re-grades every row against the new box. Measured over "AHgpy1:9" — caps, ascender,
+# descenders, digits, colon: the tallest and deepest thing a UI string can contain.
+echo "== ink box (compare with source/typography.h; test_typography T18 asserts it) =="
+python3 - "$DATA" "$ROOT/tools/fontlab" <<'INKPY'
+import sys, glob, os
+sys.path.insert(0, sys.argv[2])   # $ROOT/tools/fontlab (the heredoc is quoted: no shell expansion)
+from bcfnt import Bcfnt
+for path in sorted(glob.glob(os.path.join(sys.argv[1], "fnt_*.bin"))):
+    f = Bcfnt(path)
+    top = bot = None
+    for ch in "AHgpy1:9":
+        gi = f.glyph_index(ch)
+        if gi is None or gi < 0:
+            continue
+        for y, row in enumerate(f.glyph_bitmap(gi)):
+            if any(v > 0 for v in row):
+                top = y if top is None or y < top else top
+                bot = y if bot is None or y > bot else bot
+    cap = None
+    gi = f.glyph_index("H")
+    if gi is not None and gi >= 0:
+        rows = [y for y, r in enumerate(f.glyph_bitmap(gi)) if any(v > 0 for v in r)]
+        cap = rows[-1] - rows[0] + 1 if rows else None
+    print("  %-16s cell %2d  ink rows %2d..%-2d (inkTop %d inkH %d)  cap %s"
+          % (os.path.basename(path)[4:-4], f.cell_h, top, bot, top, bot - top + 1, cap))
+INKPY
 
 # This tex3ds build only does single-image -> t3x (no atlas / .t3s), so every plate and every
 # widget becomes its own tiny compressed t3x. The loader (assets.c) loads each into a 1-image

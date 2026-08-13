@@ -24,6 +24,7 @@
 
 #include "gbacore.h"
 #include "gamestate.h"
+#include "peersprite.h"
 #include "presence.h"
 
 // The D2.3 identity latch, one per GAME (not per screen — it must survive an X screen swap).
@@ -49,3 +50,25 @@ void presence_ident_reset(PresenceIdent* id);
 //   round = the producer's monotonic stamp (g_renderSeq)
 void presence_read_fill(PeerPresence* r, int seat, GbaCore* c, const GameProfile* p,
                         const GameState* gs, PresenceIdent* id, uint32_t round);
+
+// ---- phase 20: the peer's GENUINE trainer frame (docs/phase20-peersprite/SPEC.md) -------------
+// The second reader, and the last one. Everything it decides lives in peersprite.c (pure C,
+// host-tested by test/host/test_peersprite.c); this is a five-line adaptor that hands peersprite a
+// PsprBus of gbacore_read8/16/32 and the profile's three new columns.
+//
+// SAME TWO INVARIANTS as presence_read_fill, and they are the reason this lives here rather than in
+// main.c: READ-ONLY (the bus has no write member at all) and PARKED WINDOW ONLY (call it from the
+// existing "Workers are parked here" block, next to presence_read_fill — the DECODE and the texture
+// blit happen later, inside C3D_FrameBegin/End, and are main.c's business).
+//
+// COST (SPEC S1.8): 28 emulated-bus reads per game per frame in steady state, plus a ~64-128 read32
+// burst about 7x/second WHILE THE PEER WALKS and zero times a second while they stand. `cap` is
+// per-GAME, persistent, and carries its own change key — calling this every frame is what makes the
+// burst rare rather than constant.
+//
+//   gateDraw = presence_solve already decided to DRAW this peer (0 => no reads happen at all)
+//   surfOk   = the 128x128 presence sheet exists;  texOk = the S3.7 tiling proof passed at init
+//   gs       = the GameState game_read ALREADY produced this frame (D2.1: do NOT re-read)
+// Returns 1 when cap->hdr.ok.
+int presence_read_sprite(GbaCore* c, const GameProfile* p, const GameState* gs,
+                         int gateDraw, int surfOk, int texOk, PsprCapture* cap);

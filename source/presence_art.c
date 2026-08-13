@@ -17,6 +17,17 @@
 
 #include "presence_art.h"
 
+// PHASE 20 (SPEC.md S3.6): the live block must sit EXACTLY on top of the placeholder rows and end
+// exactly at the sheet edge. If PRES_ART_ROWS, PRES_CELL_H, PRES_SHEET_DIM or PSPR_LIVE_* ever
+// move, this is a build error rather than a sprite drawn over the placeholder's legs — and it also
+// pins the flush range main.c asserts (rows 96..127 == the LAST 16 KB of the 64 KB texture).
+_Static_assert(PRES_ART_ROWS * PRES_CELL_H == PSPR_LIVE_Y,
+               "phase 20: the live cell block must start where the placeholder variants end");
+_Static_assert(PSPR_LIVE_Y + PSPR_LIVE_DIM == PRES_SHEET_DIM,
+               "phase 20: the live cell block must end at the sheet edge");
+_Static_assert(PSPR_LIVE_X(PSPR_LIVE_SLOTS - 1) + PSPR_LIVE_DIM <= PRES_SHEET_DIM,
+               "phase 20: four live cells must fit across the sheet");
+
 // A2.6.3: the classic 4-beat walk read out of a 3-frame sheet. One beat per PRES_WALK_BEAT_PX of
 // world travel, so a 16 px tile step plays exactly one full cycle whatever the movement speed is
 // (1 px/f walk, 2 px/f run, 4 px/f bike all take the same 16 px). This is OUR animation policy —
@@ -58,15 +69,46 @@ void presence_art_cell(int gender, int dir, int pose, PresArtCell* out) {
 	out->mirror = mir;
 }
 
+// PHASE 20 (SPEC.md S5.3): the peer's OWN decoded frame, in the block of four 32x32 cells that sits
+// in rows 96..127 of the same sheet — space the placeholder layout already left free
+// (PRES_ART_ROWS * PRES_CELL_H == 96), so this phase allocates NO new texture memory.
+// mirror is always 0: the h-flip is baked into the pixels (SPEC S1.5), which is what keeps the
+// draw path — and TEST 28's mirrored-source-offset rule — untouched.
+void presence_art_live_cell(int slot, PresArtCell* out) {
+	if (!out) return;
+	if (slot < 0 || slot >= PSPR_LIVE_SLOTS) slot = 0;   // A0.4's discipline: clamp, never index out
+	out->x      = PSPR_LIVE_X(slot);
+	out->y      = PSPR_LIVE_Y;
+	out->mirror = 0;
+}
+
 // ---- geometry (A1.1, A2.4) -------------------------------------------------------------------
 
+// PHASE 20 (SPEC.md S5.1). The general form; presence_art_rect is the (16, 32) instance of it, so
+// the two CANNOT drift — TEST 40 asserts the identity over a sweep anyway, because "cannot drift"
+// is only true while this really is one line.
+void presence_art_rect_wh(float footX, float footY, int w, int h, float* sprX, float* sprY) {
+	if (sprX) *sprX = footX - (float)w * 0.5f;
+	if (sprY) *sprY = footY - (float)h;
+}
+
 void presence_art_rect(float footX, float footY, float* sprX, float* sprY) {
-	if (sprX) *sprX = footX - (float)PRES_FOOT_DX;
-	if (sprY) *sprY = footY - (float)PRES_FOOT_DY;
+	// PRES_FOOT_DX == 8 == PRES_CELL_W / 2 and PRES_FOOT_DY == 32 == PRES_CELL_H, so this is
+	// bit-identical to the pre-phase-20 body (both terms are exact in binary floating point).
+	presence_art_rect_wh(footX, footY, PRES_CELL_W, PRES_CELL_H, sprX, sprY);
 }
 
 int presence_art_clip(float sprX, float sprY, int mirror, float margin, PresArtDraw* out) {
+	return presence_art_clip_wh(sprX, sprY, PRES_CELL_W, PRES_CELL_H, mirror, margin, out);
+}
+
+// PHASE 20 (SPEC.md S5.2). Byte-for-byte the phase-15 body with PRES_CELL_W/H replaced by the
+// parameters; every comment in presence_art.h about the outward rounding, the spill margin and the
+// mirrored-source-offset rule applies unchanged.
+int presence_art_clip_wh(float sprX, float sprY, int w0, int h0, int mirror, float margin,
+                         PresArtDraw* out) {
 	if (!out) return 0;
+	if (w0 <= 0 || h0 <= 0) return 0;
 	// Reject NaN and absurd magnitudes before any float->int cast. The anchor is bounded by the
 	// data half's own cull (|dTile| <= 9 tiles), so this can only fire on a corrupted record — and
 	// a cast of NaN to int is undefined behaviour, which is not an acceptable way to find out.
@@ -82,12 +124,12 @@ int presence_art_clip(float sprX, float sprY, int mirror, float margin, PresArtD
 	float lo = -margin, hiX = (float)PRES_FRAME_W + margin, hiY = (float)PRES_FRAME_H + margin;
 	int cutL = (sprX < lo) ? ceil_i(lo - sprX) : 0;
 	int cutT = (sprY < lo) ? ceil_i(lo - sprY) : 0;
-	float rx = sprX + (float)PRES_CELL_W, by = sprY + (float)PRES_CELL_H;
+	float rx = sprX + (float)w0, by = sprY + (float)h0;
 	int cutR = (rx > hiX) ? ceil_i(rx - hiX) : 0;
 	int cutB = (by > hiY) ? ceil_i(by - hiY) : 0;
 
-	int w = PRES_CELL_W - cutL - cutR;
-	int h = PRES_CELL_H - cutT - cutB;
+	int w = w0 - cutL - cutR;
+	int h = h0 - cutT - cutB;
 	if (w <= 0 || h <= 0) return 0;                     // fully clipped == culled (A2.4.1)
 
 	out->x  = sprX + (float)cutL;

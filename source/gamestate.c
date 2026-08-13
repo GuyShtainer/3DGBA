@@ -38,7 +38,13 @@ static const GameProfile PROFILES[] = {
             /* sbDirect (SPEC-coop P3.2.3): Emerald HAS gSaveBlock1Ptr/gSaveBlock2Ptr, so the two
                columns above stay POINTERS. Written explicitly rather than left to C's zero-fill —
                an implicit zero in a table this long is how a future append goes wrong (P3.5.2). */
-            0 },
+            0,
+            /* phase 20 peer sprite (SPEC S1.3): gSprites / gPlttBufferUnfaded / gPlayerAvatar,
+               re-derived from pokeemerald.sym on 2026-08-13. VERIFIED-SYM.
+                 02020630 g 00001144 gSprites            (0x1144 = 65 * 0x44)
+                 02037714 g 00000400 gPlttBufferUnfaded  (0x400 = 512 u16)
+                 02037590 g 00000024 gPlayerAvatar */
+            0x02020630u, 0x02037714u, 0x02037590u },
   { "BPRE", 0x03005008u, 0x02022B4Cu, 0x02023FF8u, 0x02023FFCu, 0x02023BE4u, 0x02022976u,
             0x0203B0A0u, 0x02024029u, 0x030030F4u, 0x0811EBA0u, 0x0811EBD0u, 0x0303011Eu,
             0x03004FE0u, 0x0802E674u, 0x03004FF4u, 0x02023BD6u, 0x02023BCCu, 0x02023D70u, 0x02023BC4u, 0x03005040u,
@@ -66,7 +72,16 @@ static const GameProfile PROFILES[] = {
                VERIFIED-SYM. NOT gObjectEvents-0x38 (that Emerald derivation is wrong here). */
             0x02036DFCu,
             /* sbDirect: FireRed has gSaveBlock1Ptr/gSaveBlock2Ptr -> pointers (P3.2.3). */
-            0 },
+            0,
+            /* phase 20 peer sprite (SPEC S1.3): read from pokefirered.sym AND pokefirered_rev1.sym
+               (IDENTICAL — the user's FR is rev1). VERIFIED-SYM, not Emerald-derived.
+                 0202063c g 00001144 gSprites
+                 020371f8 g 00000400 gPlttBufferUnfaded
+                 02037078 g 00000020 gPlayerAvatar  (FR's struct is 0x20, not Emerald's 0x24; the
+                                                     two fields we read, flags @+0x00 and spriteId
+                                                     @+0x04, are identical — FR diverges only after
+                                                     +0x08, which we never touch) */
+            0x0202063Cu, 0x020371F8u, 0x02037078u },
   { "BPGE", 0x03005008u, 0x02022B4Cu, 0x02023FF8u, 0x02023FFCu, 0x02023BE4u, 0x02022976u,
             0x0203B0A0u, 0x02024029u, 0x030030F4u, 0x0811EBA0u, 0x0811EBD0u, 0x0303011Eu,
             0x03004FE0u, 0x0802E674u, 0x03004FF4u, 0x02023BD6u, 0x02023BCCu, 0x02023D70u, 0x02023BC4u, 0x03005040u,
@@ -90,7 +105,12 @@ static const GameProfile PROFILES[] = {
                gMapHeader 0x02036DFC. VERIFIED-SYM, not FR-derived. */
             0x02036DFCu,
             /* sbDirect: LeafGreen has gSaveBlock1Ptr/gSaveBlock2Ptr -> pointers (P3.2.3). */
-            0 },
+            0,
+            /* phase 20 peer sprite (SPEC S1.3): read from LEAFGREEN'S OWN maps —
+               pokeleafgreen.sym AND pokeleafgreen_rev1.sym (both on pret/pokefirered's `symbols`
+               branch; both agree). VERIFIED-SYM, NOT FR-derived.
+                 0202063c gSprites / 020371f8 gPlttBufferUnfaded / 02037078 gPlayerAvatar */
+            0x0202063Cu, 0x020371F8u, 0x02037078u },
 
   // ===================== Ruby / Sapphire (SPEC-coop §P3) =====================================
   // Every RAM value below is VERIFIED-SYM against pret's byte-matched `symbols` branch, all FOUR
@@ -190,7 +210,21 @@ static const GameProfile PROFILES[] = {
             /* mapHeaderPath = gMapHeader (warp classification; NOT the HD-2D `mapHeader`) */    \
             0x0202E828u,                                                                        \
             /* sbDirect = 1: sb1ptr/sb2ptr above ARE the structs, not pointers (P3.2) */         \
-            1
+            1,                                                                                  \
+            /* phase 20 peer sprite (SPEC S1.3): gSprites / gPlttBufferUnfaded / gPlayerAvatar,
+               read from ALL FOUR RS maps on 2026-08-13 — pokeruby.sym, pokesapphire.sym,
+               pokeruby_rev1.sym, pokesapphire_rev1.sym — which AGREE 4/4, exactly like the 727
+               RAM symbols the phase-18 block above diffed. RAM only, so the ROM-address ban that
+               governs this row is not engaged. gSprites' size is 0x1144 here too, i.e. the same
+               65 * 0x44 `struct Sprite` Emerald has.
+                 02020004 g 00001144 gSprites
+                 0202eac8 g 00000400 gPlttBufferUnfaded
+                 0202e858 g 00000024 gPlayerAvatar
+               *** VERIFIED-SYM / VERIFY-ON-HW: no RS ROM exists on this machine, so like every
+               other value in this row these have never been EXECUTED. The cheap proof is the same
+               one P3.6 names, plus one field: boot Ruby beside Sapphire and check that
+               g_presDiag.sprReason reads 0. *** */                                              \
+            0x02020004u, 0x0202EAC8u, 0x0202E858u
   { "AXVE", RS_PROFILE_BODY },   // Pokemon Ruby      (US, rev0 and rev1 — the RAM maps are identical)
   { "AXPE", RS_PROFILE_BODY },   // Pokemon Sapphire  (US, rev0 and rev1 — same body, pinned above)
   #undef RS_PROFILE_BODY
@@ -382,6 +416,8 @@ typedef struct {
 	uint8_t  dPrLive, dPrDrawn, dPrReason;     // phase 15 co-op presence (A6.5.3) — the TOP game's
 	int8_t   dPrFace;                          //   peer: liveness tier / drew / PRES_OFF_* / facing
 	int16_t  dPrMapG, dPrMapN, dPrPx, dPrPy;   //   ...and its map + tile. LOGGING ONLY.
+	uint8_t  dPrSprReason, dPrSprW, dPrSprH;   // phase 20 peer sprite (SPEC S4.3): why the live
+	uint16_t dPrSprGfx;                        //   frame did/didn't resolve, its size, and the FORM
 	uint32_t lstat, lbuf0, lbuf1, lnotrecv;    // link-error diagnostics (gLinkStatus / sLinkErrorBuffer / notRecv)
 	uint8_t  lerr;                             // gLinkErrorOccurred
 } GsLogEntry;
@@ -458,6 +494,9 @@ void gs_log_sample(GbaCore* c, const GameProfile* p, const GameState* gs,
 		e->dPrReason = depth->prReason; e->dPrFace = depth->prFace;
 		e->dPrMapG = depth->prMapG; e->dPrMapN = depth->prMapN;
 		e->dPrPx = depth->prPx;     e->dPrPy = depth->prPy;
+		e->dPrSprReason = depth->prSprReason;                           // phase 20 (SPEC S4.3)
+		e->dPrSprW = depth->prSprW; e->dPrSprH = depth->prSprH;
+		e->dPrSprGfx = depth->prSprGfx;
 	}
 	e->lstat = gs->linkStatus; e->lbuf0 = gs->linkErrBuf0; e->lbuf1 = gs->linkErrBuf1;
 	e->lnotrecv = gs->linkNotRecv; e->lerr = gs->linkErr;
@@ -496,7 +535,8 @@ void gamestate_log_dump(const char* path) {
 	// in a same-console run — the D3 CSV's peer columns only write during a wireless session, and
 	// presence gate P-G3 turns the feature off for the whole of one (SPEC-data D4.8).
 	fprintf(f, "# co-op (top rows): d_prLive=peer liveness 0 none/1 connected(record fresh, peer NOT game-active)/2 active; d_prDrawn=1 the gate resolved to DRAW; d_prReason=PRES_OFF_* code (0=drawing, and see presence.h: 1 off 2 menu 3 link 4 noprof 5 universe 6 self 7 field 8 obj 9 map 10 stale 11 cull); d_prMapG/d_prMapN != this row's mapG/mapN is THE commonest reason there is no avatar; d_prPx/d_prPy=peer tile; d_prFace=peer facing 1=D 2=U 3=L 4=R. Values are the PREVIOUS frame's solve (stamped in the parked window, solved in the render phase) = the frame the player just saw. LOGGING ONLY.\n");
-	fprintf(f, "idx,frame,scr,ctx,ctxName,cb1,cb2,sb1V,resolved,px,py,objX,objY,mapG,mapN,face,inj,nTask,t0,t1,t2,t3,t4,t5,t6,t7,d_ow,d_nspr,d_nui,d_nfg,d_maxd,d_camX,d_camY,d_feetMin,d_feetMax,d_headMin,d_headMax,d_tallOk,d_tallFail,d_ordOk,d_s3d,d_tiltLvl,d_tiltAngT,d_tiltAngB,d_prLive,d_prDrawn,d_prReason,d_prFace,d_prMapG,d_prMapN,d_prPx,d_prPy,lerr,lstat,lbuf0,lbuf1,lnotrecv\n");
+	fprintf(f, "# peer sprite (top rows, phase 20): d_prSprReason=PSPR_R_* for the PEER's genuine overworld frame, read live out of THEIR core's OAM+OBJ VRAM+palette (0=the peer's own sprite is on screen; see peersprite.h: 1 remote 2 noprof 3 nosurf 4 tilefmt 5 ctx 6 noobj 7 badid 8 mismatch 9 notinuse 10 hidden 11 affine 12 bpp 13 size 14 mode 15 tile 16 pending); d_prSprW/d_prSprH=the decoded cell size in the sheet (16x32 walking, 32x32 bike/surf); d_prSprGfx=graphicsId, i.e. the FORM. ANY nonzero reason means the phase-15 magenta PLACEHOLDER is drawing instead — which is the designed fallback, never garbage. LOGGING ONLY.\n");
+	fprintf(f, "idx,frame,scr,ctx,ctxName,cb1,cb2,sb1V,resolved,px,py,objX,objY,mapG,mapN,face,inj,nTask,t0,t1,t2,t3,t4,t5,t6,t7,d_ow,d_nspr,d_nui,d_nfg,d_maxd,d_camX,d_camY,d_feetMin,d_feetMax,d_headMin,d_headMax,d_tallOk,d_tallFail,d_ordOk,d_s3d,d_tiltLvl,d_tiltAngT,d_tiltAngB,d_prLive,d_prDrawn,d_prReason,d_prFace,d_prMapG,d_prMapN,d_prPx,d_prPy,d_prSprReason,d_prSprW,d_prSprH,d_prSprGfx,lerr,lstat,lbuf0,lbuf1,lnotrecv\n");
 	uint32_t n    = (s_gsLogN < GSLOG_N) ? s_gsLogN : GSLOG_N;
 	uint32_t base = (s_gsLogN < GSLOG_N) ? 0u : (s_gsLogN % GSLOG_N);   // oldest retained entry
 	for (uint32_t i = 0; i < n; i++) {
@@ -516,10 +556,13 @@ void gamestate_log_dump(const char* path) {
 			fprintf(f, ",%u,%u,%u,%d,%d,%d,%d,%d",                  // phase 15 co-op presence (A6.5.3)
 			        e->dPrLive, e->dPrDrawn, e->dPrReason, e->dPrFace,
 			        e->dPrMapG, e->dPrMapN, e->dPrPx, e->dPrPy);
-			// I6.5: 7 d_* + 8 detail + 3 tilt + 8 presence = 26 empty fields on a non-depth (bottom)
-			// row. Getting this count wrong shifts every LATER column on those rows and silently
-			// corrupts the link columns, which is the one thing this log exists to make readable.
-		} else fprintf(f, ",,,,,,,,,,,,,,,,,,,,,,,,,,");
+			fprintf(f, ",%u,%u,%u,%u",                              // phase 20 peer sprite (S4.3)
+			        e->dPrSprReason, e->dPrSprW, e->dPrSprH, e->dPrSprGfx);
+			// I6.5: 7 d_* + 8 detail + 3 tilt + 8 presence + 4 peer-sprite = 30 empty fields on a
+			// non-depth (bottom) row. Getting this count wrong shifts every LATER column on those
+			// rows and silently corrupts the link columns, which is the one thing this log exists
+			// to make readable. THE COMMA RUN BELOW MUST HAVE EXACTLY 30 COMMAS.
+		} else fprintf(f, ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,");
 		fprintf(f, ",%u,%08lX,%08lX,%08lX,%08lX\n", e->lerr,                       // link-error diagnostics
 		        (unsigned long)e->lstat, (unsigned long)e->lbuf0, (unsigned long)e->lbuf1, (unsigned long)e->lnotrecv);
 	}

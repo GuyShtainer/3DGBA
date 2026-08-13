@@ -1,0 +1,1 @@
+[["wait", 2500], ["hold", "A", 20], ["release"], ["wait", 1500], ["hold", "START+SELECT", 40], ["release"], ["wait", 2000], ["hold", "R", 20], ["release"], ["wait", 700], ["hold", "R", 20], ["release"], ["wait", 700], ["hold", "R", 20], ["release"], ["wait", 700], ["hold", "R", 20], ["release"], ["wait", 700], ["hold", "R", 20], ["release"], ["wait", 700], ["wait", 2500]]

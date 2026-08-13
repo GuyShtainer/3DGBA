@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """fontlab/measure.py — the phase-18 before/after crispness evidence.
 
-Renders the SPEC-crisp C5.2.4 corpus twice — once through the phase-17 four-face pack at the
-sizes the phase-17 call sites used, once through the phase-18 ladder — with the PICA200's own
-sampler (tools/fontlab/bcfnt.py), and reports the objective measures:
+Renders the SPEC-crisp C5.2.4 corpus twice — once through the PREVIOUS pack at the sizes that
+pack was drawn at, once through the pack in data/ — with the PICA200's own sampler
+(tools/fontlab/bcfnt.py), and reports the objective measures:
 
   offgrid  pixels whose value is NOT a multiple of 17. A bcfnt sheet is A4 (4 bpp), so every
            source texel is n*17. Zero off-grid pixels == the sampler passed texels through
@@ -17,12 +17,16 @@ sampler (tools/fontlab/bcfnt.py), and reports the objective measures:
 Usage:
   tools/fontlab/measure.py --before <dir-of-phase17-bins> [--out <dir>] [--html <file>]
 
-The BEFORE pack is not in git (data/*.bin is generated), so rebake it with the phase-17
-recipe first — the sizes and lineFeeds are asserted here so a wrong pack cannot masquerade:
-  mkbcfnt sg-bold.ttf  -s 11 -o fnt_sg_bold.bin     (lineFeed 19)
-  mkbcfnt sg-med.ttf   -s 10 -o fnt_sg_med.bin      (lineFeed 17)
-  mkbcfnt jbm-med.ttf  -s  7 -o fnt_jbm_med.bin     (lineFeed 12)
-  mkbcfnt jbm-bold.ttf -s  8 -o fnt_jbm_bold.bin    (lineFeed 14)
+The BEFORE pack is not in git (data/*.bin is generated), so rebake it first — the sizes and
+lineFeeds are asserted here so a wrong pack cannot masquerade:
+  mkbcfnt sg-bold.ttf  -s 10 -o fnt_sg_bold_17.bin   (lineFeed 17)   phase 18
+  mkbcfnt sg-bold.ttf  -s  7 -o fnt_sg_bold_12.bin   (lineFeed 12)
+  mkbcfnt sg-med.ttf   -s  7 -o fnt_sg_med_12.bin    (lineFeed 12)
+  mkbcfnt sg-med.ttf   -s  6 -o fnt_sg_med_10.bin    (lineFeed 10)
+  mkbcfnt jbm-med.ttf  -s  5 -o fnt_jbm_med_9.bin    (lineFeed  9)
+  mkbcfnt jbm-med.ttf  -s  4 -o fnt_jbm_med_7.bin    (lineFeed  7)
+  mkbcfnt jbm-bold.ttf -s  6 -o fnt_jbm_bold_11.bin  (lineFeed 11)
+then run tools/fontlab/sharpen.py apply <dir> --force, as build_assets.sh does.
 """
 import argparse
 import html
@@ -33,22 +37,28 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bcfnt import Bcfnt, render_run, metrics, to_png   # noqa: E402
 
 # role, string, BEFORE (file stem, px), AFTER (file stem, px)
-# BEFORE px values are the literals that were at the phase-17 call sites (SPEC-crisp C1.4).
+# PHASE 19 / SPEC-legible retarget. BEFORE is now the PHASE-18 pack (already lawful: px ==
+# lineFeed, texel scale 1.0) and AFTER is the phase-19 ladder, because the phase-17 pack this
+# file was written against can no longer be produced by tools/build_assets.sh. What the tool
+# proves therefore changes with the phase: for 18 it was "the resample is gone", for 19 it is
+# "the rungs got BIGGER and the pass-through survived it" — both sides must read 0 off-grid.
 CORPUS = [
-    ("TXT_TITLE",   "Settings",                ("fnt_sg_bold",  20.0), ("fnt_sg_bold_17",  17.0)),
-    ("TXT_BUTTON",  "Resume this pairing",     ("fnt_sg_bold",  13.0), ("fnt_sg_bold_12",  12.0)),
-    ("TXT_BODY",    "pick a game (d-pad + A)", ("fnt_sg_med",   12.0), ("fnt_sg_med_12",   12.0)),
-    ("TXT_SEG",     "Aspect-fit",              ("fnt_sg_med",   10.0), ("fnt_sg_med_10",   10.0)),
-    ("TXT_SECTION", "SCALE · TOP",        ("fnt_jbm_med",   9.0), ("fnt_jbm_med_9",    9.0)),
-    ("TXT_CHIP",    "HOST BPEE",               ("fnt_jbm_med",   8.0), ("fnt_jbm_med_7",    7.0)),
-    ("TXT_VALUE",   "12:34",                   ("fnt_jbm_bold", 10.0), ("fnt_jbm_bold_11", 11.0)),
+    ("TXT_TITLE",   "Settings",                ("fnt_sg_bold_17",  17.0), ("fnt_sg_bold_19",  19.0)),
+    ("TXT_BUTTON",  "Resume this pairing",     ("fnt_sg_bold_12",  12.0), ("fnt_sg_bold_15",  15.0)),
+    ("TXT_BODY",    "pick a game (d-pad + A)", ("fnt_sg_med_12",   12.0), ("fnt_sg_med_15",   15.0)),
+    ("TXT_SEG",     "Aspect-fit",              ("fnt_sg_med_10",   10.0), ("fnt_sg_med_15",   15.0)),
+    ("TXT_SECTION", "SCALE \u00b7 TOP",           ("fnt_jbm_med_9",    9.0), ("fnt_jbm_med_12",  12.0)),
+    ("TXT_CHIP",    "HOST BPEE",               ("fnt_jbm_med_7",    7.0), ("fnt_jbm_med_12",  12.0)),
+    ("TXT_VALUE",   "12:34",                   ("fnt_jbm_bold_11", 11.0), ("fnt_jbm_bold_12", 12.0)),
 ]
 
-# The three rungs whose draw px did NOT change, so before/after render at the SAME output size
-# and the numbers are apples-to-apples (SPEC-crisp C1.7.2 forbids comparing acutance across sizes).
-SAME_SIZE = {"TXT_BODY", "TXT_SEG", "TXT_SECTION"}
-
-EXPECT_BEFORE_LF = {"fnt_sg_bold": 19, "fnt_sg_med": 17, "fnt_jbm_med": 12, "fnt_jbm_bold": 14}
+# Same-size pairs are what make an acutance comparison legal (C1.7.2). Phase 19 moves EVERY rung,
+# so there are none: each side is reported on its own numbers and the gate is the binary
+# pass-through measure (off-grid == 0), which is size-independent.
+SAME_SIZE = set()
+EXPECT_BEFORE_LF = {"fnt_sg_bold_17": 17, "fnt_sg_bold_12": 12, "fnt_sg_med_12": 12,
+                    "fnt_sg_med_10": 10, "fnt_jbm_med_9": 9, "fnt_jbm_med_7": 7,
+                    "fnt_jbm_bold_11": 11}
 
 
 def load(path):
@@ -58,8 +68,8 @@ def load(path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--before", required=True, help="dir holding the phase-17 fnt_*.bin")
-    ap.add_argument("--after", default="data", help="dir holding the phase-18 fnt_*.bin")
+    ap.add_argument("--before", required=True, help="dir holding the PREVIOUS pack's fnt_*.bin")
+    ap.add_argument("--after", default="data", help="dir holding the CURRENT pack (default data/)")
     ap.add_argument("--out", default=None, help="dir for the 8x zoom PNGs")
     ap.add_argument("--html", default=None, help="write a before/after sheet here")
     a = ap.parse_args()
@@ -79,11 +89,11 @@ def main():
     for stem, lf in EXPECT_BEFORE_LF.items():
         f = get(a.before, stem)
         if f.line_feed != lf:
-            sys.exit("BEFORE pack is wrong: %s has lineFeed %d, phase 17 shipped %d"
+            sys.exit("BEFORE pack is wrong: %s has lineFeed %d, the previous ladder shipped %d"
                      % (stem, f.line_feed, lf))
 
     rows = []
-    print("%-12s %-24s | %-26s | %-26s" % ("role", "string", "BEFORE (phase 17)", "AFTER (phase 18)"))
+    print("%-12s %-24s | %-26s | %-26s" % ("role", "string", "BEFORE (previous pack)", "AFTER (data/)"))
     print("%-12s %-24s | %6s %5s %5s %5s %5s | %6s %5s %5s %5s %5s  %s"
           % ("", "", "scale", "off", "lvls", "ramp", "peak", "scale", "off", "lvls", "ramp", "peak", ""))
     worst = []
@@ -91,9 +101,12 @@ def main():
         fb = get(a.before, bstem)
         fa = get(a.after, astem)
 
-        # BEFORE: phase-17 assets.c did sc = px / ceil(lineFeed*30/cellH), and citro2d then
-        # multiplied by 30/cellH. That is exactly Bcfnt.texel_scale with the ceil'd s_native.
-        bscale = fb.texel_scale(bpx)
+        # BEFORE: model the pack that is actually on disk. A LAWFUL pack (px == lineFeed, i.e.
+        # phase 18 and later) drew at exactly px/lineFeed; the phase-17 pack drew at
+        # px / ceil(lineFeed*30/cellH), which is Bcfnt.texel_scale's ceil'd s_native. Choosing by
+        # the bytes rather than by a flag keeps this tool correct for either vintage.
+        bscale = ((bpx * fb.cell_h / (fb.line_feed * 30.0)) * (30.0 / fb.cell_h)
+                  if fb.line_feed == int(bpx) else fb.texel_scale(bpx))
         # AFTER: typo_draw_scale(px, lineFeed, cellH) * 30/cellH == px/lineFeed, and the ladder
         # makes px == lineFeed. Derived here the same way, from the shipped bytes.
         ascale = (apx * fa.cell_h / (fa.line_feed * 30.0)) * (30.0 / fa.cell_h)
@@ -102,14 +115,20 @@ def main():
         # through in phase 17 AND is the honest test of pass-through: a NEAREST render emits
         # source texels whatever the scale, so `offgrid` on a NEAREST render is 0 by
         # construction and proves nothing. At a true 1.0 the LINEAR result IS the texels.
+        lawful_before = (fb.line_feed == int(bpx))
         _, _, ib0 = render_run(fb, text, bscale, origin_x=0.0, filt="linear")
         _, _, ib5 = render_run(fb, text, bscale, origin_x=0.5, filt="linear")
         mb0, mb5 = metrics(ib0), metrics(ib5)
-        # phase 17's centred/right-aligned runs landed on a half pixel more often than not
-        # (assets_text_c passed cx - w/2 unrounded), so report the worse of the two origins —
-        # that is what the user was actually looking at on the buttons and the HUD.
-        mb = mb5 if mb5["levels"] > mb0["levels"] else mb0
-        ib = ib5 if mb5["levels"] > mb0["levels"] else ib0
+        # WHICH ORIGIN THE BEFORE PACK IS ENTITLED TO. Phase 17 drew centred/right-aligned runs at
+        # an unrounded cx - w/2, so it genuinely landed on half pixels and the WORSE of the two
+        # origins is what the user saw. Phase 18 and later snap the origin inside assets_text, so
+        # frac 0 is the only reachable case and charging a lawful pack for a half-pixel render
+        # would manufacture a regression that the app cannot produce. Choose by the pack.
+        if lawful_before:
+            mb, ib = mb0, ib0
+        else:
+            mb = mb5 if mb5["levels"] > mb0["levels"] else mb0
+            ib = ib5 if mb5["levels"] > mb0["levels"] else ib0
 
         # AFTER: assets_text rounds the origin, so frac 0 is the only reachable case.
         _, _, ia = render_run(fa, text, ascale, origin_x=0.0, filt="linear")

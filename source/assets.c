@@ -15,14 +15,22 @@ ASSET_WIDGETS
 #undef X
 // PHASE 18 / SPEC-crisp: one bcfnt per ladder rung, each baked with lineFeed == its draw px.
 // Order MUST match TxtRole in typography.h (asserted at load, see assets_init).
+//
+// PHASE 19 / SPEC-legible L2.3: two rungs are now ALIASES — TXT_SEG draws the BODY face and
+// TXT_CHIP draws the SECTION face — so the same _bin symbol appears on two rows. That is
+// deliberate (it is what removes two ~527 KB faces), and it makes de-duplication MANDATORY at
+// load: C2D_FontLoadFromMem does linearAlloc(size) + memcpy of the WHOLE .bcfnt (disassembled
+// from the shipped libcitro2d.a font.o), so loading a symbol twice burns another ~527 KB of
+// linear heap in an app that already carries two GBA cores and eight render targets. The loop
+// below loads each DISTINCT symbol once and points both role slots at the one handle.
 #define ASSET_FONTS \
-	X(TXT_TITLE,   fnt_sg_bold_17)  \
-	X(TXT_BUTTON,  fnt_sg_bold_12)  \
-	X(TXT_BODY,    fnt_sg_med_12)   \
-	X(TXT_SEG,     fnt_sg_med_10)   \
-	X(TXT_SECTION, fnt_jbm_med_9)   \
-	X(TXT_CHIP,    fnt_jbm_med_7)   \
-	X(TXT_VALUE,   fnt_jbm_bold_11)
+	X(TXT_TITLE,   fnt_sg_bold_19)  \
+	X(TXT_BUTTON,  fnt_sg_bold_15)  \
+	X(TXT_BODY,    fnt_sg_med_15)   \
+	X(TXT_SEG,     fnt_sg_med_15)   \
+	X(TXT_SECTION, fnt_jbm_med_12)  \
+	X(TXT_CHIP,    fnt_jbm_med_12)  \
+	X(TXT_VALUE,   fnt_jbm_bold_12)
 #define X(role, sym) extern const u8 sym##_bin[]; extern const u8 sym##_bin_end[];
 ASSET_FONTS
 #undef X
@@ -65,9 +73,24 @@ bool assets_init(void) {
 	theme_init_art(ASSET_THEME_ID);
 	load_group(s_plates, N_PLATES);
 	load_group(s_wgts, N_WGTS);
-#define X(role, sym) s_fonts[role] = C2D_FontLoadFromMem(sym##_bin, (size_t)(sym##_bin_end - sym##_bin));
-	ASSET_FONTS
+	// PHASE 19: load each DISTINCT face once (see ASSET_FONTS above). The identity test is the
+	// _bin symbol's ADDRESS, not a strcmp of typo_face().sym: it is the thing that would actually
+	// be loaded twice, it costs nothing, and it cannot drift from the X-macro the way a parallel
+	// name table could. Seven rows, five loads.
+	{
+		static const struct { const u8* data; const u8* end; } FSRC[TXT_COUNT] = {
+#define X(role, sym) [role] = { sym##_bin, sym##_bin_end },
+			ASSET_FONTS
 #undef X
+		};
+		for (int f = 0; f < TXT_COUNT; f++) {
+			s_fonts[f] = NULL;
+			for (int g = 0; g < f; g++)
+				if (FSRC[g].data == FSRC[f].data) { s_fonts[f] = s_fonts[g]; break; }   // alias
+			if (!s_fonts[f])
+				s_fonts[f] = C2D_FontLoadFromMem(FSRC[f].data, (size_t)(FSRC[f].end - FSRC[f].data));
+		}
+	}
 	// PHASE 18 / SPEC-crisp C2.1.1 + C3.1. Two things per face, both load-time, both one-shot:
 	//
 	//  (1) The draw scale is DERIVED from the face's own FINF/TGLP, not measured through
@@ -252,8 +275,13 @@ void assets_button(C2D_TextBuf buf, const char* sprite, float x, float y, float 
 	// removed (a resampled glyph looked low, so someone lifted it half a pixel); with the line
 	// box exactly typo_role_px(r) tall, (h - px)/2 is the true optical centre and assets_text
 	// snaps it to the grid.
+	// PHASE 19 / SPEC-legible L3.2.7: centre the INK box, not the line box. `(h - px)/2` put a
+	// cap-9 label ~4 px low in a 40 px button (the face reserves more room under the baseline
+	// than above the cap), which reads as "the label is falling out of the bottom" at the sizes
+	// this phase ships. typo_center_y is the single implementation; it rounds, so R1's integer
+	// origin still holds for the `_c` path.
 	if (label && label[0])
-		assets_text_c(buf, r, label, x + w / 2.0f, y + (h - typo_role_px(r)) / 2.0f, col);
+		assets_text_c(buf, r, label, x + w / 2.0f, typo_center_y(r, y, h), col);
 }
 
 // Segmented control, drawn procedurally (W1.2). The shipped art is a flat fill of the theme token
@@ -275,12 +303,13 @@ void assets_seg(C2D_TextBuf buf, float x, float y, float w, float h,
 	float ow = w / (float)n;
 	if (active >= 0 && active < n)
 		ui_fill(x + active * ow + 2.0f, y + 2.0f, ow - 4.0f, h - 4.0f, g_ui.acc, ui_seg_radius(h - 4.0f));
-	// TXT_SEG is the ladder's 10 px Space Grotesk Medium rung — the segmented control's cells are
-	// the tightest boxes in the app, which is why it keeps its own rung instead of folding into
-	// TXT_BODY's 12 px. `y + (h - px)/2` is the same centre the old `y + h/2 - 5` expressed.
+	// TXT_SEG is an ALIAS of TXT_BODY since phase 19 (typography.h): once every rung grew, the
+	// segmented cells were no longer the tightest boxes in the app and a separate 527 KB face
+	// bought nothing. Vertical placement is typo_center_y — the ink box centred in the cell
+	// (L3.2.7), not the line box, which sat 4 px low in a 30 px seg.
 	for (int i = 0; i < n; i++)
 		assets_text_c(buf, TXT_SEG, opts[i], x + i * ow + ow / 2.0f,
-		              y + (h - typo_role_px(TXT_SEG)) / 2.0f, i == active ? inkA : dim);
+		              typo_center_y(TXT_SEG, y, h), i == active ? inkA : dim);
 }
 
 void assets_toggle(int on, float x, float y) { assets_draw_wgt(on ? "toggle-on" : "toggle-off", x, y); }

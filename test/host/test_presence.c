@@ -46,6 +46,8 @@
 //   TEST 34 adjacency + facing (the meeting rule) .. SPEC-avatar A5.1/A5.2 (P8)
 //   TEST 35 the card FSM + the surface policy ...... SPEC-avatar A5.4/A4.4.2
 //   TEST 36 the card's text + the formatters ....... SPEC-avatar A4.3.2/A4.4.4/A5.5.3
+//   TEST 40 presence_art_rect  == _rect_wh(16, 32) . phase20 SPEC S5.1 <- phase 20
+//   TEST 41 presence_art_clip  == _clip_wh(16, 32) . phase20 SPEC S5.2
 //   TEST 37 the co-op pref's semantics ............. SPEC-avatar A6.3      (P12, the half
 //                                                    test_tilt.c TEST 6's byte mirror cannot see)
 //
@@ -2898,6 +2900,98 @@ static void test_pill_stack(void) {
 	EQF(presence_pill_x(2.0f,   100.0f, SW), PRES_PILL_EDGE,               "...clamped at the left");
 	EQF(presence_pill_x(200.0f, 500.0f, SW), PRES_PILL_EDGE,
 	    "a pill wider than the screen is pinned at the LEFT, never at a negative x");
+
+	// ---- TEST 38b (PHASE 19 FIX PASS, verify findings C6/C7) -------------------------------
+	// EVERY assertion above is written in terms of PRES_PILL_H / PRES_PILL_TOP, so it grades the
+	// stack against the constants rather than against the CHROME the constants exist to track.
+	// That is exactly why phase 19 could grow UIHIT_CHIP_H 13 -> 16 and UIHIT_HUD_BAR_H 14 -> 20
+	// with TEST 38 still green while the pills overlapped by 1 px and parked 4 rows inside the
+	// HUD bar. These four assertions are the missing half: they tie the two constants to the
+	// SHIPPED chrome dimensions, so a future chrome change fails HERE instead of on a screen.
+	//   * the pills are drawn by ui.c's ui_chip_fill_w / ui_chip_w, which are UI_CHIP_H
+	//     (= UIHIT_CHIP_H) tall — so the stack PITCH must exceed that, or one pill's rounded top
+	//     edge lands on the other's last fill row.
+	//   * main.c draws the HUD bar over rows 0..UIHIT_HUD_BAR_H-1 and a 2 px focus rule directly
+	//     under it, AFTER presence_draw_screen — so the topmost pill must start below both.
+	printf("TEST 38b: the pill constants track the SHIPPED chrome, not a stale literal\n");
+	CHECK(PRES_PILL_H >= (float)UIHIT_CHIP_H + 2.0f - 0.001f,
+	      "TEST 38b: pill pitch %.1f must be >= the chip it paces (%d) + 2 px of air",
+	      (double)PRES_PILL_H, UIHIT_CHIP_H);
+	CHECK(PRES_PILL_H - (float)UIHIT_CHIP_H <= 4.0f + 0.001f,
+	      "TEST 38b: pill pitch %.1f is more than 4 px looser than the chip (%d) — the stack "
+	      "would read as two unrelated pills", (double)PRES_PILL_H, UIHIT_CHIP_H);
+	CHECK(PRES_PILL_TOP >= (float)UIHIT_HUD_BAR_H + 2.0f + 2.0f - 0.001f,
+	      "TEST 38b: the clamp parks the stack at y=%.1f, inside the %d px HUD bar + its 2 px "
+	      "focus rule (chrome owns rows 0..%d)", (double)PRES_PILL_TOP, UIHIT_HUD_BAR_H,
+	      UIHIT_HUD_BAR_H + 1);
+	// ...and the clamped stack, drawn at the chip height it really has, clears the chrome.
+	{
+		float plateY, promptY;
+		presence_pill_y(-36.0f, 1, 1, SH, &plateY, &promptY);
+		CHECK(plateY >= (float)UIHIT_HUD_BAR_H + 2.0f,
+		      "TEST 38b: the clamped nameplate starts on row %.1f; the bar + rule own 0..%d",
+		      (double)plateY, UIHIT_HUD_BAR_H + 1);
+		CHECK(promptY >= plateY + (float)UIHIT_CHIP_H,
+		      "TEST 38b: the clamped prompt starts on row %.1f but the nameplate's %d px chip "
+		      "runs to %.1f", (double)promptY, UIHIT_CHIP_H, (double)(plateY + UIHIT_CHIP_H));
+	}
+}
+
+// ============================================================================================
+// TEST 40 / 41 — PHASE 20 (docs/phase20-peersprite/SPEC.md S5.1, S5.2, S7).
+//
+// The phase-20 live sprite draws through GENERALISED twins of two functions this suite already
+// owns: presence_art_rect_wh and presence_art_clip_wh. The identities belong HERE, in the suite
+// that would notice if presence_art_rect / presence_art_clip were ever edited without their _wh
+// twins — test_peersprite.c asserts the same two identities from the other side, deliberately, so
+// neither file can be the only guard.
+static void test_art_rect_wh(void) {
+	printf("TEST 40: presence_art_rect == presence_art_rect_wh(16, 32), bit for bit\n");
+	for (int i = -40; i <= 280; i += 13) {
+		for (int j = -40; j <= 200; j += 9) {
+			float fx = (float)i + 0.5f, fy = (float)j - 0.25f;
+			float ax, ay, bx, by;
+			presence_art_rect(fx, fy, &ax, &ay);
+			presence_art_rect_wh(fx, fy, PRES_CELL_W, PRES_CELL_H, &bx, &by);
+			CHECK(ax == bx && ay == by, "the 16x32 instance is the phase-15 function");
+			// A 32x32 form (bike / surf) hangs off the SAME foot point with the same BOTTOM edge —
+			// which is pret's own subsprite convention (.x = -16, .y = -16 for 32x32 vs -8/-16 for
+			// 16x32), not a convention we invented. No per-form offset table is needed.
+			float cx, cy;
+			presence_art_rect_wh(fx, fy, 32, 32, &cx, &cy);
+			CHECK(cy == ay, "16x32 and 32x32 share a bottom edge => the same top y here");
+			CHECK(cx == ax - 8.0f, "...and 32x32 is 8 px wider on each side");
+		}
+	}
+}
+
+static void test_art_clip_wh(void) {
+	printf("TEST 41: presence_art_clip == presence_art_clip_wh(16, 32), verdict and rect\n");
+	for (int i = -30; i <= 250; i += 7) {
+		for (int j = -40; j <= 170; j += 7) {
+			for (int mir = 0; mir < 2; mir++) {
+				for (int mi = 0; mi < 2; mi++) {
+					float mg = mi ? 26.5f : 0.0f;
+					PresArtDraw a, b;
+					int ra = presence_art_clip   ((float)i, (float)j, mir, mg, &a);
+					int rb = presence_art_clip_wh((float)i, (float)j, PRES_CELL_W, PRES_CELL_H,
+					                              mir, mg, &b);
+					CHECK(ra == rb, "same cull verdict");
+					if (ra) CHECK(a.x == b.x && a.y == b.y && a.w == b.w && a.h == b.h &&
+					              a.cx == b.cx && a.cy == b.cy, "same clipped rect + source offset");
+				}
+			}
+		}
+	}
+	// The live cell selector, which is the only NEW cell source in the sheet. mirror is always 0
+	// because phase 20 BAKES the h-flip into the pixels — which is exactly what leaves TEST 28's
+	// mirrored-source-offset rule untouched by that phase.
+	PresArtCell c;
+	presence_art_live_cell(0, &c);
+	CHECK(c.mirror == 0, "a live cell never mirrors (the flip is baked)");
+	CHECK(c.y == PRES_ART_ROWS * PRES_CELL_H,
+	      "the live block starts exactly where the placeholder variants end");
+	CHECK(c.y + PSPR_LIVE_DIM == PRES_SHEET_DIM, "...and ends at the sheet edge");
 }
 
 // ============================================================================================
@@ -2940,6 +3034,8 @@ int main(void) {
 	test_card_text();            // slice M3
 	test_pref_semantics();       // slice M3
 	test_pill_stack();           // fix pass (finding 8)
+	test_art_rect_wh();          // phase 20 — the _wh identities (SPEC S5.1)
+	test_art_clip_wh();          // phase 20 (SPEC S5.2)
 	printf("=== %d checks, %d failures ===\n", g_checks, g_fail);
 	return g_fail ? 1 : 0;
 }

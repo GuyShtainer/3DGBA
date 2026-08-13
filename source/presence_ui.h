@@ -26,6 +26,7 @@
 #include <stdint.h>
 
 #include "presence.h"   // PeerPresence, PRES_DIR_*, presence_same_map
+#include "uihit.h"      // UIHIT_CHIP_H / UIHIT_HUD_BAR_H — the chrome the head pills must clear
 #include "gbatext.h"    // the charmap decoder the card and the nameplate share
 
 // ---- A5.1 / A5.2: the meeting predicate ------------------------------------------------------
@@ -163,7 +164,17 @@ const char* presence_gender_label(int gender);
 //     synthesis and the observed failure ("chose differently") is a linkType mismatch, i.e.
 //     expected-unsupported. A "Battle" button here would promise something the whole link strategy
 //     does not yet deliver.
-#define PRES_CARD_UNION_NOTE "trade & battle use the game's own Union Room - not from here"
+// PHASE 19 / SPEC-legible L3.1: this note is the ONE string the spec's own 93-string extraction
+// missed, and the extended T10 caught it — at cap 7 it is 300 px wide in a 194 px card row (it fit
+// at cap 4). None of the three remedies applied cleanly on its own: the card cannot grow to 320
+// (it floats over the game image and is deliberately narrower than the panel), and shortening it
+// enough to fit ONE row costs either "Union Room" or "not from here" — the two halves that carry
+// the whole disclosure, and both of which test_presence pins by name. So it WRAPS: two rows of the
+// card, laid out at bake-time rather than at runtime because the copy is fixed. The concatenation
+// keeps existing consumers (and that contract test) reading one string.
+#define PRES_CARD_UNION_NOTE_1 "trade & battle use the game's own"   /* 165 px at TXT_CHIP */
+#define PRES_CARD_UNION_NOTE_2 "Union Room - not from here"          /* 130 px at TXT_CHIP */
+#define PRES_CARD_UNION_NOTE   PRES_CARD_UNION_NOTE_1 " " PRES_CARD_UNION_NOTE_2
 
 // ---- A4.4.1 / A5.4.1: where the two head pills sit ------------------------------------------
 // FIX PASS (review finding 8). These were two independent clamps in main.c, and independent clamps
@@ -173,18 +184,50 @@ const char* presence_gender_label(int gender);
 // landed INSIDE the 0..16 px HUD bar, which is drawn AFTER them (main.c's chrome block) and is
 // translucent — so the collision with the bar's game name / FOCUS / clock / TILT / CO-OP text was
 // guaranteed rather than incidental. Clamping the stack AS A UNIT fixes both: the pills keep their
-// fixed 15 px separation at every position on the screen, and they never enter the bar.
+// fixed separation at every position on the screen, and they never enter the bar.
 //
 // Pure C and host-tested (TEST 38) for the usual reason: this is arithmetic, and arithmetic in
 // main.c is arithmetic no PC test can reach.
-#define PRES_PILL_H    15.0f   // one pill row: the 13 px chip + 2 px of air
-#define PRES_PILL_TOP  18.0f   // the HUD bar is 14 px + a 2 px focus rule = 16; +2 px of air.
+//
+// PHASE 19 FIX PASS (verify findings C6/C7) — BOTH numbers are now DERIVED, not re-typed. They
+// were literals whose comments stated a derivation ("the 13 px chip + 2 px of air", "the HUD bar
+// is 14 px + a 2 px focus rule = 16; +2 px of air"), and phase 19 moved both inputs underneath
+// them: UIHIT_CHIP_H 13 -> 16 and UIHIT_HUD_BAR_H 14 -> 20. The stale literals meant (a) the pill
+// PITCH (15) was SMALLER than the chip the pills are drawn with (ui_chip_fill_w / ui_chip_w are
+// UI_CHIP_H = 16 tall), so the prompt's rounded top edge overwrote the nameplate's last fill row
+// instead of leaving 2 px of air, and (b) the clamp parked the stack at y=18 while the bar owns
+// rows 0..19 and its focus rule 20..21 — i.e. straight back inside the chrome this clamp exists
+// to clear, on exactly the near-the-top-of-screen peer the clamp fires for. Deriving them from
+// uihit.h makes a future chrome change move the pills with it; test_presence TEST 38b asserts the
+// two relations against UIHIT_* rather than against the constants themselves, which is what let
+// the old assertions pass while the numbers rotted.
+#define PRES_PILL_H    ((float)(UIHIT_CHIP_H + 2))       // one pill row: the chip + 2 px of air
+#define PRES_PILL_TOP  ((float)(UIHIT_HUD_BAR_H + 2 + 2))// bar + its 2 px focus rule + 2 px of air.
                                //   Unconditional, and that is correct: presence_surfaces returns 0
                                //   unless hudOn, so a pill can only exist on a screen whose bar is
                                //   drawn. (The right eye draws no chrome, but it draws the pills at
                                //   the SAME y as the left — two eyes that disagree would be
                                //   binocular rivalry, which is the defect A2.5.2 is about.)
 #define PRES_PILL_EDGE  2.0f   // horizontal screen margin
+
+// ---- PHASE 19 FIX PASS (verify finding O2): the co-op DEVELOPER readout ----------------------
+// main.c draws a two-line co-op diagnostic at the bottom-left of the TOP screen — the CO-OP line
+// (self/peer map + tile + facing + deltas + age/heartbeat + liveness + reason + foot anchor) and
+// the phase-20 `spr:` line (the peer sprite key + gather count). Both go through ui_text at scale
+// 0.32, i.e. the 3DS SYSTEM font — the smallest and blurriest text the app can produce, and the
+// exact bypass phase 18/19 exist to remove. They were gated on `presenceOn`, which is a SHIPPED
+// user setting (pause menu -> LINK -> "Co-op presence"), so enabling a feature turned on a
+// developer readout.
+// This flag follows phase 17's TOUCH_DIAG_HUD (touch.h) and control.h's CTL_D5_ENABLE verbatim:
+//   0 = a shipping build (default),   1 = a hardware run that wants the pair on screen.
+// The lines cannot instead be promoted to a baked role — at TXT_CHIP (jbm_med_12, 5 px/char mono)
+// the typical CO-OP line is 365 px and its worst expansion ~580 px on a 400 px screen — which is
+// what test_typography T12's budget entry has always said. Nothing is LOST by the default: the
+// structured channel `g_presDiag` (magic 'PRS1') is filled every frame regardless and is what a
+// gdb read or a log actually consumes.
+#ifndef PRES_DIAG_HUD
+#define PRES_DIAG_HUD 0
+#endif
 
 // A5.4.1's prompt label, here rather than as a literal in main.c so the MEASUREMENT and the DRAW
 // cannot drift apart now that the width is computed at a different site from the chip (finding 9).

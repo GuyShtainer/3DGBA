@@ -23,6 +23,7 @@
 #pragma once
 #include <stdint.h>
 
+#include "peersprite.h" // PHASE 20: PSPR_LIVE_* — the live cell block's layout inside THIS sheet
 #include "presence.h"   // PeerPresence, presence_sub, PRES_DIR_*, PRES_FRAME_W/H, PRES_MAX_PEERS
 
 // ---- the sheet (SPEC-avatar A1.1, A1.2, A1.3) ------------------------------------------------
@@ -102,13 +103,32 @@ int  presence_walk_step(PresWalk* w, const PeerPresence* pe);
 // Foot anchor (frame space) -> sprite top-left (frame space). The ONE conversion, A1.1.
 void presence_art_rect(float footX, float footY, float* sprX, float* sprY);
 
+// PHASE 20 (SPEC.md S5.1): the same conversion for an ARBITRARY cell size, which the live path
+// needs because the peer's own frame may be 16x32 (walking) or 32x32 (bike / surf).
+//
+//   sprX = footX - w/2      sprY = footY - h
+//
+// For (16, 32) this is BIT-IDENTICAL to presence_art_rect — asserted over a sweep in
+// test_presence TEST 40 and test_peersprite T10 — and presence_art_rect is now a one-line call to
+// it so the two cannot drift.
+//
+// AND BOTTOM-CENTRE IS THE GAME'S OWN CONVENTION, not a coincidence we are relying on:
+// pret's src/data/object_events/object_event_subsprites.h places every 16x32 subsprite table entry
+// at (.x = -8, .y = -16) and every 32x32 entry at (.x = -16, .y = -16) — both shapes hang the same
+// 32-px-tall box off the sprite's centre with the SAME BOTTOM EDGE. So a 32x32 surf or bike form
+// anchored bottom-centre at the same foot point lands exactly where the game puts it, 8 px wider on
+// each side. No per-form offset table is needed and none may be added without evidence (Open Q5).
+void presence_art_rect_wh(float footX, float footY, int w, int h, float* sprX, float* sprY);
+
 // The clipped draw, all in GBA FRAME space. `w`/`h` are the VISIBLE extent in source px (the cell
 // is drawn 1:1 in frame space; the screen fit is applied afterwards by the caller, never baked in
 // — SPEC-render R1.7, SPEC-avatar A2.2), and `cx`/`cy` are the offset INSIDE the 16x32 cell of the
 // visible part, so the visible pixels stay registered exactly where they were.
 typedef struct {
 	float x, y;     // frame-space top-left of the VISIBLE part
-	int   w, h;     // visible size, source px (0 < w <= 16, 0 < h <= 32)
+	int   w, h;     // visible size, source px. Bounded by the CELL size the clip was given:
+	                //   16x32 on the phase-15 placeholder path, up to 32x32 on the phase-20 live
+	                //   path (a bike / surf form). Always > 0 when the call returns 1.
 	int   cx, cy;   // source offset inside the cell of that visible part
 } PresArtDraw;
 
@@ -160,6 +180,15 @@ typedef struct {
 // they are on your screen).
 int presence_art_clip(float sprX, float sprY, int mirror, float margin, PresArtDraw* out);
 
+// PHASE 20 (SPEC.md S5.2): the same clip for an arbitrary cell size. presence_art_clip is now a
+// one-line call to this with (PRES_CELL_W, PRES_CELL_H), so TEST 27/28 keep passing UNMODIFIED —
+// that is the point of the wrapper — and the new suite adds the 32x32 cases.
+//
+// `mirror` IS ALWAYS 0 ON THE LIVE PATH: the peer's h-flip is baked into the decoded pixels
+// (SPEC S1.5 / S3.3), so TEST 28's mirrored-source-offset subtlety is untouched by phase 20.
+int presence_art_clip_wh(float sprX, float sprY, int w, int h, int mirror, float margin,
+                         PresArtDraw* out);
+
 // ---- the sheet layout (A1.2.1: ONE place maps a facing code to a cell) ----------------------
 typedef struct {
 	int x, y;      // texel origin of the 16x32 cell inside the 128x128 sheet
@@ -170,6 +199,18 @@ typedef struct {
 // out-of-range value selects row 0 col 0 — the DOWN standing frame — and can never index outside
 // the sheet (A0.4). `pose` is PRES_POSE_*; out of range -> STAND.
 void presence_art_cell(int gender, int dir, int pose, PresArtCell* out);
+
+// PHASE 20 (SPEC.md S5.3): the LIVE cell — the peer's own decoded frame, which main.c writes into
+// rows 96..127 of the SAME 128x128 sheet (peersprite.h PSPR_LIVE_*). `mirror` is always 0 because
+// the flip is baked. `slot` is clamped to the four cells the block holds.
+//
+// WHAT THIS DOES NOT REPLACE. presence_walk_step / PRES_WALK_CYCLE / the facing->row table / the
+// gender variant selection all become FALLBACK-ONLY when the live sprite resolves — the peer's own
+// engine already did that work, and better. Keep computing the pose anyway: it costs a handful of
+// integer ops, it is exactly what the placeholder path needs the moment the live path refuses
+// (an unmapped game, a battle, a hidden player, an M4 peer), and deleting a working animation
+// because a newer path usually covers it is how a fallback rots (SPEC S5.5).
+void presence_art_live_cell(int slot, PresArtCell* out);
 
 // ---- the placeholder sheet (A1.5) ------------------------------------------------------------
 // Fills a LINEAR RGBA8 buffer of exactly PRES_SHEET_BYTES with the placeholder walker sheet:

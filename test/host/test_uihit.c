@@ -248,9 +248,12 @@ static void t8_content_scroll(void) {
 	{ UiRect absent[2] = { { 93, 10, 216, 40 }, { 0, 0, 0, 0 } };
 	  CHECK(uihit_content_h(absent, 2) == 240, "an empty rect contributes no height"); }
 
+	// PHASE 19 / SPEC-legible L3.2.2: the viewport shrank 228 -> 226 to give the grown hint-band
+	// face its two rows back, so every number below is written against UIHIT_MENU_VIEW_H rather
+	// than the constant it happened to have. The arithmetic is the assertion; the literal was not.
 	const int mD = uihit_max_scroll(281), mT = uihit_max_scroll(283), mS = uihit_max_scroll(240);
-	CHECK(mD == 53, "DISPLAY maxScroll = 281-228 = 53, got %d", mD);
-	CHECK(mT == 55, "TOUCH maxScroll = 283-228 = 55, got %d", mT);
+	CHECK(mD == 281 - UIHIT_MENU_VIEW_H, "DISPLAY maxScroll = 281-%d, got %d", UIHIT_MENU_VIEW_H, mD);
+	CHECK(mT == 283 - UIHIT_MENU_VIEW_H, "TOUCH maxScroll = 283-%d, got %d", UIHIT_MENU_VIEW_H, mT);
 	CHECK(mS == 0,  "a tab that FITS must not scroll at all, got %d", mS);
 	CHECK(uihit_max_scroll(0) == 0 && uihit_max_scroll(-5) == 0, "degenerate heights are inert");
 	// the point of the number: at max scroll the below-fold row clears the hint line at y=231
@@ -262,8 +265,8 @@ static void t8_content_scroll(void) {
 	CHECK(GOLD_DISPLAY[5].y - mD >= 0 && GOLD_TOUCH[4].y - mT >= 0, "no row scrolls off the top");
 
 	CHECK(uihit_scroll_px(0, 40, mD) == 40, "1:1 — 40 px of finger is 40 px of content");
-	CHECK(uihit_scroll_px(0, 1000, mD) == 53, "over-scroll down clamps at maxScroll");
-	CHECK(uihit_scroll_px(53, -1000, mD) == 0, "over-scroll up clamps at 0");
+	CHECK(uihit_scroll_px(0, 1000, mD) == mD, "over-scroll down clamps at maxScroll");
+	CHECK(uihit_scroll_px(mD, -1000, mD) == 0, "over-scroll up clamps at 0");
 	CHECK(uihit_scroll_px(20, -20, mD) == 0, "a drag back to the origin returns to the top");
 	CHECK(uihit_scroll_px(0, 100, 0) == 0, "a non-scrolling tab ignores any drag");
 	CHECK(uihit_scroll_px(0, -100, 0) == 0, "…in either direction");
@@ -273,13 +276,14 @@ static void t8_content_scroll(void) {
 	}
 
 	printf("T8b d-pad focus follow (I2.4.5)\n");
-	CHECK(uihit_follow_rect(0, GOLD_DISPLAY[5], mD) == 53, "focusing the below-fold toggle scrolls to it");
-	CHECK(uihit_follow_rect(0, GOLD_DISPLAY[4], mD) == 24, "the swap toggle needs 234+18-228 = 24");
-	CHECK(uihit_follow_rect(53, GOLD_DISPLAY[0], mD) == 0, "focusing the first row scrolls back to the top");
-	CHECK(uihit_follow_rect(53, GOLD_DISPLAY[1], mD) == 53, "…a row already in view at max scroll does not move");
+	CHECK(uihit_follow_rect(0, GOLD_DISPLAY[5], mD) == mD, "focusing the below-fold toggle scrolls to it");
+	CHECK(uihit_follow_rect(0, GOLD_DISPLAY[4], mD) == 234 + 18 - UIHIT_MENU_VIEW_H,
+	      "the swap toggle needs 234+18-%d", UIHIT_MENU_VIEW_H);
+	CHECK(uihit_follow_rect(mD, GOLD_DISPLAY[0], mD) == 0, "focusing the first row scrolls back to the top");
+	CHECK(uihit_follow_rect(mD, GOLD_DISPLAY[1], mD) == mD, "…a row already in view at max scroll does not move");
 	CHECK(uihit_follow_rect(80, GOLD_DISPLAY[1], 200) == 81 - UIHIT_MENU_LEAD, "…a row above the viewport pulls its caption band in too");
 	CHECK(uihit_follow_rect(30, GOLD_DISPLAY[2], mD) == 30, "an already-visible row does not move");
-	CHECK(uihit_follow_rect(0, GOLD_TOUCH[4], mT) == 55, "TOUCH's pad-edges row scrolls to max");
+	CHECK(uihit_follow_rect(0, GOLD_TOUCH[4], mT) == mT, "TOUCH's pad-edges row scrolls to max");
 	{ UiRect absent = { 0, 0, 0, 0 };
 	  CHECK(uihit_follow_rect(17, absent, mD) == 17, "an absent control never moves the scroll"); }
 	for (int i = 0; i < 6; i++) {
@@ -334,12 +338,13 @@ static void t10_scrollbar(void) {
 	printf("T10 scrollbar thumb\n");
 	const int TY = 6, TH = 216;                          // the track this slice draws (y6..222)
 	int thD = uihit_thumb_h(TH, UIHIT_MENU_VIEW_H, 281);
-	CHECK(thD == 228 * TH / 281, "DISPLAY thumb is the visible fraction of the content");
+	CHECK(thD == UIHIT_MENU_VIEW_H * TH / 281, "DISPLAY thumb is the visible fraction of the content");
 	CHECK(thD > UIHIT_THUMB_MIN && thD < TH, "…and it is a real object: %d px of %d", thD, TH);
-	CHECK(uihit_thumb_h(TH, UIHIT_MENU_VIEW_H, 228) == TH, "content == viewport gets a full-length thumb");
+	CHECK(uihit_thumb_h(TH, UIHIT_MENU_VIEW_H, UIHIT_MENU_VIEW_H) == TH, "content == viewport gets a full-length thumb");
 	CHECK(uihit_thumb_h(TH, UIHIT_MENU_VIEW_H, 200) == TH, "content SHORTER than the viewport too");
-	CHECK(uihit_thumb_h(TH, 228, 4000) == UIHIT_THUMB_MIN, "a huge content floor-clamps the thumb");
-	CHECK(uihit_thumb_h(0, 228, 281) == 0 && uihit_thumb_h(-3, 228, 281) == 0, "a degenerate track is 0");
+	CHECK(uihit_thumb_h(TH, UIHIT_MENU_VIEW_H, 4000) == UIHIT_THUMB_MIN, "a huge content floor-clamps the thumb");
+	CHECK(uihit_thumb_h(0, UIHIT_MENU_VIEW_H, 281) == 0 && uihit_thumb_h(-3, UIHIT_MENU_VIEW_H, 281) == 0,
+	      "a degenerate track is 0");
 
 	const int mD = uihit_max_scroll(281);
 	CHECK(uihit_thumb_y(TY, TH, thD, 0,  mD) == TY, "AT SCROLL TOP THE THUMB IS AT THE TOP (D18)");

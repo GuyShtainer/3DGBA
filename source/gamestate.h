@@ -150,6 +150,33 @@ typedef struct {
 	// and ident_refresh in presence_read.c) — the only two `grep sb1ptr|sb2ptr source/` finds.
 	// Appending is again the only safe edit: PROFILES[] is POSITIONAL-initialised.
 	uint8_t  sbDirect;      // 1 = sb1ptr/sb2ptr are the structs themselves (RS), 0 = pointers
+	// --- phase 20 peer sprite (docs/phase20-peersprite/SPEC.md S1.3). The three addresses that
+	// turn `gObjectEvents[0].spriteId` into the peer's ACTUAL currently-displayed 16x32 trainer
+	// frame. All VERIFIED-SYM against pret's byte-matched `symbols` branch, re-derived from the
+	// nine maps on this machine on 2026-08-13 (the house rule: never ship someone else's word, not
+	// even a spec's — the values below were re-read, not copied):
+	//   gSprites            EM 0x02020630 | FR 0x0202063C = _rev1 | LG 0x0202063C = _rev1
+	//                       RS 0x02020004 (pokeruby / pokesapphire / both rev1 — 4/4 AGREE)
+	//   gPlttBufferUnfaded  EM 0x02037714 | FR 0x020371F8 = _rev1 | LG 0x020371F8 = _rev1
+	//                       RS 0x0202EAC8 x4                        (4/4 AGREE)
+	//   gPlayerAvatar       EM 0x02037590 (size 0x24) | FR/LG 0x02037078 (size 0x20, both revs)
+	//                       RS 0x0202E858 (size 0x24) x4            (4/4 AGREE)
+	// gSprites' symbol SIZE is 0x1144 == 65 * 0x44 (MAX_SPRITES + 1) in ALL NINE maps, which is
+	// itself strong evidence `struct Sprite` is unchanged across RS / FRLG / Emerald.
+	//
+	// Every 0 is a NAMED degradation, never a guess: `sprites == 0` => that game falls back to the
+	// phase-15 placeholder with reason PSPR_R_NOPROF; `plttUnfaded == 0` => the OBJ palette is read
+	// from hardware PLTT 0x05000200 instead (which carries the peer's screen fades — a documented,
+	// worse-but-correct source, SPEC S1.7); `playerAvatar == 0` => the spriteId cross-check is
+	// SKIPPED rather than guessed. All five shipped profiles get real values, so no game degrades.
+	//
+	// Ruby/Sapphire stay VERIFIED-SYM / VERIFY-ON-HW for the same reason phase 18 gave: no RS ROM
+	// exists on this machine. Appending is again the only safe edit — PROFILES[] is POSITIONAL.
+	uint32_t sprites;       // gSprites[65], stride 0x44 (oam @+0x00, animNum/animCmdIndex @+0x2A,
+	                        //   inUse/invisible @+0x3E, subspriteTableNum @+0x42)
+	uint32_t plttUnfaded;   // gPlttBufferUnfaded u16[512]: BG banks 0-15 then OBJ banks 0-15, so
+	                        //   OBJ bank n colour i is at +512 + 32*n + 2*i BYTES
+	uint32_t playerAvatar;  // gPlayerAvatar (+0x00 flags, +0x04 spriteId) — the cross-check only
 } GameProfile;
 
 // One-pass snapshot of the live game.
@@ -234,6 +261,12 @@ typedef struct {
 	int16_t prMapG, prMapN;                // peer map (-1 = n/a); != this row's mapG/mapN is THE
 	                                       //   commonest reason the avatar is absent
 	int16_t prPx, prPy;                    // peer tile (-1 = n/a)
+	// --- phase 20 peer sprite (docs/phase20-peersprite/SPEC.md S4.3). Appended size-tolerantly
+	// again, and for the same reason the block above exists: this is the surface a "the peer is
+	// still magenta" run is read back from, and it must say WHY without a rebuild. LOGGING ONLY. ---
+	uint8_t  prSprReason;                  // PSPR_R_* (0 = the peer's OWN frame is being drawn)
+	uint8_t  prSprW, prSprH;               // the decoded cell size actually in the sheet
+	uint16_t prSprGfx;                     // graphicsId — the FORM (normal / bike / surf / ...)
 } GsDepth;
 
 // Profile for a core's ROM (by header game code), or NULL if unknown.

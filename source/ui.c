@@ -2,6 +2,7 @@
 #include "ui.h"
 #include "theme.h"
 #include "uigeom.h"
+#include "uihit.h"   // PHASE 19 / L3.2.8: UIHIT_CHIP_H — the chip box the host suite grades
 #include "assets.h"   // W4.2 (OQ5, "add the include"): chip labels use the BAKED font at its native
                       // size — the system font at scale 0.32 is what made the "3D" badge a smudge.
 
@@ -74,7 +75,10 @@ void ui_text_r(C2D_TextBuf buf, const char* s, float rx, float y, float sz, u32 
 //       measurement recipe was wrong — the real scale then was 0.667x. See typography.h.
 // The frame also becomes ui_border_round (art `chip-focus` measures r=3), matching the design's
 // rounded chips instead of the square 4-strip outline.
-#define UI_CHIP_H  13.0f   // the chip box; its label is TXT_CHIP (7 px, typography.h)
+// PHASE 19 / SPEC-legible L3.2.8: 13 -> 16. TXT_CHIP's line box grew 9 -> 15 px with the ladder,
+// so a 13 px chip clipped its own label's descenders. 16 is the ink box (9 rows) plus a
+// symmetric 3.5 px of padding, which is what the design's own chips measure at this cap height.
+#define UI_CHIP_H  ((float)UIHIT_CHIP_H)   // the chip box; its label is TXT_CHIP (cap 7, cell 15)
 
 // One measurement for the chip's TOTAL width (label + 12 px padding) — the same number ui_chip*
 // use internally, exposed because a centred/right-flowed chip needs its width before it can be
@@ -85,14 +89,16 @@ float ui_chip_measure(C2D_TextBuf buf, const char* s) {
 	return w + 12.0f;
 }
 
+// `y` is the CHIP BOX's top; the label is centred in it by ink (L3.2.7), never by a hand-typed
+// offset — the old `y + 2` was tuned for a 13 px box and a 9 px cell and is wrong for both now.
 static void chip_label(C2D_TextBuf buf, const char* s, float x, float y, u32 ink) {
-	if (assets_ready()) assets_text(buf, TXT_CHIP, s, x, y, ink);
-	else                ui_text(buf, s, x, y, 0.32f, ink);
+	if (assets_ready()) assets_text(buf, TXT_CHIP, s, x, typo_center_y(TXT_CHIP, y, UI_CHIP_H), ink);
+	else                ui_text(buf, s, x, y + 2.0f, 0.32f, ink);
 }
 
 float ui_chip_2w(C2D_TextBuf buf, const char* s, float x, float y, float w, u32 frame, u32 ink) {
 	ui_border_round(x, y, w, UI_CHIP_H, frame, 1.0f, 3.0f);
-	chip_label(buf, s, x + 6.0f, y + 2.0f, ink);
+	chip_label(buf, s, x + 6.0f, y, ink);
 	return w;
 }
 
@@ -106,7 +112,7 @@ float ui_chip_w(C2D_TextBuf buf, const char* s, float x, float y, float w, u32 c
 
 float ui_chip_fill_w(C2D_TextBuf buf, const char* s, float x, float y, float w, u32 bg, u32 fg) {
 	ui_fill(x, y, w, UI_CHIP_H, bg, 3.0f);
-	chip_label(buf, s, x + 6.0f, y + 2.0f, fg);
+	chip_label(buf, s, x + 6.0f, y, fg);
 	return w;
 }
 

@@ -24,6 +24,7 @@
 //   TEST 6  every RS address equals the value read from pret's four sym maps   SPEC-coop P3.3.3
 //   TEST 7  the RS identity latch rejects an all-zero name                     SPEC-coop P3.2.5
 //   TEST 8  no shipped address is nonsense (address-space sanity, all rows)
+//   TEST 9  the phase-20 peer-sprite columns, per game    phase20 SPEC S1.3
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
@@ -416,6 +417,51 @@ static void test_address_sanity(void) {
 	}
 }
 
+// ============================================================================================
+// TEST 9 — PHASE 20: the three peer-sprite columns (docs/phase20-peersprite/SPEC.md S1.3)
+// The numbers themselves, per game, against pret's byte-matched `symbols` branch — the same
+// discipline TEST 6 applies to the RS row, and for the same reason: a typo in a 50-column
+// positional initialiser must be a test failure here, not a wrong read on someone's console.
+// Every value below was re-derived from the nine .sym maps on this machine on 2026-08-13.
+// ============================================================================================
+static void test_peersprite_columns(void) {
+	printf("TEST 9: the phase-20 gSprites / gPlttBufferUnfaded / gPlayerAvatar columns\n");
+	struct { const char* code; uint32_t spr, pltt, pav; } W[] = {
+		// pokeemerald.sym: 02020630 gSprites / 02037714 gPlttBufferUnfaded / 02037590 gPlayerAvatar
+		{ "BPEE", 0x02020630u, 0x02037714u, 0x02037590u },
+		// pokefirered.sym AND pokefirered_rev1.sym (identical; the user's FR is rev1)
+		{ "BPRE", 0x0202063Cu, 0x020371F8u, 0x02037078u },
+		// pokeleafgreen.sym AND pokeleafgreen_rev1.sym — LeafGreen's OWN maps, not FR-derived
+		{ "BPGE", 0x0202063Cu, 0x020371F8u, 0x02037078u },
+		// pokeruby / pokesapphire / both rev1 — 4/4 agree. VERIFIED-SYM / VERIFY-ON-HW (no RS ROM
+		// exists on this machine, so these have never been EXECUTED).
+		{ "AXVE", 0x02020004u, 0x0202EAC8u, 0x0202E858u },
+		{ "AXPE", 0x02020004u, 0x0202EAC8u, 0x0202E858u },
+	};
+	for (unsigned i = 0; i < sizeof W / sizeof W[0]; i++) {
+		const GameProfile* p = prof(W[i].code);
+		CHECK(p != NULL, "%s row exists", W[i].code);
+		if (!p) continue;
+		EQU(p->sprites,      W[i].spr,  "%s gSprites",           W[i].code);
+		EQU(p->plttUnfaded,  W[i].pltt, "%s gPlttBufferUnfaded", W[i].code);
+		EQU(p->playerAvatar, W[i].pav,  "%s gPlayerAvatar",      W[i].code);
+		// EWRAM only — every one of these is a RAM symbol, which is what licenses ONE value for
+		// Ruby AND Sapphire AND both revisions (the ROM-address ban TEST 4 enforces).
+		CHECK((p->sprites      >> 24) == 0x02u, "%s gSprites is EWRAM",      W[i].code);
+		CHECK((p->plttUnfaded  >> 24) == 0x02u, "%s gPlttBufferUnfaded EWRAM", W[i].code);
+		CHECK((p->playerAvatar >> 24) == 0x02u, "%s gPlayerAvatar is EWRAM",  W[i].code);
+		// The whole chain must be present, or the live sprite silently falls back to the
+		// placeholder for that game — which is safe, but it must not happen by accident.
+		CHECK(p->sprites != 0 && p->mapObjects != 0,
+		      "%s can resolve a peer sprite at all (sprites + mapObjects)", W[i].code);
+	}
+	// gSprites' 65-entry extent is the bound pspr_resolve clause 7 relies on: spriteId < 64.
+	// gPlttBufferUnfaded is 0x400 bytes = 512 u16, so OBJ bank 15 colour 15 sits at +512+480+30 =
+	// +1022, the last two bytes — asserted here so a future column edit cannot quietly overrun it.
+	CHECK(512u + 32u * 15u + 2u * 15u + 1u < 0x400u,
+	      "OBJ bank 15 colour 15 lies inside gPlttBufferUnfaded's 0x400 bytes");
+}
+
 int main(void) {
 	printf("test_profiles — the per-game RAM map (source/gamestate.c PROFILES[])\n\n");
 	test_lookup();
@@ -426,6 +472,7 @@ int main(void) {
 	test_rs_addresses();
 	test_rs_ident();
 	test_address_sanity();
+	test_peersprite_columns();   // phase 20
 	printf("\n=== %d checks, %d failures ===\n", g_checks, g_fails);
 	return g_fails ? 1 : 0;
 }

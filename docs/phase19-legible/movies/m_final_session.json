@@ -1,0 +1,3 @@
+[ ["wait",1500], ["hold","A",20], ["release"], ["wait",900],
+  ["hold","START+SELECT",40], ["release"], ["wait",900],
+  ["touch",40,23,16], ["wait",1200] ]

@@ -44,6 +44,8 @@ static u32 dim_color(u32 c, float f);   // fwd (defined near run_splash)
 #include "presence_read.h" // ...and the one file that reads game RAM for it (parked window only)
 #include "presence_art.h"  // ...and slice M2's pure-C sheet layout / cull-clip / walk cycle
 #include "presence_ui.h"   // ...and slice M3's meeting predicate / card / surface policy
+#include "peersprite.h"    // phase 20: the peer's GENUINE trainer frame, read out of THEIR own
+                           //   emulated OAM/VRAM/palette (docs/phase20-peersprite/SPEC.md)
 #include "gbatext.h"       // ...and the Gen-3 charmap -> UTF-8 decoder the card + nameplate share
 #include "warp_shbin.h"   // M2 grid-warp vertex shader (generated from source/warp.v.pica)
 #include "tilt_shbin.h"   // phase 14 tilt vertex shader (generated from source/tilt.v.pica)
@@ -1364,6 +1366,30 @@ static bool      s_presenceOk;           // false => presence draws NOTHING, per
 static C2D_Image s_peerArt[2];           // real baked art per variant, when the PNGs are present
 static bool      s_peerBaked[2];         // A1.5.4's drop-in switch, resolved once at init
 
+// ---- PHASE 20: the peer's GENUINE frame (docs/phase20-peersprite/SPEC.md) ---------------------
+// The placeholder above is now the FALLBACK, not the product. Ranked: live VRAM -> baked drop-in
+// art -> generated placeholder (SPEC I7'). The magenta tells stay in the placeholder untouched.
+//
+// The live cells live in rows 96..127 of the SAME 128x128 sheet — space the placeholder layout
+// already left free — so this phase allocates NO new texture and issues NO GPU command on the
+// per-frame path. The whole upload is a CPU store into s_peerTex.data plus a 16 KB cache flush.
+static bool        s_liveTileOk;         // the S3.7 tiling proof passed at init (false => live OFF
+                                         //   for the whole run, placeholder still draws)
+static PsprCapture s_psprCap[2];         // per GAME: the header/palette/tile bytes read in the
+                                         //   parked window (READ-ONLY, never a write)
+static uint32_t    s_psprSeq[2];         // the capture seq the sheet currently holds
+typedef struct { int ok, w, h, slot; } PsprCell;   // what the DRAW needs, per game
+static PsprCell    s_psprCell[2];
+
+// The live block is tiled-texture block rows 12..15 = the LAST 16 KB of the 64 KB texture,
+// contiguously. Flushing exactly that beats C3D_TexFlush, which would push all 64 KB seven times a
+// second. The arithmetic is asserted so a change to PRES_SHEET_DIM cannot silently invalidate it —
+// and test_peersprite T12 proves in software that a live-cell blit touches nothing below it.
+#define PSPR_FLUSH_OFF ((PSPR_LIVE_Y / 8) * (PRES_SHEET_DIM / 8) * 256)
+#define PSPR_FLUSH_LEN (PRES_SHEET_BYTES - PSPR_FLUSH_OFF)
+_Static_assert(PSPR_FLUSH_OFF == 49152, "phase 20: the live block starts at byte 49152");
+_Static_assert(PSPR_FLUSH_LEN == 16384, "phase 20: the live block is the last 16 KB");
+
 // A1.5 / O-A5 (resolved): the placeholder is THEME-NEUTRAL. It could have used g_ui.acc, but the
 // theme is switchable at runtime while this texture is baked once, so a themed placeholder would
 // either go stale on a theme change or need a re-bake on the render thread. It is also the answer
@@ -1434,6 +1460,34 @@ static void presence_art_ensure(void) {
 			                                                       // never sample the opposite edge
 			C3D_TexSetFilter(&s_peerTex, GPU_NEAREST, GPU_NEAREST);
 			s_peerTexOk = true;
+
+			// ---- PHASE 20 / SPEC S3.7: THE TILING PROOF ----------------------------------------
+			// The one genuine risk in the live upload is that our CPU tiled-texture encoder (Morton
+			// order, block-row order, byte order, and whether GX_TRANSFER_FLIP_VERT(0) inverts rows)
+			// does not match what C3D_SyncDisplayTransfer just produced — and getting it wrong
+			// yields an upside-down or channel-swapped or scrambled sprite whose failure is only
+			// visible in a PHOTO. So prove it here, on the real device, with a memcmp: re-encode the
+			// very buffer the transfer consumed and compare against the texture the transfer
+			// produced. Match => the encoder is byte-identical to the path the phase-18 screenshot
+			// already validated visually. Mismatch => s_liveTileOk stays false, the live path is OFF
+			// for the whole run, the diag says PSPR_R_TILEFMT, and the placeholder (which came from
+			// the trusted transfer) still draws. The design deliberately makes the WRONG answer safe
+			// rather than making the right answer certain (Open Q2).
+			//
+			// Cost: one 64 KB encode + one 64 KB compare + 64 KB of transient heap, ONCE per
+			// session, on this already-lazy path.
+			{
+				u8* probe = (u8*)malloc(PRES_SHEET_BYTES);
+				if (probe) {
+					// The GPU wrote s_peerTex.data behind the CPU's back; invalidate before reading
+					// it, or the memcmp compares against a stale cache line and goes red for the
+					// wrong reason.
+					GSPGPU_InvalidateDataCache(s_peerTex.data, PRES_SHEET_BYTES);
+					s_liveTileOk = pspr_verify_tiling(stage, (const u8*)s_peerTex.data,
+					                                  PRES_SHEET_DIM, probe) ? true : false;
+					free(probe);
+				}
+			}
 		}
 		linearFree(stage);
 	}
@@ -1448,6 +1502,72 @@ static void presence_art_fini(void) {
 	if (s_peerTexOk) C3D_TexDelete(&s_peerTex);
 	s_peerTexOk  = false;
 	s_presenceOk = false;
+	s_liveTileOk = false;
+	memset(s_psprCap,  0, sizeof s_psprCap);
+	memset(s_psprCell, 0, sizeof s_psprCell);
+	memset(s_psprSeq,  0, sizeof s_psprSeq);
+}
+
+// ---- PHASE 20 / SPEC S3.6: decode the peer's captured frame into the sheet --------------------
+// `g` is the GAME whose VRAM was read; the cell it owns is live slot `g`, and the SCREEN showing
+// game `x` draws slot `x ^ 1` (S5.4 — get that backwards and each screen shows its own trainer
+// standing next to itself, which looks plausible and is wrong).
+//
+// WHERE THIS MUST RUN, AND WHY. The RAM reads happened in the parked window (invariant I2); the
+// DECODE and the texture write happen HERE, inside C3D_FrameBegin/End, beside presence_solve.
+// Writing the texture in the parked window — before C3D_FrameBegin — would race the still-in-flight
+// PREVIOUS frame, which may still be sampling this very texture (the hazard main.c's shared-buffer
+// note names). C3D_FrameBegin(C3D_FRAME_SYNCDRAW) has already waited for that frame, so by the time
+// we get here the GPU is done with it. NO GPU COMMAND IS ISSUED: this is a plain CPU store plus a
+// cache flush, which is exactly why it is legal inside the frame.
+//
+// COST: only when the capture's seq MOVED, i.e. about 7 times a second while the peer walks and
+// zero times a second while they stand. 512-1024 texels decoded + bled + Morton-stored (~2 KB of
+// pixel work) and a 16 KB flush.
+static void presence_live_update(int g) {
+	if (g < 0 || g > 1) return;
+	s_psprCell[g].ok = 0;
+	if (!s_peerTexOk || !s_liveTileOk) return;               // clauses 4a/4b, again, at the sink
+	const PsprCapture* cap = &s_psprCap[g];
+	if (!cap->hdr.ok || !cap->havePixels) return;            // the resolve ladder already refused
+	if (cap->key.w <= 0 || cap->key.h <= 0) return;
+
+	if (cap->seq != s_psprSeq[g]) {
+		// One 4 KB scratch buffer, function-local static: this runs on the RENDER THREAD only, once
+		// per game per changed frame, and a 4 KB stack frame next to two saturated GBA workers is
+		// the kind of thing that is cheap to avoid and expensive to debug.
+		static uint32_t px  [PSPR_MAX_PIXELS];
+		static uint32_t cell[PSPR_LIVE_DIM * PSPR_LIVE_DIM];
+		int w = (int)cap->key.w, h = (int)cap->key.h;
+		int n = pspr_decode(cap->tiles, (int)cap->nTileBytes, cap->pal, &cap->key,
+		                    px, PSPR_MAX_PIXELS);
+		if (n <= 0) return;          // never a partially-decoded cell (SPEC S4.1's last paragraph)
+		// THE WHOLE 32x32 SLOT IS REWRITTEN, not just the w x h the sprite occupies. A peer who
+		// dismounts a bike goes 32x32 -> 16x32, and blitting only the new 16 columns would leave the
+		// bike's right half sitting in the sheet — invisible to the draw (which uses the new w) but
+		// NOT invisible to a GPU_LINEAR tap at the sprite's right edge under tilt, which would smear
+		// a stripe of last-form pixels down the trainer's side. Clearing costs 1024 stores, once per
+		// changed frame, ~7 times a second.
+		memset(cell, 0, sizeof cell);
+		for (int y = 0; y < h && y < PSPR_LIVE_DIM; y++)
+			for (int x = 0; x < w && x < PSPR_LIVE_DIM; x++)
+				cell[y * PSPR_LIVE_DIM + x] = px[y * w + x];
+		// SPEC S3.4: under tilt the presence draw samples GPU_LINEAR, and a tap that straddles the
+		// silhouette would blend opaque texels with transparent BLACK ones and draw a dark fringe.
+		// Real trainer art has far more silhouette per pixel than the placeholder's flat blocks.
+		// Alpha is never touched, so this cannot paint a halo (Open Q4 settles ON vs OFF by photo).
+		// Run over the WHOLE cell so the sprite's right and bottom edges get the same treatment as
+		// its interior holes.
+		pspr_bleed_edges(cell, PSPR_LIVE_DIM, PSPR_LIVE_DIM);
+		pspr_blit_tiled((u8*)s_peerTex.data, PRES_SHEET_DIM,
+		                PSPR_LIVE_X(g), PSPR_LIVE_Y, cell, PSPR_LIVE_DIM, PSPR_LIVE_DIM);
+		GSPGPU_FlushDataCache((u8*)s_peerTex.data + PSPR_FLUSH_OFF, PSPR_FLUSH_LEN);
+		s_psprSeq[g] = cap->seq;
+	}
+	s_psprCell[g].ok   = 1;
+	s_psprCell[g].w    = (int)cap->key.w;
+	s_psprCell[g].h    = (int)cap->key.h;
+	s_psprCell[g].slot = g;
 }
 
 // The peer avatars on ONE screen. Called from the three per-screen sequences (top-left eye,
@@ -1527,6 +1647,20 @@ typedef struct {                // offset
 	int32_t blitX, blitY;       // 0x5c  ...and the SCREEN-space px the last one was submitted at
 	int32_t blitW, blitH;       // 0x64  ...and its size after the A3.2.1 frame-edge clip
 	int32_t anchorX, anchorY;   // 0x6c  the GBA-frame foot anchor presence_solve computed (game 0)
+	// ---- PHASE 20 (docs/phase20-peersprite/SPEC.md S4.3) — APPENDED, existing offsets unchanged,
+	// `magic` still 'PRS1' so the phase-18 harness recipe keeps working. LOGGING ONLY: written once
+	// per frame, nothing reads it back, no branch depends on any field. Indexed by GAME. ----
+	int32_t sprReason [2];      // 0x74  PSPR_R_* (0 == a live sprite is being drawn)
+	int32_t sprW      [2];      // 0x7c  the decoded cell size actually in the sheet
+	int32_t sprH      [2];      // 0x84
+	int32_t sprTile   [2];      // 0x8c  attr2 tileNum
+	int32_t sprPal    [2];      // 0x94  pal | (hFlip<<8) | (vFlip<<9) | (map1d<<10) | (subTbl<<16)
+	int32_t sprGfxId  [2];      // 0x9c  graphicsId — the FORM (normal / bike / surf / ...)
+	int32_t sprAnim   [2];      // 0xa4  (animNum << 8) | animCmdIndex
+	int32_t sprUploads[2];      // 0xac  gathers this session — should track WALKING, not standing
+	int32_t sprAvFlags[2];      // 0xb4  gPlayerAvatar.flags (PLAYER_AVATAR_FLAG_*), logging only
+	int32_t sprTileOk;          // 0xbc  the S3.7 proof: 1 = the CPU encoder matched the GX oracle
+	int32_t sprFlags;           // 0xc0  bit0 PSPR_D_NOIO (DISPCNT unreadable, defaults assumed)
 } PresDiag;
 PresDiag g_presDiag;
 // The offsets above are a CONTRACT the harness reads by number, so pin them exactly as Settings
@@ -1553,12 +1687,29 @@ _Static_assert(offsetof(PresDiag, blitW)      == 0x64, "PresDiag.blitW");
 _Static_assert(offsetof(PresDiag, blitH)      == 0x68, "PresDiag.blitH");
 _Static_assert(offsetof(PresDiag, anchorX)    == 0x6c, "PresDiag.anchorX");
 _Static_assert(offsetof(PresDiag, anchorY)    == 0x70, "PresDiag.anchorY");
+// PHASE 20 — the appended block, pinned exactly like the fourteen above it: a future field INSERT
+// must be a build error, not a harness that silently reads the wrong word.
+_Static_assert(offsetof(PresDiag, sprReason)  == 0x74, "PresDiag.sprReason");
+_Static_assert(offsetof(PresDiag, sprW)       == 0x7c, "PresDiag.sprW");
+_Static_assert(offsetof(PresDiag, sprH)       == 0x84, "PresDiag.sprH");
+_Static_assert(offsetof(PresDiag, sprTile)    == 0x8c, "PresDiag.sprTile");
+_Static_assert(offsetof(PresDiag, sprPal)     == 0x94, "PresDiag.sprPal");
+_Static_assert(offsetof(PresDiag, sprGfxId)   == 0x9c, "PresDiag.sprGfxId");
+_Static_assert(offsetof(PresDiag, sprAnim)    == 0xa4, "PresDiag.sprAnim");
+_Static_assert(offsetof(PresDiag, sprUploads) == 0xac, "PresDiag.sprUploads");
+_Static_assert(offsetof(PresDiag, sprAvFlags) == 0xb4, "PresDiag.sprAvFlags");
+_Static_assert(offsetof(PresDiag, sprTileOk)  == 0xbc, "PresDiag.sprTileOk");
+_Static_assert(offsetof(PresDiag, sprFlags)   == 0xc0, "PresDiag.sprFlags");
 
 static void presence_draw_screen(C3D_RenderTarget* tgt,
                                  const PresenceOut* po, const PeerPresence* peer, const int* pose,
                                  int nPeers, int mode, float screenW, float screenH,
                                  const TiltView* tv, const C2D_ImageTint* tint,
-                                 const PresChrome* ch) {
+                                 const PresChrome* ch, const PsprCell* live) {
+	// PHASE 20 / SPEC S5.4: `live` is the PEER's decoded cell — s_psprCell[game ^ 1], resolved at
+	// the call site with the `^ 1` written ONCE, next to the comment that explains it. NULL (or
+	// !live->ok) means the live path refused for this peer and the phase-15 placeholder draws
+	// instead, which is the whole fallback contract (SPEC I3 / I7').
 	// A0.1.2: a closed gate costs ZERO work — no projection, no texture bind, no subtexture build,
 	// no calc_xform. The frame must be bit-identical to a presence-off frame. `po->draw` IS the data
 	// half's whole gate ladder (P-G1..P-G9 plus the D5.7 cull), menuOpen included via P-G2, so there
@@ -1570,9 +1721,13 @@ static void presence_draw_screen(C3D_RenderTarget* tgt,
 	// actually drawn at (the PROJECTED y under tilt, the flat anchor otherwise), tid breaking ties
 	// deterministically so the order cannot flicker frame to frame. Everything the draw needs is
 	// resolved here, so tilt_project runs exactly once per avatar per screen.
-	struct { float sprX, sprY, dx, dy; PresArtCell cell; int gender; } av[PRES_MAX_PEERS];
+	struct { float sprX, sprY, dx, dy; PresArtCell cell; int gender; int w, h, isLive; }
+		av[PRES_MAX_PEERS];
 	PresBillboard bb[PRES_MAX_PEERS];
 	int nbb = 0;
+	// PHASE 20: with PRES_MAX_PEERS == 1 there is exactly one live cell in play per screen. When the
+	// 3-4-player bound grows this becomes `live[slot]`, which is why PsprCell already carries `slot`.
+	const int liveOk = (live && live->ok && live->w > 0 && live->h > 0) ? 1 : 0;
 
 	for (int slot = 0; slot < nPeers; slot++) {
 		if (!po[slot].draw) continue;
@@ -1599,8 +1754,25 @@ static void presence_draw_screen(C3D_RenderTarget* tgt,
 			dx = fax - ax;
 			dy = fay - ay;
 		}
-		presence_art_rect(ax, ay, &av[nbb].sprX, &av[nbb].sprY);
-		presence_art_cell(po[slot].gender, po[slot].dir, pose[slot], &av[nbb].cell);
+		// PHASE 20 / SPEC S5.3: the live cell when the peer's own frame resolved, the phase-15
+		// placeholder cell otherwise. Everything AFTER this line — rect -> clip -> tilt_project ->
+		// y-sort -> calc_xform -> subtexture -> C2D_DrawImageAt — is the same code, unchanged; only
+		// the source rect and its size differ.
+		//
+		// AND THE POSE IS STILL COMPUTED, unconditionally, by the caller (S5.5). presence_walk_step,
+		// PRES_WALK_CYCLE, the facing->row table and the gender variant selection all become
+		// fallback-only when the live sprite resolves — the peer's own engine already did that work,
+		// and better. They are kept because they are exactly what is needed the moment the live path
+		// refuses (an unmapped game, a battle, a hidden player, an M4 peer), and deleting a working
+		// animation because a newer path usually covers it is how a fallback rots.
+		if (liveOk) {
+			presence_art_live_cell(live->slot, &av[nbb].cell);
+			av[nbb].w = live->w; av[nbb].h = live->h; av[nbb].isLive = 1;
+		} else {
+			presence_art_cell(po[slot].gender, po[slot].dir, pose[slot], &av[nbb].cell);
+			av[nbb].w = PRES_CELL_W; av[nbb].h = PRES_CELL_H; av[nbb].isLive = 0;
+		}
+		presence_art_rect_wh(ax, ay, av[nbb].w, av[nbb].h, &av[nbb].sprX, &av[nbb].sprY);
 		av[nbb].dx = dx; av[nbb].dy = dy; av[nbb].gender = po[slot].gender ? 1 : 0;
 		bb[nbb].fy   = ay + dy;
 		bb[nbb].tid  = peer[slot].tid;
@@ -1645,11 +1817,26 @@ static void presence_draw_screen(C3D_RenderTarget* tgt,
 		// A3.2.1: the clip runs on the UNPROJECTED source rect and the TRIMMED rect is then
 		// translated. Because the transform is a pure translation a trimmed rectangle stays a
 		// rectangle, which is the whole reason this composition needs no scissor and no raw C3D.
-		if (!presence_art_clip(av[a].sprX, av[a].sprY, av[a].cell.mirror, spill, &d)) continue;
+		if (!presence_art_clip_wh(av[a].sprX, av[a].sprY, av[a].w, av[a].h,
+		                          av[a].cell.mirror, spill, &d)) continue;
 
 		C2D_Image src;
 		Tex3DS_SubTexture sub;
-		if (s_peerBaked[av[a].gender]) {
+		if (av[a].isLive) {
+			// PHASE 20: the live cell lives in the SAME generated 128x128 texture as the
+			// placeholder, so this is the placeholder's own subtexture arithmetic with a different
+			// cell origin — no second texture, no second bind, no extra draw call. `mirror` is 0 by
+			// construction (presence_art_live_cell), because the peer's h-flip is BAKED into the
+			// decoded pixels (SPEC S1.5), which is what leaves TEST 28's mirrored-source-offset rule
+			// untouched by this phase.
+			const float D = (float)PRES_SHEET_DIM;
+			float u0 = (float)(av[a].cell.x + d.cx) / D,        v0 = 1.0f - (float)(av[a].cell.y + d.cy) / D;
+			float u1 = (float)(av[a].cell.x + d.cx + d.w) / D,  v1 = 1.0f - (float)(av[a].cell.y + d.cy + d.h) / D;
+			sub.width = (u16)d.w; sub.height = (u16)d.h;
+			sub.left = u0; sub.top = v0; sub.right = u1; sub.bottom = v1;
+			src.tex = &s_peerTex; src.subtex = &sub;
+			C3D_TexSetFilter(&s_peerTex, tv ? GPU_LINEAR : GPU_NEAREST, tv ? GPU_LINEAR : GPU_NEAREST);
+		} else if (s_peerBaked[av[a].gender]) {
 			// Real art: cut the cell out of the baked sheet's own subtexture rect (A1.4.3). Each
 			// widget PNG bakes into its OWN single-image .t3x (build_assets.sh:52-57), so the filter
 			// set below touches no other widget's texture. The baked sheet holds ONE variant, so the
@@ -1713,7 +1900,9 @@ static void presence_draw_screen(C3D_RenderTarget* tgt,
 		// than to the frame rect: the sprite is world content and is trimmed at the game box, the
 		// pills are chrome and simply stay on the panel.
 		if (ch && ch->buf && ch->surf) {
-			float headFx = av[a].sprX + (float)PRES_FOOT_DX + av[a].dx;   // cell top-centre, frame px
+			// Cell top-CENTRE, frame px. PHASE 20: half the ACTUAL cell width, so a 32x32 bike or
+			// surf form still carries its nameplate over its own head rather than 8 px to the left.
+			float headFx = av[a].sprX + (float)av[a].w * 0.5f + av[a].dx;
 			float headFy = av[a].sprY + av[a].dy;
 			float hx = ox + headFx * sx, hy = oy + headFy * sy;
 			// FIX PASS (review finding 8): the stack is laid out and clamped AS A UNIT, in pure C
@@ -1762,7 +1951,10 @@ static void presence_draw_screen(C3D_RenderTarget* tgt,
 // to `top` alone.
 static void presence_draw_card(C2D_TextBuf buf, const PresCardText* t, float screenW) {
 	if (!buf || !t) return;
-	const float W = 214.0f, H = 80.0f;
+	// PHASE 19 / SPEC-legible L3.2.4: 80 -> 104. The seven rows were hard-offset for a face whose
+	// line box was 9 px; at 15 the last three overlapped each other outright. The card FLOATS over
+	// the game image at y=32 with 100+ px of clear panel below it, so the remedy is the box.
+	const float W = 214.0f, H = 108.0f;
 	float x = (screenW - W) * 0.5f, y = 32.0f;    // under the HUD bar, over the game image
 
 	// The language of draw_paused_summary (main.c's own panel idiom): a 9-sliced card fill when the
@@ -1781,17 +1973,22 @@ static void presence_draw_card(C2D_TextBuf buf, const PresCardText* t, float scr
 	//    trade & battle use ...         <- TXT_CHIP, dim
 	const float px = x + 10.0f;
 	if (assets_ready()) {
-		assets_text  (buf, TXT_BUTTON,   t->name,           px, y +  8.0f, g_ui.text);
+		// L3.2.4's row table. Ink, for the record: name 11..22, gender 12..20, ID/id 34..42,
+		// location 52..60, read-only 68..76, union 82..90 and 96..104 — bottom ink 104 inside a
+		// 108 px card. (L3.2.4 specified 104 with the union note on ONE row; G2's re-measure
+		// found that note is 300 px at the new cap and has to wrap — see presence_ui.h.)
+		assets_text  (buf, TXT_BUTTON,   t->name,           px, y +  6.0f, g_ui.text);
 		assets_text_r(buf, TXT_VALUE, presence_gender_label(t->gender),
-		                                                    x + W - 10.0f, y + 10.0f, g_ui.acc);
-		assets_text  (buf, TXT_CHIP,     "ID",              px, y + 29.0f, g_ui.dim);
-		assets_text  (buf, TXT_VALUE,    t->id,             px + 22.0f, y + 27.0f, g_ui.text);
-		assets_text  (buf, TXT_CHIP,     t->loc,            px, y + 44.0f, g_ui.text);
-		assets_text  (buf, TXT_CHIP,     PRES_CARD_READONLY_NOTE, px, y + 56.0f, g_ui.dim);
+		                                                    x + W - 10.0f, y + 8.0f, g_ui.acc);
+		assets_text  (buf, TXT_CHIP,     "ID",              px, y + 30.0f, g_ui.dim);
+		assets_text  (buf, TXT_VALUE,    t->id,             px + 22.0f, y + 30.0f, g_ui.text);
+		assets_text  (buf, TXT_CHIP,     t->loc,            px, y + 48.0f, g_ui.text);
+		assets_text  (buf, TXT_CHIP,     PRES_CARD_READONLY_NOTE, px, y + 64.0f, g_ui.dim);
 		// A5.5.3 — the sanctioned disclosure. NOT a greyed "Trade"/"Battle" button: a greyed button
 		// reads as "coming in the next build", and this phase is not that (presence_ui.h carries the
 		// four blockers and the recorded later design).
-		assets_text  (buf, TXT_CHIP,     PRES_CARD_UNION_NOTE,    px, y + 67.0f, g_ui.dim);
+		assets_text  (buf, TXT_CHIP,     PRES_CARD_UNION_NOTE_1,  px, y + 78.0f, g_ui.dim);
+		assets_text  (buf, TXT_CHIP,     PRES_CARD_UNION_NOTE_2,  px, y + 92.0f, g_ui.dim);
 	} else {
 		ui_text  (buf, t->name,                              px, y +  7.0f, 0.42f, g_ui.text);
 		ui_text_r(buf, presence_gender_label(t->gender),     x + W - 10.0f, y + 9.0f, 0.34f, g_ui.acc);
@@ -2282,6 +2479,16 @@ enum { SESSION_CHANGE, SESSION_QUIT };
 #define MENU_WIRELESS_IDX 16  // opens the wireless lobby
 #define MENU_NETLINK_IDX  19  // M2.5 net link (loopback) toggle — dynamic label
 static const char* const HUD_NAMES[4] = { "off", "top", "bottom", "both" };
+// PHASE 19 / SPEC-legible L3.2.1 — float faces of the HUD-bar geometry uihit.h owns (that header
+// is pure C and int-only so the host suite can grade the same constants the app draws with).
+#define HUD_BAR_H     ((float)UIHIT_HUD_BAR_H)
+#define HUD_NAME_Y    ((float)UIHIT_HUD_NAME_Y)
+#define HUD_READOUT_Y ((float)UIHIT_HUD_READOUT_Y)
+#define HUD_CHIP_Y    ((float)UIHIT_HUD_CHIP_Y)
+#define PILL_PAD      ((float)UIHIT_PILL_PAD)
+#define PILL_GAP      ((float)UIHIT_PILL_GAP)
+#define PILL_Y        ((float)UIHIT_PILL_Y)
+#define PILL_H        ((float)UIHIT_PILL_H)
 
 // ---- Tabbed pause menu (UI redesign) ----
 // The 6 tabs re-group the SAME actions the old 2x10 grid had; legacy ids (0..19) feed the original
@@ -2319,8 +2526,35 @@ enum { PK_TOG, PK_SEG, PK_STEP, PK_BTN, PK_SWATCH };
 //                content-column left edge (x=93), vertically centred on the widget.
 //   OV_SECTION — a caption ABOVE a segmented control, like the baked "SCALE · TOP": JBM_MED 9 px
 //                caps, g_art.dim, at x=93, 14 px above the row.
+//   OV_SECTION_TIGHT — the same caption bound HARDER to its control. PHASE 19 FIX PASS
+//                (verify finding C4). Measured off the shipped indigo plates, the art uses two
+//                distinct vertical distances and they MEAN different things:
+//                  * 2 clear rows  = "this dim line describes the row ABOVE it"
+//                    (pause-bot-enhance: "Stereoscopic 3D" ink 50..60, "top screen" ink 63..70)
+//                  * 6 clear rows  = "this caption heads the control BELOW it"
+//                    (pause-bot-display: "SCALE · TOP" ink 12..19, its seg at y=26)
+//                OV_SECTION's 17 px offset lands 4 clear rows above its control, which is
+//                between the two idioms and therefore reads as neither — harmless where the
+//                space above is empty, fatal on ENHANCE where the plate bakes a BOLD "Vivid
+//                mode" whose ink ends on row 183, only 3 rows above the caption. 3-above /
+//                4-below is a tie, and the eye resolved it the wrong way: "DIORAMA · TILT"
+//                read as a sub-line of "Vivid mode". The row cannot move (the seg already ends
+//                on 225 and menu_draw_chrome owns y >= 226) and the space above is fixed by
+//                baked art, so the only lever is the SPLIT. 13 px is what MEASURED in the
+//                framebuffer (tools/emutest/runs/p19-fix/shots/enhance*-native.png, row-
+//                profiled): "DIORAMA · TILT" is caps-only, so its real ink is 7 rows (cap 7)
+//                rather than the 9-row descender box typography.h declares — at 17 px it sat
+//                3 rows under "Vivid mode" and 6 rows over its seg, i.e. it grouped UPWARD,
+//                and at 15 px it was 5/4, still a near-tie. 13 px gives 7 rows above and 2
+//                below: 3.5x asymmetric, with the below-gap at exactly the art's own
+//                tight-binding distance. 13 is also the floor — typo_ink_bottom(TXT_SECTION)
+//                is 13, so a descender-bearing caption would touch the control's first row at
+//                12 (T16 asserts the bound).
 // Ink comes from g_art (W4.1: the surface under it is baked plate art).
-enum { OV_ROW = 0, OV_SECTION = 1 };
+enum { OV_ROW = 0, OV_SECTION = 1, OV_SECTION_TIGHT = 2 };
+// The two caption offsets, named so test_typography T16 grades the same numbers the draw uses.
+#define OV_SECTION_DY        17.0f
+#define OV_SECTION_TIGHT_DY  13.0f
 typedef struct { unsigned char kind, act, nseg; short x, y, w, h; const char* ov; unsigned char ovs; } PCtl;
 static const PCtl PT_SESSION[] = {
   {PK_BTN,ACT_RESUME,0, 93,10,216,40,0},{PK_BTN,ACT_CHANGE,0, 93,59,216,40,0},{PK_BTN,ACT_QUIT,0, 93,108,216,43,0} };
@@ -2349,7 +2583,14 @@ static const PCtl PT_AUDIO[] = {
 static const PCtl PT_ENHANCE[] = {
   {PK_TOG,ACT_3D,0, 276,51,34,18,0},{PK_TOG,ACT_DOF,0, 276,83,34,18,0},{PK_TOG,ACT_BLOOM,0, 276,112,34,18,0},
   {PK_TOG,ACT_LIGHT,0, 276,141,34,18,0},{PK_TOG,ACT_VIVID,0, 276,170,34,18,0},
-  {PK_SEG,ACT_TILT,4, 140,198,170,26,"DIORAMA · TILT",OV_SECTION} };
+  // PHASE 19 / G2, found in a capture and not in a table: the OV_SECTION caption now sits 17 px
+  // above its control (L3.2.6), and on THIS tab the 17 px land under the plate's own baked
+  // "Vivid mode" label, whose ink ends on row 183. At y=198 the caption's ink ran 185..193 —
+  // ONE blank row below a bright bold label, so the dim mono caption read as a sub-line of
+  // "Vivid mode" instead of as the tilt row's own heading. The row drops two pixels: caption ink
+  // 187..195 (3 rows clear above, 4 below), seg 200..225, and menu_draw_chrome's band still owns
+  // y >= 226. contentH is 226 either way, so maxScroll stays 0 and nothing else on the tab moves.
+  {PK_SEG,ACT_TILT,4, 140,200,170,26,"DIORAMA · TILT",OV_SECTION_TIGHT} };
 // Phase 15 adds the CO-OP row (SPEC-avatar A6.1). It goes on LINK, not ENHANCE, because ENHANCE is
 // measurably full: its five baked toggles end at y=188, the tilt seg takes y198..224 and the status
 // hint sits at y=231 — SEVEN pixels left, and phase 14's open question O6 (new plate art for a 6th
@@ -2364,14 +2605,27 @@ static const PCtl PT_LINK[] = {
   {PK_TOG,ACT_LINK,0, 276,16,34,18,0},{PK_TOG,ACT_NETLINK,0, 276,44,34,18,0},
   {PK_BTN,ACT_WIRELESS,0, 93,74,216,35,0},{PK_BTN,ACT_SAVEST,0, 93,118,104,31,0},
   {PK_BTN,ACT_LOADST,0, 204,118,104,31,0},{PK_BTN,ACT_LOADSAV,0, 93,156,216,31,0},
-  {PK_TOG,ACT_PRESENCE,0, 276,196,34,18,"Co-op presence",OV_ROW} };
+  // PHASE 19 / SPEC-legible L3.2.2: y 196 -> 190 (G1 took it to 192; G2 needs two more, see
+  // uihit.h's SET_LINK_NOTE_Y note — the disabled-rows note moved from the mono rung to
+  // TXT_BODY per L3.3.3 and TXT_BODY's line box is 18 px, not 15). Bottom edge 208, and the
+  // note starts exactly there. The row above (ACT_LOADSAV, y156 h31) ends at 187, so this
+  // still sits in a genuinely empty band.
+  {PK_TOG,ACT_PRESENCE,0, 276,190,34,18,"Co-op presence",OV_ROW} };
 // I2.4.2, the same restoration: the swatch row is the manifest's 93,195,208,31 and the pad-edges
 // seg is a full-width 93,253,208,30 instead of a 172x14 sliver crushed onto the hint line (D9).
 // Its "EDGES" caption cannot sit to its left any more (that column is the tab rail), so
 // menu_ov_label puts it ABOVE the row, in the plate's own caption style — see the function.
+// PHASE 19 / SPEC-legible L3.1.3 — the phase's ONE horizontal overflow. "Preview Gamepad" is
+// 103 px at TXT_BUTTON 15 and the buttons were 101 wide, so the label touched both rounded ends.
+// The remedy is the BOX, not the copy. L3.1.3 specified 104 with the 7 px gutter kept; G2 ships
+// 106 with a 4 px gutter instead, because T10's new >98%-of-box ceiling (L5.2.2, "a string that
+// just fits is one edit from overflowing") rejects 103-in-104 at 99.0%. 93+106+4+106 = right
+// edge 309, and menu_draw_chrome repaints from x=312, so the content column still ends clear of
+// the scrollbar. pctl_rects feeds the draw AND the hit test from this one table, so the touch
+// target grows with the art.
 static const PCtl PT_TOUCH[] = {
-  {PK_SEG,ACT_TOUCHMODE,3, 93,26,208,30,0},{PK_BTN,ACT_PREVIEW_PAD,0, 93,109,101,44,0},
-  {PK_BTN,ACT_PREVIEW_SMART,0, 201,109,101,44,0},{PK_SWATCH,ACT_PADCOL,0, 93,195,208,31,0},
+  {PK_SEG,ACT_TOUCHMODE,3, 93,26,208,30,0},{PK_BTN,ACT_PREVIEW_PAD,0, 93,109,106,44,0},
+  {PK_BTN,ACT_PREVIEW_SMART,0, 203,109,106,44,0},{PK_SWATCH,ACT_PADCOL,0, 93,195,208,31,0},
   {PK_SEG,ACT_PADEDGE,3, 93,253,208,30,"GAMEPAD · EDGES",OV_SECTION} };
 static const PCtl* const PTABS[6] = { PT_SESSION, PT_DISPLAY, PT_AUDIO, PT_ENHANCE, PT_LINK, PT_TOUCH };
 // I4.4: ENHANCE goes 5 -> 6 for the tilt row. Forgetting this is SILENT — the row would never
@@ -2482,11 +2736,20 @@ static void menu_ov_label(C2D_TextBuf buf, const char* s, int style, float y, fl
 	// measured off the art: "Link cable"'s glyphs start at x=93 with its toggle at y=16..34, and
 	// "SCALE · TOP" sits 14 px above its widget. Both take g_art ink (W4.1) because the surface
 	// under them is the baked plate.
-	if (style == OV_SECTION)
-		assets_text(buf, TXT_SECTION, s, (float)UIHIT_MENU_CONTENT_X, y - 14.0f, g_art.dim);
+	// PHASE 19 / SPEC-legible L3.2.6: the caption sits at y-17, not y-14. Its cell grew 13 -> 15
+	// px, so at -14 the line box ended ON the control's first row. At -17 the ink lands y-13..y-5,
+	// five clear rows above the widget — and, as a bonus, the code-drawn captions are now cap 7,
+	// the SAME cap the plates bake, so the two finally agree instead of the code's being smaller.
+	// L3.2.7: the OV_ROW label centres its INK in the widget's box (see typo_center_y).
+	// PHASE 19 FIX PASS (verify finding C4): OV_SECTION_TIGHT is the same caption 2 px lower —
+	// see the enum for the measured art idioms it is choosing between. Both offsets are whole
+	// numbers on top of an integer row, so R1's integer origin is untouched.
+	if (style == OV_SECTION || style == OV_SECTION_TIGHT)
+		assets_text(buf, TXT_SECTION, s, (float)UIHIT_MENU_CONTENT_X,
+		            y - (style == OV_SECTION_TIGHT ? OV_SECTION_TIGHT_DY : OV_SECTION_DY), g_art.dim);
 	else
 		assets_text(buf, TXT_BODY, s, (float)UIHIT_MENU_CONTENT_X,
-		            y + (h - typo_role_px(TXT_BODY)) / 2.0f, g_art.text);
+		            typo_center_y(TXT_BODY, y, h), g_art.text);
 }
 
 // The plate carries the baked section captions, so scrolling the CONTROLS without the plate would
@@ -2538,20 +2801,34 @@ static void menu_draw_plate(const char* id, int scroll) {
 static const char* const TOUCH_EXPLAIN[3] = {
 	"Off — a touch opens the pause menu. No game input from the touch screen.",
 	"Gamepad — a translucent virtual controller (D-pad, A/B, L/R, START) over game B.",
-	"Smart — the touch screen is a pointer on the real Gen-3 UI: tap-to-walk, tap menus/party/targets, double-tap = START.",
+	// PHASE 19 / SPEC-legible L3.2.3 — the ONE copy edit in the phase, and it is forced by
+	// geometry rather than taste: "menus/party/targets," is an unbreakable 19-character token
+	// that occupies 207 of the column's 216 px by itself, so at the new size it dragged the
+	// paragraph to FIVE lines and put the last two on top of the Preview buttons. The rewrite
+	// says the same three things (pointer at the real game UI / tap to walk / tap the menus,
+	// party and targets / double-tap is START) in tokens the wrapper can break. T14 pins it.
+	"Smart — point at the real game UI: tap to walk, tap menus, party and targets. Double-tap = START.",
 };
+// PHASE 19 / SPEC-legible L3.2.3 + L3.3.3. Two changes, and they are a pair:
+//   * the paragraph is PROSE, so it leaves the mono rung for TXT_BODY (cap 9, 19.6' — the design's
+//     own body face; FONTS.md never assigned sentences to JetBrains Mono, the app did);
+//   * TXT_BODY's line box is 18 px, so a 10 px lead would overlap its own next line. The lead
+//     becomes the face's own line height (15) and the block starts 4 rows higher (62) to buy the
+//     room back. All three copies measure THREE lines at 216 px, so 62/77/92 with the last ink
+//     row at 108 and the Preview buttons at 109: one clear pixel, and nothing below moves —
+//     which matters because pause-bot-touch BAKES "GAMEPAD · COLOR" above the swatch row.
+// The column widens 208 -> 216 (x93..309, the same right edge the tab's full-width rows use).
 #define TEXPL_X      93.0f
-#define TEXPL_Y      66.0f
-#define TEXPL_W     208
-#define TEXPL_LINES   4    // 4 x 10 px lead from y=66 ends at 105; the Preview buttons start at 109
-                           // (the body face is TXT_SECTION: 9 px line in a 10 px lead)
-#define TEXPL_LEAD   10.0f
+#define TEXPL_Y      62.0f
+#define TEXPL_W     216
+#define TEXPL_LINES   3    // 3 x 15 px lead from y=62 -> last line at 92, ink 97..108, buttons 109
+#define TEXPL_LEAD   15.0f
 #define TEXPL_CAP    72
 
 // The measurement uihit_wrap needs. Deliberately a callback: the arithmetic is host-tested in
 // test_uihit T11, the metrics come from the live bcfnt, and neither has to know about the other.
 static int texpl_meas(const char* str, void* ctx) {
-	return (int)(assets_text_w((C2D_TextBuf)ctx, TXT_SECTION, str) + 0.5f);
+	return (int)(assets_text_w((C2D_TextBuf)ctx, TXT_BODY, str) + 0.5f);
 }
 
 // L5.2.1: `mode` is read every frame, never cached — flipping the segment must change the
@@ -2562,7 +2839,7 @@ static void menu_touch_explainer(C2D_TextBuf buf, int mode, int scroll) {
 	int n = uihit_wrap(TOUCH_EXPLAIN[mode], TEXPL_W, TEXPL_LINES, &lines[0][0], TEXPL_CAP,
 	                   texpl_meas, buf);
 	for (int i = 0; i < n; i++)
-		assets_text(buf, TXT_SECTION, lines[i], TEXPL_X,
+		assets_text(buf, TXT_BODY, lines[i], TEXPL_X,
 		            TEXPL_Y + (float)i * TEXPL_LEAD - (float)scroll, g_art.dim);
 }
 
@@ -2700,7 +2977,9 @@ static void draw_load_error(C2D_TextBuf buf, float screenW) {
 	if (assets_ready()) {
 		assets_text_c(buf, TXT_BUTTON, "This game could not be loaded",
 		              screenW * 0.5f, y + 8.0f, THEME_QUIT_TEXT);
-		assets_text_c(buf, TXT_CHIP, "not a valid .gba - pause menu, Change games",
+		// L3.3.3: a full sentence, so TXT_BODY (cap 9), not the chip rung. It is 261 px on a 320 px
+		// panel, and this is the line that tells a user with a bad dump what actually happened.
+		assets_text_c(buf, TXT_BODY, "not a valid .gba - pause menu, Change games",
 		              screenW * 0.5f, y + 27.0f, THEME_ON_DARK_DIM);
 	} else {
 		ui_text_c(buf, "This game could not be loaded", screenW * 0.5f, y + 10.0f, 0.5f, THEME_QUIT_TEXT);
@@ -2741,13 +3020,22 @@ static void draw_paused_summary(C2D_TextBuf buf, const char* nameTop, const char
 		PILL("Co-op", coop, g_ui.acc);
 		PILL(wlOn ? "Wireless" : (netOn ? "Net" : "Link"), (linkOn || netOn || wlOn), g_ui.acc);
 		#undef PILL
+		// PHASE 19 / SPEC-legible L3.1.4: the label pad goes 12 -> 10 and the inter-pill gap 5 -> 4.
+		// The labels themselves grew cap 4 -> cap 7 (the pills are the smallest text on the pause
+		// screen and the user reads all nine of them at a glance), which at the old padding put the
+		// worst-case nine-pill row at 383 px on a 400 px screen — 8 px of margin. Trimming the
+		// padding instead of the type gives 356 px and 22 px margins, measured on the shipped face
+		// with the LONGEST variant of every dynamic label ("Touch Off", "Wireless"). The pill BOX
+		// grows 15 -> 17 to hold the taller cell; it stays anchored at y=129 so the row does not
+		// move, and the label is centred by ink (L3.2.7) rather than by the old hand-typed +3.
 		float pw[9], tw = 0.0f;
-		for (int i = 0; i < n; i++) { pw[i] = assets_text_w(buf, TXT_CHIP, labs[i]) + 12.0f; tw += pw[i] + 5.0f; }
+		for (int i = 0; i < n; i++) { pw[i] = assets_text_w(buf, TXT_CHIP, labs[i]) + PILL_PAD; tw += pw[i] + PILL_GAP; }
 		float x = (400.0f - tw) / 2.0f;
 		for (int i = 0; i < n; i++) {
-			ui_border_round(x, 129.0f, pw[i], 15.0f, col[i], 1.0f, 5.0f);
-			assets_text_c(buf, TXT_CHIP, labs[i], x + pw[i] / 2.0f, 132.0f, col[i]);
-			x += pw[i] + 5.0f;
+			ui_border_round(x, PILL_Y, pw[i], PILL_H, col[i], 1.0f, 5.0f);
+			assets_text_c(buf, TXT_CHIP, labs[i], x + pw[i] / 2.0f,
+			              typo_center_y(TXT_CHIP, PILL_Y, PILL_H), col[i]);
+			x += pw[i] + PILL_GAP;
 		}
 	}
 	(void)buf;
@@ -3350,6 +3638,34 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 								// replaces with a UDS beacon RX (D3.4).
 								presence_publish(&presSt[gi ^ 1], 0, &presSelf[gi]);
 							}
+							// ---- PHASE 20: the peer's GENUINE frame (SPEC S1.8, S4.1) ----------
+							// The SECOND reader, and the last one, in the SAME parked window and
+							// under the same two invariants: READ-ONLY (PsprBus has no write member
+							// at all) and NO NEW SYNC PRIMITIVE. The decode and the texture blit do
+							// NOT happen here — they run later, inside C3D_FrameBegin/End, beside
+							// presence_solve (presence_live_update; SPEC S3.6 explains why).
+							//
+							// The gate is the PREVIOUS frame's presDraw[gi ^ 1]: game `gi`'s sprite
+							// is only worth reading if the OTHER game is actually drawing it. That
+							// is one frame late by construction, and the cost of being late is
+							// exactly one frame of placeholder when a peer first comes into view
+							// (reason PSPR_R_CTX -> PSPR_R_PENDING), which is invisible. The
+							// alternative — reading unconditionally — would spend 28 reads per game
+							// per frame on a peer nobody can see.
+							for (int gi = 0; gi < 2; gi++)
+								presence_read_sprite(prCore[gi], prProf[gi], prGs[gi],
+								                     presDraw[gi ^ 1], s_peerTexOk ? 1 : 0,
+								                     s_liveTileOk ? 1 : 0, &s_psprCap[gi]);
+						} else {
+							// The cost guard closed (pref off, menu open, or a live link). No reads
+							// happen, so the last verdict would otherwise sit in the HUD and the gs
+							// log saying "OK" while nothing is being read at all. Retire it — the
+							// PIXELS are deliberately kept, so closing a menu resumes without
+							// re-reading 512 bytes of unchanged VRAM.
+							for (int gi = 0; gi < 2; gi++) {
+								s_psprCap[gi].hdr.ok     = 0;
+								s_psprCap[gi].hdr.reason = PSPR_R_CTX;
+							}
 						}
 					}
 #if CTL_D4_ENABLE || CTL_D5_ENABLE
@@ -3454,6 +3770,18 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 							gd.prMapN   = (int16_t)(have ? (int)gpr->mapNum   : -1);
 							gd.prPx     = (int16_t)((have && (gpr->flags & PRES_F_SB1VALID)) ? (int)gpr->px : -1);
 							gd.prPy     = (int16_t)((have && (gpr->flags & PRES_F_SB1VALID)) ? (int)gpr->py : -1);
+							// PHASE 20 (SPEC S4.3): the peer whose avatar this row is about is the
+							// game on the OTHER screen — pg ^ 1 — which is the same `^ 1` the draw
+							// applies, for the same reason (S5.4).
+							{
+								const PsprCapture* sc = &s_psprCap[pg ^ 1];
+								int32_t rsn = sc->hdr.reason;
+								if (sc->hdr.ok && !s_psprCell[pg ^ 1].ok) rsn = PSPR_R_PENDING;
+								gd.prSprReason = (uint8_t)rsn;
+								gd.prSprW      = (uint8_t)(s_psprCell[pg ^ 1].ok ? s_psprCell[pg ^ 1].w : 0);
+								gd.prSprH      = (uint8_t)(s_psprCell[pg ^ 1].ok ? s_psprCell[pg ^ 1].h : 0);
+								gd.prSprGfx    = sc->key.graphicsId;
+							}
 						}
 						// injKeys carries the TOP game's script mask so D4 injection shows up in the same
 						// timeline as ctx/geo (D4.14 — free correlation, no new log).
@@ -4150,6 +4478,13 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			pin.slot     = 0;                                         // PRES_MAX_PEERS == 1
 			pin.self     = presSelf[gi];
 			presDraw[gi] = presence_solve(&presSt[gi], &pin, &presOut[gi]);
+			// ---- PHASE 20: decode the peer's captured frame into the sheet (SPEC S3.6) ----
+			// INSIDE C3D_FrameBegin/End (opened well above), which is the point: FrameBegin with
+			// C3D_FRAME_SYNCDRAW has already waited for the previous frame to finish sampling this
+			// texture, so a CPU store into it here cannot race the GPU. No GPU command is issued.
+			// Indexed by GAME — game `gi` owns live slot `gi`; the SCREEN showing game x draws slot
+			// x ^ 1 (S5.4), and that `^ 1` is written exactly once, at the draw call sites.
+			presence_live_update(gi);
 			// ---- slice M2: the walk phase (SPEC-avatar A2.6.3/A2.6.4) ----
 			// Driven by the PEER's own accumulated world travel, never by the foot anchor: the
 			// anchor is a DIFFERENCE, so a host-driven accumulator would animate a standing peer
@@ -4262,6 +4597,31 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 				                         (presOut[gi].dTileY & 0xFFFF);
 				g_presDiag.pairGame[gi] = presPairG[gi];
 			}
+			// PHASE 20 / SPEC S4.3 — the appended block. Written for BOTH games every frame, so a
+			// GDB read (or a photograph of the HUD suffix below) answers "why is the peer still
+			// magenta?" without a rebuild. LOGGING ONLY.
+			for (int gi = 0; gi < 2; gi++) {
+				const PsprCapture* pc = &s_psprCap[gi];
+				// The reason the DRAW will use: the resolve verdict, downgraded to PENDING when the
+				// ladder passed but no decode has landed in the sheet yet (S4.1 clause 16).
+				int32_t rsn = pc->hdr.reason;
+				if (pc->hdr.ok && !s_psprCell[gi].ok) rsn = PSPR_R_PENDING;
+				g_presDiag.sprReason [gi] = rsn;
+				g_presDiag.sprW      [gi] = s_psprCell[gi].ok ? s_psprCell[gi].w : 0;
+				g_presDiag.sprH      [gi] = s_psprCell[gi].ok ? s_psprCell[gi].h : 0;
+				g_presDiag.sprTile   [gi] = pc->key.tileNum;
+				g_presDiag.sprPal    [gi] = (int32_t)pc->key.pal
+				                          | ((int32_t)pc->key.hFlip  << 8)
+				                          | ((int32_t)pc->key.vFlip  << 9)
+				                          | ((int32_t)pc->key.map1d  << 10)
+				                          | ((int32_t)pc->key.subTbl << 16);
+				g_presDiag.sprGfxId  [gi] = pc->key.graphicsId;
+				g_presDiag.sprAnim   [gi] = ((int32_t)pc->key.animNum << 8) | pc->key.animCmdIndex;
+				g_presDiag.sprUploads[gi] = (int32_t)pc->gathers;
+				g_presDiag.sprAvFlags[gi] = pc->avatarFlags;
+			}
+			g_presDiag.sprTileOk  = s_liveTileOk ? 1 : 0;
+			g_presDiag.sprFlags   = (int32_t)(s_psprCap[0].diagFlags | s_psprCap[1].diagFlags);
 			g_presDiag.artOk      = s_presenceOk ? 1 : 0;
 			g_presDiag.anchorX    = (int32_t)(presOut[0].footX + 0.5f);
 			g_presDiag.anchorY    = (int32_t)(presOut[0].footY + 0.5f);
@@ -4366,8 +4726,13 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		// time-of-day grade with the map it stands on, or a bright peer floats over a dusk route.
 		// Under tilt all four of those passes are suppressed (&& !tiltTop below), so this one
 		// insertion point lands immediately after render_game there — one site, both cases (A2.1.1).
+		// PHASE 20 / SPEC S5.4 — THE `^ 1`, written once. The record in presSt[g] was PUBLISHED BY
+		// game g ^ 1, so the live cell for the peer drawn on this screen is s_psprCell[g ^ 1]. Get
+		// this backwards and each screen shows its OWN trainer standing next to itself, which looks
+		// entirely plausible and is wrong.
 		presence_draw_screen(top, &presOut[presTopGame], &presSt[presTopGame].rec[0], &presPose[presTopGame],
-		                     1, scaleMode[0], 400.0f, 240.0f, tiltTop ? &tiltVw : NULL, topTint, &presCh[0]);
+		                     1, scaleMode[0], 400.0f, 240.0f, tiltTop ? &tiltVw : NULL, topTint, &presCh[0],
+		                     &s_psprCell[presTopGame ^ 1]);
 		if (litPass) light_pass(top, &depth3d, scaleMode[0], &lenv);   // lit LAST -> tints the UI panels too (sign is not a bright patch)
 		if (!menuOpen) {
 			// Slice M3 / A5.4.2: the Card, over the game image and UNDER the HUD bar drawn just
@@ -4377,24 +4742,34 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			// this needs no second condition that could disagree with it.
 			if (presCard[presTopGame].open) presence_draw_card(txtBuf, &presCardTx[presTopGame], 400.0f);
 			if (hudMode & 1) {
-				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 400.0f, 14.0f, THEME_HUD_BAR);
-				if (focScreen == 0) C2D_DrawRectSolid(0.0f, 14.0f, 0.0f, 400.0f, 2.0f, clrHi);
-				ui_dot(6.0f, 4.5f, swapped ? THEME_GAME_B : THEME_GAME_A);
-				// FIX PASS: baked TXT_BODY at texel scale 1.0 (was the system font at 0.4). y = 0
-				// centres a 14-row cell in the 14 px bar; test_typography T10 holds the longest
-				// real name inside the space before the right-hand cluster.
-				assets_text(txtBuf, TXT_BODY, topName, 15.0f, 0.0f, THEME_ON_DARK);
+				// PHASE 19 / SPEC-legible L3.2.1 + L4.4: the bar is 20 px, not 14. This is the ONE
+				// place in the phase where legibility costs gameplay area, so the number is a
+				// decision and not a side effect: +6 device px of 240 = 2.5% of screen height,
+				// and not one pixel more. Three things make it the right trade — (i) the design's
+				// own `play-top` manifest reserves 27 px for this band and LETTERBOXES the game
+				// under it, so an overlaid 20 is already the cheaper reading; (ii) the bar is
+				// user-suppressible per screen (hudMode off/top/bottom/both); (iii) the
+				// alternative is keeping the clock, the fps and the game's own name at 10.9'
+				// and 15.3', which is the complaint this phase exists to answer.
+				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 400.0f, HUD_BAR_H, THEME_HUD_BAR);
+				if (focScreen == 0) C2D_DrawRectSolid(0.0f, HUD_BAR_H, 0.0f, 400.0f, 2.0f, clrHi);
+				ui_dot(6.0f, HUD_BAR_H / 2.0f - 2.5f, swapped ? THEME_GAME_B : THEME_GAME_A);
+				// FIX PASS: baked TXT_BODY at texel scale 1.0 (was the system font at 0.4).
+				// PHASE 19: y=2 puts the cap-9 ink on rows 7..18 of the 20 px bar (L3.2.1);
+				// test_typography T10 holds the longest real name inside the space before the
+				// right-hand cluster and T16 holds the ink inside the bar.
+				assets_text(txtBuf, TXT_BODY, topName, 15.0f, HUD_NAME_Y, THEME_ON_DARK);
 				if (focScreen == 0)
-					ui_chip(txtBuf, "●FOCUS", 21.0f + assets_text_w(txtBuf, TXT_BODY, topName), 0.5f, hudAcc);
+					ui_chip(txtBuf, "●FOCUS", 21.0f + assets_text_w(txtBuf, TXT_BODY, topName), HUD_CHIP_Y, hudAcc);
 				if (netOn || wlOn) {   // net-diag stat line (dev): keep the dense readout
 					float sw, sh; C2D_TextGetDimensions(&tHudStat, 0.4f, 0.4f, &sw, &sh);
-					C2D_DrawText(&tHudStat, C2D_WithColor, 396.0f - sw, 1.0f, 0.0f, 0.4f, 0.4f, THEME_ON_DARK);
+					C2D_DrawText(&tHudStat, C2D_WithColor, 396.0f - sw, 4.0f, 0.0f, 0.4f, 0.4f, THEME_ON_DARK);
 				} else {               // 1:1: [3D] 59fps 14:32 [battery]
 					float rx = 394.0f;
-					ui_border(rx - 13.0f, 3.5f, 12.0f, 7.5f, THEME_ON_DARK_DIM, 1.0f);
-					C2D_DrawRectSolid(rx - 0.5f, 5.5f, 0.0f, 1.5f, 3.5f, THEME_ON_DARK_DIM);
+					ui_border(rx - 13.0f, 6.5f, 12.0f, 7.5f, THEME_ON_DARK_DIM, 1.0f);
+					C2D_DrawRectSolid(rx - 0.5f, 8.5f, 0.0f, 1.5f, 3.5f, THEME_ON_DARK_DIM);
 					{ float bl = 8.0f * (batLvl > 5 ? 5 : batLvl) / 5.0f;
-					  if (bl > 0.5f) C2D_DrawRectSolid(rx - 11.0f, 5.5f, 0.0f, bl, 3.5f, THEME_GAME_A); }
+					  if (bl > 0.5f) C2D_DrawRectSolid(rx - 11.0f, 8.5f, 0.0f, bl, 3.5f, THEME_GAME_A); }
 					rx -= 19.0f;
 					// W4.2 / D19: the baked TXT_SECTION (9 px, scale 1.0), not the system font at
 					// scale 0.38. At 0.38 a stroke covers under half a device pixel, so the dim
@@ -4402,16 +4777,16 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					// badge unreadable, one row to its right.
 					{ time_t tt2 = time(NULL); struct tm* lt2 = localtime(&tt2);
 					  char clk[8]; snprintf(clk, sizeof clk, "%02d:%02d", lt2 ? lt2->tm_hour : 0, lt2 ? lt2->tm_min : 0);
-					  assets_text_r(txtBuf, TXT_SECTION, clk, rx, 2.0f, THEME_ON_DARK);
+					  assets_text_r(txtBuf, TXT_SECTION, clk, rx, HUD_READOUT_Y, THEME_ON_DARK);
 					  rx -= assets_text_w(txtBuf, TXT_SECTION, clk) + 7.0f; }
 					{ char fs2[12]; snprintf(fs2, sizeof fs2, "%dfps", fps);
-					  assets_text_r(txtBuf, TXT_SECTION, fs2, rx, 2.0f, focScreen == 0 ? hudAcc : THEME_ON_DARK_DIM);
+					  assets_text_r(txtBuf, TXT_SECTION, fs2, rx, HUD_READOUT_Y, focScreen == 0 ? hudAcc : THEME_ON_DARK_DIM);
 					  rx -= assets_text_w(txtBuf, TXT_SECTION, fs2) + 8.0f; }
 					if (s3dEnabled) { float cw = ui_chip_measure(txtBuf, "3D");
 					                  // W4.2 (sweep D11): the handoff's fixed role PAIR — #a9d4ff ink on a #3E86D6
 					                  // frame. It used to draw the frame colour as the ink too, i.e. dark navy
 					                  // glyphs on the near-black HUD bar.
-					                  ui_chip_2(txtBuf, "3D", rx - cw, 0.5f, THEME_GAME_B, THEME_3D_TEXT);
+					                  ui_chip_2(txtBuf, "3D", rx - cw, HUD_CHIP_Y, THEME_GAME_B, THEME_3D_TEXT);
 					                  rx -= cw + 6.0f; }   // advance so the tilt chip lands to its LEFT
 					// Phase 14 / I6.1: the tilt chip exists so a hardware PHOTO is interpretable.
 					// Unlike the 3D chip (which shows only "enabled"), the COLOUR carries the gate:
@@ -4432,7 +4807,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 						const char* tc = TILT_CHIP[tl];
 						float cw = ui_chip_measure(txtBuf, tc);
 						rx -= cw;
-						ui_chip(txtBuf, tc, rx, 0.5f, tilt_active(&tiltTw[0]) ? hudAcc : THEME_ON_DARK_DIM);
+						ui_chip(txtBuf, tc, rx, HUD_CHIP_Y, tilt_active(&tiltTw[0]) ? hudAcc : THEME_ON_DARK_DIM);
 					}
 					// Phase 15 / A6.4: the CO-OP chip, immediately LEFT of the tilt chip, same
 					// right-to-left `rx -= cw` flow. The COLOUR carries the gate exactly as the tilt
@@ -4453,7 +4828,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 						const char* pc = (presPair != PRES_PAIR_OK) ? "CO-OP x" : "CO-OP";
 						float cw = ui_chip_measure(txtBuf, pc);
 						rx -= cw + 6.0f;
-						ui_chip(txtBuf, pc, rx, 0.5f, presDraw[presTopGame] ? hudAcc : THEME_ON_DARK_DIM);
+						ui_chip(txtBuf, pc, rx, HUD_CHIP_Y, presDraw[presTopGame] ? hudAcc : THEME_ON_DARK_DIM);
 					}
 				}
 			} else if (focScreen == 0) {
@@ -4474,6 +4849,23 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			// Bottom-left of the TOP screen, matching where the smart-touch diagnostics sit on the
 			// bottom screen (y=224); it costs nothing while the pref is off and it respects the
 			// user's per-screen HUD preference like every other chrome surface (A4.4.2).
+#if PRES_DIAG_HUD
+			// PHASE 19 FIX PASS (verify finding O2). These two lines are the app's SMALLEST and
+			// blurriest text — the 3DS system font at scale 0.32, the one path this phase exists to
+			// remove — and they were gated on `presenceOn`, a SHIPPED user toggle on the pause LINK
+			// tab. So a player who turned Co-op presence on got a 73-character developer readout over
+			// their game, in a phase whose entire brief is "everything is too small to be written
+			// clearly". They cannot simply be promoted to a baked role: measured on the shipped
+			// jbm_med_12 (5 px/char, mono) the TYPICAL CO-OP line is 73 chars = 365 px and its WORST
+			// expansion (8-char name + 5-digit tid + saturated a/h counters + reason + HOLD + foot
+			// anchor) is ~116 chars = 580 px on a 400 px screen — no face on the ladder holds it, and
+			// T12 says so in its budget entry. The precedent is phase 17's TOUCH_DIAG_HUD, which
+			// retired exactly this shape of shipped probe: the on-screen readout goes behind a
+			// build flag (0 = shipping), and the STRUCTURED channel stays on unconditionally —
+			// g_presDiag (magic 'PRS1', filled every frame at main.c:4575 with reason/liveness/
+			// maps/dTile/sprReason/blit rect) is GDB- and log-readable and is the real diagnostic.
+			// A hardware calibration run builds with -DPRES_DIAG_HUD=1 and gets both lines back
+			// unchanged. T12's budget is unaffected: count_ident sees the identifiers either way.
 			if (presenceOn && (hudMode & 1)) {
 				const PresenceState* pst = &presSt[presTopGame];
 				const PeerPresence*  pr  = &pst->rec[0];
@@ -4516,7 +4908,33 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 				         presence_off_reason(po->reason), po->held ? " HOLD" : "", anch);
 				ui_text(txtBuf, pl, 6.0f, 226.0f, 0.32f,
 				        presDraw[presTopGame] ? g_ui.acc : THEME_ON_DARK_DIM);
+				// PHASE 20 / SPEC S4.3 — the sprite readout. A SEPARATE LINE, deliberately: the
+				// CO-OP line above is already ~73 characters / ~340 px of a 400 px screen and its
+				// own FIX PASS comment says a clipped right-hand half costs exactly the fields a
+				// photograph needs. Appending 15+ characters there would clip the reason code and
+				// the anchor; a second short line at y = 216 costs nothing and cannot overflow.
+				// The PEER whose sprite this is, is game presTopGame ^ 1 (S5.4) — the same `^ 1` as
+				// the draw, for the same reason.
+				{
+					const int pg  = presTopGame ^ 1;
+					const PsprCapture* pc = &s_psprCap[pg];
+					char sl[64];
+					if (g_presDiag.sprReason[pg] == PSPR_R_OK)
+						snprintf(sl, sizeof sl, "spr:OK %dx%d t%04X p%d %s%s%s u%d",
+						         s_psprCell[pg].w, s_psprCell[pg].h,
+						         (unsigned)pc->key.tileNum, (int)pc->key.pal,
+						         pc->key.hFlip ? "F" : "-", pc->key.vFlip ? "V" : "-",
+						         pc->key.map1d ? "1" : "2", (int)pc->gathers);
+					else
+						snprintf(sl, sizeof sl, "spr:%s g%02X%s",
+						         pspr_reason_name(g_presDiag.sprReason[pg]),
+						         (unsigned)pc->key.graphicsId,
+						         (pc->diagFlags & PSPR_D_NOIO) ? " noio" : "");
+					ui_text(txtBuf, sl, 6.0f, 216.0f, 0.32f,
+					        (g_presDiag.sprReason[pg] == PSPR_R_OK) ? g_ui.acc : THEME_ON_DARK_DIM);
+				}
 			}
+#endif   // PRES_DIAG_HUD
 			// FIX PASS: the baked TXT_BODY at texel scale 1.0, not the SYSTEM font at 0.5. This is
 			// the surface phase 18 added to ANSWER "co-op doesn't work" (pres_pair_toast's sentence),
 			// so drawing it with the one font path this phase exists to remove was self-defeating.
@@ -4548,7 +4966,8 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		// this call site. Both eyes therefore agree pixel for pixel except for the game image's own
 		// per-eye pops, which is what "the avatar sits on the screen plane" means.
 		presence_draw_screen(topR, &presOut[presTopGame], &presSt[presTopGame].rec[0], &presPose[presTopGame],
-		                     1, scaleMode[0], 400.0f, 240.0f, tiltTop ? &tiltVw : NULL, NULL, &presCh[0]);
+		                     1, scaleMode[0], 400.0f, 240.0f, tiltTop ? &tiltVw : NULL, NULL, &presCh[0],
+		                     &s_psprCell[presTopGame ^ 1]);   // same cell, both eyes (A2.8)
 		if (litPass) light_pass(topR, &depth3d, scaleMode[0], &lenv);
 		if (menuOpen) draw_paused_summary(txtBuf, topName, botName, s3dEnabled, dofOn, bloomOn, lightOn, vividOn, touchMode, linkOn, netOn, wlOn, presenceOn);
 
@@ -4579,7 +4998,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		presence_draw_screen(bot, &presOut[presBotGame], &presSt[presBotGame].rec[0],
 		                     &presPose[presBotGame],
 		                     1, scaleMode[1], 320.0f, 240.0f, tiltBot ? &tiltVwB : NULL, botTint,
-		                     &presCh[1]);
+		                     &presCh[1], &s_psprCell[presBotGame ^ 1]);   // A2.7.1: the roles invert
 		if (!menuOpen) {
 			// Slice M3: the Card belongs to the FOCUSED game — the one whose A press opened it —
 			// so it draws on whichever screen that game is on. A4.4.4 says "a top-screen overlay",
@@ -4595,31 +5014,49 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			// screenshot 06's top band is L | TOUCH · GAMEPAD | R over bare video. So the bar is
 			// suppressed in Gamepad mode and the pad's own chip becomes the header; the TOP screen
 			// keeps its full HUD, which is where the fps and the clock still live.
-			if ((hudMode & 2) && tmEff != TOUCH_PAD) {
-				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 14.0f, THEME_HUD_BAR);
-				if (focScreen == 1) C2D_DrawRectSolid(0.0f, 14.0f, 0.0f, 320.0f, 2.0f, clrHi);
-				ui_dot(6.0f, 4.5f, single ? THEME_GAME_A : (swapped ? THEME_GAME_A : THEME_GAME_B));
-				assets_text(txtBuf, TXT_BODY, botName, 15.0f, 0.0f, THEME_ON_DARK);   // FIX PASS: see the top bar
+			//
+			// PHASE 19 FIX PASS (verify finding C1, BLOCKER) — **EITHER touch mode**, not just the pad.
+			// Smart mode draws its OWN header chip in the SAME band: touch.c's
+			//   touch_chip("TOUCH · SMART POINTER", cx=160, y=UIHIT_TOUCH_CHIP_Y=4, h=17)
+			// => rows 4..21, x 100.5..219.5 (measured on the shipped jbm_med_12). The phase-19 bar is
+			// 20 px with a 2 px focus rule under it, so the two modules were writing the same rows:
+			// "Pokemon Emerald" ends at x=117 and its ●FOCUS chip runs 123..165, i.e. the name was cut
+			// mid-word and the FOCUS chip was covered ENTIRELY. Captured before the fix at
+			// tools/emutest/runs/p19-verify/shots/DEFECT-hud-name-vs-touchchip-zoom.png. At the phase-18
+			// rungs the same two modules cleared each other by 2.5 px, which is why it surfaced now —
+			// but the coexistence was always an accident, never a layout.
+			// The design says the same thing for BOTH modes: manifest `smart-bot` lists exactly what
+			// `pad-bot` does — video, the mode's own widgets and the `btn: menu` chip — and NO
+			// name/fps/clock rects; screenshot 07's bottom band is the mode chip alone over bare video.
+			// So the rule the comment above states for Gamepad is applied where it always belonged: the
+			// bar is the TOUCH_OFF header, and in EITHER touch mode the mode's own chip IS the header.
+			// The top screen keeps its full HUD (name, FOCUS, fps, clock) in every mode, so nothing the
+			// bar carries becomes unreachable. test_typography T19 grades the band for exclusivity.
+			if ((hudMode & 2) && tmEff == TOUCH_OFF) {
+				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, HUD_BAR_H, THEME_HUD_BAR);   // L3.2.1: identical to the top bar
+				if (focScreen == 1) C2D_DrawRectSolid(0.0f, HUD_BAR_H, 0.0f, 320.0f, 2.0f, clrHi);
+				ui_dot(6.0f, HUD_BAR_H / 2.0f - 2.5f, single ? THEME_GAME_A : (swapped ? THEME_GAME_A : THEME_GAME_B));
+				assets_text(txtBuf, TXT_BODY, botName, 15.0f, HUD_NAME_Y, THEME_ON_DARK);   // FIX PASS: see the top bar
 				{
 					float chx = 21.0f + assets_text_w(txtBuf, TXT_BODY, botName);
-					if (focScreen == 1) chx += ui_chip(txtBuf, "●FOCUS", chx, 0.5f, hudAcc) + 5.0f;
+					if (focScreen == 1) chx += ui_chip(txtBuf, "●FOCUS", chx, HUD_CHIP_Y, hudAcc) + 5.0f;
 					// The bolt is gone with the same font change that fixed the badge: U+26A1 is an
 					// emoji codepoint, absent from both baked faces, so it would draw as tofu (the
 					// "≡" in touch.c proved the failure mode in capture). The chip's ACCENT COLOUR
 					// already carries "a link is live"; a box does not.
-					if (linkOn || netOn || wlOn) ui_chip(txtBuf, "LINK", chx, 0.5f, hudAcc);
+					if (linkOn || netOn || wlOn) ui_chip(txtBuf, "LINK", chx, HUD_CHIP_Y, hudAcc);
 				}
 				if (netOn || wlOn) {
 					float bsw, bsh; C2D_TextGetDimensions(&tHudStat, 0.4f, 0.4f, &bsw, &bsh);
-					C2D_DrawText(&tHudStat, C2D_WithColor, 316.0f - bsw, 1.0f, 0.0f, 0.4f, 0.4f, THEME_ON_DARK);
+					C2D_DrawText(&tHudStat, C2D_WithColor, 316.0f - bsw, 4.0f, 0.0f, 0.4f, 0.4f, THEME_ON_DARK);
 				} else {
 					float rx = 314.0f;
 					{ time_t tt2 = time(NULL); struct tm* lt2 = localtime(&tt2);
 					  char clk[8]; snprintf(clk, sizeof clk, "%02d:%02d", lt2 ? lt2->tm_hour : 0, lt2 ? lt2->tm_min : 0);
-					  assets_text_r(txtBuf, TXT_SECTION, clk, rx, 2.0f, THEME_ON_DARK);
+					  assets_text_r(txtBuf, TXT_SECTION, clk, rx, HUD_READOUT_Y, THEME_ON_DARK);
 					  rx -= assets_text_w(txtBuf, TXT_SECTION, clk) + 7.0f; }
 					{ char fs2[12]; snprintf(fs2, sizeof fs2, "%dfps", fps);
-					  assets_text_r(txtBuf, TXT_SECTION, fs2, rx, 2.0f, focScreen == 1 ? hudAcc : THEME_ON_DARK_DIM); }
+					  assets_text_r(txtBuf, TXT_SECTION, fs2, rx, HUD_READOUT_Y, focScreen == 1 ? hudAcc : THEME_ON_DARK_DIM); }
 				}
 			} else if (focScreen == 1) {
 				C2D_DrawRectSolid(0.0f, 0.0f, 0.0f, 320.0f, 4.0f, clrHi);
@@ -4713,7 +5150,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					// (298,66,11,12) / (298,117,11,12) — right-aligned above the bar's right end, the
 					// caption's own baseline, in the handoff's caps/values face.
 					{ char lv[16]; snprintf(lv, sizeof lv, "%d", (v * 100 + 128) / 256);
-					  assets_text_r(txtBuf, TXT_VALUE, lv, x + w, y - 16.0f, g_art.dim); }
+					  assets_text_r(txtBuf, TXT_VALUE, lv, x + w, y - 18.0f, g_art.dim); }   // L4.1: cell 15 above a row that starts at y
 					if (sel) sel_ring(x, y, w, h, 7.0f, 0.0f);
 					break;
 				}
@@ -4744,7 +5181,11 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			// Fixed chrome LAST so it clips the scrolled content: blank the hint band, then the
 			// honest scrollbar (the baked one is REPORT D18).
 			menu_draw_chrome(PT_PLATE[menuTab], menuScroll, dMaxScroll, dContentH);
-			assets_text_r(txtBuf, TXT_SECTION, statusTxt, 310.0f, 231.0f, g_art.dim);
+			// PHASE 19 / SPEC-legible L3.2.2: 231 -> 226. TXT_SECTION's line box grew 13 -> 15 px,
+			// so at 231 the ink ran 235..243 and the last two rows fell off the 240 px screen. At
+			// 226 the ink is 230..238 and the band is exactly UIHIT_MENU_VIEW_H's, which is why
+			// the two constants moved in the same edit.
+			assets_text_r(txtBuf, TXT_SECTION, statusTxt, 310.0f, (float)UIHIT_MENU_VIEW_H, g_art.dim);
 		} else if (tmEff == TOUCH_OFF) {
 			// SPEC-layout L3.2 (REPORT D4): this centred hint sits at y=229 and the virtual gamepad's
 			// START key is at (128,214,64,22) — the glyphs run straight through the button's lower
@@ -4755,7 +5196,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			// in the hint's branch because Smart drew NO affordance at all then (F4 deviation 3);
 			// L6.1/L6.3.5 above give it the same chip PAD has, so the exception is retired — and
 			// screenshot 07 carries no centred hint either.
-			assets_text_c(txtBuf, TXT_SECTION, hintBuf, 160.0f, 229.0f, dim_color(hudAcc, 0.85f));
+			assets_text_c(txtBuf, TXT_SECTION, hintBuf, 160.0f, (float)UIHIT_MENU_VIEW_H, dim_color(hudAcc, 0.85f));
 		}
 
 		{ float wms = (svcGetSystemTick() - wfStart) * 1000.0f / SYSCLOCK_ARM11; if (wms > worstMs) worstMs = wms; }
@@ -4964,16 +5405,26 @@ static void run_settings(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextB
 		C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
 		C2D_TargetClear(top, g_ui.bg); C2D_SceneBegin(top);
 		assets_text(txtBuf, TXT_TITLE, "Settings", 20.0f, 20.0f, g_ui.text);
-		assets_text(txtBuf, TXT_SECTION, "configure before you pick a game", 22.0f, 48.0f, g_ui.dim);
+		// L3.3.3: these two are PROSE, so they leave the mono rung for TXT_BODY (cap 9). FONTS.md
+		// assigns JetBrains Mono to "a readout, code, tag or label" — a sentence is none of those,
+		// and at cap 7 a sentence is the thing the user has to lean in for.
+		assets_text(txtBuf, TXT_BODY, "configure before you pick a game", 22.0f, 48.0f, g_ui.dim);
 		// Phase 14 / I5.2: on an Old 3DS the TILT row stays visible AND adjustable — the preference
 		// must round-trip so a card moved to a New 3DS gives the user what they picked — but the
 		// live level is clamped to 0 by gate rule G2. Say so instead of letting it look broken.
 		// This is the one place s_isN3DS earns its keep (I4.13: run_settings takes no model arg).
 		if (g_prefs.tiltLevel > 0 && !s_isN3DS)
-			assets_text(txtBuf, TXT_SECTION, "Tilt is set, but this is an Old 3DS - it stays flat.",
-			            22.0f, 62.0f, C2D_Color32(0xFF, 0x80, 0x40, 0xFF));
-		assets_text(txtBuf, TXT_SECTION, "L / R  switch tab", 22.0f, 210.0f, g_ui.dim);
-		assets_text(txtBuf, TXT_SECTION, "B  done", 22.0f, 224.0f, g_ui.dim);
+			// y 62 -> 66. L3.2.9 kept 62 while both lines were on the mono rung (13 px apart, ink
+			// 52..60 / 66..74). At TXT_BODY the subtitle's ink runs 53..64, so 62 left three rows
+			// between two lines of prose — legal but visibly cramped. 66 makes the leading exactly
+			// the face's own 18 px line height, and nothing sits under it until the y206 hint.
+			assets_text(txtBuf, TXT_BODY, "Tilt is set, but this is an Old 3DS - it stays flat.",
+			            22.0f, 66.0f, C2D_Color32(0xFF, 0x80, 0x40, 0xFF));
+		// L3.2.9: the two hint lines come up 4 and 2 rows for the taller cell — at 210/224 the
+		// second one's ink ran 228..236 and its line box off the bottom of the screen. They STAY
+		// mono: a key legend is exactly what FONTS.md assigns to JetBrains Mono (L3.3.4).
+		assets_text(txtBuf, TXT_SECTION, "L / R  switch tab", 22.0f, 206.0f, g_ui.dim);
+		assets_text(txtBuf, TXT_SECTION, "B  done", 22.0f, 222.0f, g_ui.dim);
 
 		C2D_TargetClear(bot, g_ui.bg); C2D_SceneBegin(bot);
 		menu_draw_plate(PT_PLATE[tab], scroll);
@@ -5001,7 +5452,7 @@ static void run_settings(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextB
 				assets_text_c(txtBuf,TXT_BUTTON,"+",x+w-10,y+2,g_art.text); float bx=x+28,bw=w-56; ui_fill(bx,y+h/2-3,bw,6,g_ui.line,3.0f);
 				if(v>0)ui_fill(bx,y+h/2-3,bw*v/256.0f,6,g_ui.acc,3.0f);
 				{ char lv[16]; snprintf(lv,sizeof lv,"%d",(v*100+128)/256);   // L4: the level, not a channel tag
-				  assets_text_r(txtBuf,TXT_VALUE,lv,x+w,y-16.0f,g_art.dim); }
+				  assets_text_r(txtBuf,TXT_VALUE,lv,x+w,y-18.0f,g_art.dim); }   // L4.1
 				if(sel){sel_ring(x,y,w,h,7.0f,0.0f);} break; }
 			// P2.3.2 — the LINK tab brought four more PK_BTN actions onto this screen, and the old
 			// two-way ternary would have labelled every one of them "Preview Smart". A button whose
@@ -5041,13 +5492,22 @@ static void run_settings(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextB
 		// At 215 the ink is 218..224: one px below the last row (bottom edge 214) and three clear
 		// of the repaint. test_typography T11 is the guard.
 		if (tab == 4)
-			assets_text(txtBuf, TXT_SECTION, SET_LINK_DISABLED_NOTE, 93.0f,
+			assets_text(txtBuf, TXT_BODY, SET_LINK_DISABLED_NOTE, 93.0f,
 			            (float)(SET_LINK_NOTE_Y - scroll), g_ui.dim);
 		// Fixed chrome, drawn after the content so it clips it; the Done chip is drawn at its HIT
 		// rect (§I2.4.7) and sits INSIDE the blanked hint band, so it goes last of all.
 		menu_draw_chrome(PT_PLATE[tab], scroll, maxScroll, contentH);
 		ui_fill((float)DONE.x, (float)DONE.y, (float)DONE.w, (float)DONE.h, g_ui.acc, 5.0f);
-		assets_text_c(txtBuf, TXT_BUTTON, "Done", DONE.x + DONE.w / 2.0f, DONE.y + 1.0f, g_ui.ink);
+		// PHASE 19 FIX PASS (verify finding V1/C2): the label is centred by INK, not by a hand-typed
+		// `+ 1.0f` that was tuned for the phase-18 15 px cell. TXT_BUTTON's cell is 18 px with
+		// inkTop 5, so at y = DONE.y+1 = 225 "Done"'s ink landed on rows 230..238 inside a pill that
+		// occupies 224..237 — six blank rows above the glyphs and the last row hanging off the
+		// bottom edge (captured: tools/emutest/runs/p19-verify/shots/DEFECT-done-chip-zoom.png).
+		// typo_center_y(TXT_BUTTON, 224, 14) = 220 -> ink 225..236, inside. This site was missed by
+		// L3.2.7 only because it is a hand-rolled ui_fill + assets_text_c rather than assets_button.
+		// T18's centring table now carries the 14 px Done box so it cannot drift back.
+		assets_text_c(txtBuf, TXT_BUTTON, "Done", DONE.x + DONE.w / 2.0f,
+		              typo_center_y(TXT_BUTTON, (float)DONE.y, (float)DONE.h), g_ui.ink);
 		C3D_FrameEnd(0);
 	}
 	#undef SETSAVE
