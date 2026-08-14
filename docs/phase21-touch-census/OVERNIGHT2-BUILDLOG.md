@@ -476,3 +476,25 @@ drift headline; (3) LG: 10/13 anchors VERIFIED [exact] + the yesNoTask-bypass pr
 rec (add Task_CallYesOrNoCallback 0x080BF548) + FULLUI/LK_BUY harvest; (4) Sapphire smoke
 green. Deliverables: LANE-B-RS.md, LANE-B-LG.md, evidence/{ruby,rs-coop,leafgreen,
 sapphire}/ (36 captures), 4 commits (8d797df, f8f78cd-carried, 35105be, 997ede0, + this).
+
+## Lane A Entry 6 — EM dex adapter live (boot 20260814-024742) + FR mart attempts
+
+DEX (tier L-B): touch-tap on the START menu's POKEDEX row opened the dex; **GCTX_LIST /
+LK_DEX resolved live** (gdb ctx=12 kind=4; evidence/impl/EM-dex-list-touch-opened.bottom.png);
+drag scroll moved the dex's own cursor (dexSelected 0->1 read live; dexCount=202); the
+**SELECT-SEARCH footer chip tap opened the search UI** (the SELECT pulse working —
+EM-dex-search-chip-select.bottom.png). L21 derivation samples banked (count/selected/
+initialVOffset/listVOffset via g_touchDbg+0x5C..0x68; note: the +0x62E listVOffset read 512
+at one sample — the struct-offset walk past monSpriteIds needs a re-check before any
+relative-tap formula ships, exactly why L21 keeps relative taps disabled). FINDING (same
+class as the pocket-dot one): the dex ignores scroll-key edges landing inside its per-row
+scroll anim — drag edges under-deliver; the dex prefers HELD keys (fling path). Follow-up:
+pace LK_DEX drag edges ~8-10 frames or convert drag-to-steer for this screen.
+
+FR mart (LK_BUY/LK_QTY live proof): attempt #1's first tap fired during the QUEST-LOG
+replay window (FR continues into a cb2-blind playback — VISITED-firered.md:82 warned) and
+the route diverged (player walked to the 2F direct-corner desk instead of the 1F stairs).
+Attempt #2 restaged with +900 frames of tap delay + an idempotent stairs re-tap (in flight
+as this entry is written). FR spawn recon banked: map (13,1) = Indigo Plateau Center 2F,
+player (3,4); 1F mart clerk at (0,7), stairs warp (1,6)->1F(1,14) (pret map jsons, this
+session's scratchpad frmaps/).
