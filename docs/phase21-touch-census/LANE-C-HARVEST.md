@@ -341,3 +341,56 @@ Not renamed, not deleted, not re-graded — it is another lane's file and anothe
 here so the next audit can settle it, and as the reason this lane hashed its own seven captures
 before writing a word about them (all seven distinct; the two Hall-of-Fame frames are deliberately
 one bottom-screen and one top-screen shot of two different boots).
+
+---
+
+# LANE C2 (phase 25) — the architectural gap: giving `touch.c` a regression barrier
+
+_Session 2026-08-14/15, same tree (main), instance **a**. Continues lane C1 above. Brief: (1)
+finish what C1 left owed, (2) close audit finding **O2** — "no host suite compiles
+`source/touch.c`", so six of lane A's seven phase-24 fixes have ZERO regression cover — by
+EXTRACTING what is genuinely pure the way `touchgeom.c` / `uigeom.c` / `uihit.c` / `fieldpath.c`
+were extracted, and (3) prove the extraction behaviour-preserving on the emulator, not just on
+the host._
+
+## Entry 7 — the baseline, and what "pure" actually means in `touch.c`
+
+**Baseline gate, re-run from this tree before a line was written** (project root, so
+`test_fieldtrav` opens `roms/emerald.gba` and keeps TEST 15/16 — the audit's own methodology
+note): 16 suites, **0 failures**, celiolink 1259 · control 6940 · diag 376 · fieldpath **1808** ·
+fieldtrav 1210 · netlink 66 · peersprite 62078 · presence 61376 · profiles 2546 · theme 83444 ·
+tilt 1756 · touchgeom 371892 · trace_replay 58 (4 skips) · typography 1419 · uigeom 18332 ·
+uihit 1834 = **616 394 checks**. That reproduces lane C1's close-out exactly, so anything that
+moves from here is this lane's doing.
+
+### The desk pass: which of the seven phase-24 fixes can be made pure, and which cannot
+
+`source/touch.c` is 2 539 lines and cannot be host-compiled: it includes `<3ds.h>`, `citro2d.h`,
+`gbacore.h` and draws chips through `C2D_TextBuf`. That is not an accident of style — the file is
+the *seam* between the 3DS UI, the emulator core and the pure planners. So the question is not
+"can touch.c be tested" but "what DECISIONS live inside it that are functions of state alone".
+
+| # | phase-24 fix | commit | pure? |
+|---|---|---|---|
+| 1 | level-triggered ANSWER cadence | `2dde03e` | **yes** — a function of (ctx, phase frames, presses so far) |
+| 2 | field-A (DLG) cadence | `b0ae8d9` | **yes** — (textDlg, ctx, frames) |
+| 3 | closed-loop FACE | `70f963d` | **yes** — (the game's facing, the move's dir, frames) |
+| 4 | warp/leg-boundary ARMING | `e1c6041` | **yes** — (live map vs the leg's map, the plan's D map) |
+| 5 | layout-stable replan | `2fa4976` | **yes** — (the two dims reads, across frames) |
+| 6 | STEP-warp terminal detector | `a1cbdca` | **yes** — the watcher is a comparison, not a read |
+| 7 | `gMapHeader` is EWRAM | `e11b620` | already covered (`fieldtrav` TEST 16, mutation-proven) |
+
+The reads those decisions close their loops on (`gObjectEvents[0].facingDirection`, the surf bit,
+the object slot, `gBackupMapLayout`'s dims) are NOT pure and stay in `touch.c`; what is pure is
+what the executor DOES with them. So two extractions, both in the house shape:
+
+- **`source/progseq.{c,h}`** — the INTERACT sequencer (`prog_update`'s phase machine): the abort
+  ladder, WALK/FACE/A/DLG/YESNO/ANSWER/DONE, every budget and cadence. Fixes 1, 2, 3.
+- **`source/excseq.{c,h}`** — the EXCURSION leg machine: the boundary watcher, the arm/settle
+  protocol, the dims-stability rule and the give-up. Fixes 4, 5, 6.
+
+Both take the world as a struct of already-read values and hand back an ACTION; `touch.c` keeps
+every read, every write and every BFS. The one thing that must not happen is a token test, so the
+bar this lane sets itself: **the extracted machines must be the SHIPPED ones** (touch.c calls
+them; there is no second copy), and the suites must drive them frame by frame through the exact
+sequences the live phase-24 runs produced.
