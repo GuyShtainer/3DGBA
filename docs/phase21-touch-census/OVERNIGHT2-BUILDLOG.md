@@ -255,3 +255,46 @@ FPS TAX (renderSeq deltas over ~20 s, display asleep, GBA-core HUD in parens):
 Ops notes for the lanes: `run --instance b <tool> …` everywhere; B's gdb needs its own
 `gdbio resume`; stage via `--stage-roms NAME[,NAME]` (writes recent.bin, movie boots
 land on the resume prompt); NEVER `open` az-b/Azahar.app by hand without -n.
+
+## Entry 8 — LANE B: RUBY FIRST BOOT (instance b) — AXVE profile LIVE for the first time
+
+Boot 2026-08-14 ~01:36Z: `run --instance b azctl boot --gdb --movie boot_resume.ctm
+--wipe-netlogs --stage-roms ruby` (NOTE: `--fresh-sd-fixtures` is the dual-gba tier-B
+path and FAILS on instance b — no dual-gba originals there; --stage-roms alone is the
+correct recipe). Lane-B hermetic setup: ELF+3dsx SNAPSHOTTED to scratchpad laneb/ and
+every azctl/gdbio call runs with EMUTEST_ELF/EMUTEST_APP pointing at the snapshot, so a
+Lane-A rebuild of the main tree cannot skew instance-b symbol reads. gs statics re-derived
+from the snapshot (SHIFTED vs the census build — s_gsLog 0x00530a7c→0x00531a7c, s_lastCb2
+0x00530a64→0x00531a64, s_lastCtx 0x0052342c→0x0052442c, s_gsLogN 0x00531a60; nm size of
+s_gsLog 0x27000 = 1024×156 = entry layout unchanged). Query tool: scratchpad
+laneb/gsqb.py (instance-b port, resolves on pokeruby_rev2.sym).
+
+First-ever AXVE execution, all live-read [exact] on `pokeruby_rev2.sym`:
+- control log header `p1=AXVE` -> the profile ROW MATCHED on first boot.
+- GF intro   cb2 0x0813B7B8 `MainCB2_Intro` [exact]
+- Title      cb2 0x0807C474 `MainCB2` [exact] (title_screen module — neighborhood
+  CB2_InitTitleScreen 0x0807C110 / Task_TitleScreenPhase1 0x0807C48C)
+- Main menu  cb2 0x080096C4 `CB2_MainMenu` [exact] — shows the 600h save (GUY, 614:45,
+  dex 259, 8 badges)
+- Overworld  cb2 0x080543C4 `CB2_Overworld` [exact], ctx=field, sb1V=1, px=10,py=2,
+  obj=17,9 (= px+7/py+7 — the MAP_OFFSET relation holds => sb1ptr AND mapObjects both
+  correct live), map=13,6 (a Pokemon Center interior), face read working.
+- D4 channel operational on AXVE (5-token script picked up + completed).
+- ctx stays `field` on intro/title/menu as EXPECTED — the RS cb2Title/cb2FullUi lists
+  are empty (gamestate.c:653); the four cb2 values above are the promotion candidates.
+Captures: laneb/rb_boot1|rb_title|rb_title2|rb_overworld (to be curated into
+docs/phase21-touch-census/evidence/ruby/).
+
+## Entry 9 — LANE B: Ruby solo pass COMPLETE — battleMainCb 0x0800F808 VERIFIED LIVE
+
+Wild Linoone on Route 121: cb2 -> 0x0800F808 `BattleMainCB2` [exact] and the ctx gate
+sequence b.oth -> b.act -> b.move -> b.act -> field tracked the on-screen truth exactly —
+the ONE shipped RS ROM anchor plus the whole battle sub-gate chain
+(actionCursor/moveCursor/ctrlFuncs/battlerPos/…) are live-proven on the user's-rev ROM.
+Party/bag/START correctly degrade to field (RS zeroed pointers — no false positives).
+RS cb2 harvest for future promotion (all [exact]): intro 0x0813B7B8 MainCB2_Intro, title
+0x0807C474 (title MainCB2), main menu 0x080096C4 CB2_MainMenu, overworld 0x080543C4
+CB2_Overworld, party 0x0806AEFC CB2_PartyMenuMain (+task HandleDefaultPartyMenu
+0x08089CF4), bag 0x080A3138 (+task 0x080A50E8). Full verdict table + ops routes:
+LANE-B-RS.md §1. 12 captures -> evidence/ruby/. Next: ruby+sapphire co-op boot (the
+AXVE-vs-AXPE universe-gate empirical answer).
