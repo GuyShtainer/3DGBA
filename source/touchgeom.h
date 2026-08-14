@@ -133,3 +133,58 @@ int storgeom_hit(int gx, int gy, int inParty, int* pos);
 // inside the box so a step can never exit the grid except via the modeled TITLE/BUTTONS edges.
 enum { SN_NONE = 0, SN_UP, SN_DOWN, SN_LEFT, SN_RIGHT, SN_START };
 int stornav_step(int curArea, int curPos, int tgtArea, int tgtPos);
+
+// ================================ FAM-DLG — TAP-ADVANCE (phase 23) ==============================
+// TOUCH-PLAN.md §2 FAM-DLG, the residual killer's second half. Phase 22.0 promoted ~40 screens out
+// of the GCTX_OVERWORLD fall-through into GCTX_TITLE / GCTX_FULLUI, which stopped the walk-key
+// LEAK — but those two contexts hit touch.c's `default:` and inject NOTHING, so every dialog,
+// cutscene, PSA, Hall of Fame, credits, TV, quest-log, evolution and egg-hatch screen is currently
+// touch-DEAD. This family is the one that makes them usable, and it is deliberately the whole of
+// what a cursorless screen can honestly support:
+//
+//   tap  (clean, <= DLGGEOM_SLOP_PX of travel, any duration below the hold)  -> A pulse
+//   hold (finger down DLGGEOM_HOLD_FRAMES unmoved)                           -> B, level-triggered
+//   drag (> slop)                                                            -> D-pad edges
+//
+// THREE design calls, all recorded here because they are taste, not fact:
+//
+//  1. HOLD = B, not "hold = A to speed text up". The plan's §FAM-DLG picked B and the reasons are
+//     that B is the only way a pointer can DECLINE (a yes/no default), CANCEL an evolution, or
+//     back out of a viewer — and A is already reachable by tapping repeatedly, which is what a
+//     player does to advance text anyway. `hold` is level-triggered (the seam is an additive
+//     per-frame mask, COVERAGE §5), so it is a true held button, not a pulse train.
+//     Open question 5 in TOUCH-PLAN is therefore ANSWERED-BY-DEFAULT here, not by the user.
+//
+//  2. DRAG = DIRECT MANIPULATION (drag right emits RIGHT), the OPPOSITE of FAM-LIST's
+//     content-follows-finger rule (there, drag DOWN emits UP because the list scrolls under the
+//     finger). The two are not inconsistent: FAM-LIST screens scroll CONTENT under a fixed
+//     viewport, whereas nearly every screen in the FULLUI class that reacts to the D-pad at all
+//     moves a CURSOR (fly/region map, options rows, PokeNav ring, FR storage hand, wall clock) —
+//     and a cursor should follow the finger. Screens that ignore the D-pad (dialogs, cutscenes,
+//     credits) are unaffected either way, which is why this is safe as the class-wide default.
+//
+//  3. The EDGE ZONES are gated on a PER-SCREEN pager list (GameProfile.cb2Pager), never
+//     class-wide. On a dialog, a tap near the screen edge MUST still be A — turning it into LEFT
+//     would read as "the box didn't advance". Only screens where LEFT/RIGHT is a real page/value
+//     verb opt in (v1: the summary screen and the options menu, both games).
+#define DLGGEOM_SLOP_PX      6   // tap-vs-drag one-way latch (the shared UIHIT_DRAG_PX convention)
+#define DLGGEOM_HOLD_FRAMES 30   // ~0.5 s at 60 fps before an unmoved finger becomes a held B
+#define DLGGEOM_DRAG_PX     14   // one D-pad edge per this many px of drag (the FAM-LIST cadence)
+#define DLGGEOM_EDGE_PX     44   // pager side-zone width, px (18% of the 240 px frame per side)
+
+// What a CLEAN tap (no drag, released before the hold) resolves to.
+enum {
+	DLGH_ADVANCE = 0,   // A pulse — the class default, and the only result on a non-pager screen
+	DLGH_PAGE_PREV,     // LEFT  pulse — pager screens only, left edge zone
+	DLGH_PAGE_NEXT      // RIGHT pulse — pager screens only, right edge zone
+};
+// `pager` = 1 when the live cb2 is in this game's GameProfile.cb2Pager list. Off-frame taps never
+// reach here (touch.c gates on gvalid), so every (gx,gy) inside 240x160 classifies.
+int dlggeom_tap(int gx, int gy, int pager);
+
+// Drag -> the D-pad edge for an accumulated (dx,dy) since the last emitted notch, or DLGD_NONE
+// when neither axis has travelled DLGGEOM_DRAG_PX yet. The dominant axis wins outright (a
+// diagonal drag never emits two keys in one frame — a chord would move two cursors at once on
+// screens that read both axes). Direct manipulation: +dx -> RIGHT, +dy -> DOWN.
+enum { DLGD_NONE = -1, DLGD_RIGHT = 0, DLGD_LEFT = 1, DLGD_DOWN = 2, DLGD_UP = 3 };
+int dlggeom_drag_dir(int dx, int dy);

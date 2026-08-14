@@ -205,3 +205,32 @@ int stornav_step(int curArea, int curPos, int tgtArea, int tgtPos) {
 		return SN_NONE;
 	}
 }
+
+// ================================ FAM-DLG — TAP-ADVANCE (phase 23) ==============================
+// See touchgeom.h for the three design calls (hold=B, drag=direct-manipulation, edge zones gated
+// on the per-screen pager list). Stateless, like everything else in this file — touch.c owns the
+// frame counters and the accumulated drag delta.
+
+int dlggeom_tap(int gx, int gy, int pager) {
+	(void)gy;   // the side zones are FULL-HEIGHT bands on purpose: the screens that opt in (summary,
+	            // options) draw content edge to edge, so an x-only rule has no dead corner to
+	            // explain and the same tap means the same thing wherever the finger lands.
+	if (pager) {
+		if (gx <  DLGGEOM_EDGE_PX)        return DLGH_PAGE_PREV;
+		if (gx >= 240 - DLGGEOM_EDGE_PX)  return DLGH_PAGE_NEXT;
+	}
+	return DLGH_ADVANCE;
+}
+
+int dlggeom_drag_dir(int dx, int dy) {
+	int ax = (dx < 0) ? -dx : dx;
+	int ay = (dy < 0) ? -dy : dy;
+	// Dominant axis wins OUTRIGHT (>=, so a perfect diagonal resolves horizontally rather than
+	// emitting nothing): one key edge per notch, never a two-key chord.
+	if (ax >= ay) {
+		if (ax < DLGGEOM_DRAG_PX) return DLGD_NONE;
+		return (dx > 0) ? DLGD_RIGHT : DLGD_LEFT;
+	}
+	if (ay < DLGGEOM_DRAG_PX) return DLGD_NONE;
+	return (dy > 0) ? DLGD_DOWN : DLGD_UP;
+}

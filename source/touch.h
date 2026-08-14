@@ -47,7 +47,11 @@ typedef struct {
 	// --- instrumentation passthrough (LOGGING ONLY; never gates touch) — the screen fingerprint the touch
 	// log records so NOT-YET-DETECTED contexts (map/PokeNav/Pokemon PC/move-learn/intro/Battle Frontier)
 	// that fall through to ctx=overworld/none are identifiable by cb2 + active-task pointers. ---
-	uint32_t cb2;             // raw gMain.callback2 (Thumb stripped) — the undetected-screen fingerprint
+	uint32_t cb2;             // raw gMain.callback2 (Thumb stripped) — the undetected-screen fingerprint.
+	                          //   PHASE 23: no longer logging-only. FAM-DLG compares it against
+	                          //   GameProfile.cb2Pager to decide whether the left/right EDGE ZONES
+	                          //   are live on this screen (touchgeom.h). Compare-only, never
+	                          //   dereferenced, and a 0/unknown cb2 simply means "not a pager".
 	bool     ctxResolved;     // ctx from a POSITIVE menu/battle match (true) vs the bare overworld fall-through (false)
 	uint8_t  nTask;           // count of active-task func ptrs in taskFp[]
 	uint32_t taskFp[8];       // active gTasks func pointers (Thumb stripped, sorted) — disambiguate cb2-ambiguous screens
@@ -172,6 +176,19 @@ typedef struct {
 	int32_t  stTgtArea;      // +0xA4  the armed navigation target (-1 = idle)
 	int32_t  stTgtPos;       // +0xA8
 	uint32_t stOccupancy;    // +0xAC  30-bit hasSpecies mask of the current box (bit = slot)
+	// --- phase 23 FAM-DLG (tap-advance) mirror. APPENDED, so every offset above is unchanged and
+	// the phase-22 harness scripts keep working verbatim. This family writes NO game RAM, so unlike
+	// every other family there is no "the cursor moved" channel to read — the proof that a tap
+	// registered has to come from the app side, which is what these five counters are. They are
+	// MONOTONIC per session (dlg_reset deliberately leaves them alone) so a proof arc reads them
+	// once before and once after and the DELTA is the evidence; `dlgPager` says which rule the
+	// screen under the finger is running, which is how a "why did my tap turn the page" is
+	// diagnosed without a rebuild. LOGGING ONLY — nothing reads them back.
+	int32_t  dlgTaps;        // +0xB0  clean taps that became an A pulse
+	int32_t  dlgHolds;       // +0xB4  holds that became a level-triggered B
+	int32_t  dlgPages;       // +0xB8  edge-zone taps that became LEFT/RIGHT (pager screens only)
+	int32_t  dlgSteps;       // +0xBC  drag notches that became a D-pad edge
+	int32_t  dlgPager;       // +0xC0  1 = the live cb2 is in this game's cb2Pager whitelist
 } TouchDbg;
 extern TouchDbg g_touchDbg;
 

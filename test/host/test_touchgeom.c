@@ -329,6 +329,74 @@ static void test_storage_nav(void) {
 	CHECK(stornav_step(0, 5, 1, 2) == SN_NONE, "box -> party is unroutable (handler drops)");
 }
 
+// TEST 11 — phase 23 FAM-DLG tap classification (touchgeom.h dlggeom_tap). The whole family's
+// safety rests on ONE property: on a NON-pager screen every px of the 240x160 frame is A. A single
+// px that resolved to LEFT would read, on a dialog, as "the box didn't advance" — so this is swept
+// exhaustively rather than spot-checked.
+static void test_dlg_tap(void) {
+	puts("TEST 11: FAM-DLG tap zones (exhaustive over the frame)");
+	int bad = 0;
+	for (int y = 0; y < 160; y++)
+		for (int x = 0; x < 240; x++)
+			if (dlggeom_tap(x, y, 0) != DLGH_ADVANCE) bad++;
+	CHECK(bad == 0, "non-pager: every px is ADVANCE (%d exceptions)", bad);
+
+	// Pager: three full-height bands, boundaries exactly at DLGGEOM_EDGE_PX and 240-EDGE_PX.
+	int wrong = 0;
+	for (int y = 0; y < 160; y++)
+		for (int x = 0; x < 240; x++) {
+			int want = (x < DLGGEOM_EDGE_PX) ? DLGH_PAGE_PREV
+			         : (x >= 240 - DLGGEOM_EDGE_PX) ? DLGH_PAGE_NEXT : DLGH_ADVANCE;
+			if (dlggeom_tap(x, y, 1) != want) wrong++;
+			else g_checks++;   // counted, silent
+		}
+	CHECK(wrong == 0, "pager: the three bands are exact (%d exceptions)", wrong);
+	// The boundary pixels themselves, named (a fencepost here silently shrinks the centre).
+	CHECK(dlggeom_tap(DLGGEOM_EDGE_PX - 1, 80, 1) == DLGH_PAGE_PREV, "x=EDGE-1 is PREV");
+	CHECK(dlggeom_tap(DLGGEOM_EDGE_PX,     80, 1) == DLGH_ADVANCE,   "x=EDGE is ADVANCE");
+	CHECK(dlggeom_tap(240 - DLGGEOM_EDGE_PX - 1, 80, 1) == DLGH_ADVANCE,   "x=239-EDGE is ADVANCE");
+	CHECK(dlggeom_tap(240 - DLGGEOM_EDGE_PX,     80, 1) == DLGH_PAGE_NEXT, "x=240-EDGE is NEXT");
+	// The centre band must be the majority of the frame — an edge zone that ate the screen would
+	// still pass the band test above but would be a design bug.
+	CHECK(240 - 2 * DLGGEOM_EDGE_PX >= 120, "centre band keeps >= half the frame");
+}
+
+// TEST 12 — phase 23 FAM-DLG drag direction. Two properties matter: the dominant axis wins
+// OUTRIGHT (never a two-key chord, which would move two cursors at once), and the enum order is
+// pinned to touch.c's s_keyDir table {RIGHT, LEFT, DOWN, UP} — a silent reorder there would make
+// every drag go the wrong way with no compile error.
+static void test_dlg_drag(void) {
+	puts("TEST 12: FAM-DLG drag direction + the s_keyDir enum contract");
+	const int T = DLGGEOM_DRAG_PX;
+	CHECK(DLGD_RIGHT == 0 && DLGD_LEFT == 1 && DLGD_DOWN == 2 && DLGD_UP == 3,
+	      "enum order matches touch.c s_keyDir {RIGHT,LEFT,DOWN,UP}");
+	CHECK(dlggeom_drag_dir(0, 0) == DLGD_NONE, "no movement -> NONE");
+	CHECK(dlggeom_drag_dir(T - 1, 0) == DLGD_NONE, "just under threshold -> NONE");
+	CHECK(dlggeom_drag_dir(T, 0) == DLGD_RIGHT, "+x at threshold -> RIGHT");
+	CHECK(dlggeom_drag_dir(-T, 0) == DLGD_LEFT, "-x at threshold -> LEFT");
+	CHECK(dlggeom_drag_dir(0, T) == DLGD_DOWN, "+y -> DOWN (screen y grows downward)");
+	CHECK(dlggeom_drag_dir(0, -T) == DLGD_UP, "-y -> UP");
+	CHECK(dlggeom_drag_dir(T, T) == DLGD_RIGHT, "perfect diagonal resolves horizontally, not NONE");
+	CHECK(dlggeom_drag_dir(T, -T) == DLGD_RIGHT, "diagonal up-right -> RIGHT");
+	CHECK(dlggeom_drag_dir(3, 40) == DLGD_DOWN, "dominant axis wins even when the minor axis is 0-crossing");
+	CHECK(dlggeom_drag_dir(40, 3) == DLGD_RIGHT, "and symmetrically");
+	// The minor axis NEVER matters once the major one is decided: sweep it.
+	int bad = 0;
+	for (int minor = -(T - 1); minor <= T - 1; minor++) {
+		if (dlggeom_drag_dir(T + 5, minor) != DLGD_RIGHT) bad++;
+		if (dlggeom_drag_dir(minor, T + 5) != DLGD_DOWN) bad++;
+		else g_checks++;
+	}
+	CHECK(bad == 0, "minor axis never flips or suppresses the dominant one (%d exceptions)", bad);
+	// Sub-threshold on BOTH axes is always NONE — the gesture accumulator must keep accumulating.
+	int leaks = 0;
+	for (int dx = -(T - 1); dx <= T - 1; dx++)
+		for (int dy = -(T - 1); dy <= T - 1; dy++)
+			if (dlggeom_drag_dir(dx, dy) != DLGD_NONE) leaks++;
+			else g_checks++;
+	CHECK(leaks == 0, "both axes sub-threshold -> NONE, always (%d leaks)", leaks);
+}
+
 int main(void) {
 	test_colcount();
 	test_validity();
@@ -340,6 +408,8 @@ int main(void) {
 	test_pocket_tabs();
 	test_storage_rects();
 	test_storage_nav();
+	test_dlg_tap();
+	test_dlg_drag();
 	printf("\n=== %d checks, %d failures ===\n", g_checks, g_fails);
 	return g_fails ? 1 : 0;
 }

@@ -1299,6 +1299,91 @@ static u16 storage_update(const TouchSmart* sm, bool touching, bool newPress, bo
 	}
 }
 
+// ===================== FAM-DLG: TAP-ADVANCE (phase 23, lane B) ===============
+// TOUCH-PLAN.md §2 FAM-DLG. The gesture rules and the three taste calls live in touchgeom.h; this
+// is the state machine and the only place that touches the bus (it doesn't — the family is 100%
+// key injection, no RAM writes at all, which is what makes it safe to point at ~40 screens whose
+// internals were never harvested).
+//
+// WHY IT IS SAFE TO POINT AT AN UNKNOWN SCREEN. Every context with a real handler is matched
+// BEFORE this one in game_read (naming / list / storage / bag / party / battle / fieldmenu all win
+// on a more specific test), so a screen only reaches FAM-DLG when nothing else claimed it. And the
+// three verbs are the three a Gen-3 screen cannot misinterpret: A advances or confirms, B backs
+// out, the D-pad moves whatever cursor is there. There is no RAM write to land on the wrong
+// struct, and there is no walk-key leak — that was the whole point of phase 22.0's promotion.
+static int  s_dTick = 0;                      // frames the finger has been down (0 = up)
+static bool s_dDown = false, s_dDrag = false, s_dHeld = false;
+static int  s_dDownX, s_dDownY, s_dLastX, s_dLastY;
+static int  s_dPulse = 0; static u16 s_dPulseKey = 0;   // 2-frame edge: dead frame, then the key
+static int  s_dTaps = 0, s_dHolds = 0, s_dPages = 0, s_dSteps = 0;   // PROOF counters (g_touchDbg)
+static void dlg_reset(void) {
+	s_dTick = 0; s_dDown = false; s_dDrag = false; s_dHeld = false;
+	s_dPulse = 0; s_dPulseKey = 0;
+	// the four counters are deliberately NOT cleared: they are the gdb proof channel and must
+	// survive the ctx changes a proof arc walks through (they only ever reset with the session).
+}
+
+// `pager` = the live cb2 is in this game's cb2Pager whitelist (gamestate.h). Compare-only.
+static int dlg_is_pager(const TouchSmart* sm) {
+	if (!sm->prof || !sm->cb2) return 0;
+	for (int i = 0; i < GS_N_PAGER; i++)
+		if (sm->prof->cb2Pager[i] && sm->cb2 == sm->prof->cb2Pager[i]) return 1;
+	return 0;
+}
+
+// `allowB` = 0 on GCTX_TITLE. On the pre-save screens B is either inert (intro, title) or an
+// "unselect" the main menu handles anyway, and a hold there is far more likely to be a player
+// resting a finger on a screen that is mid-fade than a deliberate cancel — so TITLE gets tap=A and
+// nothing else, which is exactly what TOUCH-PLAN rows A1/A2 asked for.
+static u16 dlg_update(const TouchSmart* sm, bool touching, bool newPress, bool gvalid,
+                      int gx, int gy, int allowB) {
+	if (s_dPulse > 0) {                       // finish a queued edge (dead frame, then 1 key frame)
+		u16 k = (s_dPulse == 1) ? s_dPulseKey : 0;
+		if (--s_dPulse == 0) s_dPulseKey = 0;
+		return k;
+	}
+	int pager = dlg_is_pager(sm);
+	if (newPress && gvalid) {
+		s_dDown = true; s_dDrag = false; s_dHeld = false; s_dTick = 0;
+		s_dDownX = s_dLastX = gx; s_dDownY = s_dLastY = gy;
+	}
+	if (touching && s_dDown) {
+		s_dTick++;
+		if (gvalid) {
+			if (!s_dDrag && (abs(gx - s_dDownX) > DLGGEOM_SLOP_PX || abs(gy - s_dDownY) > DLGGEOM_SLOP_PX))
+				s_dDrag = true;
+			if (s_dDrag) {
+				int d = dlggeom_drag_dir(gx - s_dLastX, gy - s_dLastY);
+				if (d != DLGD_NONE) {
+					s_dLastX = gx; s_dLastY = gy; s_dSteps++;
+					return s_keyDir[d];       // {RIGHT,LEFT,DOWN,UP} — dlggeom's enum order, pinned
+				}                             // by test_touchgeom TEST 17
+				return 0;
+			}
+		}
+		// unmoved and still down: the HOLD verb. Level-triggered, so it is a real held B.
+		if (!s_dDrag && allowB && s_dTick >= DLGGEOM_HOLD_FRAMES) {
+			if (!s_dHeld) { s_dHeld = true; s_dHolds++; }
+			return 1 << GBAKEY_B;
+		}
+		return 0;
+	}
+	if (!touching && s_dDown) {                // released
+		s_dDown = false;
+		int wasDrag = s_dDrag, wasHeld = s_dHeld;
+		s_dDrag = false; s_dHeld = false; s_dTick = 0;
+		if (!wasDrag && !wasHeld) {            // a CLEAN tap — the only thing that becomes A
+			switch (dlggeom_tap(s_dDownX, s_dDownY, pager)) {
+			case DLGH_PAGE_PREV: s_dPulseKey = 1 << GBAKEY_LEFT;  s_dPages++; break;
+			case DLGH_PAGE_NEXT: s_dPulseKey = 1 << GBAKEY_RIGHT; s_dPages++; break;
+			default:             s_dPulseKey = 1 << GBAKEY_A;     s_dTaps++;  break;
+			}
+			s_dPulse = 2;                      // this frame 0, next frame the key => a clean edge
+		}
+	}
+	return 0;
+}
+
 // ===================== touch-event instrumentation log =======================
 // Decode a GBA key mask to a short string (bit order A0 B1 Sel2 St3 Right4 Left5 Up6 Down7 R8 L9).
 static void touch_keystr(uint16_t k, char* out, int cap) {
@@ -1485,6 +1570,11 @@ static void touch_dbg_stamp(const TouchSmart* sm, u16 ret) {
 	uint32_t seq = d->seq + 1;
 	memset(d, 0, sizeof *d);
 	d->seq = seq; d->ctx = sm->ctx; d->lastKeys = ret;
+	// phase 23 FAM-DLG: stamped FIRST, above every early return, because the tap-advance family is
+	// the one that runs on screens where `p` may carry nothing else worth reading — its proof
+	// channel must survive exactly the situations the other mirrors bail out of.
+	d->dlgTaps = s_dTaps; d->dlgHolds = s_dHolds; d->dlgPages = s_dPages; d->dlgSteps = s_dSteps;
+	d->dlgPager = dlg_is_pager(sm);
 	const GameProfile* p = sm->prof;
 	if (!sm->core || !p) return;
 	if (sm->ctx == GCTX_NAMING && p->namingPtr) {
@@ -1551,7 +1641,7 @@ static void touch_dbg_stamp(const TouchSmart* sm, u16 ret) {
 }
 
 // ================================ dispatch ==================================
-static void all_reset(void) { battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset(); prog_reset(); }
+static void all_reset(void) { battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset(); dlg_reset(); prog_reset(); }
 
 u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, bool gvalid,
                  const TouchSmart* sm) {
@@ -1588,6 +1678,10 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 	}
 
 	u16 ret = 0;
+	// PHASE 23 / FAM-DLG: one line instead of adding dlg_reset() to nine per-case reset lists — the
+	// tap-advance state must die the moment the screen stops being a FAM-DLG screen (a half-finished
+	// hold must never leak a B into the battle menu the dialog just opened).
+	if (sm->ctx != GCTX_FULLUI && sm->ctx != GCTX_TITLE) dlg_reset();
 	switch (sm->ctx) {
 	case GCTX_BATTLE_ACTION:
 	case GCTX_BATTLE_MOVE: {
@@ -1656,6 +1750,19 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 	case GCTX_BATTLE_OTHER:
 		all_reset();
 		ret = touching ? (1 << GBAKEY_A) : 0;                      // battle dialog/animation: tap = advance
+		break;
+	// --- PHASE 23 (lane B): the TAP-ADVANCE class. These two contexts were promoted out of the
+	// GCTX_OVERWORLD leak in phase 22.0 and have injected NOTHING ever since — every dialog,
+	// cutscene, PSA, Hall of Fame, credits, TV, evolution and egg-hatch screen in the census sits
+	// here. FAM-DLG is what makes them usable: tap = A, hold = B, drag = D-pad (TITLE gets tap=A
+	// only — see dlg_update's allowB note).
+	case GCTX_FULLUI:
+		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset();
+		ret = dlg_update(sm, touching, newPress, gvalid, gx, gy, 1);
+		break;
+	case GCTX_TITLE:
+		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset();
+		ret = dlg_update(sm, touching, newPress, gvalid, gx, gy, 0);
 		break;
 	default:
 		all_reset();

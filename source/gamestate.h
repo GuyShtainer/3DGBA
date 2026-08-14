@@ -53,6 +53,11 @@ enum {
 // the LG/RS delta passes; unused slots are 0 and never match (a cb2 is never 0).
 #define GS_N_TITLE  6
 #define GS_N_FULLUI 18
+// Capacity of the phase-23 FAM-DLG pager list (GameProfile.cb2Pager) — the FULLUI screens on which
+// LEFT/RIGHT is a real page/value verb, so the tap-advance family gives them edge-zone taps. v1
+// ships 2 per FRLG/EM row (summary + options); sized to 4 for the dex-entry / trainer-card / berry
+// tag candidates the census still owes a live LEFT/RIGHT confirmation.
+#define GS_N_PAGER  4
 
 // Per-game RAM map (all absolute GBA bus addresses; EM=Emerald, FR=FireRed/LeafGreen).
 typedef struct {
@@ -338,6 +343,31 @@ typedef struct {
 	uint32_t partyBase;       // gPlayerParty (100-byte stride, 6 slots)
 	uint32_t mapGroupsRom;    // gMapGroups (ROM: MapHeader** per group) — slice 2
 	uint32_t mapGroupsRomAlt; // gMapGroups, other revision (0 = none)
+	// --- phase 23 (lane B) — FAM-DLG's PAGER opt-in list. The tap-advance family gives every
+	// GCTX_TITLE / GCTX_FULLUI screen tap=A + hold=B + drag=D-pad; this list names the FEW screens
+	// where LEFT/RIGHT is additionally a real PAGE-or-VALUE verb, and only they get the left/right
+	// EDGE-ZONE taps (touchgeom.h DLGGEOM_EDGE_PX). It is deliberately an opt-in whitelist, not a
+	// class-wide rule: on a dialog an edge tap must still be A, or the box "doesn't advance".
+	//
+	// Every value is a cb2 ALREADY in this row's cb2FullUi list (that is what makes the screen
+	// reach the family at all) — so nothing new was harvested and nothing can start detecting that
+	// did not detect before; the list only re-classifies taps on screens the census already proved
+	// [exact]. Provenance = CB2-HARVEST.md, live-read on the running games.
+	//   BPEE  summary MainCB2 0x081BFAB4 (pokemon_summary_screen.c) — VERIFIED-SRC that LEFT/RIGHT
+	//         is the page verb: pokeemerald src/pokemon_summary_screen.c Task_HandleInput calls
+	//         ChangePage(taskId, -1) on DPAD_LEFT / +1 on DPAD_RIGHT.
+	//   BPEE  options MainCB2 0x080BA4B0 (option_menu.c) — LEFT/RIGHT is the VALUE slider on the
+	//         selected row (Task_OptionMenuProcessInput -> the per-row *_ProcessInput handlers all
+	//         branch on DPAD_RIGHT / DPAD_LEFT); TOUCH-PLAN A5's "tap L/R halves of value".
+	//   BPRE  summary CB2_RunPokemonSummaryScreen 0x08137F60, options CB2_InitOptionMenu
+	//         0x08088370 (FR keeps the init symbol as the run loop — CB2-HARVEST FR row A5).
+	//   BPGE / AXVE / AXPE: 0. LG's whole cb2FullUi list is still empty (its harvest is its own
+	//         slice) and RS is under the ROM-address ban — so a pager entry would be unreachable
+	//         at best and wrong at worst. NAMED degradation: those games get the class default
+	//         (tap=A / hold=B / drag) on whatever screens they do classify, with no edge zones.
+	// 0 = unused slot and never matches (a cb2 is never 0). Appending is the only safe edit:
+	// PROFILES[] is POSITIONAL-initialised.
+	uint32_t cb2Pager[GS_N_PAGER];
 } GameProfile;
 
 // One-pass snapshot of the live game.
