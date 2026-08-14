@@ -1045,3 +1045,168 @@ Whether the *primary* path (ctx resolving to `GCTX_FIELDMENU` -> `TPH_ANSWER` wr
 `sMenu.cursorPos = 0` + A) also fired is still unproven: that needs a re-run with the gdb
 channel alive, reading `progPhase`/`progEnd`. **That is the single next experiment**, and
 with the save-at-the-shore unlock it is a two-minute arc.
+## PHASE 23 / LANE B — Entry 1: FAM-DLG (TAP-ADVANCE) LIVE-PROVEN ON EMERALD
+
+Worktree `worktree-wf_fe79c2e4-600-2`, instance **b**, dual Emerald (`--stage-roms
+emerald,emerald` — landmine #1's single-ROM trap respected), boot
+`runs-b/20260814-065252`, build snapshotted to scratchpad `laneb23/` and reached via
+`EMUTEST_APP/EMUTEST_ELF/EMUTEST_MAP` (azctl.py:100, gdbio.py:133-142) so a lane-A
+rebuild of the shared tree cannot skew a symbol read. Instance **a was never touched**.
+
+**What shipped** (commit `2eee75b`): the tap-advance family for `GCTX_TITLE` /
+`GCTX_FULLUI` — the two contexts phase 22.0 created and then left injecting NOTHING.
+tap=A, hold(30f)=B, drag=D-pad at one edge per 14 GBA px, plus left/right EDGE ZONES on
+an opt-in per-screen whitelist (`GameProfile.cb2Pager`). Design calls + citations live in
+`source/touchgeom.h`; the proof channel is `TouchDbg +0xB0..+0xC0`
+(dlgTaps/dlgHolds/dlgPages/dlgSteps/dlgPager), monotonic per session so a delta is the
+evidence.
+
+**The arc (every step a gdb read + a capture; counters read out of `g_touchDbg`):**
+
+| # | Act | gdb before -> after | Screen proof |
+|---|---|---|---|
+| P1 | tap (160,130) on the **title screen** (ctx 9 TITLE) | dlgTaps **0 -> 1** | title -> MAIN MENU (`EM-dlg-P1-*`) |
+| P2 | tap (160,130) on the **main menu** | dlgTaps **1 -> 2**, ctx **9 -> 1** | the save loaded (GUYA 116:34, 8 badges) |
+| P4 | tap the START menu's OPTION row (shipped fmenu family) | ctx **6 -> 10 FULLUI**, **dlgPager 0 -> 1** | the options screen |
+| P5 | tap the **LEFT edge zone** (30,130) | dlgPages **0 -> 1**, dlgTaps **stays 2** | TEXT SPEED **FAST -> MID** |
+| P6 | **drag down** (160,60)->(160,130) over 30f | dlgSteps **0 -> 3** | highlight walks TEXT SPEED -> **SOUND**, exactly 3 rows |
+| P7 | **hold** 60 frames at (160,130) | dlgHolds **0 -> 1**, ctx **10 -> 6** | B exited options back to the START menu |
+
+Four claims are established by what did NOT move as much as by what did:
+- **P5 dlgTaps stayed 2** — an edge-zone tap on a pager becomes LEFT, never also an A.
+- **P7 dlgTaps stayed 2** — a hold's release does not additionally fire the tap verb.
+- **P7 dlgPager 1 -> 0** — the whitelist is per-screen and follows the live cb2.
+- **P6 = 3 rows for 3 notches** — the direct-manipulation rule (drag DOWN emits DOWN) is
+  the OPPOSITE of FAM-LIST's content-follows-finger, and it is the correct one here: the
+  option row is a cursor, and a cursor follows the finger.
+
+Captures banked to `evidence/impl/EM-dlg-P1|P5|P6|P7-*.bottom.png`.
+
+### ⚠️ LANDMINE #2 IS NARROWER THAN RECORDED — a correction, with evidence
+
+The overnight rule read *"sdmc file visibility SNAPSHOTS at app spawn: pre-stage EVERY
+control file BEFORE boot; one proof arc per boot."* That is **not what the app does**, and
+believing it costs a whole boot per proof step. `main.c:511 ctl_touch_poll` /
+the D4 move poll `stat()` their file **live, every N render frames**; the only thing
+sampled at session start is `s_ctlOn`, i.e. whether the **directory**
+`sdmc:/cias/control` exists (main.c:2521).
+
+Measured this session, after the app was already running for ~90 s: `sdmc drop move 2`
+-> `wait-consumed` **PASS**, and then **six** further `touch.txt` scripts were each picked
+up mid-session (the whole P1-P7 arc above was dropped one file at a time, reading gdb
+between steps). **The corrected rule: `sdmc arm-control` BEFORE boot; every control file
+after it, as many as you like.** This turns the touch families from blind pre-staged
+batches into a closed loop — which is how P4's tap coordinate was chosen from P3's
+capture, and how P6's notch count was verified rather than guessed.
+
+Landmines #1 (dual-ROM staging or SMART is forced to PAD), #3 (touch keys abort a running
+D4 script — the arc sequences them, never overlaps) and #4 (a second instance costs
+25-40% fps — every wait above is 8-14 s of wall clock for well under a second of gesture)
+all held exactly as written.
+
+Suites at this entry: touchgeom 115396 -> **158835** (TEST 11 sweeps every pixel of the
+frame for "on a non-pager screen every px is A"; TEST 12 pins dlggeom's enum against
+touch.c's `s_keyDir` table), profiles 1480 -> **1622** (TEST 16 pins the whitelist and
+proves every pager entry is a SUBSET of `cb2FullUi`, so a pager value can never become
+back-door detection). `make -j8` clean.
+
+## PHASE 23 / LANE B — Entry 2: the SUMMARY SCREEN pages by touch (FAM-PAGE flagship)
+
+Same boot, continued as a closed loop (each tap coordinate read off the previous
+capture — the landmine-#2 correction in Entry 1 is what makes that possible).
+
+Route, all by touch, no D4 keys after the START press: START menu -> **POKéMON** row
+(fmenu) -> party (ctx 5) -> tap **TYRANITAR** slot 0 (party family) -> the
+SUMMARY/SWITCH/ITEM/CANCEL popup (ctx 6) -> tap **SUMMARY** (fmenu) -> the summary
+screen, **ctx 10 FULLUI with `dlgPager` 1** = BPEE cb2Pager 0x081BFAB4 matched LIVE.
+
+| # | Act | gdb | Screen |
+|---|---|---|---|
+| P10 | reach the summary | dlgPager **0 -> 1** | page 1 **POKéMON INFO**, dot 1 |
+| P11 | one RIGHT edge-zone tap | dlgPages **1 -> 2** | page 2 **POKéMON SKILLS**, dot 2 |
+| P12 | two more RIGHT edge taps | dlgPages **2 -> 4** | page 4 **CONTEST MOVES**, dot 4 |
+
+`dlgTaps` never moved off 2 across all three steps: on a pager the edge zone is LEFT/RIGHT
+and never additionally an A — which matters here because A on the summary opens the
+move-detail sub-mode, i.e. a leak would have been visible AND wrong.
+
+That is TOUCH-PLAN row **E1 (the FAM-PAGE flagship)** delivered on the cheapest possible
+mechanism: no summary-internal addresses were harvested at all, because LEFT/RIGHT is the
+engine's own page verb (`ChangePage`, pokemon_summary_screen.c:1544-1550) and the edge
+zones are pure geometry. The same code gives row **A5 (options)** for free (Entry 1 P5)
+and will give any future pager the moment its cb2 joins the whitelist.
+
+Captures: `evidence/impl/EM-page-P10|P11|P12-*.bottom.png`.
+
+## PHASE 23 / LANE B — Entry 3: FireRed rev1 pass, one honest NON-verdict, and the scoreboard
+
+Second boot, `runs-b/20260814-070708`, dual FireRed (the user's rev1 cart image).
+
+**PROVEN on FR:**
+- **tap-advance**: `dlgTaps` 0 -> 4 carried the game **title -> main menu -> CONTINUE ->
+  overworld entirely by touch**, ending at `ctx 1`. (The first pair of taps landed during
+  the intro/copyright fade — the counter still incremented, i.e. WE injected and the GAME
+  ignored it; a second pair on the settled title went through. That distinction is exactly
+  what the counters exist for.)
+- **FULLUI classification**: a mis-aimed START-menu tap opened the **Pokédex TOC**, live
+  cb2 `0x0810254C` `CB2_PokedexScreen` read off `s_lastCb2[1]` -> `ctx 10`. TOUCH-PLAN row
+  **F6** now has tap=A / hold=B / drag instead of nothing.
+- **hold = B**: `dlgHolds` 0 -> 1 on that dex screen, `ctx 10 -> 6` (B backed out to the
+  START menu), `dlgTaps` **stayed 4** — a hold's release never additionally fires the tap
+  verb, confirmed on a second game.
+
+**NOT PROVEN, stated as UNKNOWN (never as a pass):** the **FR pager row**. The arc never
+reached the FR options screen — the START-menu tap landed on POKéDEX instead of OPTION (my
+row-y estimate off the capture, not a code fault), and the FireRed **quest-log replay**
+(landmine: ~800-2600 emulated frames, ~3.5 minutes of wall clock at instance-b fps here)
+ate two START presses before the menu would open, which is where the session's budget went.
+So `BPRE cb2Pager = { 0x08137F60 summary, 0x08088370 options }` remains **VERIFIED-SRC +
+census-[exact] but LIVE-UNEXERCISED**. It is compare-only and a subset of `cb2FullUi`
+(TEST 16), so the worst case is that FR's two pagers behave like ordinary FAM-DLG screens —
+a named degradation, not a hazard. **Owed: one FR boot that reaches START > OPTION and
+reads `dlgPager == 1`.**
+
+### Banked for the next lane: TAP-TO-FLY is ready to implement (research done, not built)
+
+TOUCH-PLAN row **B8/B7 (FAM-MAP)** was next on the list and is deliberately NOT half-built.
+Everything needed is now derived and cited, so the next slice starts at the keyboard:
+
+- `sRegionMap` (EM) = **0x0203A144** (pokeemerald.sym, `l 00000004` — a POINTER to the
+  struct, deref it). `sFieldRegionMapHandler` = 0x0203BCD0.
+- `struct RegionMap` offsets, **VERIFIED-SRC** (pokeemerald include/region_map.h:28-83):
+  `mapSecId` **+0x000** (u16) · `cursorPosX` **+0x054** (u16) · `cursorPosY` **+0x056**
+  (u16) · `zoomed` +0x078 · `cursorDeltaX/Y` +0x07B/+0x07C.
+- Cursor bounds, src/region_map.c:41-46: `MAP_WIDTH 28`, `MAP_HEIGHT 15`,
+  `MAPCURSOR_X_MIN 1`, `MAPCURSOR_Y_MIN 2` => cursorPosX 1..28, cursorPosY 2..16.
+- Cell <-> pixel, src/region_map.c:1418-1419: `cursorSprite->x = 8*cursorPosX + 4`,
+  `y = 8*cursorPosY + 4` => the inverse a tap needs is
+  `cx = clamp(round((gx-4)/8), 1, 28)`, `cy = clamp(round((gy-4)/8), 2, 16)`.
+  (Whether pokeemerald's `sprite->x` is the CENTRE or the corner is the ONE thing to
+  calibrate live rather than assume — one gdb read of cursorPosX/Y against a known tap.)
+- Movement model, `ProcessRegionMapInput_Full` (:653-690): **JOY_HELD**, one cell per
+  press, and on a move it sets `cursorMovementFrameCounter = 4` and swaps `inputCallback`
+  to `MoveRegionMapCursor_Full` for the 4-frame slide — i.e. the driver must PACE its edges
+  (the storage family's `STOR_EDGE_GAP` lesson, ~8 frames) and run CLOSED-LOOP on the live
+  `cursorPosX/Y` rather than counting. `A_BUTTON` is `MAP_INPUT_A_BUTTON` = the fly confirm.
+- Detection is already shipped: EM `CB2_FlyMap` 0x081248D4 and
+  `MCB2_FieldUpdateRegionMap` 0x08170274 are both in `cb2FullUi`, so they reach FAM-DLG
+  today — meaning **drag already moves the map cursor and tap already confirms**. The
+  slice upgrades that to one-tap targeting; it is an improvement on a working screen, not
+  a rescue of a dead one.
+- Proof plan (TOUCH-PLAN 22.4): tap a city, read `mapSecId` before/after, then confirm the
+  warp via `SaveBlock1.location` — the walker's own `g_fieldDbg.curMapGroup/curMapNum`
+  mirror already exposes it, so no new instrument is needed.
+
+### Honest scoreboard — what landed vs what remains (lane B, phase 23)
+
+| Plan item | State |
+|---|---|
+| **1. TAP-ADVANCE class** | **LANDED + LIVE-PROVEN on EM and FR.** tap=A / hold=B / drag=D-pad for every `GCTX_TITLE` + `GCTX_FULLUI` screen — the ~40 census screens that injected nothing since phase 22.0. All four verbs proven with gdb deltas + captures. |
+| **2. MULTI-PAGE VIEWERS** | **LANDED + LIVE-PROVEN (EM).** The summary screen pages by edge tap through all four pages. Trainer card / berry tag / dex entries get tap=A + drag today; adding them to `cb2Pager` needs one live LEFT/RIGHT confirmation each — cheap, not done. |
+| **3. REGION MAP / FLY** | **NOT BUILT — research banked above, ready to implement.** Drag+tap already work there via FAM-DLG; the one-tap targeting slice is owed. |
+| **4. FR dex habitat grid / remaining lists** | **Partly, by inheritance:** the FR dex TOC is live-classified `FULLUI` and now takes tap/hold/drag. A real ListMenu adapter for it is untouched (the P-D probe is the entry point). |
+| **5. OPTIONS + simple menus** | **LANDED + LIVE-PROVEN (EM).** Options rows drag, values change on edge taps. FR's copy is UNKNOWN (above). |
+
+Suites at close: touchgeom **158835**, profiles **1622**, both 0 failures; `make -j8` clean.
+Emulator hygiene: `azctl stop` run for both boots, `profile=CLEAN`, fixtures re-hashed
+untouched, instance **a never touched** (its pid was observed and left alone throughout).

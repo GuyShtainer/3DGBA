@@ -1080,6 +1080,85 @@ static void test_family22_2_storage(void) {
 	}
 }
 
+// ============================================================================================
+// TEST 16 — PHASE 23: the FAM-DLG pager whitelist (GameProfile.cb2Pager). Three properties, and
+// the SECOND one is the load-bearing safety claim of the whole tap-advance family:
+//   (a) the values are exactly what the row comments cite (VERIFIED-SRC page/value verbs);
+//   (b) every pager entry is ALSO in that row's cb2FullUi list — a pager cb2 that never reached
+//       GCTX_FULLUI would be dead code, and worse, a pager cb2 that is NOT a classified screen
+//       would mean someone had added detection through the back door;
+//   (c) the screens with a RICHER handler are NOT in it (naming / storage / bag / summary-adjacent
+//       list screens keep their own family — the plan's "keep screens that already have a richer
+//       handler out of the tap-advance class").
+// ============================================================================================
+static void test_family23_pager(void) {
+	printf("TEST 16: phase-23 FAM-DLG pager whitelist (cb2Pager)\n");
+	static const uint32_t EM_PAGER[GS_N_PAGER] = { 0x081BFAB4u, 0x080BA4B0u };   // summary, options
+	static const uint32_t FR_PAGER[GS_N_PAGER] = { 0x08137F60u, 0x08088370u };   // summary, options
+	static const uint32_t NONE_P[GS_N_PAGER]   = { 0 };
+	struct { const char* code; const uint32_t* pager; } W[] = {
+		{ "BPEE", EM_PAGER }, { "BPRE", FR_PAGER },
+		{ "BPGE", NONE_P   },   // LG class lists are empty -> a pager could never be consulted
+		{ "AXVE", NONE_P   }, { "AXPE", NONE_P },   // RS ROM-address ban
+	};
+	for (unsigned i = 0; i < sizeof W / sizeof W[0]; i++) {
+		const GameProfile* p = prof(W[i].code);
+		if (!p) { CHECK(0, "%s row missing", W[i].code); continue; }
+		for (int k = 0; k < GS_N_PAGER; k++)
+			EQU(p->cb2Pager[k], W[i].pager[k], "%s cb2Pager[%d]", W[i].code, k);
+		for (int k = 0; k < GS_N_PAGER; k++) {
+			if (!p->cb2Pager[k]) continue;
+			CHECK((p->cb2Pager[k] >> 24) == 0x08u, "%s pager 0x%08X is ROM-space", W[i].code, p->cb2Pager[k]);
+			// (b) the subset property — the whole safety argument in one loop.
+			int inFull = 0;
+			for (int j = 0; j < GS_N_FULLUI; j++) if (p->cb2FullUi[j] == p->cb2Pager[k]) inFull = 1;
+			CHECK(inFull, "%s pager 0x%08X is also in cb2FullUi (never new detection)", W[i].code, p->cb2Pager[k]);
+			// and it must NOT be a TITLE-class screen (edge zones on the main menu would be wrong)
+			for (int j = 0; j < GS_N_TITLE; j++)
+				CHECK(p->cb2Title[j] != p->cb2Pager[k], "%s pager 0x%08X is not a TITLE screen", W[i].code, p->cb2Pager[k]);
+			// no duplicates within the list
+			for (int j = k + 1; j < GS_N_PAGER; j++)
+				CHECK(p->cb2Pager[j] != p->cb2Pager[k], "%s pager 0x%08X listed once only", W[i].code, p->cb2Pager[k]);
+		}
+		// (c) screens that own a richer family must never be pagers.
+		for (int k = 0; k < GS_N_PAGER; k++) {
+			if (!p->cb2Pager[k]) continue;
+			CHECK(!p->namingCb  || p->cb2Pager[k] != p->namingCb,  "%s pager != namingCb", W[i].code);
+			CHECK(!p->namingCbAlt|| p->cb2Pager[k] != p->namingCbAlt,"%s pager != namingCbAlt", W[i].code);
+			CHECK(!p->storageCb || p->cb2Pager[k] != p->storageCb, "%s pager != storageCb", W[i].code);
+			CHECK(!p->cb2BagRun || p->cb2Pager[k] != p->cb2BagRun, "%s pager != cb2BagRun", W[i].code);
+			CHECK(!p->cb2BagRunAlt || p->cb2Pager[k] != p->cb2BagRunAlt, "%s pager != cb2BagRunAlt", W[i].code);
+			CHECK(!p->cb2UpdParty || p->cb2Pager[k] != p->cb2UpdParty, "%s pager != cb2UpdParty", W[i].code);
+			CHECK(!p->battleMainCb || p->cb2Pager[k] != p->battleMainCb, "%s pager != battleMainCb", W[i].code);
+		}
+	}
+	// BEHAVIOUR: the two EM pager screens really do resolve to GCTX_FULLUI through the real
+	// game_read — i.e. the family they opt into is actually the family they reach.
+	{
+		GbaCore c; bus_reset(&c, "BPEE");
+		const GameProfile* p = profile_for(&c);
+		GameState gs;
+		for (int k = 0; k < GS_N_PAGER; k++) {
+			if (!p->cb2Pager[k]) continue;
+			bus_w32(&c, p->mainCb2, p->cb2Pager[k] | 1u);
+			game_read(&c, p, &gs);
+			EQU(gs.ctx, GCTX_FULLUI, "BPEE: pager cb2 0x%08X reaches GCTX_FULLUI", p->cb2Pager[k]);
+			CHECK(gs.ctxResolved, "BPEE: pager cb2 0x%08X is a positive match", p->cb2Pager[k]);
+		}
+	}
+	{   // and on FR, on the user's rev1 cart values
+		GbaCore c; bus_reset(&c, "BPRE");
+		const GameProfile* p = profile_for(&c);
+		GameState gs;
+		for (int k = 0; k < GS_N_PAGER; k++) {
+			if (!p->cb2Pager[k]) continue;
+			bus_w32(&c, p->mainCb2, p->cb2Pager[k] | 1u);
+			game_read(&c, p, &gs);
+			EQU(gs.ctx, GCTX_FULLUI, "BPRE: pager cb2 0x%08X reaches GCTX_FULLUI", p->cb2Pager[k]);
+		}
+	}
+}
+
 int main(void) {
 	printf("test_profiles — the per-game RAM map (source/gamestate.c PROFILES[])\n\n");
 	test_lookup();
@@ -1097,6 +1176,7 @@ int main(void) {
 	test_family22_columns();     // phase 22.1 (keyboard + lists)
 	test_family22_behaviour();   // phase 22.1
 	test_family22_2_storage();   // phase 22.2 (grid)
+	test_family23_pager();       // phase 23 (FAM-DLG pager whitelist)
 	printf("\n=== %d checks, %d failures ===\n", g_checks, g_fails);
 	return g_fails ? 1 : 0;
 }

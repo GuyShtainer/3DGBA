@@ -91,7 +91,17 @@ static const GameProfile PROFILES[] = {
                08486578, both re-read from pokeemerald.sym this session. Emerald ships ONE
                revision, so no alternate exists (0), and the excursion planner's self-validating
                probe simply confirms the primary. */
-            0x020244ECu, 0x08486578u, 0x00000000u },
+            0x020244ECu, 0x08486578u, 0x00000000u,
+            /* phase 23 FAM-DLG pager list (gamestate.h cb2Pager). BOTH values are ALREADY in this
+               row's cb2FullUi list above — re-listing them here only changes how a tap in the
+               left/right EDGE ZONE is read on those two screens, never whether they detect.
+                 0x081BFAB4 summary MainCB2   — VERIFIED-SRC: pokeemerald src/pokemon_summary_screen.c
+                                                 :1544-1550 ChangePage(taskId,-1) on DPAD_LEFT,
+                                                 (+1) on DPAD_RIGHT (also :2210-2216, :2290-2313).
+                 0x080BA4B0 options MainCB2   — VERIFIED-SRC: src/option_menu.c :400/:409 (text
+                                                 speed), :446/:469/:492 (toggles), :516/:527,
+                                                 :574/:583 — DPAD_LEFT/RIGHT is the value verb. */
+            { 0x081BFAB4u, 0x080BA4B0u } },
   // BPRE ROM anchors: the PRIMARIES below are FR rev0 (correct for a rev0 cart); the REV1 values —
   // the user's cart — live in the phase-22.0 ALTERNATE block at the end of the row. newKeys was
   // 0x0303011E (a digit transposition, RS-REV2-VERIFICATION.md §7): gMain 0x030030F0
@@ -198,7 +208,31 @@ static const GameProfile PROFILES[] = {
                alternate is needed for it. gMapGroups DOES drift: rev0 083526a8 (primary, the row
                convention) / rev1 08352718 (alternate — the user's cart). Both re-read this
                session. The excursion probe picks whichever resolves the LIVE map correctly. */
-            0x02024284u, 0x083526A8u, 0x08352718u },
+            0x02024284u, 0x083526A8u, 0x08352718u,
+            /* phase 23 FAM-DLG pager list. Both values are ALREADY in this row's cb2FullUi list
+               (live-read [exact] on the user's rev1 cart, CB2-HARVEST.md FR pass), so this adds no
+               new detection — only edge-zone taps on those two screens.
+                 0x08137F60 CB2_RunPokemonSummaryScreen — VERIFIED-SRC: pokefirered
+                             src/pokemon_summary_screen.c :1081/:1089 — a page flip is exactly
+                             JOY_NEW(DPAD_RIGHT) / JOY_NEW(DPAD_LEFT) (the L/R alternates are
+                             gated on optionsButtonMode == LR, which the user's cart is NOT).
+                 0x08088370 CB2_InitOptionMenu (FR's RUN loop) — VERIFIED-SRC: src/option_menu.c
+                             :415/:427 JOY_REPT(DPAD_RIGHT/LEFT) is the value verb; a fresh press
+                             is included in newAndRepeatedKeys, so a 1-frame injected edge counts.
+               NOTE both are rev-INSENSITIVE in the sense that matters: cb2Pager is compared, never
+               dereferenced, and it is only ever consulted for a cb2 that already matched
+               cb2FullUi — a rev0 cart simply matches neither list and gets the class default.
+               *** STATUS: LIVE-UNEXERCISED (phase-23 lane B, OVERNIGHT2-BUILDLOG Entry 3). The FR
+               boot proved the FAM-DLG class itself on this cart (tap-advance carried title -> main
+               menu -> overworld; hold=B backed out of CB2_PokedexScreen 0x0810254C, live [exact])
+               but never reached the options or summary screen — FireRed's quest-log replay ate the
+               session's budget. Recorded as UNKNOWN, never as a pass (the verdict.sh prime
+               directive). Worst case if a value is wrong: that screen behaves like an ordinary
+               FAM-DLG screen (tap=A / hold=B / drag) instead of gaining edge zones — compare-only,
+               fail-safe, and TEST 16 already pins it as a SUBSET of cb2FullUi so it can never
+               become detection. OWED: one FR boot that reaches START > OPTION and reads
+               g_touchDbg.dlgPager == 1 (+0xC0). *** */
+            { 0x08137F60u, 0x08088370u } },
   // BPGE ROM anchors — REPLACED phase 22.0 (they were FireRed-rev0 values, wrong for EVERY
   // LeafGreen revision; battle/party/bag/menu detection was silently dead on LG). PRIMARIES are
   // now LG **rev1** — the user's cart is rev 1.1 — re-derived field-by-field from
@@ -301,7 +335,13 @@ static const GameProfile PROFILES[] = {
                pokeleafgreen_rev1.sym), not FR-derived; both agree, so no alternate. gMapGroups
                drifts: primary = LG **rev1** 083526f8 (the user's 1.1 cart — the BPGE row
                convention since 305242f), alternate = rev0 08352688. Both re-read this session. */
-            0x02024284u, 0x083526F8u, 0x08352688u },
+            0x02024284u, 0x083526F8u, 0x08352688u,
+            /* phase 23 FAM-DLG pager list: EMPTY for LeafGreen, and necessarily so — this row's
+               cb2Title/cb2FullUi lists are still all-zero (the LG harvest is its own slice), so no
+               LG screen reaches GCTX_FULLUI at all and a pager entry could never be consulted.
+               NAMED degradation, not an oversight: it lights up for free the moment the LG cb2
+               class lists are promoted (LANE-B-LG.md holds the live [exact] candidates). */
+            { 0x00000000u } },
 
   // ===================== Ruby / Sapphire (SPEC-coop §P3) =====================================
   // Every RAM value below is VERIFIED-SYM against pret's byte-matched `symbols` branch, all FOUR
@@ -480,7 +520,13 @@ static const GameProfile PROFILES[] = {
                RS-REV2-VERIFICATION promotion rule), alternate = rev0 08308588. Re-read from
                pokeruby[_rev1|_rev2].sym this session. NEVER Sapphire's value: the two titles
                drift (08308530 there), which is the exact failure mode lane B documented. */
-            0x083085A0u, 0x08308588u },
+            0x083085A0u, 0x08308588u,
+            /* phase 23 FAM-DLG pager list: 0 for RS. Ruby's two FULLUI screens are the party menu
+               and the bag — neither is a pager (LEFT/RIGHT is not a page or value verb on either),
+               and the RS ROM-address ban forbids adding a summary/options cb2 that was never
+               measured on the rev-2 fixture. NAMED degradation: RS gets the FAM-DLG class default
+               (tap=A / hold=B / drag=D-pad) on those two screens, with no edge zones. */
+            { 0x00000000u } },
   // Pokemon Sapphire (US; same promotion rule — every value below was measured on SAPPHIRE
   // itself, live [exact] on pokesapphire_rev2.sym; LANE-B-RS.md §2 drift table + §3 solo smoke).
   { "AXPE", RS_PROFILE_BODY_RAM,
@@ -497,7 +543,10 @@ static const GameProfile PROFILES[] = {
             /* phase 22.2 TRAVERSAL, per-title half: SAPPHIRE's OWN gMapGroups. Primary =
                rev1/rev2 08308530 (identical in both maps), alternate = rev0 08308518. Measured on
                the sapphire maps, never copied from Ruby (which is 0x70 away). */
-            0x08308530u, 0x08308518u },
+            0x08308530u, 0x08308518u,
+            /* phase 23 FAM-DLG pager list: 0 for Sapphire, same reasoning as Ruby — and doubly so
+               here, where the ONE classified FULLUI screen is the bag. */
+            { 0x00000000u } },
   #undef RS_PROFILE_BODY_RAM
   #undef RS_PROFILE_BODY_TAIL
 };

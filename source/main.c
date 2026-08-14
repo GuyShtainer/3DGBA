@@ -3590,7 +3590,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 							sm.textDlg = gsr.textDlg;
 							sm.padKeys = to_gba_keys(kHeld);
 							sm.traverse = g_prefs.smartTraverse;
-							sm.cb2 = gsr.cb2; sm.ctxResolved = gsr.ctxResolved; sm.nTask = gsr.nTask;   // touch-log fingerprint (LOGGING ONLY)
+							// cb2 is the touch-log fingerprint AND (phase 23) the FAM-DLG pager gate —
+							// compare-only against GameProfile.cb2Pager; ctxResolved/nTask stay LOGGING-ONLY.
+							sm.cb2 = gsr.cb2; sm.ctxResolved = gsr.ctxResolved; sm.nTask = gsr.nTask;
 							for (int i = 0; i < 8; i++) sm.taskFp[i] = gsr.taskFp[i];
 						}
 					}
