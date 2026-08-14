@@ -63,17 +63,24 @@ Column key:
   proved live (a field dialog differs only in which NPC is talking) ·
   `BROKEN` = the row's premise is false, with the diagnosis in the lane log ·
   `UNREACH` = the mechanism is in place, this save/session cannot get to the screen.
-  Tally: **6 VERIFIED · 19 VER-mech · 10 BROKEN · 13 UNREACHABLE**. Nine of the ten BROKEN rows
-  share one diagnosis — the screen has **no cb2 fingerprint**, so the "safe default" the `TAP`
-  class assumes never runs there. That is a census gap, and the per-screen harvest plan is
-  written out at the end of the lane log.
+  Tally, **RESTATED 2026-08-14** (phase-24 audit finding **O5**, accepted by phase-25 lane C1):
+  **4 VERIFIED · 21 VER-mech · 10 BROKEN · 13 UNREACHABLE** — rows **A1** and **A2** were written
+  as VERIFIED on a phase-23 proof plus a `ctx` read, which does not meet the lane's own definition
+  ("the verb was proven by a state delta the game produced" *this session*), so both are
+  VER-mech and the counts move 6/19 → 4/21. Nothing else was re-graded by that correction.
+  Nine of the ten BROKEN rows shared one diagnosis — the screen has **no cb2 fingerprint**, so the
+  "safe default" the `TAP` class assumes never runs there. That is a census gap, not a code gap.
+  **Phase-25 lane C1 (`LANE-C-HARVEST.md`) acted on it**: E15(EM) and E8 harvested live [exact]
+  and proven by touch, K4 given a real guard and proven by an A/B on one boot, E19 re-diagnosed
+  (it needs no fingerprint — it is a `lockall` window), and the remaining six promoted (the
+  credits into a NEW taps-dead class, `GCTX_INERT`) but still unvisited.
 
 ### A. Boot, title, file select
 
 | # | Screen | Now | Target | Class | Fam | Eff | Sym | Ver |
 |---|---|---|---|---|---|---|---|---|
-| A1 | GF intro | leak-safe (tap=A) | tap=A skip; nothing else | TAP | DLG | S | promo | emu · **B1:VERIFIED** |
-| A2 | Title screen | leak-safe | tap=Start; DONE once GCTX_TITLE lands | TAP | DLG | S | promo | emu · **B1:VERIFIED** |
+| A1 | GF intro | leak-safe (tap=A) | tap=A skip; nothing else | TAP | DLG | S | promo | emu · **B1:VER-mech** (restated, audit O5 — the verb's delta is phase-23's, not B1's) |
+| A2 | Title screen | leak-safe | tap=Start; DONE once GCTX_TITLE lands | TAP | DLG | S | promo | emu · **B1:VER-mech** (restated, audit O5) |
 | A3 | Main menu | leak-safe | list rows tappable (Continue/New/Gift/Option) | FULL | LIST | S | promo+substate (menu task) | emu |
 | A4 | New-game intro (Birch/Oak) | leak | tap=A advance; naming hop = FAM-KB; gender yes/no = fmenu | TAP | DLG+KB | S | promo | emu (FR, accidental) · **B1:UNREACH** |
 | A5 | Options menu | leak | rows tappable; tap L/R halves of value = LEFT/RIGHT slider | FULL | LIST | M | promo+substate | emu |
@@ -81,7 +88,7 @@ Column key:
 | A7 | Reset RTC (RSE) | leak | defer — obscure, D-pad digits fine | DEFER (niche) | GRID | — | sym | — |
 | A8 | Berry-fix multiboot | leak | defer | DEFER (2P) | — | — | — | — |
 | A9 | Save-failed screen | leak | nothing (fault path) | DEFER (fault) | — | — | — | — |
-| A10 | Link error | leak | tap=A acknowledge | TAP | DLG | S | sym | — · **B1:BROKEN** |
+| A10 | Link error | leak | tap=A acknowledge | TAP | DLG | S | sym | — · **C1:PROMOTED-SYM, screen UNREACHABLE** (`CB2_PrintErrorMessage` EM 0x0800B1A0 / FR 0x0800AF40 + `CB2_LinkError`, both now in `cb2FullUi`; a deliberate link failure needs the frozen `celiolink` path) |
 
 ### B. Overworld & field layer
 
@@ -122,7 +129,7 @@ Column key:
 | C12 | Recorded battle ask | leak | fmenu (yes/no) | TAP | POPUP | S | - | — · **B1:VER-mech** |
 | C13/C15 | tutorials/Marowak | consumed by saves | inherit battle | DEFER (new-game) | — | — | — | — |
 | C14 | Pokedude demo | leak (FR) | tap=A advance, B=quit chip (it's a TV show) | TAP | DLG | S | rev1 | emu · **B1:UNREACH** |
-| C20 | Evolution scene | leak | tap=A, hold=B (cancel evolution is a real verb!) | TAP | DLG | S | promo-family | — · **B1:BROKEN** |
+| C20 | Evolution scene | leak | tap=A, hold=B (cancel evolution is a real verb!) | TAP | DLG | S | promo-family | — · **C1:PROMOTED-SYM, screen UNREACHABLE this session** (`CB2_EvolutionSceneUpdate` EM 0x0813E3A4 / FR 0x080CE724 + trade twins + loaders. Measured why: the save's party is five final-form Lv71-74 mons plus a **Lv9** Zigzagoon eleven levels short of Linoone, and the bag holds **7** Rare Candies and **no** evolution stone) |
 | C21 | Egg hatch | leak | tap=A; naming hop = FAM-KB | TAP | DLG | S | - | — · **B1:VER-mech** |
 | C22 | Forget-move summary hop | leak | FAM-PAGE summary instance: tap a move row = select, tap page arrows | FULL | PAGE | S (with E1) | promo | emu |
 
@@ -157,18 +164,18 @@ Column key:
 | E5 | TM Case (FR) | **FAM-LIST, DISCOVERED list ✓ (shipped)** | = E4 (cb2 = `CB2_Idle` 0x081318DC — the census's catalog correction) | **DONE** | LIST | S | **none** | emu · **B2:** desk-proven (test_profiles TEST 19 drives it through the real `game_read`: listed cb2 + a live ListMenu → `GCTX_LIST`/`LK_FULLUI` with the discovered base; listed cb2 + NO live list → `GCTX_FULLUI`, i.e. today's behaviour; an UNLISTED screen with the same live list is never claimed). Live sign-off owed |
 | E6 | Berry tag (RSE) | leak | tap=exit, L/R flip taps | TAP | PAGE | S | promo | emu · **B1:UNREACH** |
 | E7 | PSA anim (FR) | leak | tap=A (cutscene) | TAP | DLG | S | promo | emu · **B1:UNREACH** |
-| E8 | Mail read | leak | tap=advance/exit | TAP | DLG | S | - | — · **B1:BROKEN** |
+| E8 | Mail read | leak | tap=advance/exit | TAP | DLG | S | promo | emu · **C1:VERIFIED** — `CB2_MailRead` **0x08121C64** live [exact]; one tap closed the letter (`dlgTaps` 1→2, cb2 → `CB2_Overworld`) |
 | E9 | Mail compose | leak | FAM-KB (easy-chat) | FULL | KB | — | substate | — |
 | E10 | Naming screen | leak (worst offender: taps leak walk keys into a keyboard) | **FAM-KB flagship — full tap keyboard** (SPEC-family-keyboard.md, ready) | FULL | KB | M | promo + sNamingScreen (sym) | emu |
 | E11 | PC top menu | fmenu ✓ (EM) | done | DONE | POPUP | — | rev1 | emu |
 | E12 | Storage boxes | leak (all 6 sub-states photographed) | **FAM-GRID flagship**: tap slot = move hand (cursor write) ; tap-tap-move honest v1; drag-and-drop = v2 ambition (hold≥N enters "holding", drop on release — uses the game's own multi-move?) ; box tabs = L/R taps; party strip toggle chip | FULL | GRID | L | promo+substate (cursor/mode) | emu |
 | E13 | Player PC items | leak | FAM-LIST instance (anchors researched: gPlayerPCItemPageInfo / Task_ItemPcMain) | FULL | LIST | S | sym | emu (menu only) |
 | E14 | Mailbox | leak | FAM-LIST | FULL | LIST | S | sym | — |
-| E15 | HoF PC replay | leak | tap=A advance | TAP | DLG | S | promo | emu (FR) · **B1:BROKEN** |
+| E15 | HoF PC replay | leak | tap=A advance | TAP | DLG | S | promo | emu · **C1:VERIFIED (EM half)** — `CB2_HallOfFame` **0x08173560** live [exact]; one tap fired ⓐEXIT (`dlgTaps` 0→1). After the promotion the same screen reads `ctx=fullui` where it read `field` |
 | E16 | Oak/Lanette dialog | dialog | tap=A | TAP | DLG | — | - | emu (FR) · **B1:VER-mech** |
 | E17 | Move relearner | leak | FAM-LIST (move list + yes/no) | FULL | LIST | S | substate | — |
 | E18 | Daycare | dialog+party | covered | TAP | DLG | — | - | — · **B1:VER-mech** |
-| E19 | Battle records | leak | tap=exit | TAP | DLG | S | - | — · **B1:BROKEN** |
+| E19 | Battle records | leak | tap=exit | TAP | DLG | S | - | — · **C1:RE-DIAGNOSED → VER-mech** — not a missing cb2 at all: `EventScript_CableBoxResults` is `lockall` + `waitbuttonpress` around a plain window (`ShowLinkBattleRecords` sets no callback2), i.e. the B3 arm. Screen UNREACHABLE solo (the machine is a cable-club metatile) |
 | E20 | Diploma | leak | tap=exit | TAP | DLG | S | - | — (FR dex 117/150 — locked) · **B1:UNREACH** |
 
 ### F. Pokédex
@@ -199,8 +206,8 @@ Column key:
 | H1 | Choose contest mon | party-family | = E2 choose-mode fix | FULL | GRID | — | promo | — |
 | H2 | Contest lobby | dialog/multi | fmenu covers | TAP | POPUP | — | - | — · **B1:VER-mech** |
 | H3 | Contest appeals | leak | tap move card = cursor write + A (4-wide picker each round); rounds between = tap-advance | FULL | GRID | M | substate | — |
-| H4/H5 | Results / painting | leak | tap=A | TAP | DLG | S | - | — · **B1:BROKEN** |
-| H6 | Berry Blender | leak | minigame: tap = A at the arrow (timing) — honest mapping IS just tap=A; keep | TAP | MINI | S | substate | — · **B1:BROKEN** |
+| H4/H5 | Results / painting | leak | tap=A | TAP | DLG | S | promo | — · **C1:PROMOTED-SYM, screen UNREACHABLE this session** (`CB2_ShowContestResults` 0x080F5C00 / `CB2_HoldContestPainting` 0x0812FDF8; a contest run is a multi-minute progression event) |
+| H6 | Berry Blender | leak | minigame: tap = A at the arrow (timing) — honest mapping IS just tap=A; keep | TAP | MINI | S | promo | — · **C1:PROMOTED-SYM, screen UNREACHABLE this session** (`CB2_PlayBlender` 0x08081898 + `CB2_EndBlenderGame` 0x08081FC8) |
 | H7 | Pokéblock case | leak | FAM-LIST | FULL | LIST | S | promo+substate | emu |
 | H8 | Pokéblock feed | leak | tap=A (cutscene) | TAP | DLG | S | promo | emu · **B1:UNREACH** |
 | H9 | Use-Pokéblock condition | leak | tap mon portrait = cursor; tap block = feed | FULL | GRID | M | promo+substate | emu |
@@ -243,7 +250,7 @@ Column key:
 | K1 | Teachy TV | leak | FAM-LIST (chapter list); shows = tap=A | FULL | LIST | S | rev1+substate | emu |
 | K2 | Fame Checker | leak | faces GRID (tap face = cursor+A); fact-grid PICK = same | FULL | GRID | M | rev1+substate | emu |
 | K3 | Vs Seeker | overworld | works via B1 | DONE | TRAV | — | - | emu |
-| K4 | Quest Log playback | leak (cb2-invisible! runs under CB2_Overworld) | suppress touch during playback — needs the quest-log state flag, else taps inject into a cutscene | TAP (guard) | DLG | S | substate (QL flag) | emu · **B1:BROKEN** |
+| K4 | Quest Log playback | leak (cb2-invisible! runs under CB2_Overworld) | suppress touch during playback | TAP (guard) | INERT | S | `gQuestLogState` 0x0203ADFA | emu · **C1:VERIFIED** — the guard now exists: state 2/3 (the game's own `QL_IS_PLAYBACK_STATE`) → `GCTX_INERT`. Live A/B on one boot: during playback 8 touch ops left `planSeq` **0**; after it the same script took `planSeq` **0→2** |
 | K5 | Help overlay (L/R) | invisible to cb2 (IRQ overlay) | optional HELP chip → inject R (user plays L=A, so L is taken!); needs the help-system flag address to detect it's open | FULL (late) | LIST | M | substate (flag) | — |
 | K6 | Trainer Tower records | dialog | tap=A | TAP | DLG | — | - | — · **B1:VER-mech** |
 | K7 | Story cutscenes | consumed | — | DEFER (new-game) | — | — | — | — |
@@ -252,8 +259,8 @@ Column key:
 
 | # | Screen | Now | Target | Class | Fam | Eff | Sym | Ver |
 |---|---|---|---|---|---|---|---|---|
-| L1 | Hall of Fame | leak | tap=A | TAP | DLG | S | - | — · **B1:BROKEN** |
-| L2 | Credits | leak | tap=nothing (don't skip by accident); B chip maybe | TAP | DLG | S | - | — · **B1:BROKEN** |
+| L1 | Hall of Fame | leak | tap=A | TAP | DLG | S | promo | — · **C1:PROMOTED, screen UNREACHABLE** — the SAME value E15 proved live (`CB2_HallOfFame` 0x08173560): `CB2_DoHallOfFameScreen` (:417) and `CB2_DoHallOfFamePC` (:797) both end at `SetMainCallback2(CB2_HallOfFame)` (:401/:852). The HoF scene itself needs the league beaten again |
+| L2 | Credits | leak | **tap = nothing** — engine-mandated: `credits.c:349` makes a HELD B the credits FAST-FORWARD | TAP | INERT | S | promo | — · **C1:FIXED IN CLASS, screen UNREACHABLE** — new `GCTX_INERT` (`cb2Inert` = `CB2_Credits` EM 0x081754DC + starter 0x08175620 / FR 0x080F3A60): detected and given nothing, so the walk-key leak into the credits is dead by construction. The class itself is live-proven on its OTHER member (K4) |
 | L3 | Starter choose | — | grid of 3 balls (new-game only) | DEFER (new-game) | GRID | — | — | — |
 
 **Tally (143 catalog rows):** DONE (incl. done-after-rev1-fix) **≈ 24** · TAP-ADVANCE
