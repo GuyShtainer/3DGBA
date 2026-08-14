@@ -181,3 +181,44 @@ entered through a live link session. So:
 Verdict: **VERIFIED-mech** (the mechanism is B3's, proven live in lane B1 and again on this boot's
 PC dialog: `fieldLock 1` → `dlgOwns 1` → tap = A), with the honest note that the screen itself was
 not visited. That is a strictly better answer than "BROKEN: undetected cb2", which was wrong.
+
+---
+
+## Entry 3 — what shipped: the promotion, and a class that was missing (`GCTX_INERT`)
+
+Commit `f859a82` (`source/gamestate.{h,c}` + `source/touch.{c,h}` + `test/host/test_profiles.c`).
+
+**1. `cb2FullUi` 18 → 32 slots, 13 EM + 10 FR values.** Two are the live [exact] reads above; the
+other 21 are VERIFIED-SYM and say so in the row comment, per screen. The read is a compare, so a
+wrong value can only leave a screen exactly as broken as it is today — it can never mis-key one.
+
+**2. A new context, `GCTX_INERT` — "detected, and deliberately SILENT".** This project did not have
+one. Until now a screen was either NAMED (and got the tap-advance verbs) or UNKNOWN (and fell
+through to the walker with the whole route machinery). L2 and K4 both need the third thing, and for
+the same reason: *the player is watching, not playing*.
+
+- **L2, the credits**, named by cb2 (`GameProfile.cb2Inert`). Entry 0's `credits.c:349` finding is
+  what forces it: a hold would be the fast-forward. The list is pinned DISJOINT from
+  `cb2Title`/`cb2FullUi` so one screen can never classify two ways.
+- **K4, FRLG quest-log playback**, named by STATE (`GameProfile.questLog` = `gQuestLogState`
+  0x0203ADFA). The guard is the game's own `QL_IS_PLAYBACK_STATE` — state **2 or 3** — and NOT
+  "non-zero", which would have been the tempting one-liner and would have killed touch for the
+  whole game, because ordinary FRLG play sits at `QL_STATE_RECORDING` (1). Both rules run before
+  every other rule in `game_read`, including the battle test: "do not touch this screen" cannot be
+  overridden by something more specific.
+
+**3. A latent bug, found while in the file and reported rather than quietly fixed:** the ctx-name
+table (`gamestate.c` `GS_CTXN`) stopped at `GCTX_STORAGE` (13). `GCTX_MAP` is 14, so **every
+region-map row in the gs ring and on the diag HUD has been printing `?` since lane B2 shipped
+tap-to-fly**. Table extended with `"map"` and `"inert"`; TEST 20 pins both.
+
+Suites, re-run from this tree: **test_profiles 1697 → 2546** (TEST 20: the columns per game, the
+disjointness, `questLog` being EWRAM — which is *why* it needs no rev-alternate — and behaviour
+through the real `game_read`: the credits go inert, the two live-harvested EM values classify,
+Emerald is untouched by the FRLG guard, and the quest-log state boundary 0/1/2/3/4 does the right
+thing including beating a live start-menu task and a battle callback). All 16 suites green:
+celiolink 1259 · control 6940 · diag 376 · fieldpath **1808 (UNMODIFIED)** · fieldtrav 1210 ·
+netlink 66 · peersprite 62078 · presence 61376 · **profiles 2546** · theme 83444 · tilt 1756 ·
+touchgeom 371892 · trace_replay 58 (4 skips) · typography 1419 · uigeom 18332 · uihit 1834 =
+**616 394 checks, 0 failures**. `make -j8` clean, `3DGBA.3dsx` 4 403 340 B (only the pre-existing
+mgba/indentation warnings).
