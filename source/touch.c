@@ -361,6 +361,47 @@ static FpEngine fp_engine(const GameProfile* p) {
 // Plan a route to the tapped tile. Returns true and arms the follow loop; false means NOTHING is
 // injected — which for a door with no reachable approach is the whole point (a documented no-op
 // beats tackling the wall next to it).
+// ---- PHASE 23 / SPEC-family-traversal §3: the EXCURSION leg machine --------------------------
+// A cross-map route is not one plan, it is a PROGRAM of legs, and the executor's whole job is to
+// notice a leg boundary and re-plan the next one FROM REALITY (H3.4). The legs themselves are
+// ordinary fieldpath routes — walking to a warp with its classified terminal is exactly what the
+// shipped router already does — so this adds a supervisor, not a second walker.
+//
+//   leg 0  current map  -> the OUT warp (Wi)
+//   leg 1  the interior -> the RETURN warp (Wj)          [re-planned live on arrival]
+//   leg 2  current map  -> the tapped goal               [re-planned live on arrival]
+//
+// EVERY transition is gated on SaveBlock1.location becoming EXACTLY the map the plan predicted.
+// Any other map, or a leg that cannot be re-planned live (an NPC camped in the doorway), ends the
+// excursion where it stands: visible, honest, recoverable. Never a wander (H3.5).
+static FtExcursion s_exc;
+static bool s_excOn = false;
+static int  s_excLeg = 0;                 // 0 = out, 1 = interior, 2 = home
+static int  s_excMapG = -1, s_excMapN = -1;   // the map the CURRENT leg is walked on
+static int  s_excGoalX = 0, s_excGoalY = 0;   // the tapped goal, kept for leg 2
+static int  s_excSeq = 0;
+static const char* s_excChip = 0;
+
+static void exc_reset(void) {
+	s_excOn = false; s_excLeg = 0; s_excMapG = s_excMapN = -1; s_excChip = 0;
+}
+// "VIA DOOR - LEG n/3" (T4.2). The leg counter is the honest v1: map NAMES would need the ROM
+// region-map strings, which is its own slice.
+static const char* exc_chip_for(int leg) {
+	switch (leg) {
+	case 0:  return "VIA DOOR - LEG 1/3";
+	case 1:  return "VIA DOOR - LEG 2/3";
+	default: return "VIA DOOR - LEG 3/3";
+	}
+}
+static void exc_dbg_stamp(void) { g_fieldDbg.progMapSeq = s_excLeg; }
+// Forward declarations: the two leg-machine entry points are DEFINED next to prog_plan (they need
+// the bus helpers that live there) but are CALLED from walk_update_inner, which comes first.
+static int  exc_plan(GbaCore* core, const GameProfile* p, int px, int py, int gx, int gy,
+                     int mapG, int mapN);
+static void exc_leg_boundary(GbaCore* core, const GameProfile* p, int px, int py,
+                             int mapG, int mapN);
+
 static bool walk_plan(GbaCore* core, const GameProfile* p, int px, int py, int gx, int gy,
                       int mapG, int mapN) {
 	int w, h; uint32_t ptr;
@@ -454,7 +495,13 @@ static u16 walk_update_inner(bool touching, bool newPress, bool gvalid, int gx, 
 					// walk has ALREADY failed. A wet or destructive detour can therefore never
 					// displace a walkable route, however much longer the walk would have been.
 					// Declining (return 0) leaves the tap doing exactly what it does today.
-					prog_plan(core, p, px, py, s_downPx + ddx, s_downPy + ddy, mapG, mapN);
+					if (prog_plan(core, p, px, py, s_downPx + ddx, s_downPy + ddy, mapG, mapN) == 0 &&
+					    traverse >= 2) {
+						// PHASE 23 / SPEC H3.2: excursions are the LAST tier, consulted only once
+						// the dry walk AND the conditional-edge planner have both failed — so a
+						// same-map route can never be displaced by a trip through a building.
+						exc_plan(core, p, px, py, s_downPx + ddx, s_downPy + ddy, mapG, mapN);
+					}
 				}
 			}
 		}
@@ -469,7 +516,12 @@ static u16 walk_update_inner(bool touching, bool newPress, bool gvalid, int gx, 
 	// ptr/w/h check cannot see a same-size map swap and a stale route survives into the arrival
 	// map. Both nets are kept.
 	if (mapG != s_mapG || mapN != s_mapN) {
-		s_walking = false; s_termActive = false; route_end(core, FDBG_END_MAPCHANGE); return 0;
+		s_walking = false; s_termActive = false; route_end(core, FDBG_END_MAPCHANGE);
+		// PHASE 23: for an excursion this is not the end of the route, it is the END OF A LEG —
+		// but ONLY if the map we landed on is the one the plan predicted. Anything else (a wrong
+		// door, a script warp, a Fly) is exactly the case the kill-switch exists for.
+		if (s_excOn) exc_leg_boundary(core, p, px, py, mapG, mapN);
+		return 0;
 	}
 	if (!map_read(core, p, &w, &h, &ptr) || ptr != s_mapPtr || w != s_mapW || h != s_mapH) {
 		s_walking = false; s_termActive = false; route_end(core, FDBG_END_MAPCHANGE); return 0;
@@ -689,6 +741,56 @@ static int prog_plan(GbaCore* core, const GameProfile* p, int px, int py, int gx
 	prog_dbg_stamp();
 	prog_chip_refresh();
 	return 1;
+}
+
+// PHASE 23 — arm an excursion. Runs ONLY after tier 0 (dry walk) and tier 1 (conditional edges)
+// have both declined, so it can never displace a same-map route. Returns 1 if a program is armed.
+static int exc_plan(GbaCore* core, const GameProfile* p, int px, int py, int gx, int gy,
+                    int mapG, int mapN) {
+	exc_reset();
+	int w, h; uint32_t ptr;
+	if (!core || !p || !p->mapGroupsRom || !map_read(core, p, &w, &h, &ptr)) return 0;
+	read_npcs(core, p);
+	FpBus bus = { fp_r8, fp_r16, fp_r32, core };
+	FpMap m = { fp_engine(p), p->mapHeaderPath, p->mapObjects, ptr, w, h };
+	if (!fieldtrav_excursion(&bus, &m, p->mapGroupsRom, mapG, mapN, px, py, gx, gy,
+	                         s_npcG, s_npcN, &s_exc)) {
+		g_fieldDbg.progOutcome = s_exc.outcome;      // FT_OUT_NOEXC = "excursion-none" (H3.5)
+		return 0;
+	}
+	// Leg 0 is an ORDINARY warp route: walk to Wi and let fieldpath's own terminal semantics
+	// (door hold / arrow hold / step) fire it. If even that cannot be planned, plan nothing.
+	if (!walk_plan(core, p, px, py, s_exc.wiX, s_exc.wiY, mapG, mapN)) return 0;
+	s_walking = true; s_lpx = px; s_lpy = py; s_stall = 0; s_replans = 0;
+	s_excOn = true; s_excLeg = 0;
+	s_excMapG = mapG; s_excMapN = mapN;
+	s_excGoalX = gx; s_excGoalY = gy;
+	s_excChip = exc_chip_for(0);
+	g_fieldDbg.progSeq = ++s_excSeq;
+	g_fieldDbg.progOutcome = s_exc.outcome;
+	g_fieldDbg.progEnd = TPE_NONE;
+	exc_dbg_stamp();
+	return 1;
+}
+
+// A leg ended because SaveBlock1.location changed. Verify we are where the plan SAID we would be,
+// then re-plan the next leg on the LIVE grid of the map we actually landed on (H3.4) — never from
+// the ROM plan, which has no NPCs in it and cannot see runtime layout changes.
+static void exc_leg_boundary(GbaCore* core, const GameProfile* p, int px, int py,
+                             int mapG, int mapN) {
+	if (!s_excOn) return;
+	int wantG, wantN, gx, gy;
+	if (s_excLeg == 0)      { wantG = s_exc.dGroup; wantN = s_exc.dNum; gx = s_exc.wjX;   gy = s_exc.wjY; }
+	else if (s_excLeg == 1) { wantG = s_excMapG;    wantN = s_excMapN;  gx = s_excGoalX;  gy = s_excGoalY; }
+	else                    { exc_reset(); return; }          // leg 2 ends at the goal, not a warp
+	if (mapG != wantG || mapN != wantN) { exc_reset(); return; }   // not the map we predicted
+	s_excLeg++;
+	s_excChip = exc_chip_for(s_excLeg);
+	exc_dbg_stamp();
+	// The door drops the avatar on (or one step off) the arrival tile; walk_plan starts from where
+	// the player REALLY is, so a +-1 arrival needs no tolerance rule here.
+	if (!walk_plan(core, p, px, py, gx, gy, mapG, mapN)) { exc_reset(); return; }
+	s_walking = true; s_lpx = px; s_lpy = py; s_stall = 0; s_replans = 0;
 }
 
 // Re-plan from LIVE state after every INTERACT (SPEC H0.1: never execute a plan's assumptions
