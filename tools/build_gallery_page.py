@@ -3,7 +3,7 @@
 and every embedded image re-encoded to LOSSLESS WebP (identical pixels, ~41% the bytes).
 
 Idempotent — safe for the 2-hourly loop republish."""
-import base64, os, re, subprocess, hashlib
+import base64, os, re, struct, subprocess, hashlib
 
 P = "/Users/guyshtainer/VSCodeProjects/3ds-toolkit/projects/3DGBA"
 EV = f"{P}/docs/phase21-touch-census/evidence"
@@ -124,9 +124,19 @@ def group_impl(rows):
     return [(t, buckets[t]) for t in pref if t in buckets]
 
 # ---------------------------------------------------------------- markup
+def png_size(p):
+    """Intrinsic size, so a collapsed group reserves the right box and opening it does not lurch."""
+    with open(p, "rb") as f:
+        head = f.read(24)
+    if head[:8] == b"\x89PNG\r\n\x1a\n":
+        w, h = struct.unpack(">II", head[16:24])
+        return f' width="{w}" height="{h}"'
+    return ""
+
 def cells(rows):
     return "\n".join(
-        f'<figure class="cshot"><img src="{webp_uri(p)}" alt="{sid}" loading="lazy" />'
+        f'<figure class="cshot" title="{sid}">'
+        f'<img src="{webp_uri(p)}" alt="{sid}"{png_size(p)} loading="lazy" />'
         f'<figcaption>{sid}</figcaption></figure>' for sid, p in rows)
 
 def group_block(title, rows, open_first=False):
@@ -135,59 +145,76 @@ def group_block(title, rows, open_first=False):
             f'<span class="gcount">{len(rows)}</span></summary>'
             f'<div class="cgrid">\n{cells(rows)}\n</div></details>')
 
-def gallery(groups, first_open=True):
-    return "\n".join(group_block(t, r, open_first=(first_open and i == 0))
+def gallery(groups, open_when=None):
+    """open_when(i, title) -> bool. Default: open the first group only."""
+    if open_when is None:
+        open_when = lambda i, t: i == 0
+    return "\n".join(group_block(t, r, open_first=open_when(i, t))
                      for i, (t, r) in enumerate(groups))
 
+# Open the group a reader actually came for — the locations — not the four boot screens that
+# happen to sort first. E (30+) would be a wall again; B is the sweet spot.
+CENSUS_OPEN = lambda i, t: t.startswith("B ·")
+
 impl   = group_impl(shots("impl"))
-firsts = [("Ruby & Sapphire — first boots", shots("ruby")),
-          ("LeafGreen — first boot",        shots("leafgreen")),
+firsts = [("Ruby — first boot",      shots("ruby")),
+          ("Sapphire — first boot",  shots("sapphire")),
+          ("LeafGreen — first boot", shots("leafgreen")),
           ("Ruby + Sapphire co-op, one console", shots("rs-coop"))]
 firsts = [(t, r) for t, r in firsts if r]
 em = group_census(shots("emerald"))
 fr = group_census(shots("firered"))
 
 n_impl   = sum(len(r) for _, r in impl)
-n_firsts = sum(len(r) for _, r in firsts)
+n_firsts = sum(len(r) for t, r in firsts if "co-op" not in t)
+n_coop   = sum(len(r) for t, r in firsts if "co-op" in t)
 n_em     = sum(len(r) for _, r in em)
 n_fr     = sum(len(r) for _, r in fr)
 
 section = f"""{MARK_START}
   <h2 id="impl">Touch, actually working</h2>
   <p class="h2note">
-    Proof captures from the implementation runs — the naming keyboard typed by touch alone, list
-    drag-scrolling, the PC box worked by touch — plus the first-ever Ruby, Sapphire and LeafGreen
-    boots. <strong>{n_impl}</strong> implementation proofs, <strong>{n_firsts}</strong> first boots.
-    Sections open on click.
+    Proof captures from the implementation runs — <strong>{n_impl}</strong> of them, across
+    {len(impl)} flows.
   </p>
   <div class="gtools"><button class="gbtn" data-scope="impl-wrap" data-act="open">Open all</button>
     <button class="gbtn" data-scope="impl-wrap" data-act="close">Close all</button></div>
   <div id="impl-wrap">
 {gallery(impl)}
-{gallery(firsts, first_open=False)}
+  </div>
+
+  <h2 id="firsts">New games running</h2>
+  <p class="h2note">
+    Three games the app had never run before, booted and driven: <strong>{n_firsts}</strong> boot
+    captures, plus <strong>{n_coop}</strong> of Ruby and Sapphire in co-op on one console.
+  </p>
+  <div class="gtools"><button class="gbtn" data-scope="firsts-wrap" data-act="open">Open all</button>
+    <button class="gbtn" data-scope="firsts-wrap" data-act="close">Close all</button></div>
+  <div id="firsts-wrap">
+{gallery(firsts)}
   </div>
 
   <h2 id="census">The screen census</h2>
   <p class="h2note">
     An automated sweep visited every reachable screen, photographing both 3DS screens and
     identifying each by reading the game's own callback pointer and resolving it against the
-    decompilation's symbols — certain identification, not guesswork. Grouped by the catalog's own
-    sections. <strong>{n_em}</strong> Emerald and <strong>{n_fr}</strong> FireRed screens.
+    decompilation's symbols — certain identification, not guesswork.
+    <strong>{n_em}</strong> Emerald and <strong>{n_fr}</strong> FireRed screens.
   </p>
   <div class="gtools"><button class="gbtn" data-scope="census-wrap" data-act="open">Open all</button>
     <button class="gbtn" data-scope="census-wrap" data-act="close">Close all</button></div>
   <div id="census-wrap">
     <h3 class="gsub" id="census-em">Emerald <span class="gsubn">covers Ruby / Sapphire</span></h3>
-{gallery(em)}
+{gallery(em, CENSUS_OPEN)}
     <h3 class="gsub" id="census-fr">FireRed <span class="gsubn">covers LeafGreen</span></h3>
-{gallery(fr, first_open=False)}
+{gallery(fr, CENSUS_OPEN)}
   </div>
 {MARK_END}
 """
 
 # ---------------------------------------------------------------- quick-nav
 NAV = [("sharp", "Sharp text"), ("roles", "Type roles"), ("coop", "Co-op"),
-       ("earlier", "Earlier fixes"), ("impl", "Touch proofs"),
+       ("earlier", "Earlier fixes"), ("impl", "Touch proofs"), ("firsts", "New games"),
        ("census", "Screen census"), ("status", "Status")]
 
 nav_html = ('<nav class="qnav" aria-label="Sections"><div class="qnav-in">'
@@ -195,18 +222,30 @@ nav_html = ('<nav class="qnav" aria-label="Sections"><div class="qnav-in">'
             + '</div></nav>')
 
 CSS = f"""{CSS_START}
+  /* Amber ink for SMALL TEXT. The display accent is only 3.5:1 on the light panel — dimmer than
+     the resting label it is meant to highlight — so active nav/hover/disclosure ink uses this
+     darker amber in light and the normal accent in dark. Defined in all three theme states. */
+  :root {{ --acc-ink:#8A5A0F; }}
+  @media (prefers-color-scheme: dark) {{ :root:not([data-theme="light"]) {{ --acc-ink:#F5D042; }} }}
+  :root[data-theme="dark"] {{ --acc-ink:#F5D042; }}
+
   .qnav {{ position:sticky; top:10px; z-index:20; margin:34px 0 8px; }}
   .qnav-in {{ display:flex; gap:2px; overflow-x:auto; scrollbar-width:none; padding:5px 6px;
-              background:color-mix(in srgb,var(--panel) 82%,transparent); backdrop-filter:blur(10px);
-              border:1px solid var(--line); border-radius:999px; box-shadow:var(--shadow); }}
+              background:var(--panel);
+              background:color-mix(in srgb,var(--panel) 92%,transparent);
+              -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px);
+              border:1px solid var(--line); border-radius:999px; box-shadow:var(--shadow);
+              -webkit-mask-image:linear-gradient(90deg,#000 0 calc(100% - 26px),transparent);
+              mask-image:linear-gradient(90deg,#000 0 calc(100% - 26px),transparent); }}
   .qnav-in::-webkit-scrollbar {{ display:none; }}
   .qnav a {{ flex:none; text-decoration:none; color:var(--dim); font-family:var(--mono);
              font-size:10.5px; letter-spacing:.13em; text-transform:uppercase; white-space:nowrap;
              padding:6px 11px; border-radius:999px; border:1px solid transparent; }}
   .qnav a:hover {{ color:var(--text); background:color-mix(in srgb,var(--acc) 10%,transparent); }}
-  .qnav a.on {{ color:var(--acc); border-color:color-mix(in srgb,var(--acc) 40%,transparent);
+  .qnav a.on {{ color:var(--acc-ink); border-color:color-mix(in srgb,var(--acc) 40%,transparent);
                 background:color-mix(in srgb,var(--acc) 12%,transparent); }}
-  .qnav a:focus-visible {{ outline:2px solid var(--acc); outline-offset:2px; }}
+  /* inset ring: overflow-x:auto also computes overflow-y, which would clip an outset one */
+  .qnav a:focus-visible {{ outline:2px solid var(--acc); outline-offset:-2px; }}
   html {{ scroll-behavior:smooth; }}
   @media (prefers-reduced-motion:reduce) {{ html {{ scroll-behavior:auto; }} }}
   [id] {{ scroll-margin-top:72px; }}
@@ -215,7 +254,7 @@ CSS = f"""{CSS_START}
   .gbtn {{ font-family:var(--mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase;
            color:var(--dim); background:var(--panel); border:1px solid var(--line);
            border-radius:999px; padding:6px 13px; cursor:pointer; }}
-  .gbtn:hover {{ color:var(--acc); border-color:color-mix(in srgb,var(--acc) 45%,transparent); }}
+  .gbtn:hover {{ color:var(--acc-ink); border-color:color-mix(in srgb,var(--acc) 45%,transparent); }}
   .gbtn:focus-visible {{ outline:2px solid var(--acc); outline-offset:2px; }}
 
   .ggroup {{ background:var(--panel); border:1px solid var(--line); border-radius:12px;
@@ -224,7 +263,7 @@ CSS = f"""{CSS_START}
                        font-family:var(--mono); font-size:11.5px; letter-spacing:.06em; color:var(--text);
                        list-style:none; }}
   .ggroup > summary::-webkit-details-marker {{ display:none; }}
-  .ggroup > summary::before {{ content:"+"; flex:none; width:15px; color:var(--acc);
+  .ggroup > summary::before {{ content:"+"; flex:none; width:15px; color:var(--acc-ink);
                                font-size:13px; text-align:center; }}
   .ggroup[open] > summary::before {{ content:"–"; }}
   .ggroup[open] > summary {{ border-bottom:1px solid var(--line); }}
@@ -234,16 +273,18 @@ CSS = f"""{CSS_START}
              border:1px solid var(--line); border-radius:999px; padding:2px 8px; }}
   .ggroup .cgrid {{ padding:14px 16px 16px; }}
 
-  .cgrid {{ display:grid; gap:10px; grid-template-columns:repeat(auto-fill,minmax(168px,1fr)); }}
+  .cgrid {{ display:grid; gap:10px; align-items:start;
+            grid-template-columns:repeat(auto-fill,minmax(168px,1fr)); }}
   .cshot {{ margin:0; background:var(--panel2); border:1px solid var(--line); border-radius:8px;
             overflow:hidden; }}
-  .cshot img {{ width:100%; display:block; image-rendering:pixelated; background:#000; }}
+  .cshot img {{ width:100%; height:auto; display:block; image-rendering:pixelated;
+                background:var(--panel2); }}
   .cshot figcaption {{ padding:5px 8px; font-family:var(--mono); font-size:9.5px; color:var(--dim);
                        letter-spacing:.04em; overflow:hidden; text-overflow:ellipsis;
                        white-space:nowrap; }}
   .gsub {{ font-size:12px; font-family:var(--mono); letter-spacing:.14em; text-transform:uppercase;
            color:var(--dim); margin:26px 0 10px; display:flex; align-items:baseline; gap:10px; }}
-  .gsubn {{ font-size:10px; letter-spacing:.08em; text-transform:none; opacity:.75; }}
+  .gsubn {{ font-size:10px; letter-spacing:.08em; text-transform:none; }}
 {CSS_END}"""
 
 JS = """<script>
@@ -294,11 +335,13 @@ for pat, hid in [(r'<h2>(Sharp text[^<]*)</h2>', 'sharp'),
                  (r'<h2>(Earlier fixes[^<]*)</h2>', 'earlier')]:
     html = re.sub(pat, lambda m, h=hid: f'<h2 id="{h}">{m.group(1)}</h2>', html, count=1)
 
-# 3. sticky nav immediately before the first content section (once)
-if 'class="qnav"' not in html:
-    if '<h2 id="sharp">' not in html:
-        raise SystemExit("nav anchor missing — the #sharp id was not applied")
-    html = html.replace('<h2 id="sharp">', nav_html + '\n\n  <h2 id="sharp">', 1)
+# 3. sticky nav immediately before the first content section. RE-EMITTED every run: a
+#    once-only guard here silently swallows any change to NAV (a new section's link would
+#    never appear on an already-published page).
+html = re.sub(r'<nav class="qnav".*?</nav>\n*\s*', "", html, flags=re.S)
+if '<h2 id="sharp">' not in html:
+    raise SystemExit("nav anchor missing — the #sharp id was not applied")
+html = html.replace('<h2 id="sharp">', nav_html + '\n\n  <h2 id="sharp">', 1)
 
 # 4. CSS (replaceable block)
 if CSS_START in html:

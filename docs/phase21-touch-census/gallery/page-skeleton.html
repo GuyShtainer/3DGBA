@@ -1,0 +1,802 @@
+<title>3DGBA — UI audit</title>
+<style>
+  :root {
+    --bg:#EDEBE4; --panel:#FFFFFF; --panel2:#F1EDE4; --line:#DAD5CB;
+    --acc:#BE7A16; --text:#241C33; --dim:#6E6784;
+    --good:#4E8F2E; --bad:#C23A24; --info:#2F6BAE;
+    --shadow:0 1px 2px rgba(36,28,51,.06), 0 8px 24px rgba(36,28,51,.07);
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg:#201830; --panel:#2A2042; --panel2:#33265A; --line:#3B2E60;
+      --acc:#F5D042; --text:#F4F1FB; --dim:#B0A8C8;
+      --good:#63B23C; --bad:#E4796B; --info:#3E86D6;
+      --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg:#201830; --panel:#2A2042; --panel2:#33265A; --line:#3B2E60;
+    --acc:#F5D042; --text:#F4F1FB; --dim:#B0A8C8;
+    --good:#63B23C; --bad:#E4796B; --info:#3E86D6;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:var(--sans);
+          line-height:1.55; -webkit-font-smoothing:antialiased; }
+  .wrap { max-width:1080px; margin:0 auto; padding:clamp(24px,5vw,64px) clamp(16px,4vw,32px) 96px; }
+  .eyebrow { font-family:var(--mono); font-size:11px; letter-spacing:.18em; text-transform:uppercase;
+              color:var(--dim); margin:0 0 14px; }
+  h1 { font-size:clamp(30px,5.2vw,52px); line-height:1.04; letter-spacing:-.025em; margin:0 0 16px;
+        text-wrap:balance; font-weight:760; }
+  h1 em { font-style:normal; color:var(--acc); }
+  .lede { font-size:clamp(16px,1.9vw,19px); color:var(--dim); max-width:64ch; margin:0 0 36px; }
+  .stats { display:flex; flex-wrap:wrap; gap:10px; margin:0 0 46px; }
+  .stat { flex:1 1 150px; background:var(--panel); border:1px solid var(--line); border-radius:10px;
+           padding:14px 16px; box-shadow:var(--shadow); }
+  .stat b { display:block; font-family:var(--mono); font-size:26px; font-variant-numeric:tabular-nums;
+             letter-spacing:-.02em; line-height:1.1; }
+  .stat span { font-family:var(--mono); font-size:10.5px; letter-spacing:.13em; text-transform:uppercase;
+                color:var(--dim); }
+  .stat-good b { color:var(--good); } .stat-acc b { color:var(--acc); } .stat-info b { color:var(--info); }
+  h2 { font-size:13px; font-family:var(--mono); letter-spacing:.16em; text-transform:uppercase;
+        color:var(--dim); margin:56px 0 6px; padding-bottom:10px; border-bottom:1px solid var(--line); }
+  .h2note { color:var(--dim); font-size:14.5px; margin:12px 0 26px; max-width:68ch; }
+  .h2note strong { color:var(--text); }
+
+  .strip { margin:0 0 18px; background:var(--panel); border:1px solid var(--line); border-radius:12px;
+            padding:14px 16px 16px; box-shadow:var(--shadow); overflow:hidden; }
+  .strip figcaption h4 { margin:0 0 10px; font-size:15px; }
+  .strip-row { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+  .strip-row img { flex:1; min-width:0; width:100%; display:block; image-rendering:pixelated;
+                    border-radius:5px; background:#0E0B16; }
+  .tag { flex:none; width:52px; font-family:var(--mono); font-size:9.5px; letter-spacing:.1em;
+          text-transform:uppercase; }
+  .tag-b { color:var(--bad); } .tag-a { color:var(--good); }
+
+  .roles { display:grid; gap:16px; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); }
+  .role { margin:0; background:var(--panel); border:1px solid var(--line); border-radius:12px;
+           padding:14px 16px 16px; box-shadow:var(--shadow); overflow:hidden; }
+  .role figcaption { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+  .role h4 { margin:0; font-size:14.5px; }
+  .role code { font-family:var(--mono); font-size:11.5px; color:var(--dim); }
+  .was { margin-left:auto; font-family:var(--mono); font-size:10px; color:var(--bad); }
+  .role-imgs { display:grid; gap:8px; }
+  .role-imgs div { display:flex; align-items:center; gap:10px; }
+  .role-imgs img { flex:1; min-width:0; width:100%; display:block; image-rendering:pixelated;
+                    border-radius:5px; background:#fff; }
+
+  .grid { display:grid; gap:22px; }
+  .card { margin:0; background:var(--panel); border:1px solid var(--line); border-radius:12px;
+           overflow:hidden; box-shadow:var(--shadow); }
+  .card-head { display:flex; align-items:flex-start; justify-content:space-between; gap:14px;
+                padding:16px 18px 12px; }
+  .card-head h3 { margin:0; font-size:17px; letter-spacing:-.01em; }
+  .screen { margin:3px 0 0; font-family:var(--mono); font-size:11px; color:var(--dim); }
+  .pill { font-family:var(--mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase;
+           padding:4px 9px; border-radius:999px; white-space:nowrap; border:1px solid; }
+  .pill-fixed { color:var(--good); border-color:color-mix(in srgb,var(--good) 45%,transparent);
+                 background:color-mix(in srgb,var(--good) 12%,transparent); }
+  .wipe { position:relative; aspect-ratio:720/540; background:#000; touch-action:pan-y; }
+  .wipe img { position:absolute; inset:0; width:100%; height:100%; display:block; image-rendering:pixelated; }
+  .w-after { clip-path:inset(0 0 0 var(--pos)); }
+  .w-line { position:absolute; top:0; bottom:0; left:var(--pos); width:2px; background:var(--acc);
+             transform:translateX(-1px); pointer-events:none; }
+  .w-grip { position:absolute; top:50%; left:50%; width:34px; height:34px; transform:translate(-50%,-50%);
+             border-radius:999px; background:var(--acc); border:2px solid var(--bg);
+             box-shadow:0 2px 10px rgba(0,0,0,.4); }
+  .w-tag { position:absolute; top:10px; font-family:var(--mono); font-size:10px; letter-spacing:.12em;
+            text-transform:uppercase; padding:3px 8px; border-radius:5px; pointer-events:none;
+            background:rgba(0,0,0,.62); }
+  .w-tag-b { left:10px; color:#FF9E8E; } .w-tag-a { right:10px; color:#9BE87A; }
+  .w-range { position:absolute; inset:0; width:100%; height:100%; margin:0; opacity:0; cursor:ew-resize; }
+  .w-range:focus-visible ~ .w-line { box-shadow:0 0 0 3px color-mix(in srgb,var(--acc) 55%,transparent); }
+  .notes { padding:14px 18px 18px; display:grid; gap:8px; }
+  .notes p { margin:0; font-size:14.5px; color:var(--dim); }
+  .notes strong { color:var(--text); font-weight:650; }
+  .dot { display:inline-block; width:7px; height:7px; border-radius:999px; margin-right:9px;
+          vertical-align:middle; }
+  .dot-b { background:var(--bad); } .dot-a { background:var(--good); }
+
+  .shot { margin:0; background:var(--panel); border:1px solid var(--line); border-radius:12px;
+           overflow:hidden; box-shadow:var(--shadow); }
+  .shot img { width:100%; display:block; image-rendering:pixelated; background:#000; }
+  .shot figcaption { padding:14px 16px 16px; font-size:14.5px; color:var(--dim); }
+
+  table { width:100%; border-collapse:collapse; font-size:14.5px; }
+  th, td { text-align:left; padding:11px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { font-family:var(--mono); font-size:10.5px; letter-spacing:.12em; text-transform:uppercase;
+        color:var(--dim); font-weight:400; }
+  td:first-child { white-space:nowrap; font-weight:620; }
+  .st { font-family:var(--mono); font-size:10px; letter-spacing:.08em; text-transform:uppercase;
+         padding:3px 7px; border-radius:999px; border:1px solid; }
+  .st-ok { color:var(--good); border-color:color-mix(in srgb,var(--good) 45%,transparent); }
+  .st-part { color:var(--acc); border-color:color-mix(in srgb,var(--acc) 45%,transparent); }
+  .st-hw { color:var(--info); border-color:color-mix(in srgb,var(--info) 45%,transparent); }
+  .tblwrap { overflow-x:auto; }
+  footer { margin-top:64px; padding-top:22px; border-top:1px solid var(--line); font-size:13.5px;
+            color:var(--dim); }
+  footer code { font-family:var(--mono); font-size:12.5px; }
+  @media (prefers-reduced-motion:reduce) { * { transition:none !important; animation:none !important; } }
+
+/*GNAV-CSS-START*/
+  /* Amber ink for SMALL TEXT. The display accent is only 3.5:1 on the light panel — dimmer than
+     the resting label it is meant to highlight — so active nav/hover/disclosure ink uses this
+     darker amber in light and the normal accent in dark. Defined in all three theme states. */
+  :root { --acc-ink:#8A5A0F; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --acc-ink:#F5D042; } }
+  :root[data-theme="dark"] { --acc-ink:#F5D042; }
+
+  .qnav { position:sticky; top:10px; z-index:20; margin:34px 0 8px; }
+  .qnav-in { display:flex; gap:2px; overflow-x:auto; scrollbar-width:none; padding:5px 6px;
+              background:var(--panel);
+              background:color-mix(in srgb,var(--panel) 92%,transparent);
+              -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px);
+              border:1px solid var(--line); border-radius:999px; box-shadow:var(--shadow);
+              -webkit-mask-image:linear-gradient(90deg,#000 0 calc(100% - 26px),transparent);
+              mask-image:linear-gradient(90deg,#000 0 calc(100% - 26px),transparent); }
+  .qnav-in::-webkit-scrollbar { display:none; }
+  .qnav a { flex:none; text-decoration:none; color:var(--dim); font-family:var(--mono);
+             font-size:10.5px; letter-spacing:.13em; text-transform:uppercase; white-space:nowrap;
+             padding:6px 11px; border-radius:999px; border:1px solid transparent; }
+  .qnav a:hover { color:var(--text); background:color-mix(in srgb,var(--acc) 10%,transparent); }
+  .qnav a.on { color:var(--acc-ink); border-color:color-mix(in srgb,var(--acc) 40%,transparent);
+                background:color-mix(in srgb,var(--acc) 12%,transparent); }
+  /* inset ring: overflow-x:auto also computes overflow-y, which would clip an outset one */
+  .qnav a:focus-visible { outline:2px solid var(--acc); outline-offset:-2px; }
+  html { scroll-behavior:smooth; }
+  @media (prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } }
+  [id] { scroll-margin-top:72px; }
+
+  .gtools { display:flex; gap:8px; margin:0 0 14px; }
+  .gbtn { font-family:var(--mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase;
+           color:var(--dim); background:var(--panel); border:1px solid var(--line);
+           border-radius:999px; padding:6px 13px; cursor:pointer; }
+  .gbtn:hover { color:var(--acc-ink); border-color:color-mix(in srgb,var(--acc) 45%,transparent); }
+  .gbtn:focus-visible { outline:2px solid var(--acc); outline-offset:2px; }
+
+  .ggroup { background:var(--panel); border:1px solid var(--line); border-radius:12px;
+             margin:0 0 8px; box-shadow:var(--shadow); overflow:hidden; }
+  .ggroup > summary { display:flex; align-items:center; gap:10px; cursor:pointer; padding:13px 16px;
+                       font-family:var(--mono); font-size:11.5px; letter-spacing:.06em; color:var(--text);
+                       list-style:none; }
+  .ggroup > summary::-webkit-details-marker { display:none; }
+  .ggroup > summary::before { content:"+"; flex:none; width:15px; color:var(--acc-ink);
+                               font-size:13px; text-align:center; }
+  .ggroup[open] > summary::before { content:"–"; }
+  .ggroup[open] > summary { border-bottom:1px solid var(--line); }
+  .ggroup > summary:focus-visible { outline:2px solid var(--acc); outline-offset:-2px; }
+  .gtitle { flex:1 1 auto; }
+  .gcount { flex:none; font-size:10px; color:var(--dim); font-variant-numeric:tabular-nums;
+             border:1px solid var(--line); border-radius:999px; padding:2px 8px; }
+  .ggroup .cgrid { padding:14px 16px 16px; }
+
+  .cgrid { display:grid; gap:10px; align-items:start;
+            grid-template-columns:repeat(auto-fill,minmax(168px,1fr)); }
+  .cshot { margin:0; background:var(--panel2); border:1px solid var(--line); border-radius:8px;
+            overflow:hidden; }
+  .cshot img { width:100%; height:auto; display:block; image-rendering:pixelated;
+                background:var(--panel2); }
+  .cshot figcaption { padding:5px 8px; font-family:var(--mono); font-size:9.5px; color:var(--dim);
+                       letter-spacing:.04em; overflow:hidden; text-overflow:ellipsis;
+                       white-space:nowrap; }
+  .gsub { font-size:12px; font-family:var(--mono); letter-spacing:.14em; text-transform:uppercase;
+           color:var(--dim); margin:26px 0 10px; display:flex; align-items:baseline; gap:10px; }
+  .gsubn { font-size:10px; letter-spacing:.08em; text-transform:none; }
+/*GNAV-CSS-END*/
+</style>
+
+<div class="wrap">
+  <p class="eyebrow">3DGBA · Nintendo 3DS homebrew · UI audit</p>
+  <h1>Found by a robot that can see. Fixed, then <em>measured</em>.</h1>
+  <p class="lede">
+    An automated harness boots the real app in an emulator, drives it with synthesized button and
+    touch input, screenshots every screen and reads them back. It found 22 defects on its own; 21
+    are fixed. Then you tested on hardware and said the text was blurry — so that got fixed too,
+    and this time the proof is arithmetic rather than opinion.
+  </p>
+
+  <div class="stats">
+    <div class="stat stat-acc"><b>22</b><span>defects found</span></div>
+    <div class="stat stat-good"><b>21</b><span>fixed &amp; re-captured</span></div>
+    <div class="stat stat-good"><b>1.000×</b><span>text texel scale</span></div>
+    <div class="stat stat-info"><b>164k</b><span>host checks green</span></div>
+  </div>
+
+  <nav class="qnav" aria-label="Sections"><div class="qnav-in"><a href="#sharp">Sharp text</a><a href="#roles">Type roles</a><a href="#coop">Co-op</a><a href="#earlier">Earlier fixes</a><a href="#impl">Touch proofs</a><a href="#firsts">New games</a><a href="#census">Screen census</a><a href="#status">Status</a></div></nav>
+
+  <h2 id="sharp">Sharp text — the same pixels, before and after</h2>
+  <p class="h2note">
+    Text was drawn at scales like <strong>0.585×</strong> and <strong>0.702×</strong> against fonts
+    baked at fixed sizes — a bitmap font resampled off 1.0 is blurry by construction. Every text
+    role now draws at exactly <strong>1.000×</strong> on an integer origin. These strips are the
+    identical crop from the identical screen, before and after.
+  </p>
+
+      <figure class="strip">
+        <figcaption><h4>The pause chip row</h4></figcaption>
+        <div class="strip-row"><span class="tag tag-b">before</span><img src="IMG" alt="The pause chip row before" /></div>
+        <div class="strip-row"><span class="tag tag-a">after</span><img src="IMG" alt="The pause chip row after" /></div>
+      </figure>
+
+      <figure class="strip">
+        <figcaption><h4>A hint line</h4></figcaption>
+        <div class="strip-row"><span class="tag tag-b">before</span><img src="IMG" alt="A hint line before" /></div>
+        <div class="strip-row"><span class="tag tag-a">after</span><img src="IMG" alt="A hint line after" /></div>
+      </figure>
+
+      <figure class="strip">
+        <figcaption><h4>A HUD chip</h4></figcaption>
+        <div class="strip-row"><span class="tag tag-b">before</span><img src="IMG" alt="A HUD chip before" /></div>
+        <div class="strip-row"><span class="tag tag-a">after</span><img src="IMG" alt="A HUD chip after" /></div>
+      </figure>
+
+  <h2 id="roles">Every text role, rendered from the shipped font bytes</h2>
+  <p class="h2note">
+    Native 3DS resolution, no emulator upscaling in the way. The proof is binary: after the fix
+    every glyph pixel is an exact multiple of 17 — the only values the glyph sheet can contain —
+    which is possible <em>only</em> at scale 1.0 with an integer origin. Off-values went
+    <strong>530 → 0</strong>; distinct grey levels <strong>217 → 15</strong>.
+  </p>
+  <div class="roles">
+
+      <figure class="role">
+        <figcaption><h4>Section label</h4><code>SCALE · TOP</code><span class="was">was 0.750×</span></figcaption>
+        <div class="role-imgs">
+          <div><span class="tag tag-b">before</span><img src="IMG" alt="Section label before" /></div>
+          <div><span class="tag tag-a">after</span><img src="IMG" alt="Section label after" /></div>
+        </div>
+      </figure>
+
+      <figure class="role">
+        <figcaption><h4>Body text</h4><code>pick a game (d-pad + A)</code><span class="was">was 0.702×</span></figcaption>
+        <div class="role-imgs">
+          <div><span class="tag tag-b">before</span><img src="IMG" alt="Body text before" /></div>
+          <div><span class="tag tag-a">after</span><img src="IMG" alt="Body text after" /></div>
+        </div>
+      </figure>
+
+      <figure class="role">
+        <figcaption><h4>Segmented</h4><code>Aspect-fit</code><span class="was">was 0.585×</span></figcaption>
+        <div class="role-imgs">
+          <div><span class="tag tag-b">before</span><img src="IMG" alt="Segmented before" /></div>
+          <div><span class="tag tag-a">after</span><img src="IMG" alt="Segmented after" /></div>
+        </div>
+      </figure>
+
+      <figure class="role">
+        <figcaption><h4>Button</h4><code>Resume this pairing</code><span class="was">was 0.682×</span></figcaption>
+        <div class="role-imgs">
+          <div><span class="tag tag-b">before</span><img src="IMG" alt="Button before" /></div>
+          <div><span class="tag tag-a">after</span><img src="IMG" alt="Button after" /></div>
+        </div>
+      </figure>
+
+      <figure class="role">
+        <figcaption><h4>Title</h4><code>Settings</code><span class="was">was 1.049×</span></figcaption>
+        <div class="role-imgs">
+          <div><span class="tag tag-b">before</span><img src="IMG" alt="Title before" /></div>
+          <div><span class="tag tag-a">after</span><img src="IMG" alt="Title after" /></div>
+        </div>
+      </figure>
+
+      <figure class="role">
+        <figcaption><h4>Value</h4><code>12:34</code><span class="was">was 0.694×</span></figcaption>
+        <div class="role-imgs">
+          <div><span class="tag tag-b">before</span><img src="IMG" alt="Value before" /></div>
+          <div><span class="tag tag-a">after</span><img src="IMG" alt="Value after" /></div>
+        </div>
+      </figure>
+  </div>
+
+  <h2 id="coop">Co-op, working — both games see each other</h2>
+  <figure class="shot">
+    <img src="IMG" alt="Both 3DS screens: each game renders the other player in the same Pokemon Center" />
+    <figcaption>
+      Two Emerald copies on one console, same Pokémon Center, both screens captured at native 3DS
+      resolution. The magenta figure with the <code>GUYA</code> nameplate is the <em>other</em>
+      player — top screen shows game B's trainer standing in game A's world, bottom screen shows
+      game A's trainer in game B's. Mirror views of one room.
+      The magenta is a deliberate placeholder so it can never be mistaken for finished art;
+      the real trainer sprite is the next piece of work.
+      <strong>This works in the emulator but not yet on the console</strong> — that gap is open,
+      not closed.
+    </figcaption>
+  </figure>
+
+  <h2 id="earlier">Earlier fixes — drag to compare</h2>
+  <p class="h2note">
+    From the first sweep. The headline was a widget sprite that shipped with the designer's example
+    label <em>baked into its pixels</em>, printed under the live label on every segmented control.
+  </p>
+  <div class="grid">
+
+      <figure class="card">
+        <figcaption class="card-head">
+          <div><h3>Game-select mode pill</h3><p class="screen">Bottom screen · first interactive screen</p></div>
+          <span class="pill pill-fixed">fixed</span>
+        </figcaption>
+        <div class="wipe" style="--pos:50%">
+          <img class="w-before" src="IMG" alt="Game-select mode pill before" />
+          <img class="w-after" src="IMG" alt="Game-select mode pill after" />
+          <div class="w-line" aria-hidden="true"><span class="w-grip"></span></div>
+          <span class="w-tag w-tag-b">before</span><span class="w-tag w-tag-a">after</span>
+          <input class="w-range" type="range" min="0" max="100" value="50" step="0.1"
+                 aria-label="Reveal Game-select mode pill after the fix" />
+        </div>
+        <div class="notes">
+          <p><span class="dot dot-b"></span>An unreadable smear — and every tap resolved to “1 Game”, so the control did not work either.</p>
+          <p><span class="dot dot-a"></span>A right-half tap now selects <strong>2 Games</strong>, the footer hint reads in full, and the settings chip moved clear of it.</p>
+        </div>
+      </figure>
+
+      <figure class="card">
+        <figcaption class="card-head">
+          <div><h3>DISPLAY settings tab</h3><p class="screen">Pause menu · bottom screen</p></div>
+          <span class="pill pill-fixed">fixed</span>
+        </figcaption>
+        <div class="wipe" style="--pos:50%">
+          <img class="w-before" src="IMG" alt="DISPLAY settings tab before" />
+          <img class="w-after" src="IMG" alt="DISPLAY settings tab after" />
+          <div class="w-line" aria-hidden="true"><span class="w-grip"></span></div>
+          <span class="w-tag w-tag-b">before</span><span class="w-tag w-tag-a">after</span>
+          <input class="w-range" type="range" min="0" max="100" value="50" step="0.1"
+                 aria-label="Reveal DISPLAY settings tab after the fix" />
+        </div>
+        <div class="notes">
+          <p><span class="dot dot-b"></span>All four rows smeared — you could not read a single one of your own settings.</p>
+          <p><span class="dot dot-a"></span><strong>1:1</strong>, <strong>Aspect-fit</strong>, <strong>Sharp</strong>, <strong>off</strong>, each legible.</p>
+        </div>
+      </figure>
+
+      <figure class="card">
+        <figcaption class="card-head">
+          <div><h3>Virtual gamepad</h3><p class="screen">In-game · bottom screen</p></div>
+          <span class="pill pill-fixed">fixed</span>
+        </figcaption>
+        <div class="wipe" style="--pos:50%">
+          <img class="w-before" src="IMG" alt="Virtual gamepad before" />
+          <img class="w-after" src="IMG" alt="Virtual gamepad after" />
+          <div class="w-line" aria-hidden="true"><span class="w-grip"></span></div>
+          <span class="w-tag w-tag-b">before</span><span class="w-tag w-tag-a">after</span>
+          <input class="w-range" type="range" min="0" max="100" value="50" step="0.1"
+                 aria-label="Reveal Virtual gamepad after the fix" />
+        </div>
+        <div class="notes">
+          <p><span class="dot dot-b"></span>L and R drawn on top of the HUD text; START clipped by the screen edge.</p>
+          <p><span class="dot dot-a"></span>Keys clear the HUD, and every key is a proper rounded shape.</p>
+        </div>
+      </figure>
+
+      <figure class="card">
+        <figcaption class="card-head">
+          <div><h3>The “3D” badge</h3><p class="screen">In-game · top screen HUD</p></div>
+          <span class="pill pill-fixed">fixed</span>
+        </figcaption>
+        <div class="wipe" style="--pos:50%">
+          <img class="w-before" src="IMG" alt="The “3D” badge before" />
+          <img class="w-after" src="IMG" alt="The “3D” badge after" />
+          <div class="w-line" aria-hidden="true"><span class="w-grip"></span></div>
+          <span class="w-tag w-tag-b">before</span><span class="w-tag w-tag-a">after</span>
+          <input class="w-range" type="range" min="0" max="100" value="50" step="0.1"
+                 aria-label="Reveal The “3D” badge after the fix" />
+        </div>
+        <div class="notes">
+          <p><span class="dot dot-b"></span>Dark navy text on black — effectively invisible.</p>
+          <p><span class="dot dot-a"></span>Legible at the design’s own role colour.</p>
+        </div>
+      </figure>
+  </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+<!--GALLERY-START-->
+  <h2 id="impl">Touch, actually working</h2>
+  <p class="h2note">
+    Proof captures from the implementation runs — <strong>39</strong> of them, across
+    7 flows.
+  </p>
+  <div class="gtools"><button class="gbtn" data-scope="impl-wrap" data-act="open">Open all</button>
+    <button class="gbtn" data-scope="impl-wrap" data-act="close">Close all</button></div>
+  <div id="impl-wrap">
+<details class="ggroup" open><summary><span class="gtitle">PC storage — the box, worked by touch</span><span class="gcount">7</span></summary><div class="cgrid">
+<figure class="cshot" title="EM-P24-G1-storage-move-mons"><img src="IMG" alt="EM-P24-G1-storage-move-mons" width="720" height="540" loading="lazy" /><figcaption>EM-P24-G1-storage-move-mons</figcaption></figure>
+<figure class="cshot" title="EM-P24-G2a-party-mon-selected"><img src="IMG" alt="EM-P24-G2a-party-mon-selected" width="720" height="540" loading="lazy" /><figcaption>EM-P24-G2a-party-mon-selected</figcaption></figure>
+<figure class="cshot" title="EM-P24-G2b-lugia-SHIFT-menu"><img src="IMG" alt="EM-P24-G2b-lugia-SHIFT-menu" width="720" height="540" loading="lazy" /><figcaption>EM-P24-G2b-lugia-SHIFT-menu</figcaption></figure>
+<figure class="cshot" title="EM-P24-G2c-lugia-in-hand"><img src="IMG" alt="EM-P24-G2c-lugia-in-hand" width="720" height="540" loading="lazy" /><figcaption>EM-P24-G2c-lugia-in-hand</figcaption></figure>
+<figure class="cshot" title="EM-P24-G2d-PLACE-into-party"><img src="IMG" alt="EM-P24-G2d-PLACE-into-party" width="720" height="540" loading="lazy" /><figcaption>EM-P24-G2d-PLACE-into-party</figcaption></figure>
+<figure class="cshot" title="EM-P24-G2e-zigzagoon-SHIFT"><img src="IMG" alt="EM-P24-G2e-zigzagoon-SHIFT" width="720" height="540" loading="lazy" /><figcaption>EM-P24-G2e-zigzagoon-SHIFT</figcaption></figure>
+<figure class="cshot" title="EM-P24-G2f-save-8-badges"><img src="IMG" alt="EM-P24-G2f-save-8-badges" width="720" height="540" loading="lazy" /><figcaption>EM-P24-G2f-save-8-badges</figcaption></figure>
+</div></details>
+<details class="ggroup"><summary><span class="gtitle">Naming keyboard — typed by touch alone</span><span class="gcount">3</span></summary><div class="cgrid">
+<figure class="cshot" title="EM-naming-OK-commit-so-its-PIK"><img src="IMG" alt="EM-naming-OK-commit-so-its-PIK" width="720" height="540" loading="lazy" /><figcaption>EM-naming-OK-commit-so-its-PIK</figcaption></figure>
+<figure class="cshot" title="EM-naming-PIKA-typed"><img src="IMG" alt="EM-naming-PIKA-typed" width="720" height="540" loading="lazy" /><figcaption>EM-naming-PIKA-typed</figcaption></figure>
+<figure class="cshot" title="EM-naming-lower-page-after-swap"><img src="IMG" alt="EM-naming-lower-page-after-swap" width="720" height="540" loading="lazy" /><figcaption>EM-naming-lower-page-after-swap</figcaption></figure>
+</div></details>
+<details class="ggroup"><summary><span class="gtitle">Lists — bag rows, Pokédex, search chips</span><span class="gcount">4</span></summary><div class="cgrid">
+<figure class="cshot" title="EM-bag-drag-scrolled"><img src="IMG" alt="EM-bag-drag-scrolled" width="720" height="540" loading="lazy" /><figcaption>EM-bag-drag-scrolled</figcaption></figure>
+<figure class="cshot" title="EM-bag-rowtap-submenu-repeatball"><img src="IMG" alt="EM-bag-rowtap-submenu-repeatball" width="720" height="540" loading="lazy" /><figcaption>EM-bag-rowtap-submenu-repeatball</figcaption></figure>
+<figure class="cshot" title="EM-dex-list-touch-opened"><img src="IMG" alt="EM-dex-list-touch-opened" width="720" height="540" loading="lazy" /><figcaption>EM-dex-list-touch-opened</figcaption></figure>
+<figure class="cshot" title="EM-dex-search-chip-select"><img src="IMG" alt="EM-dex-search-chip-select" width="720" height="540" loading="lazy" /><figcaption>EM-dex-search-chip-select</figcaption></figure>
+</div></details>
+<details class="ggroup"><summary><span class="gtitle">Summary pages — edge taps to turn</span><span class="gcount">3</span></summary><div class="cgrid">
+<figure class="cshot" title="EM-page-P10-summary-page1-info"><img src="IMG" alt="EM-page-P10-summary-page1-info" width="720" height="540" loading="lazy" /><figcaption>EM-page-P10-summary-page1-info</figcaption></figure>
+<figure class="cshot" title="EM-page-P11-edgetap-page2-skills"><img src="IMG" alt="EM-page-P11-edgetap-page2-skills" width="720" height="540" loading="lazy" /><figcaption>EM-page-P11-edgetap-page2-skills</figcaption></figure>
+<figure class="cshot" title="EM-page-P12-edgetaps-page4-contestmoves"><img src="IMG" alt="EM-page-P12-edgetaps-page4-contestmoves" width="720" height="540" loading="lazy" /><figcaption>EM-page-P12-edgetaps-page4-contestmoves</figcaption></figure>
+</div></details>
+<details class="ggroup"><summary><span class="gtitle">Traversal — tap to route</span><span class="gcount">6</span></summary><div class="cgrid">
+<figure class="cshot" title="EM-traversal-6step-script-wall"><img src="IMG" alt="EM-traversal-6step-script-wall" width="720" height="540" loading="lazy" /><figcaption>EM-traversal-6step-script-wall</figcaption></figure>
+<figure class="cshot" title="EM-traversal-P1-shore-arrival"><img src="IMG" alt="EM-traversal-P1-shore-arrival" width="720" height="540" loading="lazy" /><figcaption>EM-traversal-P1-shore-arrival</figcaption></figure>
+<figure class="cshot" title="EM-traversal-P1-surf-prompt-from-tap"><img src="IMG" alt="EM-traversal-P1-surf-prompt-from-tap" width="720" height="540" loading="lazy" /><figcaption>EM-traversal-P1-surf-prompt-from-tap</figcaption></figure>
+<figure class="cshot" title="EM-traversal-frontier-canal"><img src="IMG" alt="EM-traversal-frontier-canal" width="720" height="540" loading="lazy" /><figcaption>EM-traversal-frontier-canal</figcaption></figure>
+<figure class="cshot" title="EM-traversal-matchcall-wall"><img src="IMG" alt="EM-traversal-matchcall-wall" width="720" height="540" loading="lazy" /><figcaption>EM-traversal-matchcall-wall</figcaption></figure>
+<figure class="cshot" title="EM-traversal-taproute-10tiles"><img src="IMG" alt="EM-traversal-taproute-10tiles" width="720" height="540" loading="lazy" /><figcaption>EM-traversal-taproute-10tiles</figcaption></figure>
+</div></details>
+<details class="ggroup"><summary><span class="gtitle">Dialogs & options — tap to advance</span><span class="gcount">10</span></summary><div class="cgrid">
+<figure class="cshot" title="EM-dlg-P1-title-before-tap"><img src="IMG" alt="EM-dlg-P1-title-before-tap" width="720" height="540" loading="lazy" /><figcaption>EM-dlg-P1-title-before-tap</figcaption></figure>
+<figure class="cshot" title="EM-dlg-P1-title-tap-opened-mainmenu"><img src="IMG" alt="EM-dlg-P1-title-tap-opened-mainmenu" width="720" height="540" loading="lazy" /><figcaption>EM-dlg-P1-title-tap-opened-mainmenu</figcaption></figure>
+<figure class="cshot" title="EM-dlg-P5-options-before-textspeed-FAST"><img src="IMG" alt="EM-dlg-P5-options-before-textspeed-FAST" width="720" height="540" loading="lazy" /><figcaption>EM-dlg-P5-options-before-textspeed-FAST</figcaption></figure>
+<figure class="cshot" title="EM-dlg-P5-options-edgetap-textspeed-MID"><img src="IMG" alt="EM-dlg-P5-options-edgetap-textspeed-MID" width="720" height="540" loading="lazy" /><figcaption>EM-dlg-P5-options-edgetap-textspeed-MID</figcaption></figure>
+<figure class="cshot" title="EM-dlg-P6-options-dragdown-3rows-to-SOUND"><img src="IMG" alt="EM-dlg-P6-options-dragdown-3rows-to-SOUND" width="720" height="540" loading="lazy" /><figcaption>EM-dlg-P6-options-dragdown-3rows-to-SOUND</figcaption></figure>
+<figure class="cshot" title="EM-dlg-P7-options-hold-B-exited"><img src="IMG" alt="EM-dlg-P7-options-hold-B-exited" width="720" height="540" loading="lazy" /><figcaption>EM-dlg-P7-options-hold-B-exited</figcaption></figure>
+<figure class="cshot" title="FR-dlg-P1-title-before"><img src="IMG" alt="FR-dlg-P1-title-before" width="720" height="540" loading="lazy" /><figcaption>FR-dlg-P1-title-before</figcaption></figure>
+<figure class="cshot" title="FR-dlg-P2-tapped-through-to-overworld-startmenu"><img src="IMG" alt="FR-dlg-P2-tapped-through-to-overworld-startmenu" width="720" height="540" loading="lazy" /><figcaption>FR-dlg-P2-tapped-through-to-overworld-startmenu</figcaption></figure>
+<figure class="cshot" title="FR-dlg-P4-dex-TOC-fullui"><img src="IMG" alt="FR-dlg-P4-dex-TOC-fullui" width="720" height="540" loading="lazy" /><figcaption>FR-dlg-P4-dex-TOC-fullui</figcaption></figure>
+<figure class="cshot" title="FR-dlg-P4-hold-B-exited-dex"><img src="IMG" alt="FR-dlg-P4-hold-B-exited-dex" width="720" height="540" loading="lazy" /><figcaption>FR-dlg-P4-hold-B-exited-dex</figcaption></figure>
+</div></details>
+<details class="ggroup"><summary><span class="gtitle">Other proofs</span><span class="gcount">6</span></summary><div class="cgrid">
+<figure class="cshot" title="EM-B3-fixed-4taps-no-route"><img src="IMG" alt="EM-B3-fixed-4taps-no-route" width="720" height="540" loading="lazy" /><figcaption>EM-B3-fixed-4taps-no-route</figcaption></figure>
+<figure class="cshot" title="EM-B3-fixed-tap-advances-dialog"><img src="IMG" alt="EM-B3-fixed-tap-advances-dialog" width="720" height="540" loading="lazy" /><figcaption>EM-B3-fixed-tap-advances-dialog</figcaption></figure>
+<figure class="cshot" title="EM-B3-leak-dpad-under-dialog"><img src="IMG" alt="EM-B3-leak-dpad-under-dialog" width="720" height="540" loading="lazy" /><figcaption>EM-B3-leak-dpad-under-dialog</figcaption></figure>
+<figure class="cshot" title="EM-P24-P1a-shore-arrival"><img src="IMG" alt="EM-P24-P1a-shore-arrival" width="720" height="540" loading="lazy" /><figcaption>EM-P24-P1a-shore-arrival</figcaption></figure>
+<figure class="cshot" title="EM-P24-P1b-surf-mounted"><img src="IMG" alt="EM-P24-P1b-surf-mounted" width="720" height="540" loading="lazy" /><figcaption>EM-P24-P1b-surf-mounted</figcaption></figure>
+<figure class="cshot" title="FR-mart-qty13-confirm"><img src="IMG" alt="FR-mart-qty13-confirm" width="720" height="540" loading="lazy" /><figcaption>FR-mart-qty13-confirm</figcaption></figure>
+</div></details>
+  </div>
+
+  <h2 id="firsts">New games running</h2>
+  <p class="h2note">
+    Three games the app had never run before, booted and driven: <strong>31</strong> boot
+    captures, plus <strong>5</strong> of Ruby and Sapphire in co-op on one console.
+  </p>
+  <div class="gtools"><button class="gbtn" data-scope="firsts-wrap" data-act="open">Open all</button>
+    <button class="gbtn" data-scope="firsts-wrap" data-act="close">Close all</button></div>
+  <div id="firsts-wrap">
+<details class="ggroup" open><summary><span class="gtitle">Ruby — first boot</span><span class="gcount">12</span></summary><div class="cgrid">
+<figure class="cshot" title="A1-gf-intro"><img src="IMG" alt="A1-gf-intro" width="900" height="540" loading="lazy" /><figcaption>A1-gf-intro</figcaption></figure>
+<figure class="cshot" title="A2-title"><img src="IMG" alt="A2-title" width="900" height="540" loading="lazy" /><figcaption>A2-title</figcaption></figure>
+<figure class="cshot" title="A3-mainmenu-600h-save"><img src="IMG" alt="A3-mainmenu-600h-save" width="900" height="540" loading="lazy" /><figcaption>A3-mainmenu-600h-save</figcaption></figure>
+<figure class="cshot" title="B1-overworld-center-pc"><img src="IMG" alt="B1-overworld-center-pc" width="900" height="540" loading="lazy" /><figcaption>B1-overworld-center-pc</figcaption></figure>
+<figure class="cshot" title="B1b-overworld-lilycove"><img src="IMG" alt="B1b-overworld-lilycove" width="900" height="540" loading="lazy" /><figcaption>B1b-overworld-lilycove</figcaption></figure>
+<figure class="cshot" title="B1c-route121"><img src="IMG" alt="B1c-route121" width="900" height="540" loading="lazy" /><figcaption>B1c-route121</figcaption></figure>
+<figure class="cshot" title="B2-startmenu"><img src="IMG" alt="B2-startmenu" width="900" height="540" loading="lazy" /><figcaption>B2-startmenu</figcaption></figure>
+<figure class="cshot" title="C1-battle-intro-linoone"><img src="IMG" alt="C1-battle-intro-linoone" width="900" height="540" loading="lazy" /><figcaption>C1-battle-intro-linoone</figcaption></figure>
+<figure class="cshot" title="C2-battle-action"><img src="IMG" alt="C2-battle-action" width="900" height="540" loading="lazy" /><figcaption>C2-battle-action</figcaption></figure>
+<figure class="cshot" title="C3-battle-move"><img src="IMG" alt="C3-battle-move" width="900" height="540" loading="lazy" /><figcaption>C3-battle-move</figcaption></figure>
+<figure class="cshot" title="E2-party"><img src="IMG" alt="E2-party" width="900" height="540" loading="lazy" /><figcaption>E2-party</figcaption></figure>
+<figure class="cshot" title="E3-bag"><img src="IMG" alt="E3-bag" width="900" height="540" loading="lazy" /><figcaption>E3-bag</figcaption></figure>
+</div></details>
+<details class="ggroup"><summary><span class="gtitle">Sapphire — first boot</span><span class="gcount">3</span></summary><div class="cgrid">
+<figure class="cshot" title="A1-gf-intro"><img src="IMG" alt="A1-gf-intro" width="900" height="540" loading="lazy" /><figcaption>A1-gf-intro</figcaption></figure>
+<figure class="cshot" title="B1-overworld-sootopolis-center"><img src="IMG" alt="B1-overworld-sootopolis-center" width="900" height="540" loading="lazy" /><figcaption>B1-overworld-sootopolis-center</figcaption></figure>
+<figure class="cshot" title="B1b-walk-sanity"><img src="IMG" alt="B1b-walk-sanity" width="900" height="540" loading="lazy" /><figcaption>B1b-walk-sanity</figcaption></figure>
+</div></details>
+<details class="ggroup"><summary><span class="gtitle">LeafGreen — first boot</span><span class="gcount">16</span></summary><div class="cgrid">
+<figure class="cshot" title="A3-mainmenu"><img src="IMG" alt="A3-mainmenu" width="900" height="540" loading="lazy" /><figcaption>A3-mainmenu</figcaption></figure>
+<figure class="cshot" title="A5-options"><img src="IMG" alt="A5-options" width="900" height="540" loading="lazy" /><figcaption>A5-options</figcaption></figure>
+<figure class="cshot" title="B1-overworld-lavender"><img src="IMG" alt="B1-overworld-lavender" width="900" height="540" loading="lazy" /><figcaption>B1-overworld-lavender</figcaption></figure>
+<figure class="cshot" title="B1b-route8"><img src="IMG" alt="B1b-route8" width="900" height="540" loading="lazy" /><figcaption>B1b-route8</figcaption></figure>
+<figure class="cshot" title="B2-startmenu-fmenu-fires"><img src="IMG" alt="B2-startmenu-fmenu-fires" width="900" height="540" loading="lazy" /><figcaption>B2-startmenu-fmenu-fires</figcaption></figure>
+<figure class="cshot" title="B4-save-yesno-startmenu-task"><img src="IMG" alt="B4-save-yesno-startmenu-task" width="900" height="540" loading="lazy" /><figcaption>B4-save-yesno-startmenu-task</figcaption></figure>
+<figure class="cshot" title="B5-nurse-yesno-multichoice-task"><img src="IMG" alt="B5-nurse-yesno-multichoice-task" width="900" height="540" loading="lazy" /><figcaption>B5-nurse-yesno-multichoice-task</figcaption></figure>
+<figure class="cshot" title="B6-trainer-card"><img src="IMG" alt="B6-trainer-card" width="900" height="540" loading="lazy" /><figcaption>B6-trainer-card</figcaption></figure>
+<figure class="cshot" title="C2-battle-action-deoxys"><img src="IMG" alt="C2-battle-action-deoxys" width="900" height="540" loading="lazy" /><figcaption>C2-battle-action-deoxys</figcaption></figure>
+<figure class="cshot" title="C2b-battle-slp"><img src="IMG" alt="C2b-battle-slp" width="900" height="540" loading="lazy" /><figcaption>C2b-battle-slp</figcaption></figure>
+<figure class="cshot" title="C3-battle-move"><img src="IMG" alt="C3-battle-move" width="900" height="540" loading="lazy" /><figcaption>C3-battle-move</figcaption></figure>
+<figure class="cshot" title="E3-bag"><img src="IMG" alt="E3-bag" width="900" height="540" loading="lazy" /><figcaption>E3-bag</figcaption></figure>
+<figure class="cshot" title="E3b-bag-toss-callyesorno"><img src="IMG" alt="E3b-bag-toss-callyesorno" width="900" height="540" loading="lazy" /><figcaption>E3b-bag-toss-callyesorno</figcaption></figure>
+<figure class="cshot" title="F1-pokedex"><img src="IMG" alt="F1-pokedex" width="900" height="540" loading="lazy" /><figcaption>F1-pokedex</figcaption></figure>
+<figure class="cshot" title="I1-mart-shopmenu"><img src="IMG" alt="I1-mart-shopmenu" width="900" height="540" loading="lazy" /><figcaption>I1-mart-shopmenu</figcaption></figure>
+<figure class="cshot" title="I1b-mart-buy-confirm"><img src="IMG" alt="I1b-mart-buy-confirm" width="900" height="540" loading="lazy" /><figcaption>I1b-mart-buy-confirm</figcaption></figure>
+</div></details>
+<details class="ggroup"><summary><span class="gtitle">Ruby + Sapphire co-op, one console</span><span class="gcount">5</span></summary><div class="cgrid">
+<figure class="cshot" title="coop-chip-ruby-top"><img src="IMG" alt="coop-chip-ruby-top" width="900" height="540" loading="lazy" /><figcaption>coop-chip-ruby-top</figcaption></figure>
+<figure class="cshot" title="coop-ruby-top"><img src="IMG" alt="coop-ruby-top" width="900" height="540" loading="lazy" /><figcaption>coop-ruby-top</figcaption></figure>
+<figure class="cshot" title="coop-sapphire-bottom"><img src="IMG" alt="coop-sapphire-bottom" width="720" height="540" loading="lazy" /><figcaption>coop-sapphire-bottom</figcaption></figure>
+<figure class="cshot" title="coop-sapphire-sootopolis"><img src="IMG" alt="coop-sapphire-sootopolis" width="720" height="540" loading="lazy" /><figcaption>coop-sapphire-sootopolis</figcaption></figure>
+<figure class="cshot" title="sapphire-center-interior"><img src="IMG" alt="sapphire-center-interior" width="720" height="540" loading="lazy" /><figcaption>sapphire-center-interior</figcaption></figure>
+</div></details>
+  </div>
+
+  <h2 id="census">The screen census</h2>
+  <p class="h2note">
+    An automated sweep visited every reachable screen, photographing both 3DS screens and
+    identifying each by reading the game's own callback pointer and resolving it against the
+    decompilation's symbols — certain identification, not guesswork.
+    <strong>74</strong> Emerald and <strong>97</strong> FireRed screens.
+  </p>
+  <div class="gtools"><button class="gbtn" data-scope="census-wrap" data-act="open">Open all</button>
+    <button class="gbtn" data-scope="census-wrap" data-act="close">Close all</button></div>
+  <div id="census-wrap">
+    <h3 class="gsub" id="census-em">Emerald <span class="gsubn">covers Ruby / Sapphire</span></h3>
+<details class="ggroup"><summary><span class="gtitle">A · Boot, title & file select</span><span class="gcount">4</span></summary><div class="cgrid">
+<figure class="cshot" title="A1-intro"><img src="IMG" alt="A1-intro" width="320" height="240" loading="lazy" /><figcaption>A1-intro</figcaption></figure>
+<figure class="cshot" title="A2-title"><img src="IMG" alt="A2-title" width="320" height="240" loading="lazy" /><figcaption>A2-title</figcaption></figure>
+<figure class="cshot" title="A3-mainmenu"><img src="IMG" alt="A3-mainmenu" width="320" height="240" loading="lazy" /><figcaption>A3-mainmenu</figcaption></figure>
+<figure class="cshot" title="A5-options"><img src="IMG" alt="A5-options" width="320" height="240" loading="lazy" /><figcaption>A5-options</figcaption></figure>
+</div></details>
+<details class="ggroup" open><summary><span class="gtitle">B · Overworld & field</span><span class="gcount">11</span></summary><div class="cgrid">
+<figure class="cshot" title="B1-overworld-indoor"><img src="IMG" alt="B1-overworld-indoor" width="320" height="240" loading="lazy" /><figcaption>B1-overworld-indoor</figcaption></figure>
+<figure class="cshot" title="B2-startmenu"><img src="IMG" alt="B2-startmenu" width="320" height="240" loading="lazy" /><figcaption>B2-startmenu</figcaption></figure>
+<figure class="cshot" title="B3-scriptdialog"><img src="IMG" alt="B3-scriptdialog" width="320" height="240" loading="lazy" /><figcaption>B3-scriptdialog</figcaption></figure>
+<figure class="cshot" title="B5-savedialog"><img src="IMG" alt="B5-savedialog" width="320" height="240" loading="lazy" /><figcaption>B5-savedialog</figcaption></figure>
+<figure class="cshot" title="B5b-saving"><img src="IMG" alt="B5b-saving" width="320" height="240" loading="lazy" /><figcaption>B5b-saving</figcaption></figure>
+<figure class="cshot" title="B6-trainercard-front"><img src="IMG" alt="B6-trainercard-front" width="320" height="240" loading="lazy" /><figcaption>B6-trainercard-front</figcaption></figure>
+<figure class="cshot" title="B6b-trainercard-back"><img src="IMG" alt="B6b-trainercard-back" width="320" height="240" loading="lazy" /><figcaption>B6b-trainercard-back</figcaption></figure>
+<figure class="cshot" title="B7-fieldregionmap"><img src="IMG" alt="B7-fieldregionmap" width="320" height="240" loading="lazy" /><figcaption>B7-fieldregionmap</figcaption></figure>
+<figure class="cshot" title="B8-flymap"><img src="IMG" alt="B8-flymap" width="320" height="240" loading="lazy" /><figcaption>B8-flymap</figcaption></figure>
+<figure class="cshot" title="B8a-fly-submenu"><img src="IMG" alt="B8a-fly-submenu" width="320" height="240" loading="lazy" /><figcaption>B8a-fly-submenu</figcaption></figure>
+<figure class="cshot" title="B9-wallclock"><img src="IMG" alt="B9-wallclock" width="320" height="240" loading="lazy" /><figcaption>B9-wallclock</figcaption></figure>
+</div></details>
+<details class="ggroup"><summary><span class="gtitle">C · Battle</span><span class="gcount">4</span></summary><div class="cgrid">
+<figure class="cshot" title="C2-battleaction"><img src="IMG" alt="C2-battleaction" width="320" height="240" loading="lazy" /><figcaption>C2-battleaction</figcaption></figure>
+<figure class="cshot" title="C22-forgetmove"><img src="IMG" alt="C22-forgetmove" width="320" height="240" loading="lazy" /><figcaption>C22-forgetmove</figcaption></figure>
+<figure class="cshot" title="C3-battlemove"><img src="IMG" alt="C3-battlemove" width="320" height="240" loading="lazy" /><figcaption>C3-battlemove</figcaption></figure>
+<figure class="cshot" title="C5-battledialog"><img src="IMG" alt="C5-battledialog" width="320" height="240" loading="lazy" /><figcaption>C5-battledialog</figcaption></figure>
+</div></details>
+<details class="ggroup"><summary><span class="gtitle">D · Battle Frontier</span><span class="gcount">2</span></summary><div class="cgrid">
+<figure class="cshot" title="D1-frontierpass"><img src="IMG" alt="D1-frontierpass" width="320" height="240" loading="lazy" /><figcaption>D1-frontierpass</figcaption></figure>
+<figure class="cshot" title="D1b-frontiermap"><img src="IMG" alt="D1b-frontiermap" width="320" height="240" loading="lazy" /><figcaption>D1b-frontiermap</figcaption></figure>
+</div></details>
+<details class="ggroup"><summary><span class="gtitle">E · Core menus — bag, party, summary, PC</span><span class="gcount">30</span></summary><div class="cgrid">
+<figure class="cshot" title="E1-summary-battlemoves"><img src="IMG" alt="E1-summary-battlemoves" width="320" height="240" loading="lazy" /><figcaption>E1-summary-battlemoves</figcaption></figure>
+<figure class="cshot" title="E1-summary-contestmoves"><img src="IMG" alt="E1-summary-contestmoves" width="320" height="240" loading="lazy" /><figcaption>E1-summary-contestmoves</figcaption></figure>
+<figure class="cshot" title="E1-summary-info"><img src="IMG" alt="E1-summary-info" width="320" height="240" loading="lazy" /><figcaption>E1-summary-info</figcaption></figure>
+<figure class="cshot" title="E1-summary-skills"><img src="IMG" alt="E1-summary-skills" width="320" height="240" loading="lazy" /><figcaption>E1-summary-skills</figcaption></figure>
+<figure class="cshot" title="E10-naming"><img src="IMG" alt="E10-naming" width="320" height="240" loading="lazy" /><figcaption>E10-naming</figcaption></figure>
+<figure class="cshot" title="E11-pctopmenu"><img src="IMG" alt="E11-pctopmenu" width="320" height="240" loading="lazy" /><figcaption>E11-pctopmenu</figcaption></figure>
+<figure class="cshot" title="E12-storage-boxes"><img src="IMG" alt="E12-storage-boxes" width="320" height="240" loading="lazy" /><figcaption>E12-storage-boxes</figcaption></figure>
+<figure class="cshot" title="E12a-storagemenu"><img src="IMG" alt="E12a-storagemenu" width="320" height="240" loading="lazy" /><figcaption>E12a-storagemenu</figcaption></figure>
+<figure class="cshot" title="E12b-storage-monmenu"><img src="IMG" alt="E12b-storage-monmenu" width="320" height="240" loading="lazy" /><figcaption>E12b-storage-monmenu</figcaption></figure>
+<figure class="cshot" title="E12c-storage-holding"><img src="IMG" alt="E12c-storage-holding" width="320" height="240" loading="lazy" /><figcaption>E12c-storage-holding</figcaption></figure>
+<figure class="cshot" title="E12d-storage-boxmenu"><img src="IMG" alt="E12d-storage-boxmenu" width="320" height="240" loading="lazy" /><figcaption>E12d-storage-boxmenu</figcaption></figure>
+<figure class="cshot" title="E12e-storage-partystrip"><img src="IMG" alt="E12e-storage-partystrip" width="320" height="240" loading="lazy" /><figcaption>E12e-storage-partystrip</figcaption></figure>
+<figure class="cshot" title="E12f-storage-boxjump"><img src="IMG" alt="E12f-storage-boxjump" width="320" height="240" loading="lazy" /><figcaption>E12f-storage-boxjump</figcaption></figure>
+<figure class="cshot" title="E13a-playerpc-menu"><img src="IMG" alt="E13a-playerpc-menu" width="320" height="240" loading="lazy" /><figcaption>E13a-playerpc-menu</figcaption></figure>
+<figure class="cshot" title="E1b-moves-dragonite"><img src="IMG" alt="E1b-moves-dragonite" width="400" height="240" loading="lazy" /><figcaption>E1b-moves-dragonite</figcaption></figure>
+<figure class="cshot" title="E1b-moves-gengar"><img src="IMG" alt="E1b-moves-gengar" width="400" height="240" loading="lazy" /><figcaption>E1b-moves-gengar</figcaption></figure>
+<figure class="cshot" title="E1b-moves-metagross"><img src="IMG" alt="E1b-moves-metagross" width="400" height="240" loading="lazy" /><figcaption>E1b-moves-metagross</figcaption></figure>
+<figure class="cshot" title="E1b-moves-milotic"><img src="IMG" alt="E1b-moves-milotic" width="400" height="240" loading="lazy" /><figcaption>E1b-moves-milotic</figcaption></figure>
+<figure class="cshot" title="E1b-moves-salamence"><img src="IMG" alt="E1b-moves-salamence" width="400" height="240" loading="lazy" /><figcaption>E1b-moves-salamence</figcaption></figure>
+<figure class="cshot" title="E2-party"><img src="IMG" alt="E2-party" width="320" height="240" loading="lazy" /><figcaption>E2-party</figcaption></figure>
+<figure class="cshot" title="E2b-partysub"><img src="IMG" alt="E2b-partysub" width="320" height="240" loading="lazy" /><figcaption>E2b-partysub</figcaption></figure>
+<figure class="cshot" title="E2c-partysub-salamence"><img src="IMG" alt="E2c-partysub-salamence" width="320" height="240" loading="lazy" /><figcaption>E2c-partysub-salamence</figcaption></figure>
+<figure class="cshot" title="E2d-party-hmchoose"><img src="IMG" alt="E2d-party-hmchoose" width="320" height="240" loading="lazy" /><figcaption>E2d-party-hmchoose</figcaption></figure>
+<figure class="cshot" title="E3-bag-berries"><img src="IMG" alt="E3-bag-berries" width="320" height="240" loading="lazy" /><figcaption>E3-bag-berries</figcaption></figure>
+<figure class="cshot" title="E3-bag-items"><img src="IMG" alt="E3-bag-items" width="320" height="240" loading="lazy" /><figcaption>E3-bag-items</figcaption></figure>
+<figure class="cshot" title="E3-bag-keyitems"><img src="IMG" alt="E3-bag-keyitems" width="320" height="240" loading="lazy" /><figcaption>E3-bag-keyitems</figcaption></figure>
+<figure class="cshot" title="E3-bag-pokeballs"><img src="IMG" alt="E3-bag-pokeballs" width="320" height="240" loading="lazy" /><figcaption>E3-bag-pokeballs</figcaption></figure>
+<figure class="cshot" title="E3-bag-tms"><img src="IMG" alt="E3-bag-tms" width="320" height="240" loading="lazy" /><figcaption>E3-bag-tms</figcaption></figure>
+<figure class="cshot" title="E3b-berrysub"><img src="IMG" alt="E3b-berrysub" width="320" height="240" loading="lazy" /><figcaption>E3b-berrysub</figcaption></figure>
+<figure class="cshot" title="E6-berrytag"><img src="IMG" alt="E6-berrytag" width="320" height="240" loading="lazy" /><figcaption>E6-berrytag</figcaption></figure>
+</div></details>
+<details class="ggroup"><summary><span class="gtitle">F · Pokédex</span><span class="gcount">6</span></summary><div class="cgrid">
+<figure class="cshot" title="F1-dexlist"><img src="IMG" alt="F1-dexlist" width="320" height="240" loading="lazy" /><figcaption>F1-dexlist</figcaption></figure>
+<figure class="cshot" title="F2-dexentry"><img src="IMG" alt="F2-dexentry" width="320" height="240" loading="lazy" /><figcaption>F2-dexentry</figcaption></figure>
+<figure class="cshot" title="F2b-dexsize"><img src="IMG" alt="F2b-dexsize" width="320" height="240" loading="lazy" /><figcaption>F2b-dexsize</figcaption></figure>
+<figure class="cshot" title="F3-dexarea"><img src="IMG" alt="F3-dexarea" width="320" height="240" loading="lazy" /><figcaption>F3-dexarea</figcaption></figure>
+<figure class="cshot" title="F4-dexcry"><img src="IMG" alt="F4-dexcry" width="320" height="240" loading="lazy" /><figcaption>F4-dexcry</figcaption></figure>
+<figure class="cshot" title="F5-dexsearch"><img src="IMG" alt="F5-dexsearch" width="320" height="240" loading="lazy" /><figcaption>F5-dexsearch</figcaption></figure>
+</div></details>
+<details class="ggroup"><summary><span class="gtitle">G · PokéNav</span><span class="gcount">8</span></summary><div class="cgrid">
+<figure class="cshot" title="G1-pokenav-main"><img src="IMG" alt="G1-pokenav-main" width="320" height="240" loading="lazy" /><figcaption>G1-pokenav-main</figcaption></figure>
+<figure class="cshot" title="G2-pokenav-map"><img src="IMG" alt="G2-pokenav-map" width="320" height="240" loading="lazy" /><figcaption>G2-pokenav-map</figcaption></figure>
+<figure class="cshot" title="G3-pokenav-condition"><img src="IMG" alt="G3-pokenav-condition" width="320" height="240" loading="lazy" /><figcaption>G3-pokenav-condition</figcaption></figure>
+<figure class="cshot" title="G3a-pokenav-condition-menu"><img src="IMG" alt="G3a-pokenav-condition-menu" width="320" height="240" loading="lazy" /><figcaption>G3a-pokenav-condition-menu</figcaption></figure>
+<figure class="cshot" title="G4-pokenav-matchcall"><img src="IMG" alt="G4-pokenav-matchcall" width="320" height="240" loading="lazy" /><figcaption>G4-pokenav-matchcall</figcaption></figure>
+<figure class="cshot" title="G4b-matchcall-incoming"><img src="IMG" alt="G4b-matchcall-incoming" width="320" height="240" loading="lazy" /><figcaption>G4b-matchcall-incoming</figcaption></figure>
+<figure class="cshot" title="G5-pokenav-ribbons"><img src="IMG" alt="G5-pokenav-ribbons" width="320" height="240" loading="lazy" /><figcaption>G5-pokenav-ribbons</figcaption></figure>
+<figure class="cshot" title="G5b-pokenav-ribbonsummary"><img src="IMG" alt="G5b-pokenav-ribbonsummary" width="320" height="240" loading="lazy" /><figcaption>G5b-pokenav-ribbonsummary</figcaption></figure>
+</div></details>
+<details class="ggroup"><summary><span class="gtitle">H · Contests, Pokéblocks & TV</span><span class="gcount">5</span></summary><div class="cgrid">
+<figure class="cshot" title="H10-tvnews"><img src="IMG" alt="H10-tvnews" width="320" height="240" loading="lazy" /><figcaption>H10-tvnews</figcaption></figure>
+<figure class="cshot" title="H7-pokeblockcase"><img src="IMG" alt="H7-pokeblockcase" width="320" height="240" loading="lazy" /><figcaption>H7-pokeblockcase</figcaption></figure>
+<figure class="cshot" title="H8-pokeblockfeed"><img src="IMG" alt="H8-pokeblockfeed" width="320" height="240" loading="lazy" /><figcaption>H8-pokeblockfeed</figcaption></figure>
+<figure class="cshot" title="H9-usepokeblock"><img src="IMG" alt="H9-usepokeblock" width="320" height="240" loading="lazy" /><figcaption>H9-usepokeblock</figcaption></figure>
+<figure class="cshot" title="H9b-usepokeblock-confirm"><img src="IMG" alt="H9b-usepokeblock-confirm" width="400" height="240" loading="lazy" /><figcaption>H9b-usepokeblock-confirm</figcaption></figure>
+</div></details>
+<details class="ggroup"><summary><span class="gtitle">I · Shops & money games</span><span class="gcount">3</span></summary><div class="cgrid">
+<figure class="cshot" title="I4-slotmachine"><img src="IMG" alt="I4-slotmachine" width="320" height="240" loading="lazy" /><figcaption>I4-slotmachine</figcaption></figure>
+<figure class="cshot" title="I6-coinclerk"><img src="IMG" alt="I6-coinclerk" width="320" height="240" loading="lazy" /><figcaption>I6-coinclerk</figcaption></figure>
+<figure class="cshot" title="I6b-coinbuy"><img src="IMG" alt="I6b-coinbuy" width="320" height="240" loading="lazy" /><figcaption>I6b-coinbuy</figcaption></figure>
+</div></details>
+<details class="ggroup"><summary><span class="gtitle">J · Link, wireless & Mystery Gift</span><span class="gcount">1</span></summary><div class="cgrid">
+<figure class="cshot" title="J12-mysterygift"><img src="IMG" alt="J12-mysterygift" width="320" height="240" loading="lazy" /><figcaption>J12-mysterygift</figcaption></figure>
+</div></details>
+    <h3 class="gsub" id="census-fr">FireRed <span class="gsubn">covers LeafGreen</span></h3>
+<details class="ggroup"><summary><span class="gtitle">A · Boot, title & file select</span><span class="gcount">6</span></summary><div class="cgrid">
+<figure class="cshot" title="A1-intro"><img src="IMG" alt="A1-intro" width="320" height="240" loading="lazy" /><figcaption>A1-intro</figcaption></figure>
+<figure class="cshot" title="A2-title"><img src="IMG" alt="A2-title" width="320" height="240" loading="lazy" /><figcaption>A2-title</figcaption></figure>
+<figure class="cshot" title="A3-mainmenu"><img src="IMG" alt="A3-mainmenu" width="320" height="240" loading="lazy" /><figcaption>A3-mainmenu</figcaption></figure>
+<figure class="cshot" title="A3b-mainmenu-scrolled"><img src="IMG" alt="A3b-mainmenu-scrolled" width="320" height="240" loading="lazy" /><figcaption>A3b-mainmenu-scrolled</figcaption></figure>
+<figure class="cshot" title="A4-newgame-oakspeech"><img src="IMG" alt="A4-newgame-oakspeech" width="320" height="240" loading="lazy" /><figcaption>A4-newgame-oakspeech</figcaption></figure>
+<figure class="cshot" title="A5-options"><img src="IMG" alt="A5-options" width="320" height="240" loading="lazy" /><figcaption>A5-options</figcaption></figure>
+</div></details>
+<details class="ggroup" open><summary><span class="gtitle">B · Overworld & field</span><span class="gcount">22</span></summary><div class="cgrid">
+<figure class="cshot" title="B1-overworld"><img src="IMG" alt="B1-overworld" width="320" height="240" loading="lazy" /><figcaption>B1-overworld</figcaption></figure>
+<figure class="cshot" title="B10-itemfinder"><img src="IMG" alt="B10-itemfinder" width="320" height="240" loading="lazy" /><figcaption>B10-itemfinder</figcaption></figure>
+<figure class="cshot" title="B11-fishing"><img src="IMG" alt="B11-fishing" width="320" height="240" loading="lazy" /><figcaption>B11-fishing</figcaption></figure>
+<figure class="cshot" title="B11b-fishresult"><img src="IMG" alt="B11b-fishresult" width="320" height="240" loading="lazy" /><figcaption>B11b-fishresult</figcaption></figure>
+<figure class="cshot" title="B12-safarizone"><img src="IMG" alt="B12-safarizone" width="320" height="240" loading="lazy" /><figcaption>B12-safarizone</figcaption></figure>
+<figure class="cshot" title="B12a-safari-entrance"><img src="IMG" alt="B12a-safari-entrance" width="320" height="240" loading="lazy" /><figcaption>B12a-safari-entrance</figcaption></figure>
+<figure class="cshot" title="B12b-safari-pay"><img src="IMG" alt="B12b-safari-pay" width="320" height="240" loading="lazy" /><figcaption>B12b-safari-pay</figcaption></figure>
+<figure class="cshot" title="B12c-safari-dialog"><img src="IMG" alt="B12c-safari-dialog" width="320" height="240" loading="lazy" /><figcaption>B12c-safari-dialog</figcaption></figure>
+<figure class="cshot" title="B12d-safari-startmenu"><img src="IMG" alt="B12d-safari-startmenu" width="320" height="240" loading="lazy" /><figcaption>B12d-safari-startmenu</figcaption></figure>
+<figure class="cshot" title="B1b-overworld-ip1f"><img src="IMG" alt="B1b-overworld-ip1f" width="320" height="240" loading="lazy" /><figcaption>B1b-overworld-ip1f</figcaption></figure>
+<figure class="cshot" title="B1c-gamecorner"><img src="IMG" alt="B1c-gamecorner" width="320" height="240" loading="lazy" /><figcaption>B1c-gamecorner</figcaption></figure>
+<figure class="cshot" title="B1d-bedroom"><img src="IMG" alt="B1d-bedroom" width="320" height="240" loading="lazy" /><figcaption>B1d-bedroom</figcaption></figure>
+<figure class="cshot" title="B1e-route22"><img src="IMG" alt="B1e-route22" width="320" height="240" loading="lazy" /><figcaption>B1e-route22</figcaption></figure>
+<figure class="cshot" title="B2-startmenu"><img src="IMG" alt="B2-startmenu" width="320" height="240" loading="lazy" /><figcaption>B2-startmenu</figcaption></figure>
+<figure class="cshot" title="B5-savedialog"><img src="IMG" alt="B5-savedialog" width="320" height="240" loading="lazy" /><figcaption>B5-savedialog</figcaption></figure>
+<figure class="cshot" title="B5b-saving"><img src="IMG" alt="B5b-saving" width="320" height="240" loading="lazy" /><figcaption>B5b-saving</figcaption></figure>
+<figure class="cshot" title="B5c-savedone"><img src="IMG" alt="B5c-savedone" width="320" height="240" loading="lazy" /><figcaption>B5c-savedone</figcaption></figure>
+<figure class="cshot" title="B6-trainercard-front"><img src="IMG" alt="B6-trainercard-front" width="320" height="240" loading="lazy" /><figcaption>B6-trainercard-front</figcaption></figure>
+<figure class="cshot" title="B6b-trainercard-back"><img src="IMG" alt="B6b-trainercard-back" width="320" height="240" loading="lazy" /><figcaption>B6b-trainercard-back</figcaption></figure>
+<figure class="cshot" title="B7-townmap"><img src="IMG" alt="B7-townmap" width="320" height="240" loading="lazy" /><figcaption>B7-townmap</figcaption></figure>
+<figure class="cshot" title="B7b-wallmap"><img src="IMG" alt="B7b-wallmap" width="320" height="240" loading="lazy" /><figcaption>B7b-wallmap</figcaption></figure>
+<figure class="cshot" title="B8-flymap"><img src="IMG" alt="B8-flymap" width="320" height="240" loading="lazy" /><figcaption>B8-flymap</figcaption></figure>
+</div></details>
+<details class="ggroup"><summary><span class="gtitle">C · Battle</span><span class="gcount">9</span></summary><div class="cgrid">
+<figure class="cshot" title="C14-pokedude"><img src="IMG" alt="C14-pokedude" width="320" height="240" loading="lazy" /><figcaption>C14-pokedude</figcaption></figure>
+<figure class="cshot" title="C2-battleaction"><img src="IMG" alt="C2-battleaction" width="320" height="240" loading="lazy" /><figcaption>C2-battleaction</figcaption></figure>
+<figure class="cshot" title="C22-forgetmove"><img src="IMG" alt="C22-forgetmove" width="320" height="240" loading="lazy" /><figcaption>C22-forgetmove</figcaption></figure>
+<figure class="cshot" title="C22a-replace-prompt"><img src="IMG" alt="C22a-replace-prompt" width="320" height="240" loading="lazy" /><figcaption>C22a-replace-prompt</figcaption></figure>
+<figure class="cshot" title="C22b-forgetmove-summary"><img src="IMG" alt="C22b-forgetmove-summary" width="320" height="240" loading="lazy" /><figcaption>C22b-forgetmove-summary</figcaption></figure>
+<figure class="cshot" title="C2b-battlebag"><img src="IMG" alt="C2b-battlebag" width="320" height="240" loading="lazy" /><figcaption>C2b-battlebag</figcaption></figure>
+<figure class="cshot" title="C3-battlemove"><img src="IMG" alt="C3-battlemove" width="320" height="240" loading="lazy" /><figcaption>C3-battlemove</figcaption></figure>
+<figure class="cshot" title="C5-battleintro"><img src="IMG" alt="C5-battleintro" width="320" height="240" loading="lazy" /><figcaption>C5-battleintro</figcaption></figure>
+<figure class="cshot" title="C7-safaribattle"><img src="IMG" alt="C7-safaribattle" width="320" height="240" loading="lazy" /><figcaption>C7-safaribattle</figcaption></figure>
+</div></details>
+<details class="ggroup"><summary><span class="gtitle">E · Core menus — bag, party, summary, PC</span><span class="gcount">35</span></summary><div class="cgrid">
+<figure class="cshot" title="E1-summary-info"><img src="IMG" alt="E1-summary-info" width="320" height="240" loading="lazy" /><figcaption>E1-summary-info</figcaption></figure>
+<figure class="cshot" title="E1-summary-moves"><img src="IMG" alt="E1-summary-moves" width="320" height="240" loading="lazy" /><figcaption>E1-summary-moves</figcaption></figure>
+<figure class="cshot" title="E1-summary-skills"><img src="IMG" alt="E1-summary-skills" width="320" height="240" loading="lazy" /><figcaption>E1-summary-skills</figcaption></figure>
+<figure class="cshot" title="E10-naming"><img src="IMG" alt="E10-naming" width="320" height="240" loading="lazy" /><figcaption>E10-naming</figcaption></figure>
+<figure class="cshot" title="E10b-naming-lower"><img src="IMG" alt="E10b-naming-lower" width="320" height="240" loading="lazy" /><figcaption>E10b-naming-lower</figcaption></figure>
+<figure class="cshot" title="E11-pctopmenu"><img src="IMG" alt="E11-pctopmenu" width="320" height="240" loading="lazy" /><figcaption>E11-pctopmenu</figcaption></figure>
+<figure class="cshot" title="E12-storage-boxes"><img src="IMG" alt="E12-storage-boxes" width="320" height="240" loading="lazy" /><figcaption>E12-storage-boxes</figcaption></figure>
+<figure class="cshot" title="E12a-storagemenu"><img src="IMG" alt="E12a-storagemenu" width="320" height="240" loading="lazy" /><figcaption>E12a-storagemenu</figcaption></figure>
+<figure class="cshot" title="E12b-monmenu"><img src="IMG" alt="E12b-monmenu" width="320" height="240" loading="lazy" /><figcaption>E12b-monmenu</figcaption></figure>
+<figure class="cshot" title="E12c-holding-menu"><img src="IMG" alt="E12c-holding-menu" width="320" height="240" loading="lazy" /><figcaption>E12c-holding-menu</figcaption></figure>
+<figure class="cshot" title="E12d-boxtitlemenu"><img src="IMG" alt="E12d-boxtitlemenu" width="320" height="240" loading="lazy" /><figcaption>E12d-boxtitlemenu</figcaption></figure>
+<figure class="cshot" title="E12e-partystrip"><img src="IMG" alt="E12e-partystrip" width="320" height="240" loading="lazy" /><figcaption>E12e-partystrip</figcaption></figure>
+<figure class="cshot" title="E13a-playerpc"><img src="IMG" alt="E13a-playerpc" width="320" height="240" loading="lazy" /><figcaption>E13a-playerpc</figcaption></figure>
+<figure class="cshot" title="E15-hofpc"><img src="IMG" alt="E15-hofpc" width="320" height="240" loading="lazy" /><figcaption>E15-hofpc</figcaption></figure>
+<figure class="cshot" title="E16-oakpc"><img src="IMG" alt="E16-oakpc" width="320" height="240" loading="lazy" /><figcaption>E16-oakpc</figcaption></figure>
+<figure class="cshot" title="E16b-oakrating"><img src="IMG" alt="E16b-oakrating" width="320" height="240" loading="lazy" /><figcaption>E16b-oakrating</figcaption></figure>
+<figure class="cshot" title="E1b-summary-movedetail"><img src="IMG" alt="E1b-summary-movedetail" width="320" height="240" loading="lazy" /><figcaption>E1b-summary-movedetail</figcaption></figure>
+<figure class="cshot" title="E1c-moves-2"><img src="IMG" alt="E1c-moves-2" width="320" height="240" loading="lazy" /><figcaption>E1c-moves-2</figcaption></figure>
+<figure class="cshot" title="E1c-moves-3"><img src="IMG" alt="E1c-moves-3" width="320" height="240" loading="lazy" /><figcaption>E1c-moves-3</figcaption></figure>
+<figure class="cshot" title="E1c-moves-4"><img src="IMG" alt="E1c-moves-4" width="320" height="240" loading="lazy" /><figcaption>E1c-moves-4</figcaption></figure>
+<figure class="cshot" title="E1c-moves-5"><img src="IMG" alt="E1c-moves-5" width="320" height="240" loading="lazy" /><figcaption>E1c-moves-5</figcaption></figure>
+<figure class="cshot" title="E1c-moves-6"><img src="IMG" alt="E1c-moves-6" width="320" height="240" loading="lazy" /><figcaption>E1c-moves-6</figcaption></figure>
+<figure class="cshot" title="E2-party"><img src="IMG" alt="E2-party" width="320" height="240" loading="lazy" /><figcaption>E2-party</figcaption></figure>
+<figure class="cshot" title="E2b-partysub"><img src="IMG" alt="E2b-partysub" width="320" height="240" loading="lazy" /><figcaption>E2b-partysub</figcaption></figure>
+<figure class="cshot" title="E2c-partysub-fly"><img src="IMG" alt="E2c-partysub-fly" width="320" height="240" loading="lazy" /><figcaption>E2c-partysub-fly</figcaption></figure>
+<figure class="cshot" title="E2d-party-hmchoose"><img src="IMG" alt="E2d-party-hmchoose" width="320" height="240" loading="lazy" /><figcaption>E2d-party-hmchoose</figcaption></figure>
+<figure class="cshot" title="E3-bag-items"><img src="IMG" alt="E3-bag-items" width="320" height="240" loading="lazy" /><figcaption>E3-bag-items</figcaption></figure>
+<figure class="cshot" title="E3-bag-keyitems"><img src="IMG" alt="E3-bag-keyitems" width="320" height="240" loading="lazy" /><figcaption>E3-bag-keyitems</figcaption></figure>
+<figure class="cshot" title="E3-bag-pokeballs"><img src="IMG" alt="E3-bag-pokeballs" width="320" height="240" loading="lazy" /><figcaption>E3-bag-pokeballs</figcaption></figure>
+<figure class="cshot" title="E3b-keyitem-submenu"><img src="IMG" alt="E3b-keyitem-submenu" width="320" height="240" loading="lazy" /><figcaption>E3b-keyitem-submenu</figcaption></figure>
+<figure class="cshot" title="E3c-keyitems-scrolled"><img src="IMG" alt="E3c-keyitems-scrolled" width="320" height="240" loading="lazy" /><figcaption>E3c-keyitems-scrolled</figcaption></figure>
+<figure class="cshot" title="E4-berrypouch"><img src="IMG" alt="E4-berrypouch" width="320" height="240" loading="lazy" /><figcaption>E4-berrypouch</figcaption></figure>
+<figure class="cshot" title="E5-tmcase"><img src="IMG" alt="E5-tmcase" width="320" height="240" loading="lazy" /><figcaption>E5-tmcase</figcaption></figure>
+<figure class="cshot" title="E5b-tmcase-submenu"><img src="IMG" alt="E5b-tmcase-submenu" width="320" height="240" loading="lazy" /><figcaption>E5b-tmcase-submenu</figcaption></figure>
+<figure class="cshot" title="E7-psa-anim"><img src="IMG" alt="E7-psa-anim" width="320" height="240" loading="lazy" /><figcaption>E7-psa-anim</figcaption></figure>
+</div></details>
+<details class="ggroup"><summary><span class="gtitle">F · Pokédex</span><span class="gcount">5</span></summary><div class="cgrid">
+<figure class="cshot" title="F6a-dex-mainmenu"><img src="IMG" alt="F6a-dex-mainmenu" width="320" height="240" loading="lazy" /><figcaption>F6a-dex-mainmenu</figcaption></figure>
+<figure class="cshot" title="F6b-dex-list"><img src="IMG" alt="F6b-dex-list" width="320" height="240" loading="lazy" /><figcaption>F6b-dex-list</figcaption></figure>
+<figure class="cshot" title="F6c-dex-entry"><img src="IMG" alt="F6c-dex-entry" width="320" height="240" loading="lazy" /><figcaption>F6c-dex-entry</figcaption></figure>
+<figure class="cshot" title="F6d-dex-page2"><img src="IMG" alt="F6d-dex-page2" width="320" height="240" loading="lazy" /><figcaption>F6d-dex-page2</figcaption></figure>
+<figure class="cshot" title="F6e-dex-habitat"><img src="IMG" alt="F6e-dex-habitat" width="320" height="240" loading="lazy" /><figcaption>F6e-dex-habitat</figcaption></figure>
+</div></details>
+<details class="ggroup"><summary><span class="gtitle">I · Shops & money games</span><span class="gcount">13</span></summary><div class="cgrid">
+<figure class="cshot" title="I1-martbuy"><img src="IMG" alt="I1-martbuy" width="320" height="240" loading="lazy" /><figcaption>I1-martbuy</figcaption></figure>
+<figure class="cshot" title="I1a-martdialog"><img src="IMG" alt="I1a-martdialog" width="320" height="240" loading="lazy" /><figcaption>I1a-martdialog</figcaption></figure>
+<figure class="cshot" title="I1b-martqty"><img src="IMG" alt="I1b-martqty" width="320" height="240" loading="lazy" /><figcaption>I1b-martqty</figcaption></figure>
+<figure class="cshot" title="I2-martsell"><img src="IMG" alt="I2-martsell" width="320" height="240" loading="lazy" /><figcaption>I2-martsell</figcaption></figure>
+<figure class="cshot" title="I4-slotintro"><img src="IMG" alt="I4-slotintro" width="320" height="240" loading="lazy" /><figcaption>I4-slotintro</figcaption></figure>
+<figure class="cshot" title="I4-slotmachine"><img src="IMG" alt="I4-slotmachine" width="320" height="240" loading="lazy" /><figcaption>I4-slotmachine</figcaption></figure>
+<figure class="cshot" title="I4a-slotprompt"><img src="IMG" alt="I4a-slotprompt" width="320" height="240" loading="lazy" /><figcaption>I4a-slotprompt</figcaption></figure>
+<figure class="cshot" title="I4b-slotprompt2"><img src="IMG" alt="I4b-slotprompt2" width="320" height="240" loading="lazy" /><figcaption>I4b-slotprompt2</figcaption></figure>
+<figure class="cshot" title="I4c-slotspin"><img src="IMG" alt="I4c-slotspin" width="320" height="240" loading="lazy" /><figcaption>I4c-slotspin</figcaption></figure>
+<figure class="cshot" title="I4d-slotquit"><img src="IMG" alt="I4d-slotquit" width="320" height="240" loading="lazy" /><figcaption>I4d-slotquit</figcaption></figure>
+<figure class="cshot" title="I6-coinclerk"><img src="IMG" alt="I6-coinclerk" width="320" height="240" loading="lazy" /><figcaption>I6-coinclerk</figcaption></figure>
+<figure class="cshot" title="I6b-coinbuy"><img src="IMG" alt="I6b-coinbuy" width="320" height="240" loading="lazy" /><figcaption>I6b-coinbuy</figcaption></figure>
+<figure class="cshot" title="I8-prizemenu"><img src="IMG" alt="I8-prizemenu" width="320" height="240" loading="lazy" /><figcaption>I8-prizemenu</figcaption></figure>
+</div></details>
+<details class="ggroup"><summary><span class="gtitle">K · FR/LG systems</span><span class="gcount">7</span></summary><div class="cgrid">
+<figure class="cshot" title="K1-teachytv"><img src="IMG" alt="K1-teachytv" width="320" height="240" loading="lazy" /><figcaption>K1-teachytv</figcaption></figure>
+<figure class="cshot" title="K1b-teachytv-show"><img src="IMG" alt="K1b-teachytv-show" width="320" height="240" loading="lazy" /><figcaption>K1b-teachytv-show</figcaption></figure>
+<figure class="cshot" title="K2-famechecker"><img src="IMG" alt="K2-famechecker" width="320" height="240" loading="lazy" /><figcaption>K2-famechecker</figcaption></figure>
+<figure class="cshot" title="K2b-famechecker-facts"><img src="IMG" alt="K2b-famechecker-facts" width="320" height="240" loading="lazy" /><figcaption>K2b-famechecker-facts</figcaption></figure>
+<figure class="cshot" title="K3-vsseeker"><img src="IMG" alt="K3-vsseeker" width="320" height="240" loading="lazy" /><figcaption>K3-vsseeker</figcaption></figure>
+<figure class="cshot" title="K4-questlog"><img src="IMG" alt="K4-questlog" width="320" height="240" loading="lazy" /><figcaption>K4-questlog</figcaption></figure>
+<figure class="cshot" title="K4b-questlog2"><img src="IMG" alt="K4b-questlog2" width="320" height="240" loading="lazy" /><figcaption>K4b-questlog2</figcaption></figure>
+</div></details>
+  </div>
+<!--GALLERY-END-->
+
+  <h2 id="status">Honest status</h2>
+  <div class="tblwrap">
+  <table>
+    <tr><th>Item</th><th>State</th><th>What that means</th></tr>
+    <tr><td>Text sharpness</td><td><span class="st st-ok">measured</span></td>
+        <td>Fixed and proven on real framebuffers. How it reads on the physical panels is your call — an emulator cannot judge that.</td></tr>
+    <tr><td>Text <em>size</em></td><td><span class="st st-hw">needs hardware</span></td>
+        <td>Re-baked bigger on a seven-role ladder, and you confirmed it reads bigger in the emulator &mdash; your words were &ldquo;better&rdquo;, not &ldquo;good&rdquo;, and the hardware re-check has not happened yet. Sharpness and size are different problems — the type is now crisp, but a 7&nbsp;px label on a 320×240 panel at arm's length is small no matter how clean its edges are. The role ladder makes this a re-bake plus a layout re-fit rather than a rewrite.</td></tr>
+    <tr><td>Door pathing</td><td><span class="st st-hw">needs hardware</span></td>
+        <td>Proven by 1,808 host assertions driven from your own ROMs' map data, re-derived from the decomp, and now driven in a live overworld &mdash; the routing captures are above. A tap also reaches the game's own Surf prompt; carrying that through its confirmation is being proven right now. None of it has run on hardware.</td></tr>
+    <tr><td>Co-op, same console</td><td><span class="st st-part">works here, not there</span></td>
+        <td>Renders in the emulator on Emerald+Emerald and on Ruby+Sapphire, and on your real carts. Your hardware failure is not reproduced. The on-screen dev line ends with the gate's reason word — that one word will identify it.</td></tr>
+    <tr><td>Ruby + Sapphire</td><td><span class="st st-part">boots, not played through</span></td>
+        <td>Both now boot and run &mdash; the captures are under &ldquo;New games running&rdquo; above, including the two in co-op on one console. Addresses were verified against byte-matched symbol maps, but only the screens shown have ever been reached, so a full session is still unproven. Most likely of the three pairs to misbehave.</td></tr>
+    <tr><td>Battles over co-op</td><td><span class="st st-hw">out of scope</span></td>
+        <td>Still unsupported and expected to be: it needs the input-sync tier, not this work.</td></tr>
+  </table>
+  </div>
+
+  <footer>
+    Captures produced by <code>tools/emutest</code> — the app driven in Azahar with synthesized CTM
+    movies, state read over the emulator's GDB stub, screens cropped from the window. One caveat on
+    the full-screen shots: Azahar renders the 320×240 screen into a 720×540 area, a 2.25×
+    non-integer upscale, so those add softness that is not in the app — which is why the text proof
+    above is measured from the font bytes instead. Emulator-green is not hardware-proven.
+  </footer>
+</div>
+
+<script>
+  for (const w of document.querySelectorAll('.wipe')) {
+    const r = w.querySelector('.w-range');
+    const set = v => w.style.setProperty('--pos', v + '%');
+    r.addEventListener('input', () => set(r.value));
+    set(r.value);
+  }
+</script>
+<script>
+(function () {
+  document.querySelectorAll('.gbtn').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var host = document.getElementById(b.dataset.scope);
+      if (!host) return;
+      var want = b.dataset.act === 'open';
+      host.querySelectorAll('details.ggroup').forEach(function (d) { d.open = want; });
+    });
+  });
+  var links = [].slice.call(document.querySelectorAll('.qnav a'));
+  var targets = links.map(function (a) { return document.getElementById(a.hash.slice(1)); });
+  function mark() {
+    var best = 0, top = 1e9;
+    targets.forEach(function (t, i) {
+      if (!t) return;
+      var d = Math.abs(t.getBoundingClientRect().top - 70);
+      if (t.getBoundingClientRect().top < window.innerHeight * 0.6 && d < top) { top = d; best = i; }
+    });
+    links.forEach(function (a, i) { a.classList.toggle('on', i === best); });
+  }
+  addEventListener('scroll', mark, { passive: true });
+  mark();
+})();
+</script>
