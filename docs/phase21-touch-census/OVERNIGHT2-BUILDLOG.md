@@ -1210,3 +1210,105 @@ Everything needed is now derived and cited, so the next slice starts at the keyb
 Suites at close: touchgeom **158835**, profiles **1622**, both 0 failures; `make -j8` clean.
 Emulator hygiene: `azctl stop` run for both boots, `profile=CLEAN`, fixtures re-hashed
 untouched, instance **a never touched** (its pid was observed and left alone throughout).
+
+## PHASE 24 / LANE A — Entry 1: STEP 0 answered, and the GRID family's deferred P-G2 delivered
+
+Instance **a**, main tree, boot `runs/20260814-130910`, dual Emerald staged as
+`--stage-roms emerald-fix,emerald-fix` (landmine: a SINGLE-ROM stage forces SMART -> PAD).
+`emerald-fix.{gba,sav}` is a FIXTURE pair in `roms/` — `emerald-fix.gba` is a symlink to the
+user's ROM, `emerald-fix.sav` a real copy — so every in-game save this arc makes persists
+into later boots without the user's own `emerald.sav` ever being written. (`--stage-roms`
+re-copies from `roms/` on every boot, so the loop is: play -> in-game SAVE -> copy
+`sdmc:/3DGBA/gameB.sav` back over `roms/emerald-fix.sav`.)
+
+### THE LUGIA QUESTION — answered from the game's own RAM, by the project's own decrypt rail
+
+Both halves of the apparent contradiction were true. The user's Lugia is real, it does know
+Surf **and Fly**, and the party genuinely did not have Fly — because **the Lugia was in the
+PC**, and Fly only works from a party member.
+
+Method: no new parser. `fieldtrav_read_mon` (the decrypt lifted out of
+`fieldtrav_party_has_move` — same personality%24 permutation, same `personality^otId` XOR,
+same checksum-before-belief gate) + `fieldtrav_census` sweeping gPlayerParty and the 14x30
+PC, mirrored into `g_monDbg` and read over gdb. **192 of 197 live PC slots verified their
+own checksum** — a hand-rolled parser producing "garbage party count" would fail exactly
+that rail.
+
+**Party as found** (species = Gen-3 INTERNAL ids; 277+ are the Hoenn block):
+
+| slot | species | id | field moves |
+|---|---|---|---|
+| 0 | Tyranitar | 248 | — |
+| 1 | Salamence | 397 | — |
+| 2 | Metagross | 400 | — |
+| 3 | Gengar | 94 | — |
+| 4 | Dragonite | 149 | — |
+| 5 | Milotic | 329 | **SURF** |
+
+So: SURF yes; **CUT / FLY / ROCK SMASH / STRENGTH / WATERFALL all absent from the party**.
+
+**Where the field moves actually live** (PC, from the same census — 20 records):
+
+| box.slot | species | moves that matter |
+|---|---|---|
+| **8.0** | **LUGIA (249)** | **FLY, SURF** |
+| 10.14 | Zigzagoon (288) | ROCK SMASH, CUT, SURF |
+| 9.4 | Walrein (343) | SURF, WATERFALL |
+| 5.13 | Tropius (369) | FLY, ROCK SMASH, STRENGTH |
+| 1.29 / 9.9 | Altaria (359) | FLY |
+| 10.4 | Rayquaza (406) | FLY |
+| 1.13 / 3.28 | (170) | WATERFALL, DIVE |
+| 2.27 | Donphan-class (74) | ROCK SMASH |
+| 10.12 | Wailord (314) | DIVE, WATERFALL, SURF |
+
+Save header read live at the save prompt: **BATTLE FRONTIER · GUYA · BADGES 8 · POKéDEX 162
+· TIME 116:41** — 8 badges, so every HM badge gate is open.
+
+### The withdrawal, done with OUR OWN TOUCH CODE — TOUCH-PLAN's deferred P-G2, delivered
+
+The plan called P-G2 (the real storage move) "next, after the lane-A deferred proofs". It is
+now done, on the user's own save, and the mon it moved is the one this arc needed.
+
+| # | Act (all bottom-screen taps unless marked KEY) | gdb (`g_touchDbg` +0x80 mirror) |
+|---|---|---|
+| 1 | KEY: walk to the PC + A, tap "LANETTE'S PC" row, tap through | ctx **6** on the PC-choice multichoice — the shipped fmenu driver |
+| 2 | KEY: MOVE POKéMON (see the gap below) | ctx **13 GCTX_STORAGE**, boxOption **2**, occupancy **0x3FFFFFFF** |
+| 3 | tap PARTY POKéMON band (176,49) | area **0 -> 1**, inParty **0 -> 1** |
+| 4 | tap party slot 3 (192,108) | pos **-> 3**, menuOpen **-> 1**, screen: "GENGAR is selected" |
+| 5 | tap MOVE row (225,73) | **held 1**, origBox **14 (party)**, origPos **3** |
+| 6 | tap right box-arrow x7 (268,68) | boxId **0 -> 7**, occupancy **0x3F000041** (bit 0 = Lugia) |
+| 7 | tap box 8 slot 0 (140,84) | pos **-> 0**, menuOpen 1, popup row 0 = **SHIFT** |
+| 8 | tap SHIFT | **origBox 7, origPos 0** — the hand now holds **LUGIA Lv71**, Gengar is in the box |
+| 9 | tap PARTY, tap slot 5, tap PLACE | **held -> 0** |
+| 10 | tap CLOSE BOX, tap YES | ctx 13 -> the option menu |
+| 11 | repeat 3-10 for **Zigzagoon (box 10 slot 14)**, displacing Metagross | second SHIFT, second PLACE |
+| 12 | tap SAVE in the START menu, tap YES, tap YES (overwrite) | `gameB.sav` written; copied back to `roms/emerald-fix.sav` |
+
+**Party after (census, live):** Tyranitar · Salamence · Dragonite · Milotic (SURF) ·
+**LUGIA (FLY, SURF)** · **Zigzagoon (ROCK SMASH, CUT, SURF)**. That is P1, P2, P3 and the
+travel move for P4, all in one party, obtained by touch.
+
+### THREE gaps found, each reproducible, none guessed
+
+1. **The PC main menu (WITHDRAW/DEPOSIT/MOVE POKéMON/MOVE ITEMS/SEE YA!) is NOT detected** —
+   `ctx` reads **1 (overworld)** while it is up, so taps on it do nothing. It is not the
+   multichoice the PC-choice menu uses (that one reads ctx 6 and taps fine). Two keys
+   (`D D a`) were used instead. **Owed:** its task/window in `pokemon_storage_system.c`
+   (`Task_PCMainMenu` family) added to the census -> one more FIELDMENU row.
+2. **The grid navigator cannot route OUT of the party panel.** With `sInPartyMenu == 1`,
+   a tap on the box-scroll arrow band AND a tap on CLOSE BOX both produced **no key at
+   all** (mirror unchanged: area 1, pos 3). One RIGHT key press leaves the panel and both
+   taps then work normally. So the §1.2 transition table's "RIGHT from pos>0 leaves the
+   party" edge is not being used when the TARGET is area 2/3 — only area-0 targets route.
+   **Owed:** extend `stornav_step`'s cross-area routing (and its host oracle) to reach
+   TITLE/BUTTONS from IN_PARTY.
+3. **MOVE ITEMS (boxOption 3) is a total dead zone — including its popups.** G7 says the
+   driver emits nothing there, which is correct, but that also means the "Continue BOX
+   operations?" YES/NO prompt cannot be answered by touch, and a mis-tap that lands on the
+   MOVE ITEMS row (one row above SEE YA!) traps the session until a key rescues it.
+   **Owed:** let G6's popup delegation run even under boxOption 3 (the popup is the global
+   sMenu; nothing about it is item-specific).
+
+Landmines re-confirmed: #3 (never overlap touch scripts with D4 key scripts — every step
+above alternates), and the corrected landmine #2 (`sdmc arm-control` before boot, then any
+number of control files mid-session — this whole 12-step arc was one boot, ~25 file drops).
