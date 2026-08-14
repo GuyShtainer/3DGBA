@@ -570,7 +570,12 @@ static int  s_lDownX, s_lDownY, s_lLastX, s_lLastY;
 static int  s_lPressRow = -1, s_lPressArrow = -1, s_lPressTab = -1;
 static int  s_lVel[4], s_lVelN = 0;              // per-frame dy ring (fling velocity, L5)
 static int  s_lFling = 0; static u16 s_lFlingKey = 0;   // fling-hold frames + key
-static int  s_lSeq = 0, s_lSeqTick = 0; static u16 s_lSeqKey = 0;  // queued tab edges (1 per 2 frames)
+static int  s_lSeq = 0, s_lSeqTick = 0; static u16 s_lSeqKey = 0;  // queued tab edges (paced)
+// EMULATOR FINDING (lane A, EM bag run 2026-08-14): the bag IGNORES a pocket-switch key that
+// lands during its ~16-frame pocket-swap animation — a 2-frame edge cadence delivered 1 of 3
+// queued edges (POKE BALLS instead of BERRIES). One edge per 24 frames clears the swap anim
+// with margin; a dot tap is a deliberate act, so the extra ~0.4 s for a 3-pocket jump is fine.
+#define LIST_SEQ_FRAMES 24
 static int  s_lPrevKind = -1;                    // kind change inside GCTX_LIST -> reset
 static void list_reset(void) {
 	s_lRow = -1; s_lTick = 0; s_lDown = false; s_lDrag = false;
@@ -607,9 +612,9 @@ static u16 list_update(const TouchSmart* sm, uint32_t listBase, int flags,
 		if (++s_lTick >= 2) { s_lRow = -1; s_lTick = 0; }
 		return k;
 	}
-	if (s_lSeq > 0) {                                // queued pocket-tab edges, one per 2 frames
+	if (s_lSeq > 0) {                                // queued pocket-tab edges, one per LIST_SEQ_FRAMES
 		u16 k = (s_lSeqTick == 0) ? s_lSeqKey : 0;
-		if (++s_lSeqTick >= 2) { s_lSeqTick = 0; s_lSeq--; }
+		if (++s_lSeqTick >= LIST_SEQ_FRAMES) { s_lSeqTick = 0; s_lSeq--; }
 		return k;
 	}
 	if (s_lFling > 0) {                              // fling-hold: the game's own key repeat scrolls
