@@ -151,3 +151,50 @@ Captures: `EM-P24-P2a-tree-standing.bottom.png` (the saved state this boot loade
   column below the tree. A hand-written `d6` down that column times out forever; the planner has to
   route around her. Every walk script here should come out of `plan24.py` (which reads the map's own
   object events), not out of a mental picture of the map.
+
+---
+
+## P4 — LAVARIDGE HOT SPRING, the cross-map excursion: **PROVEN** (and it works in both directions)
+
+Boot `runs/20260814-160325`, from `roms/emerald-lavaridge.sav` (saved in game, by touch, on the
+fly tile). `smartTraverse = 2` (HM+Via).
+
+**The premise, verified on the host first** (`gate.py`/flood over the real map data): from the fly
+tile (9,7), **157 tiles** of Lavaridge are reachable on foot and **(5,5) is not one of them** — the
+spring block (x 3..6, y 3..5) has solid wall under it. From the PC's back-door tile (9,2) it is one
+of 16. So no dry route can exist, and the only way in is out-and-back through the Pokemon Center.
+
+**The act:** `t 96 96 6 30` — ddx −4 / ddy −2 from (9,7) → world (5,5), a hot-spring tile.
+
+**What the game's own state said**, one line per read (~6 s apart), nothing else sent:
+
+| read | map | pos | note |
+|---|---|---|---|
+| tap | (0,12) Lavaridge | (9,7) | on the town floor |
+| +6 s | **(4,5) PC 1F** | (7,8) | walked to the front door (9,6) and warped IN — leg 0 |
+| +12 s | (4,5) | (5,8) | crossing the room, `walking=1` |
+| +18 s | (4,5) | (2,4) | …still crossing — leg 1 planned on the interior's live grid |
+| +24 s | (4,5) | **(2,1)** | the PC's BACK door |
+| +30 s | **(0,12)** | (8,1) | warped OUT onto the north terrace, already walking — leg 2 |
+| +36 s | (0,12) | **(5,5)** | **in the hot spring**, `plan goal=(5,5) beh=0x28 outcome=PLANNED end=ARRIVED`, `progMapSeq=2` |
+
+**Then the same tap in reverse**: from (5,5), a tap on the town's (9,7) ran the whole excursion the
+other way — back door → across the PC → front door → (9,7) — as `progSeq=2`, `mapSeq=2`. The
+machine is not tuned to one direction.
+
+Captures: `EM-P24-P4a-lavaridge-arrival.bottom.png` (the town, with the spring fenced off behind
+the Pokemon Center), `EM-P24-P4b-inside-the-pokemon-center.bottom.png` (mid-excursion, inside the
+PC), `EM-P24-P4d-in-the-hot-spring.bottom.png` (**standing in the spring beside the two bathers**),
+`EM-P24-P4e-back-in-town.bottom.png` (the reverse trip).
+
+**Verdict: PROVEN** — the user's own example ("the jakuzi is seen from outside… touch that and the
+game understands how to reach it") works, from one tap, with every leg boundary read off the game.
+
+### Four defects this target found — the excursion tier had never once run
+
+| # | Fix | What it was |
+|---|---|---|
+| 1 | `e11b620` | `fieldtrav_excursion` demanded `ft_rom_ptr(m->mapHeader)`, but gMapHeader is an **EWRAM struct** — every excursion on real hardware returned BADMAP before reading a warp. The host fixture handed it the ROM header, so the suite could not see it; TEST 16 now serves the header at the EWRAM address the console uses (and fails 4 checks against the old line). |
+| 2 | `e1c6041` | The next leg was planned on the frame `SaveBlock1.location` changed. A Gen-3 warp writes the location when it STARTS, so the plan read a half-built world, failed, and killed the excursion one door short. Boundaries now ARM a leg; the follower plans it when the world answers. |
+| 3 | `a1cbdca` | The boundary detector sat inside the path-follow block. The last leg's terminal is a STEP warp — the walker finishes (`s_walking = false`) BEFORE the warp fires — so the second boundary was never seen. The watcher now runs unconditionally against the map the current leg is walked on. |
+| 4 | `2fa4976` | Matching the location is not the world being loaded: leg 2 got planned on the Pokemon Center's 14x9 grid while the town's 20x20 was still loading, and died as MAPCHANGE one frame later. The settle rule now also requires the layout DIMENSIONS to be stable, and a layout-killed leg re-arms instead of ending the trip. |
