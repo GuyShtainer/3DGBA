@@ -155,7 +155,14 @@ static const GameProfile PROFILES[] = {
                can only mean "no change". */
             { 0x081754DCu, 0x08175620u, 0x00000000u, 0x00000000u },
             /* phase 25 questLog = 0: Emerald has no quest log (an FRLG feature). */
-            0x00000000u },
+            0x00000000u,
+            /* PHASE 25 (lane D1) rmVariant/rmCurPtr/rmCbAlt — Emerald IS the engine FAM-MAP was
+               written against, so this row only has to NAME it: GS_RMAP_EM. Its cursor lives
+               inside the struct rmPtr already points at (cursorPosX/Y +0x054/+0x056), so no second
+               pointer; its two map screens are two distinct cb2s, so no rev-alternate slot is
+               needed for a shared one. Zero behaviour change to Emerald — pinned by test_profiles
+               TEST 18, which still drives the SAME EM fly/wall answers through the real game_read. */
+            GS_RMAP_EM, 0x00000000u, 0x00000000u },
   // BPRE ROM anchors: the PRIMARIES below are FR rev0 (correct for a rev0 cart); the REV1 values —
   // the user's cart — live in the phase-22.0 ALTERNATE block at the end of the row. newKeys was
   // 0x0303011E (a digit transposition, RS-REV2-VERIFICATION.md §7): gMain 0x030030F0
@@ -309,16 +316,18 @@ static const GameProfile PROFILES[] = {
                live-verified and the read is compare-only, so a wrong value could only ever
                DISABLE the field-dialog re-route, never mis-fire it. */
             0x03000F9Cu,
-            /* phase 24 (lane B2) FAM-MAP rmPtr/rmFlyCb/rmWallCb = 0, for a MEASURED reason rather
-               than an unfinished one: the census harvested ONE cb2 for BOTH FR map screens
-               (CB2_RegionMap 0x080C08C8 — "town map AND fly map, one loop, mode internal",
-               CB2-HARVEST.md), so `fly` — i.e. whether an arrival A confirms a destination or
-               CLOSES the map — is not decidable from the callback, and no pokefirered symbol map
-               was available this session to resolve FR's region-map struct pointer. Explicit
-               zeros (P3.5.2). Named degradation: the FR map keeps the shipped FAM-DLG default
-               (tap = A, hold = B, drag = one D-pad edge per 14 px), which already moves its
-               cursor. Owed: FR's region-map struct pointer + a fly-vs-wall discriminator. */
-            0x00000000u, 0x00000000u, 0x00000000u,
+            /* phase 24 (lane B2) left rmPtr/rmFlyCb/rmWallCb = 0 with an owed item: "FR's
+               region-map struct pointer + a fly-vs-wall discriminator". PHASE 25 (lane D1) pays it.
+                 rmPtr    0x020399D4  `020399d4 l 00000004 sRegionMap` (pokefirered_rev1.sym AND
+                          pokefirered.sym — EWRAM, byte-identical on both revisions). A POINTER:
+                          deref, then +0x4796 is `type` = REGIONMAP_TYPE_NORMAL/_WALL/_FLY, which
+                          is the discriminator B2 could not get from the callback.
+                 rmFlyCb  0           FireRed genuinely has no second callback — B2's census was
+                          right. The mode is struct state, so it is read as struct state.
+                 rmWallCb 0x080C08C8  `CB2_RegionMap` (rev1), the one run loop, matched here and
+                          then refined by the live `type` read. Already in cb2FullUi above.
+               The rev0 twin (0x080C08B4) rides in rmCbAlt at the end of this row. */
+            0x020399D4u, 0x00000000u, 0x080C08C8u,
             /* phase 24 (lane B2) cb2List — the DISCOVERED-LIST whitelist. Both values are census
                live-harvest [exact] (CB2-HARVEST.md FR rows E4/E5) and both are ALREADY in this
                row's cb2FullUi list above, so this cannot make a screen start or stop detecting:
@@ -342,7 +351,24 @@ static const GameProfile PROFILES[] = {
                revision-insensitive, so unlike every ROM anchor in this row it needs no alternate.
                game_read applies the game's own QL_IS_PLAYBACK_STATE test (2 or 3), never
                "non-zero": ordinary play sits at QL_STATE_RECORDING (1). */
-            0x0203ADFAu },
+            0x0203ADFAu,
+            /* PHASE 25 (lane D1) FAM-MAP for FIRERED — the three columns lane B2 shipped as
+               explicit zeros, with the discriminator it said was owed. B2's diagnosis was right
+               (ONE cb2 for all FR map screens) and its conclusion too pessimistic: FireRed's map
+               is a DIFFERENT ENGINE whose own struct names the mode.
+                 rmVariant GS_RMAP_FR   — pokefirered src/region_map.c, not pokeemerald's
+                 rmPtr     0x020399D4   `020399d4 l 00000004 sRegionMap` (POINTER; +0x4796 = type)
+                 rmCurPtr  0x020399E4   `020399e4 l 00000004 sMapCursor` (POINTER; x/y +0x00/+0x02,
+                                        selectedMapsec +0x14, selectedMapsecType +0x16)
+                 rmFlyCb   0            FireRed has no separate fly callback
+                 rmWallCb  0x080C08C8   `CB2_RegionMap` rev1 — the ONE run loop, and ALREADY in
+                                        this row's cb2FullUi list, so this changes how the screen
+                                        READS, never whether it detects (the B2 property)
+                 rmCbAlt   0x080C08B4   `CB2_RegionMap` rev0 — the one ROM value here, so it is the
+                                        one that needed an alternate
+               Both EWRAM pointers are BYTE-IDENTICAL in pokefirered.sym and pokefirered_rev1.sym
+               (checked this session), so only the callback is revision-sensitive. */
+            GS_RMAP_FR, 0x020399E4u, 0x080C08B4u },
   // BPGE ROM anchors — REPLACED phase 22.0 (they were FireRed-rev0 values, wrong for EVERY
   // LeafGreen revision; battle/party/bag/menu detection was silently dead on LG). PRIMARIES are
   // now LG **rev1** — the user's cart is rev 1.1 — re-derived field-by-field from
@@ -475,7 +501,14 @@ static const GameProfile PROFILES[] = {
                EWRAM address in pokeleafgreen.sym, pokeleafgreen_rev1.sym, pokefirered.sym and
                pokefirered_rev1.sym (all four checked this session). LG's quest log replays on
                every CONTINUE exactly like FireRed's. VERIFIED-SYM, live-unverified on LG. */
-            0x0203ADFAu },
+            0x0203ADFAu,
+            /* PHASE 25 (lane D1) rmVariant = GS_RMAP_NONE, rmCurPtr/rmCbAlt = 0. LeafGreen runs
+               the SAME engine as FireRed (one binary family), and that is exactly why its
+               addresses are not copied: pokeleafgreen's own `sRegionMap`/`sMapCursor`/
+               `CB2_RegionMap` were not resolved in this lane, and inventing them from the FR row
+               is the precise failure this profile spent phase 22.0 undoing. Explicit zeros; LG
+               keeps the FAM-DLG default on its map. Owed: one LG harvest slice. */
+            GS_RMAP_NONE, 0x00000000u, 0x00000000u },
 
   // ===================== Ruby / Sapphire (SPEC-coop §P3) =====================================
   // Every RAM value below is VERIFIED-SYM against pret's byte-matched `symbols` branch, all FOUR
@@ -680,7 +713,11 @@ static const GameProfile PROFILES[] = {
                its cb2 was never harvested and RS ROM values are not promoted from a sym map).
                questLog = 0 — the quest log is an FRLG feature, RS has none. Explicit zeros. */
             { 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u },
-            0x00000000u },
+            0x00000000u,
+            /* PHASE 25 (lane D1) rmVariant = GS_RMAP_NONE + zeros — the standing RS ROM/statics
+               ban. Ruby/Sapphire's region map is pokeemerald's ANCESTOR, not its twin, and no RS
+               address in this file is promoted from a sym map. Explicit zeros. */
+            GS_RMAP_NONE, 0x00000000u, 0x00000000u },
   // Pokemon Sapphire (US; same promotion rule — every value below was measured on SAPPHIRE
   // itself, live [exact] on pokesapphire_rev2.sym; LANE-B-RS.md §2 drift table + §3 solo smoke).
   { "AXPE", RS_PROFILE_BODY_RAM,
@@ -720,7 +757,11 @@ static const GameProfile PROFILES[] = {
                its cb2 was never harvested and RS ROM values are not promoted from a sym map).
                questLog = 0 — the quest log is an FRLG feature, RS has none. Explicit zeros. */
             { 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u },
-            0x00000000u },
+            0x00000000u,
+            /* PHASE 25 (lane D1) rmVariant = GS_RMAP_NONE + zeros — the standing RS ROM/statics
+               ban. Ruby/Sapphire's region map is pokeemerald's ANCESTOR, not its twin, and no RS
+               address in this file is promoted from a sym map. Explicit zeros. */
+            GS_RMAP_NONE, 0x00000000u, 0x00000000u },
   #undef RS_PROFILE_BODY_RAM
   #undef RS_PROFILE_BODY_TAIL
 };
@@ -934,7 +975,27 @@ bool game_read(GbaCore* c, const GameProfile* p, GameState* out) {
 		// map A confirms a destination, on the wall map A EXITS. A game with no anchors (0) never
 		// matches and keeps the shipped behaviour.
 		if (p->rmFlyCb && out->cb2 == p->rmFlyCb)  { out->ctx = GCTX_MAP; out->mapFly = true;  return true; }
-		if (p->rmWallCb && out->cb2 == p->rmWallCb) { out->ctx = GCTX_MAP; out->mapFly = false; return true; }
+		if (p->rmVariant != GS_RMAP_FR && p->rmWallCb && out->cb2 == p->rmWallCb) {
+			out->ctx = GCTX_MAP; out->mapFly = false; return true;
+		}
+		// PHASE 25 (lane D1): the FIRERED region map. B2's census finding stands — ONE callback
+		// serves the bag's TOWN MAP, the wall map and the FLY map — so the mode cannot come from
+		// the callback and is read from the LIVE struct instead: pokefirered `struct RegionMap`
+		// carries its own `type` (REGIONMAP_TYPE_NORMAL 0 / _WALL 1 / _FLY 2) at +0x4796, and
+		// `Task_FlyMap` (:3955) is the only mode that ever accepts an A.
+		//
+		// If the pointer is not a live EWRAM struct we deliberately do NOT claim GCTX_MAP and let
+		// the screen fall through to its cb2FullUi row — i.e. the failure mode is "no upgrade,
+		// keep today's FAM-DLG tap=A/hold=B", never a map driver running blind. Same rule the
+		// discovered-list whitelist follows a few lines below.
+		if (p->rmVariant == GS_RMAP_FR && p->rmWallCb &&
+		    (out->cb2 == p->rmWallCb || (p->rmCbAlt && out->cb2 == p->rmCbAlt))) {
+			uint32_t rmb = gbacore_read32(c, p->rmPtr);
+			if ((rmb >> 24) == 0x02) {
+				uint8_t ty = gbacore_read8(c, rmb + GS_FR_RM_TYPE_OFF);
+				out->ctx = GCTX_MAP; out->mapFly = (ty == GS_FR_RMTYPE_FLY); return true;
+			}
+		}
 		if (task_active(c, p, p->dexTask)) {                        // EM dex LIST (task is unique
 			out->ctx = GCTX_LIST; out->listKind = LK_DEX;           //   to the list screen)
 			return true;

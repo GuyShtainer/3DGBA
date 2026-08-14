@@ -1261,16 +1261,20 @@ static void test_family24_map(void) {
 	}
 	CHECK(fly && wall, "both map cb2s remain in BPEE's cb2FullUi list — this slice re-CLASSIFIES "
 	      "two already-detected screens, it never makes one start or stop detecting");
-	// The named degradations, pinned so a later edit has to argue with the suite.
-	const char* zero[] = { "BPRE", "BPGE", "AXVE", "AXPE" };
-	for (unsigned i = 0; i < 4; i++) {
+	EQU(em->rmVariant, (uint32_t)GS_RMAP_EM, "BPEE names its ENGINE (phase 25 lane D1): Emerald "
+	    "runs the region map FAM-MAP was derived against");
+	CHECK(em->rmCurPtr == 0 && em->rmCbAlt == 0, "…and needs neither a second cursor pointer "
+	      "(its cursor lives inside sRegionMap) nor a rev-alternate (its two cb2s are distinct)");
+	// The named degradations that REMAIN after lane D1 paid FireRed's. BPRE has moved to TEST 20.
+	const char* zero[] = { "BPGE", "AXVE", "AXPE" };
+	for (unsigned i = 0; i < 3; i++) {
 		const GameProfile* q = prof(zero[i]);
 		if (!q) { CHECK(0, "%s row missing", zero[i]); continue; }
-		CHECK(q->rmPtr == 0 && q->rmFlyCb == 0 && q->rmWallCb == 0,
-		      "%s FAM-MAP columns are 0 — FR/LG: ONE cb2 serves both map screens (fly-vs-wall is "
-		      "not decidable from the callback) and no FRLG region-map struct pointer was "
-		      "resolved; RS: the ROM/statics ban. Named degradation: FAM-DLG keeps those screens",
-		      zero[i]);
+		CHECK(q->rmPtr == 0 && q->rmFlyCb == 0 && q->rmWallCb == 0 &&
+		      q->rmVariant == (uint32_t)GS_RMAP_NONE && q->rmCurPtr == 0 && q->rmCbAlt == 0,
+		      "%s FAM-MAP columns are ALL 0 — LG: its region map is FireRed's engine but its "
+		      "addresses are its own and copying FR's is the exact BPGE bug phase 22.0 undid; "
+		      "RS: the ROM/statics ban. Named degradation: FAM-DLG keeps those screens", zero[i]);
 	}
 
 	// --- behaviour through the real game_read ---------------------------------------------
@@ -1294,15 +1298,122 @@ static void test_family24_map(void) {
 		EQU(gs.ctx, GCTX_FULLUI, "a non-map FULLUI screen still classifies as GCTX_FULLUI");
 		CHECK(!gs.mapFly, "…and mapFly is 0 outside GCTX_MAP");
 	}
-	{   // FR: the same callback that would be a map elsewhere must NOT become GCTX_MAP here
+}
+
+
+// ============================================================================================
+// TEST 20 — PHASE 25 (lane D1): FAM-MAP's SECOND ENGINE, i.e. FIRERED's region map. Lane B2
+// shipped BPRE's map columns as explicit zeros and named what it owed: "FR's region-map struct
+// pointer + a fly-vs-wall discriminator". Its diagnosis was right — ONE CB2_RegionMap serves the
+// bag's TOWN MAP, the wall map AND the fly map — but the conclusion "therefore undecidable" was
+// not: pokefirered's region map is a SEPARATE implementation whose own struct carries the mode
+// (`sRegionMap->type` at +0x4796 = REGIONMAP_TYPE_NORMAL 0 / _WALL 1 / _FLY 2).
+//
+// Graded here, and every one of them is a property a wrong edit would break:
+//   (a) the four BPRE values, and the shape rules that make them fail-safe (two EWRAM pointers
+//       because both get DEREFERENCED, two ROM callbacks because both are compare-only);
+//   (b) the callback is still in cb2FullUi, so — exactly like lane B2's Emerald half — this
+//       re-CLASSIFIES an already-detected screen and can never make one stop detecting;
+//   (c) the rev pair: rmWallCb/rmCbAlt are the rev1/rev0 `CB2_RegionMap` values and must differ,
+//       while the two EWRAM pointers must NOT need alternates (they are rev-identical);
+//   (d) behaviour through the REAL game_read, all three modes, both revisions:
+//       type FLY -> GCTX_MAP + mapFly 1 · type WALL and type NORMAL -> GCTX_MAP + mapFly 0 ·
+//       and a NULL/garbage sRegionMap -> NOT GCTX_MAP at all but the screen's cb2FullUi
+//       fallback, i.e. the failure mode is "no upgrade", never a map driver running blind.
+static void test_family25_frmap(void) {
+	printf("TEST 20: phase-25 FAM-MAP second engine (FireRed region map)\n");
+	const GameProfile* fr = prof("BPRE");
+	if (!fr) { CHECK(0, "BPRE row missing"); return; }
+	// (a) the values
+	EQU(fr->rmVariant, (uint32_t)GS_RMAP_FR, "BPRE names pokefirered's engine, not Emerald's");
+	EQU(fr->rmPtr,    0x020399D4u, "BPRE rmPtr = sRegionMap (pokefirered_rev1.sym "
+	    "`020399d4 l 00000004`, identical in pokefirered.sym)");
+	EQU(fr->rmCurPtr, 0x020399E4u, "BPRE rmCurPtr = sMapCursor (`020399e4 l 00000004`) — FireRed "
+	    "keeps the cursor in its OWN allocation, which is why one pointer was never enough");
+	EQU(fr->rmWallCb, 0x080C08C8u, "BPRE rmWallCb = CB2_RegionMap rev1 (the user's cart)");
+	EQU(fr->rmCbAlt,  0x080C08B4u, "BPRE rmCbAlt = CB2_RegionMap rev0");
+	EQU(fr->rmFlyCb,  0u, "BPRE rmFlyCb = 0 — FireRed genuinely has no separate fly callback; the "
+	    "mode is struct state, so it is read as struct state");
+	// (b)/(c) the shape rules
+	CHECK((fr->rmPtr >> 24) == 0x02u && (fr->rmCurPtr >> 24) == 0x02u,
+	      "both FR map pointers are EWRAM — they are the values that get DEREFERENCED");
+	CHECK((fr->rmWallCb >> 24) == 0x08u && (fr->rmCbAlt >> 24) == 0x08u,
+	      "both FR map callbacks are ROM (compare-only, hence fail-safe)");
+	CHECK(fr->rmWallCb != fr->rmCbAlt, "the rev0/rev1 callbacks differ — the ONE FAM-MAP anchor "
+	      "that is a ROM address is the one that moved between revisions, which is why it is the "
+	      "only one with an alternate slot");
+	int seen = 0;
+	for (int i = 0; i < GS_N_FULLUI; i++) if (fr->cb2FullUi[i] == fr->rmWallCb) seen = 1;
+	CHECK(seen, "CB2_RegionMap is STILL in BPRE's cb2FullUi list — this slice re-classifies an "
+	      "already-detected screen (lane B2's property, held on the second engine)");
+	// (d) behaviour through the real game_read
+	static const struct { uint32_t cb2; const char* rev; } revs[] = {
+		{ 0x080C08C8u, "rev1" }, { 0x080C08B4u, "rev0" }
+	};
+	for (unsigned r = 0; r < 2; r++) {
+		GbaCore c; bus_reset(&c, "BPRE");
+		const GameProfile* p = profile_for(&c);
+		GameState gs;
+		const uint32_t RM = 0x02030000u;                       // a plausible heap block
+		bus_w32(&c, p->sb1ptr, 0x02025734u);
+		bus_w32(&c, p->mainCb2, revs[r].cb2 | 1u);
+		bus_w32(&c, p->rmPtr, RM);
+		bus_w8(&c, RM + GS_FR_RM_TYPE_OFF, GS_FR_RMTYPE_FLY);
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_MAP, "%s: CB2_RegionMap + type FLY resolves GCTX_MAP", revs[r].rev);
+		CHECK(gs.mapFly, "%s: …with mapFly = 1 — the ONE mode whose A confirms a destination "
+		      "(Task_FlyMap :3955 + MAPPERM_HAS_FLY_DESTINATIONS)", revs[r].rev);
+		bus_w8(&c, RM + GS_FR_RM_TYPE_OFF, GS_FR_RMTYPE_WALL);
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_MAP, "%s: type WALL is still GCTX_MAP (the cursor is still drivable)",
+		    revs[r].rev);
+		CHECK(!gs.mapFly, "%s: …with mapFly = 0, so the driver never arms an arrival A there",
+		      revs[r].rev);
+		bus_w8(&c, RM + GS_FR_RM_TYPE_OFF, GS_FR_RMTYPE_NORMAL);
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_MAP, "%s: type NORMAL (the bag's TOWN MAP) is GCTX_MAP too", revs[r].rev);
+		CHECK(!gs.mapFly, "%s: …and also gets no arrival A", revs[r].rev);
+	}
+	{   // the fail-safe: no live struct -> NOT GCTX_MAP, fall through to today's behaviour
 		GbaCore c; bus_reset(&c, "BPRE");
 		const GameProfile* p = profile_for(&c);
 		GameState gs;
 		bus_w32(&c, p->sb1ptr, 0x02025734u);
-		bus_w32(&c, p->mainCb2, 0x080C08C8u | 1u);            // FR CB2_RegionMap (census [exact])
+		bus_w32(&c, p->mainCb2, 0x080C08C8u | 1u);
+		bus_w32(&c, p->rmPtr, 0u);                             // sRegionMap NULL (freed / not yet)
 		game_read(&c, p, &gs);
-		CHECK(gs.ctx != GCTX_MAP, "BPRE's region map does NOT reach GCTX_MAP — with no anchors the "
-		      "zero columns can never match, which is the fail-safe the family is built on");
+		CHECK(gs.ctx != GCTX_MAP, "a NULL sRegionMap does NOT reach GCTX_MAP — the map driver is "
+		      "never given a screen it cannot read");
+		EQU(gs.ctx, GCTX_FULLUI, "…it falls through to the screen's cb2FullUi row, i.e. exactly "
+		    "the FAM-DLG behaviour it had before this slice: the failure mode is 'no upgrade'");
+		bus_w32(&c, p->rmPtr, 0x08001234u);                    // a ROM value where a struct belongs
+		game_read(&c, p, &gs);
+		CHECK(gs.ctx != GCTX_MAP, "…and so does a non-EWRAM sRegionMap");
+	}
+	{   // an UNLISTED callback with a perfectly good map struct is never claimed
+		GbaCore c; bus_reset(&c, "BPRE");
+		const GameProfile* p = profile_for(&c);
+		GameState gs;
+		const uint32_t RM = 0x02030000u;
+		bus_w32(&c, p->sb1ptr, 0x02025734u);
+		bus_w32(&c, p->rmPtr, RM);
+		bus_w8(&c, RM + GS_FR_RM_TYPE_OFF, GS_FR_RMTYPE_FLY);
+		bus_w32(&c, p->mainCb2, 0x08137F60u | 1u);             // FR summary screen (a FULLUI row)
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_FULLUI, "another FULLUI screen is untouched by the FR map arm, even with "
+		    "a live map struct sitting in RAM");
+		CHECK(!gs.mapFly, "…and mapFly stays 0 outside GCTX_MAP");
+	}
+	{   // EMERALD must be completely unaffected by the second engine
+		GbaCore c; bus_reset(&c, "BPEE");
+		const GameProfile* p = profile_for(&c);
+		GameState gs;
+		bus_w32(&c, p->sb1ptr, 0x02025734u);
+		bus_w32(&c, p->mainCb2, 0x08170274u | 1u);             // MCB2_FieldUpdateRegionMap
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_MAP, "EM's wall map still resolves GCTX_MAP after the FR arm landed");
+		CHECK(!gs.mapFly, "…still with mapFly = 0, and with NO sRegionMap deref required — the "
+		      "EM path must not acquire FireRed's liveness precondition");
 	}
 }
 
@@ -1529,6 +1640,7 @@ int main(void) {
 	test_family24_map();         // phase 24 (lane B2) FAM-MAP region map / tap-to-fly
 	test_family24_listcb2();     // phase 24 (lane B2) discovered-list whitelist (FR E4/E5)
 	test_family25_inert();       // phase 25 (lane C1) INERT class: credits + FRLG quest log
+	test_family25_frmap();       // phase 25 (lane D1) FAM-MAP second engine (FireRed)
 	printf("\n=== %d checks, %d failures ===\n", g_checks, g_fails);
 	return g_fails ? 1 : 0;
 }

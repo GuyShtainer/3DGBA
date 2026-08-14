@@ -268,6 +268,14 @@ typedef struct {
 	// a quest-log playback state (2 or 3) or, with qlState 0/1, the credits cb2 list. -1 = this
 	// game has no quest log (Emerald / RS) or the profile was unreadable. LOGGING ONLY.
 	int32_t  qlState;        // +0x104 raw GameProfile.questLog byte (gQuestLogState on FRLG)
+	// --- PHASE 25 / lane D1: FAM-MAP's SECOND ENGINE. APPENDED (every offset above is unchanged).
+	int32_t  mapVariant;     // +0x108 GameProfile.rmVariant as the driver resolved it: 0 none,
+	                         //        1 GS_RMAP_EM (pokeemerald), 2 GS_RMAP_FR (pokefirered).
+	                         //        -1 = rmap_read failed, which IS the diagnosis when a tap on
+	                         //        a map "does nothing" (bad pointer / struct not live yet).
+	int32_t  mapCancels;     // +0x10C arrivals that pressed A on FireRed's on-screen CANCEL button
+	int32_t  mapFrType;      // +0x110 FR only: the live sRegionMap->type (+0x4796) — 0 NORMAL /
+	                         //        1 WALL / 2 FLY. -1 on Emerald or when the read failed.
 } TouchDbg;
 extern TouchDbg g_touchDbg;
 

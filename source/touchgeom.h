@@ -285,6 +285,63 @@ int mapgeom_hit(int gx, int gy, int* cx, int* cy);
 enum { MN_RIGHT = 1, MN_LEFT = 2, MN_DOWN = 4, MN_UP = 8 };
 int mapnav_step(int curX, int curY, int tgtX, int tgtY);
 
+// ---- PHASE 25 / lane D1: the family gets a SECOND ENGINE (pokefirered's region map) -----------
+// FireRed does not run pokeemerald's region map with a different entry point; it is a separate
+// implementation (pokefirered src/region_map.c) that disagrees with Emerald about the cell
+// bounds, the cell->pixel formula, where the cursor LIVES and how the screen names its own mode.
+// What it does NOT disagree about is the part the driver is built on, and that is why one family
+// covers both — quoting FireRed's own input pair:
+//
+//   HandleRegionMapInput (:2754-2831): JOY_HELD per direction, X and Y read INDEPENDENTLY (so a
+//     diagonal is one frame), and a move sets `sMapCursor->moveCounter = 4` + swaps
+//     `sMapCursor->inputHandler` to MoveMapCursor.
+//   MoveMapCursor (:2833-2853): polls NO input while moveCounter != 0 (SpriteCB_MapCursor ticks it
+//     down 1/frame while sliding the sprite 2 px), then commits x/y and restores the handler.
+//   ==> a SINGLE-FRAME press moves exactly one cell here too: overshoot is impossible and the
+//       logical position is written only at the END of the slide, so writing the cursor would
+//       desync the sprite exactly as it does on Emerald. Same closed loop, same "never write".
+//
+// The differences are pure parameters, and they live in MapGeom so a wrong one cannot be shared:
+//
+//   |                | pokeemerald                    | pokefirered                            |
+//   |----------------|--------------------------------|----------------------------------------|
+//   | cell bounds    | x 1..28, y 2..16               | x 0..21, y 0..14 (MAP_WIDTH 22/HEIGHT 15)|
+//   | cell -> px     | 8*x + 4                        | 8*x + 36  (CreateMapCursor :2696-2697) |
+//   | body in px     | x [8,232) y [16,136)           | x [32,208) y [32,152)                  |
+//   | mode           | two cb2s                       | ONE cb2 + sRegionMap->type (+0x4796)   |
+//   | A accepted     | mapSecType 2 CITY_CANFLY /     | selectedMapsecType 2 MAPSECTYPE_VISITED|
+//   |                |             4 BATTLE_FRONTIER  |                    / 4 _UNKNOWN, and   |
+//   |                |                                | only when type == FLY (Task_FlyMap     |
+//   |                |                                | :3955, MAPPERM_HAS_FLY_DESTINATIONS)   |
+//
+// The two acceptance sets happen to be the same NUMBERS and are not the same RULE, so they are
+// written out per variant rather than shared — a third engine that used {2,3} would otherwise
+// inherit a silently wrong constant.
+typedef struct {
+	int xMin, xMax, yMin, yMax;   // the engine's own legal cursor-cell range
+	int pxOrgX, pxOrgY;           // GBA pixel of cell (xMin,yMin)'s LEFT/TOP edge
+	int flyA, flyB;               // the two mapSecType values THIS engine's fly map accepts
+	int cancelX, cancelY;         // an on-screen CANCEL button cell, or -1/-1 if the engine has none
+} MapGeom;
+extern const MapGeom MAPGEOM_EM;   // pokeemerald  (the shipped geometry, unchanged)
+extern const MapGeom MAPGEOM_FR;   // pokefirered
+// FireRed draws a CANCEL button at cell (21,13) and HandleRegionMapInput :2795-2799 turns A there
+// into MAP_INPUT_CANCEL **unconditionally, in every mode** — the test is on the cursor cell, not
+// on a permission. So "tap the on-screen CANCEL button and the map closes" is the game's own
+// semantics on the town map, the wall map and the fly map alike. (SWITCH at (21,11) is
+// permission-gated and deliberately NOT wired: it swaps in the Sevii layouts, a different table
+// than the one this hit test was derived from.)
+#define MAPGEOM_FR_CANCEL_X 21
+#define MAPGEOM_FR_CANCEL_Y 13
+
+// The variant-aware forms. `mapgeom_hit`/`mapnav_step` above are these with &MAPGEOM_EM.
+int mapgeom_hit_g(const MapGeom* g, int gx, int gy, int* cx, int* cy);
+int mapnav_step_g(const MapGeom* g, int curX, int curY, int tgtX, int tgtY);
+// Would THIS engine's fly map accept an A on a cell whose live mapSecType is `secType`? This is
+// the game's own test, restated: pressing A anywhere else is ignored by the engine, so emitting
+// it would be noise indistinguishable from a bug.
+int mapgeom_fly_ok(const MapGeom* g, int secType);
+
 // ========== PHASE 24 / lane A2 — the OVERWORLD OWN-TILE GESTURE (user decision D1) =============
 // docs/phase21-touch-census/DECISIONS-overworld-gestures.md §D1, verbatim: a TAP on the player's
 // own tile is START (the field menu) and fires on RELEASE; a HOLD on the player's own tile is

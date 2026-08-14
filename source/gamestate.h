@@ -94,6 +94,23 @@ enum {
 // 2 entries (FR's Berry Pouch + TM Case); sized to 4 for the mailbox / move-relearner / dex-TOC
 // candidates the census still owes a live confirmation.
 #define GS_N_LISTCB2 4
+// PHASE 25 (lane D1) — which REGION-MAP ENGINE a game runs (GameProfile.rmVariant). Not a family
+// flag: the two engines really are different code with different struct layouts, and the shared
+// half is the input model, which is what the FAM-MAP driver is built on. 0 = no support.
+#define GS_RMAP_NONE 0
+#define GS_RMAP_EM   1   // pokeemerald src/region_map.c   — two cb2s, one struct, cursor inside it
+#define GS_RMAP_FR   2   // pokefirered src/region_map.c   — ONE cb2, mode in the struct, cursor out
+// pokefirered `struct RegionMap` (src/region_map.c:93-116) — the ONE offset the FR path reads out
+// of the map struct itself. The layout is pinned by pret's own `// size = 0x47C0` trailer:
+//   mapName[19] +0x0000 · dungeonName[19] +0x0013 · layouts[5][600] u16 +0x0026 (0x1770 bytes) ·
+//   bgTilemapBuffers[3][0x800] u16 +0x1796 (0x3000 bytes) · **type +0x4796** · permissions[4]
+//   +0x4797 · selectedRegion +0x479B · playersRegion +0x479C · mainState/openState/loadGfxState
+//   ALIGNED(4) +0x47A0/+0x47A4/+0x47A8 · 4 u16 +0x47AA · filler[6] +0x47B2 · mainTask +0x47B8 ·
+//   savedCallback +0x47BC  ==> 0x47C0. No other reading of the ALIGNED(4) run lands on it.
+#define GS_FR_RM_TYPE_OFF   0x4796
+#define GS_FR_RMTYPE_NORMAL 0   // the bag's TOWN MAP (has the region SWITCH + dungeon previews)
+#define GS_FR_RMTYPE_WALL   1   // a wall map read from the field
+#define GS_FR_RMTYPE_FLY    2   // the FLY destination picker — the only mode that accepts an A
 
 // Per-game RAM map (all absolute GBA bus addresses; EM=Emerald, FR=FireRed/LeafGreen).
 typedef struct {
@@ -506,6 +523,37 @@ typedef struct {
 	// never "non-zero", because ordinary play sits at QL_STATE_RECORDING (1) and would then be
 	// mistaken for a cutscene. 0 = this game has no quest log (EM/RS) -> the guard never runs.
 	uint32_t questLog;
+	// --- PHASE 25 (lane D1) — FAM-MAP gains its SECOND ENGINE. Appended, so every offset above is
+	// untouched and PROFILES[]'s positional initialisers stay valid.
+	//
+	// `rmVariant` names WHICH region-map implementation this game runs, because pokefirered's is a
+	// separate one, not pokeemerald's behind a different entry point: different cell bounds,
+	// different cell->pixel formula, a cursor in its OWN heap allocation, and one callback for all
+	// three of its modes. GS_RMAP_NONE (0) = this game has no FAM-MAP support and nothing below is
+	// read — the FR/LG/RS degradation lane B2 shipped, now still true for LG and RS only.
+	//
+	// `rmCurPtr` is the FireRed-only second pointer: `sMapCursor` (0x020399E4, `l 00000004` = a
+	// POINTER, deref), holding x/y (s16 +0x00/+0x02), selectedMapsec (u16 +0x14) and
+	// selectedMapsecType (u16 +0x16). Emerald keeps all four inside the struct `rmPtr` points at,
+	// so its `rmCurPtr` is 0 and the EM read path never touches it.
+	//
+	// `rmCbAlt` is the rev-alternate for `rmWallCb` — needed because FireRed's ONE map callback is
+	// the only FAM-MAP anchor that is a ROM address, and it MOVED between revisions
+	// (`CB2_RegionMap` rev0 0x080C08B4 / rev1 0x080C08C8). The two EWRAM pointers did NOT move:
+	// `sRegionMap` 0x020399D4 and `sMapCursor` 0x020399E4 are byte-identical in pokefirered.sym and
+	// pokefirered_rev1.sym (both checked this session), so FireRed's map works on either cart.
+	//
+	//   BPEE: GS_RMAP_EM, rmCurPtr 0, rmCbAlt 0 — Emerald ships two distinct cb2s and one struct.
+	//   BPRE: GS_RMAP_FR, rmPtr 0x020399D4, rmCurPtr 0x020399E4, rmFlyCb 0 (there is no separate
+	//         fly callback), rmWallCb 0x080C08C8 (rev1, the user's cart) + rmCbAlt 0x080C08B4
+	//         (rev0). Fly-vs-wall is then read from the LIVE struct: `sRegionMap->type` at +0x4796
+	//         is REGIONMAP_TYPE_NORMAL 0 / _WALL 1 / _FLY 2 (include/region_map.h:7-12).
+	//   BPGE/AXVE/AXPE: GS_RMAP_NONE. LeafGreen's region map is the same engine as FireRed's but
+	//         its addresses are its own, and copying FireRed's is the exact BPGE failure mode
+	//         phase 22.0 was spent undoing. Explicit zeros; named degradation.
+	uint32_t rmVariant;
+	uint32_t rmCurPtr;
+	uint32_t rmCbAlt;
 } GameProfile;
 
 // One-pass snapshot of the live game.

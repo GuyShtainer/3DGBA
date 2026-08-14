@@ -1715,8 +1715,11 @@ static u16 dlg_update(const TouchSmart* sm, bool touching, bool newPress, bool g
 // Gestures (M3): clean tap = go there (+ fly confirm) · drag = the target FOLLOWS the finger,
 // cursor only, no A (this is how you read map names) · hold = B, which cancels any armed target
 // and closes the map, matching the FAM-DLG hold verb the screen had before this slice.
+// What the arrival A would MEAN on the armed cell (phase 25 lane D1 replaced the old 0/1 flag:
+// FireRed adds a second, unconditional reason to press A, and a bare bool could not say which).
+enum { MAP_ACT_NONE = 0, MAP_ACT_FLY = 1, MAP_ACT_CANCEL = 2 };
 static int s_mpTgtX = -1, s_mpTgtY = 0;    // armed target cell (-1 = idle)
-static int s_mpAct = 0;                    // 1 = press A on arrival (fly map + flyable mapsec)
+static int s_mpAct = 0;                    // MAP_ACT_* — what to do when the live cursor arrives
 static int s_mpArm = 0;                    // arrival settle countdown
 static int s_mpATick = 0;                  // remaining A-pulse frames
 static int s_mpGap = 0;                    // idle frames between cursor presses
@@ -1724,6 +1727,7 @@ static int s_mpTotal = 0;                  // frames since the target was armed 
 static int s_mpTick = 0; static bool s_mpDown = false, s_mpDrag = false, s_mpHeld = false;
 static int s_mpDownX = 0, s_mpDownY = 0;
 static int s_mpTaps = 0, s_mpSteps = 0, s_mpArrive = 0, s_mpFly = 0, s_mpHolds = 0;  // PROOF counters
+static int s_mpCancels = 0;   // PHASE 25 (lane D1): arrivals on FireRed's on-screen CANCEL button
 static void map_reset(void) {
 	s_mpTgtX = -1; s_mpTgtY = 0; s_mpAct = 0; s_mpArm = 0; s_mpATick = 0; s_mpGap = 0; s_mpTotal = 0;
 	s_mpTick = 0; s_mpDown = false; s_mpDrag = false; s_mpHeld = false;
@@ -1739,21 +1743,39 @@ static void map_reset(void) {
                             // x 6 frames = 162, so this only ever fires on a screen that stopped
                             // accepting input — a fade, a zoom, a sub-menu)
 
-typedef struct { int curX, curY, secId, secType; } RMapState;
+// PHASE 25 (lane D1): the state carries its ENGINE, because FireRed's region map is a separate
+// implementation with its own struct layout and its own cell grid (touchgeom.h FAM-MAP table).
+typedef struct { int curX, curY, secId, secType; const MapGeom* g; int variant; } RMapState;
 static int rmap_read(const TouchSmart* sm, RMapState* ms) {
 	const GameProfile* p = sm->prof;
 	if (!sm->core || !p || !p->rmPtr) return 0;
 	uint32_t base = gbacore_read32(sm->core, p->rmPtr);      // sRegionMap: a POINTER, always deref
 	if ((base >> 24) != 0x02) return 0;                      // not an EWRAM struct: no map is live
-	if (gbacore_read8(sm->core, base + 0x78) != 0) return 0;  // zoomed: a DIFFERENT cursor model
-	ms->curX    = gbacore_read16(sm->core, base + 0x54);
-	ms->curY    = gbacore_read16(sm->core, base + 0x56);
-	ms->secId   = gbacore_read16(sm->core, base + 0x00);
-	ms->secType = gbacore_read8 (sm->core, base + 0x02);
-	// The same range test mapnav_step makes, applied here too so a mid-init struct never even
+	ms->variant = (p->rmVariant == GS_RMAP_FR) ? GS_RMAP_FR : GS_RMAP_EM;
+	if (ms->variant == GS_RMAP_FR) {
+		// pokefirered keeps the CURSOR in a second allocation (`sMapCursor`), so this is the one
+		// place the family needs two pointers. struct MapCursor (:206-224, size 0x124):
+		// x s16 +0x00 · y s16 +0x02 · selectedMapsec u16 +0x14 · selectedMapsecType u16 +0x16.
+		if (!p->rmCurPtr) return 0;
+		uint32_t cur = gbacore_read32(sm->core, p->rmCurPtr);
+		if ((cur >> 24) != 0x02) return 0;                   // the map is up but the cursor is not
+		ms->g       = &MAPGEOM_FR;
+		ms->curX    = (int16_t)gbacore_read16(sm->core, cur + 0x00);
+		ms->curY    = (int16_t)gbacore_read16(sm->core, cur + 0x02);
+		ms->secId   = gbacore_read16(sm->core, cur + 0x14);
+		ms->secType = gbacore_read16(sm->core, cur + 0x16);
+	} else {
+		if (gbacore_read8(sm->core, base + 0x78) != 0) return 0;  // zoomed: a DIFFERENT cursor model
+		ms->g       = &MAPGEOM_EM;
+		ms->curX    = gbacore_read16(sm->core, base + 0x54);
+		ms->curY    = gbacore_read16(sm->core, base + 0x56);
+		ms->secId   = gbacore_read16(sm->core, base + 0x00);
+		ms->secType = gbacore_read8 (sm->core, base + 0x02);
+	}
+	// The same range test mapnav_step_g makes, applied here too so a mid-init struct never even
 	// reaches the navigator (and so the g_touchDbg mirror shows the raw read that failed).
-	if (ms->curX < MAPGEOM_X_MIN || ms->curX > MAPGEOM_X_MAX) return 0;
-	if (ms->curY < MAPGEOM_Y_MIN || ms->curY > MAPGEOM_Y_MAX) return 0;
+	if (ms->curX < ms->g->xMin || ms->curX > ms->g->xMax) return 0;
+	if (ms->curY < ms->g->yMin || ms->curY > ms->g->yMax) return 0;
 	return 1;
 }
 
@@ -1779,8 +1801,9 @@ static u16 map_update(const TouchSmart* sm, bool touching, bool newPress, bool g
 			s_mpDrag = true;
 		if (s_mpDrag) {
 			int cx, cy;                                       // the target follows the finger…
-			if (gvalid && mapgeom_hit(gx, gy, &cx, &cy) && (cx != s_mpTgtX || cy != s_mpTgtY))
-				map_arm(cx, cy, 0);                           // …with NO arrival A (M3)
+			if (gvalid && mapgeom_hit_g(ms.g, gx, gy, &cx, &cy) && (cx != s_mpTgtX || cy != s_mpTgtY))
+				map_arm(cx, cy, MAP_ACT_NONE);                // …with NO arrival A (M3), and that
+				                                              // includes dragging onto CANCEL
 		} else if (s_mpTick >= DLGGEOM_HOLD_FRAMES) {
 			if (!s_mpHeld) { s_mpHeld = true; s_mpHolds++; }
 			map_reset(); s_mpDown = true; s_mpHeld = true;    // a hold cancels the route it armed
@@ -1793,8 +1816,18 @@ static u16 map_update(const TouchSmart* sm, bool touching, bool newPress, bool g
 		s_mpDrag = false; s_mpHeld = false; s_mpTick = 0;
 		if (!wasDrag && !wasHeld) {                            // a CLEAN tap = go there
 			int cx, cy;
-			if (mapgeom_hit(s_mpDownX, s_mpDownY, &cx, &cy)) {
-				map_arm(cx, cy, sm->mapFly ? 1 : 0);          // A only where A means "fly" (M2)
+			if (mapgeom_hit_g(ms.g, s_mpDownX, s_mpDownY, &cx, &cy)) {
+				// What an arrival A would MEAN on this cell, on this engine, in this mode:
+				//   CANCEL — FireRed draws a CANCEL button and A there is MAP_INPUT_CANCEL in
+				//            every mode (HandleRegionMapInput :2795-2799), so a tap on the button
+				//            the player can see does what the button says. Emerald has none
+				//            (MAPGEOM_EM.cancelX = -1), so this arm simply never fires there.
+				//   FLY    — only on a fly map, and only if the game's own acceptance test passes
+				//            when we ARRIVE (checked below against the live mapSecType, not now).
+				int act = MAP_ACT_NONE;
+				if (ms.g->cancelX >= 0 && cx == ms.g->cancelX && cy == ms.g->cancelY) act = MAP_ACT_CANCEL;
+				else if (sm->mapFly) act = MAP_ACT_FLY;       // A only where A means "fly" (M2)
+				map_arm(cx, cy, act);
 				s_mpTaps++;
 			}
 		}
@@ -1806,17 +1839,19 @@ static u16 map_update(const TouchSmart* sm, bool touching, bool newPress, bool g
 		if (s_mpArm == 0) s_mpArm = MAPNAV_A_DELAY;
 		if (--s_mpArm > 0) return 0;
 		int act = s_mpAct;
-		s_mpTgtX = -1; s_mpAct = 0; s_mpArm = 0; s_mpArrive++;
-		// The game's OWN acceptance test (CB_HandleFlyMapInput): A on anything else is ignored by
-		// the engine, so emitting it would be noise we could not distinguish from a bug.
-		if (act && (ms.secType == MAPSECTYPE_CITY_CANFLY || ms.secType == MAPSECTYPE_BATTLE_FRONTIER)) {
+		s_mpTgtX = -1; s_mpAct = MAP_ACT_NONE; s_mpArm = 0; s_mpArrive++;
+		// The game's OWN acceptance test, per engine (mapgeom_fly_ok): A on anything else is
+		// ignored by the engine, so emitting it would be noise we could not distinguish from a bug.
+		if (act == MAP_ACT_FLY && mapgeom_fly_ok(ms.g, ms.secType)) {
 			s_mpFly++; s_mpATick = 1; return 1 << GBAKEY_A;
 		}
+		// The CANCEL button needs no mapsec test — the engine's test is the CURSOR CELL itself.
+		if (act == MAP_ACT_CANCEL) { s_mpCancels++; s_mpATick = 1; return 1 << GBAKEY_A; }
 		return 0;
 	}
 	s_mpArm = 0;                                              // moved off target mid-settle
 	if (s_mpGap > 0) { s_mpGap--; return 0; }
-	int mn = mapnav_step(ms.curX, ms.curY, s_mpTgtX, s_mpTgtY);
+	int mn = mapnav_step_g(ms.g, ms.curX, ms.curY, s_mpTgtX, s_mpTgtY);
 	if (!mn) { map_reset(); return 0; }
 	s_mpGap = MAPNAV_GAP; s_mpSteps++;
 	u16 k = 0;                                                // X and Y are read independently by
@@ -2032,6 +2067,8 @@ static void touch_dbg_stamp(const TouchSmart* sm, u16 ret) {
 	d->mapTgtX = s_mpTgtX; d->mapTgtY = (s_mpTgtX < 0) ? -1 : s_mpTgtY;
 	d->mapIsFly = sm->mapFly ? 1 : 0;
 	d->mapCurX = d->mapCurY = d->mapSecId = d->mapSecType = -1;
+	d->mapVariant = d->mapFrType = -1;
+	d->mapCancels = s_mpCancels;
 	d->qlState = -1;                     // PHASE 25: -1 = no quest log for this game / no profile
 	const GameProfile* p = sm->prof;
 	if (!sm->core || !p) return;
@@ -2044,6 +2081,12 @@ static void touch_dbg_stamp(const TouchSmart* sm, u16 ret) {
 		if (rmap_read(sm, &ms)) {
 			d->mapCurX = ms.curX; d->mapCurY = ms.curY;
 			d->mapSecId = ms.secId; d->mapSecType = ms.secType;
+			d->mapVariant = ms.variant;
+			if (ms.variant == GS_RMAP_FR && p->rmPtr) {       // the mode byte, mirrored raw: this
+				uint32_t rmb = gbacore_read32(sm->core, p->rmPtr);   // is the value that decides
+				if ((rmb >> 24) == 0x02)                             // whether mapIsFly is 1
+					d->mapFrType = (int32_t)gbacore_read8(sm->core, rmb + GS_FR_RM_TYPE_OFF);
+			}
 		}
 	}
 	if (p->fieldMsgMode) d->msgMode = (int32_t)gbacore_read8(sm->core, p->fieldMsgMode);

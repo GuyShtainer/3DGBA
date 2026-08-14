@@ -571,6 +571,161 @@ static void test_map_nav(void) {
 	      "the game's OWN test before it emits a confirm A");
 }
 
+// ============================================================================================
+// TEST 19 — PHASE 25 / lane D1: FAM-MAP's SECOND ENGINE (pokefirered's region map). Lane B2's two
+// tests grade Emerald; this one grades the parameterised forms against BOTH engines, so a change
+// that quietly assumed Emerald's numbers cannot pass.
+//
+// The engines disagree about the grid (FR: x 0..21, y 0..14), the cell->pixel formula (FR:
+// 8*cell + 36, CreateMapCursor :2696-2697) and therefore about which pixels are DEAD (FR body:
+// x [32,208), y [32,152)) — but not about the input model, which is the part the driver is built
+// on. So the same two properties are re-proved per engine:
+//   (a) every legal cell round-trips through the pixel the GAME draws its cursor at, every pixel
+//       of every cell body resolves to that cell, and everything else on the 240x160 frame is
+//       DEAD rather than clamped (rule M1: never fly somewhere the finger did not point);
+//   (b) the navigator converges from every cell to every cell in EXACTLY max(|dx|,|dy|) presses,
+//       with zero overshoots, driven through a transcription of FIRERED'S OWN input pair
+//       (HandleRegionMapInput :2754-2831 + MoveMapCursor :2833-2853 — a 4-frame slide that polls
+//       no input, which is what makes a single-frame press exactly one cell).
+// Plus the two cross-engine safety properties: the geometries must not overlap in their bounds
+// (a coordinate legal in one is not silently legal in the other), and each engine's fly-acceptance
+// set is its OWN (the numbers coincide; the rules do not).
+static void map_roundtrip(const MapGeom* g, const char* who) {
+	int bad = 0, k = (g == &MAPGEOM_EM) ? 4 : 36;   // the engine's own cell->sprite constant
+	for (int cy = g->yMin; cy <= g->yMax; cy++)
+		for (int cx = g->xMin; cx <= g->xMax; cx++) {
+			int rx = -1, ry = -1;
+			if (!mapgeom_hit_g(g, 8 * cx + k, 8 * cy + k, &rx, &ry) || rx != cx || ry != cy) bad++;
+			else g_checks++;
+		}
+	CHECK(bad == 0, "%s: every legal cell round-trips through the pixel the GAME draws its cursor "
+	      "at (8*cell + %d) (%d bad)", who, k, bad);
+	bad = 0;
+	for (int cy = g->yMin; cy <= g->yMax; cy++)
+		for (int cx = g->xMin; cx <= g->xMax; cx++)
+			for (int dy = 0; dy < 8; dy++)
+				for (int dx = 0; dx < 8; dx++) {
+					int px = g->pxOrgX + 8 * (cx - g->xMin) + dx;
+					int py = g->pxOrgY + 8 * (cy - g->yMin) + dy;
+					int rx = -1, ry = -1;
+					if (!mapgeom_hit_g(g, px, py, &rx, &ry) || rx != cx || ry != cy) bad++;
+					else g_checks++;
+				}
+	CHECK(bad == 0, "%s: every pixel of every cell body resolves to that cell (%d bad)", who, bad);
+	int leaks = 0, dead = 0;
+	int w = 8 * (g->xMax - g->xMin + 1), h = 8 * (g->yMax - g->yMin + 1);
+	for (int gy = 0; gy < 160; gy++)
+		for (int gx = 0; gx < 240; gx++) {
+			int inside = (gx >= g->pxOrgX && gx < g->pxOrgX + w &&
+			              gy >= g->pxOrgY && gy < g->pxOrgY + h);
+			if (mapgeom_hit_g(g, gx, gy, 0, 0) != inside) leaks++;
+			else if (!inside) dead++;
+		}
+	CHECK(leaks == 0, "%s: the body is exactly x[%d,%d) y[%d,%d) and every other pixel of the "
+	      "240x160 frame is DEAD (%d misclassified, %d dead px swept)", who,
+	      g->pxOrgX, g->pxOrgX + w, g->pxOrgY, g->pxOrgY + h, leaks, dead);
+}
+
+static void map_converge(const MapGeom* g, const char* who) {
+	int bad = 0, overshoot = 0, routes = 0, worst = 0;
+	for (int sy = g->yMin; sy <= g->yMax; sy++)
+	for (int sx = g->xMin; sx <= g->xMax; sx++)
+	for (int ty = g->yMin; ty <= g->yMax; ty++)
+	for (int tx = g->xMin; tx <= g->xMax; tx++) {
+		int cx = sx, cy = sy, slide = 0, presses = 0, frames = 0;
+		routes++;
+		int dxn = (tx > sx) ? tx - sx : sx - tx, dyn = (ty > sy) ? ty - sy : sy - ty;
+		int want = (dxn > dyn) ? dxn : dyn;
+		while ((cx != tx || cy != ty) && frames < 600) {
+			frames++;
+			if (slide > 0) { slide--; continue; }         // MoveMapCursor: polls NO input
+			int k = mapnav_step_g(g, cx, cy, tx, ty);
+			if (!k) break;
+			presses++;
+			int ddx = 0, ddy = 0;                          // the engine's independent axis reads
+			if ((k & MN_UP)    && cy > g->yMin) ddy = -1;
+			if ((k & MN_DOWN)  && cy < g->yMax) ddy = +1;
+			if ((k & MN_LEFT)  && cx > g->xMin) ddx = -1;
+			if ((k & MN_RIGHT) && cx < g->xMax) ddx = +1;
+			if (!ddx && !ddy) break;
+			cx += ddx; cy += ddy; slide = RM_SLIDE;
+			if ((ddx > 0 && cx > tx) || (ddx < 0 && cx < tx) ||
+			    (ddy > 0 && cy > ty) || (ddy < 0 && cy < ty)) overshoot++;
+		}
+		if (cx != tx || cy != ty || presses != want) bad++;
+		else g_checks++;
+		if (presses > worst) worst = presses;
+	}
+	CHECK(bad == 0, "%s: every one of %d routes converges in EXACTLY max(|dx|,|dy|) presses "
+	      "(%d failures)", who, routes, bad);
+	CHECK(overshoot == 0, "%s: no single-frame press ever steps past the target (%d overshoots)",
+	      who, overshoot);
+	CHECK(worst == g->xMax - g->xMin, "%s: the widest route costs %d presses", who, worst);
+}
+
+static void test_map_engines(void) {
+	puts("TEST 19: FAM-MAP's second engine — pokefirered's region map, graded like pokeemerald's");
+	// The numbers, from pret, restated here so a silent edit to the table fails the suite.
+	CHECK(MAPGEOM_EM.xMin == 1 && MAPGEOM_EM.xMax == 28 && MAPGEOM_EM.yMin == 2 && MAPGEOM_EM.yMax == 16,
+	      "EM cursor bounds x 1..28 y 2..16 (MAPCURSOR_X_MIN 1 / Y_MIN 2, MAP_WIDTH 28/HEIGHT 15)");
+	CHECK(MAPGEOM_FR.xMin == 0 && MAPGEOM_FR.xMax == 21 && MAPGEOM_FR.yMin == 0 && MAPGEOM_FR.yMax == 14,
+	      "FR cursor bounds x 0..21 y 0..14 (MAP_WIDTH 22 / MAP_HEIGHT 15, 0-based)");
+	CHECK(MAPGEOM_EM.pxOrgX == 8 && MAPGEOM_EM.pxOrgY == 16, "EM body starts at px (8,16)");
+	CHECK(MAPGEOM_FR.pxOrgX == 32 && MAPGEOM_FR.pxOrgY == 32, "FR body starts at px (32,32) — the "
+	      "sprite CENTRE of cell (0,0) is 8*0+36, so the cell owns [32,40)");
+	map_roundtrip(&MAPGEOM_EM, "EM");
+	map_roundtrip(&MAPGEOM_FR, "FR");
+	map_converge(&MAPGEOM_EM, "EM");
+	map_converge(&MAPGEOM_FR, "FR");
+	// The legacy entry points must still BE the Emerald geometry — lane B2's TEST 14/15 grade
+	// them, and this pins that they did not quietly become something else.
+	int ax = -1, ay = -1, bx = -1, by = -1;
+	CHECK(mapgeom_hit(100, 100, &ax, &ay) == mapgeom_hit_g(&MAPGEOM_EM, 100, 100, &bx, &by) &&
+	      ax == bx && ay == by, "mapgeom_hit IS mapgeom_hit_g(&MAPGEOM_EM, ...)");
+	CHECK(mapnav_step(5, 5, 9, 3) == mapnav_step_g(&MAPGEOM_EM, 5, 5, 9, 3),
+	      "mapnav_step IS mapnav_step_g(&MAPGEOM_EM, ...)");
+	// Cross-engine independence: a coordinate one engine cannot hold must be refused by it even
+	// though the OTHER engine is perfectly happy with it. This is the check that would have caught
+	// a shared bounds macro surviving the split.
+	CHECK(mapnav_step_g(&MAPGEOM_FR, 0, 0, 5, 5) != 0, "FR cell (0,0) is legal on FireRed");
+	CHECK(mapnav_step(0, 0, 5, 5) == 0, "…and illegal on Emerald (MAPCURSOR_X_MIN 1 / Y_MIN 2)");
+	CHECK(mapnav_step_g(&MAPGEOM_EM, 5, 5, 28, 16) != 0, "EM cell (28,16) is legal on Emerald");
+	CHECK(mapnav_step_g(&MAPGEOM_FR, 5, 5, 28, 16) == 0, "…and illegal on FireRed (x max 21)");
+	CHECK(mapgeom_hit_g(&MAPGEOM_FR, 12, 80, 0, 0) == 0, "FR: the left margin is dead…");
+	CHECK(mapgeom_hit(12, 80, 0, 0) != 0, "…while the SAME pixel is live map on Emerald");
+	CHECK(mapgeom_hit_g(&MAPGEOM_FR, 120, 155, 0, 0) == 0,
+	      "FR: a tap below the map body is dead, not clamped (rule M1 on the second engine)");
+	// The acceptance sets are per engine. They happen to be the same NUMBERS and are not the same
+	// RULE — EM's are CITY_CANFLY/BATTLE_FRONTIER, FR's are MAPSECTYPE_VISITED/_UNKNOWN.
+	CHECK(mapgeom_fly_ok(&MAPGEOM_EM, MAPSECTYPE_CITY_CANFLY) &&
+	      mapgeom_fly_ok(&MAPGEOM_EM, MAPSECTYPE_BATTLE_FRONTIER),
+	      "EM accepts an A on CITY_CANFLY (2) and BATTLE_FRONTIER (4)");
+	CHECK(mapgeom_fly_ok(&MAPGEOM_FR, 2) && mapgeom_fly_ok(&MAPGEOM_FR, 4),
+	      "FR accepts an A on MAPSECTYPE_VISITED (2) and MAPSECTYPE_UNKNOWN (4)");
+	for (int t = 0; t < 256; t++)
+		if (t != 2 && t != 4) {
+			if (mapgeom_fly_ok(&MAPGEOM_EM, t) || mapgeom_fly_ok(&MAPGEOM_FR, t)) {
+				CHECK(0, "mapSecType %d must be refused by both engines", t); break;
+			}
+			g_checks++;
+		}
+	CHECK(!mapgeom_fly_ok(0, 2), "a NULL geometry accepts nothing — never guess");
+	// FireRed's on-screen CANCEL button. HandleRegionMapInput :2795-2799 makes A there
+	// MAP_INPUT_CANCEL in EVERY mode (the test is the cursor cell, not a permission), so the
+	// family carries it as geometry; Emerald draws no such button and must say so with -1.
+	CHECK(MAPGEOM_FR.cancelX == 21 && MAPGEOM_FR.cancelY == 13,
+	      "FR CANCEL button lives at cell (21,13) (CANCEL_BUTTON_X/Y, region_map.c:24-25)");
+	CHECK(MAPGEOM_EM.cancelX < 0 && MAPGEOM_EM.cancelY < 0,
+	      "EM has NO cancel button — the -1 is what keeps the driver's cancel arm from ever firing "
+	      "on Emerald, where A on the wall map already exits and A on the fly map is a confirm");
+	{   // the button is inside the map body, i.e. it is genuinely tappable
+		int cx = -1, cy = -1;
+		CHECK(mapgeom_hit_g(&MAPGEOM_FR, 8 * MAPGEOM_FR.cancelX + 36, 8 * MAPGEOM_FR.cancelY + 36,
+		                    &cx, &cy) && cx == MAPGEOM_FR.cancelX && cy == MAPGEOM_FR.cancelY,
+		      "the CANCEL cell is inside the FR map body and round-trips like any other cell");
+	}
+}
+
 // ================== PHASE 24 / lane A2 — the OWN-TILE GESTURE (decision D1) ====================
 // A gesture is a TIMELINE, so the oracle is a timeline driver: it replays a synthetic touch as the
 // app sees it (one call per frame, `touching` / `newPress` / the caller's slop latch) and records
@@ -821,6 +976,7 @@ int main(void) {
 	test_own_gesture();
 	test_run_tile();
 	test_run_decide();
+	test_map_engines();          // phase 25 (lane D1) FAM-MAP second engine (FireRed)
 	printf("\n=== %d checks, %d failures ===\n", g_checks, g_fails);
 	return g_fails ? 1 : 0;
 }
