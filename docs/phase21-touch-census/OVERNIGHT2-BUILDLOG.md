@@ -907,3 +907,38 @@ plaza** (52,53) -> (62,53), replanning around the frontier's buildings on the li
 That is the phase-18 router working in a real overworld, on camera
 (`evidence/impl/EM-traversal-taproute-10tiles.bottom.png`) — the thing `phase18-crisp/
 RESULTS.md:16` said had "never been watched working in an actual overworld".
+
+## Lane A Entry 14 (phase 23) — 🔍 THE WALL IS A POKENAV MATCH CALL, and the `a`-batch cure WORKS
+
+Caught on camera at last: `evidence/impl/EM-traversal-matchcall-wall.bottom.png` — the box
+that has been eating every long walk reads **"My team needs more"** beside a trainer
+portrait. It is a **PokeNav Match Call**: a registered trainer ringing the player, which on
+an 8-badge save fires on a step counter while walking outdoors, opens a field message box,
+and freezes the avatar until the conversation is advanced with A. That retro-explains every
+stall in Entries 10 and 13, including why they landed at ~6 and ~36 steps, why movement
+DEGRADED for two tokens before halting (the call arrives and the field controller yields),
+and why the ROM's own blockdata insisted the tile ahead was walkable.
+
+**The cure works.** Arc 5 ran the route `d4 r1 d1 [a x8] d6 [a x2] r6 [a x2] d7 [a x2]
+r1 d1 r1 d1 r3 [a x8] d2 r1 [a x4] d2 l1 d1 l4 d3` and the control log shows it walking
+straight through BOTH walls — every token from the arena door to (51,50) completing in
+7-57 frames with no timeout:
+
+```
+tok 26 d6 (40,35)->(40,41) f=4938 … done f=4979
+tok 29 r6 (40,41)->(46,41) f=5062 … done f=5111
+tok 32 d7 (46,41)->(46,48) f=5194 … done f=5251
+tok 39 r3 (48,50)->(51,50) f=5368 … done f=5391
+```
+
+The `a` tokens between legs are what advance the call; **only A advances a Gen-3 box**
+(Entry 7), and placing them where the avatar faces open ground keeps a no-op A harmless.
+
+Two operational notes paid for in this arc:
+- **`azctl stop` truncates the control log** (the SD ring never flushes — the known
+  landmine), so the last tokens of a run are invisible afterwards. Read the log's frame
+  numbers, not its last line, when judging how far a route got.
+- I stopped arc 5 about two minutes BEFORE its surf tap was due, on the mistaken reading
+  that it had stalled again. **Let a pre-staged arc run to the end of its touch script** —
+  the wait budget is deliberately generous, so "nothing has happened for a minute" is the
+  expected state, not a failure.
