@@ -44,7 +44,30 @@ static const GameProfile PROFILES[] = {
                  02020630 g 00001144 gSprites            (0x1144 = 65 * 0x44)
                  02037714 g 00000400 gPlttBufferUnfaded  (0x400 = 512 u16)
                  02037590 g 00000024 gPlayerAvatar */
-            0x02020630u, 0x02037714u, 0x02037590u },
+            0x02020630u, 0x02037714u, 0x02037590u,
+            /* phase 22.0 rev-alternate ROM anchors: NONE for Emerald — one US revision is in play
+               and the census live-verified the shipped primaries on it (CB2-HARVEST.md boot #2:
+               BattleMainCB2 0x08038420 [exact], CB2_BagMenuRun 0x081AAD5C via E3, CB2_UpdateParty-
+               Menu 0x081B01B0 via E2 — all read from the LIVE game). All 13 alternates = 0. */
+            0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
+            0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
+            0x00000000u,
+            /* phase 22.0 census promotion — EM cb2 screen classes. EVERY value live-read from the
+               running game this census (gs-logger gdb channel) and resolved [exact] on
+               pokeemerald.sym; per-screen provenance rows in CB2-HARVEST.md §Emerald.
+               TITLE class: MainCB2_Intro (intro.c) / MainCB2 (title_screen.c) / CB2_MainMenu
+               (also the Mystery-Gift shell, J12). */
+            { 0x0816CC00u, 0x080AAB2Cu, 0x0802F6B0u },
+            /* FULLUI class: option MainCB2, CB2_TrainerCard, CB2_FlyMap, CB2_FrontierPass,
+               summary MainCB2, CB2_BerryTagScreen, CB2_Pokedex (whole dex), CB2_Pokenav (all
+               sub-apps), CB2_PokeblockMenu, CB2_UsePokeblockMenu, CB2_PokeblockFeed,
+               MCB2_FieldUpdateRegionMap (the RUN loop — catalog correction), CB2_WallClock,
+               CB2_NamingScreen, CB2_PokeStorage, CB2_SlotMachine. */
+            { 0x080BA4B0u, 0x080C2710u, 0x081248D4u, 0x080C5438u, 0x081BFAB4u, 0x08177C54u,
+              0x080BB774u, 0x081C7400u, 0x0813591Cu, 0x0816631Cu, 0x08179B68u, 0x08170274u,
+              0x08134C9Cu, 0x080E4F58u, 0x080C7D54u, 0x0812A670u } },
+  // BPRE ROM anchors: the PRIMARIES below are FR rev0 (correct for a rev0 cart); the REV1 values —
+  // the user's cart — live in the phase-22.0 ALTERNATE block at the end of the row.
   { "BPRE", 0x03005008u, 0x02022B4Cu, 0x02023FF8u, 0x02023FFCu, 0x02023BE4u, 0x02022976u,
             0x0203B0A0u, 0x02024029u, 0x030030F4u, 0x0811EBA0u, 0x0811EBD0u, 0x0303011Eu,
             0x03004FE0u, 0x0802E674u, 0x03004FF4u, 0x02023BD6u, 0x02023BCCu, 0x02023D70u, 0x02023BC4u, 0x03005040u,
@@ -81,7 +104,45 @@ static const GameProfile PROFILES[] = {
                                                      two fields we read, flags @+0x00 and spriteId
                                                      @+0x04, are identical — FR diverges only after
                                                      +0x08, which we never touch) */
-            0x0202063Cu, 0x020371F8u, 0x02037078u },
+            0x0202063Cu, 0x020371F8u, 0x02037078u,
+            /* phase 22.0 REV1 ALTERNATES — the fix for the census's headline finding: the user's
+               FR cart is rev1 and rev1 MOVED every ROM anchor above, so battle/party/bag/menu
+               detection was silently dead on it (VISITED-firered.md ⚠ table). Six values are
+               live-verified [exact] census 2026-08-14 (read from the RUNNING rev1 game, resolved
+               on pokefirered_rev1.sym — CB2-HARVEST.md FR pass + drift table :97-100):
+                 BattleMainCB2              0x08011114
+                 CB2_UpdatePartyMenu        0x0811EC18
+                 CB2_BagMenuRun             0x08107F58
+                 Task_HandleChooseMonInput  0x0811FBA0
+                 Task_StartMenuHandleInput  0x0806F204
+                 Task_HandleSelectionMenuInput 0x08122CD4
+               The remaining seven are rev1 sym-derived / verify-in-emulator (the same
+               pokefirered_rev1.sym that resolved every live read [exact]; RS-REV2-VERIFICATION.md
+               §6 cross-validation lists them): CB2_InitPartyMenu 0x0811EC48, HandleInputChoose-
+               Target 0x0802E688, StartCB_HandleInput 0x0806F294, Task_BagMenu_HandleInput
+               0x08108F84, Task_YesNoMenu_HandleInput 0x0809CE68, Task_MultichoiceMenu_HandleInput
+               0x0809CCAC, Task_MapNamePopup 0x080981C0. Order: battleMainCbAlt, cb2UpdPartyAlt,
+               cb2InitPartyAlt, chooseTargetAlt, startCbInputAlt, cb2BagRunAlt, bagHandlerAlt,
+               partyTaskAlt, yesNoTaskAlt, multiTaskAlt, selMenuTaskAlt, startMenuTaskAlt,
+               mapNameTaskAlt. */
+            0x08011114u, 0x0811EC18u, 0x0811EC48u, 0x0802E688u, 0x0806F294u,
+            0x08107F58u, 0x08108F84u, 0x0811FBA0u, 0x0809CE68u, 0x0809CCACu,
+            0x08122CD4u, 0x0806F204u, 0x080981C0u,
+            /* phase 22.0 census promotion — FR cb2 screen classes, ALL live-read [exact] on the
+               user's own rev1 cart this census (CB2-HARVEST.md §FireRed rev1 — a rev0 cart's
+               values would differ; these serve the cart actually in the user's hands).
+               TITLE: CB2_Intro, CB2_InitCopyrightScreenAfterTitleScreen, CB2_TitleScreenRun,
+               CB2_MainMenu, CB2_NewGameScene (Oak speech). */
+            { 0x080EC9E8u, 0x080EC878u, 0x08078BB0u, 0x0800C2E8u, 0x0812EB88u },
+            /* FULLUI: CB2_InitOptionMenu (FR's RUN loop), CB2_TrainerCard, CB2_RegionMap (town
+               AND fly map — one loop), CB2_RunPokemonSummaryScreen, CB2_BerryPouchIdle, TM-case
+               CB2_Idle (catalog gap #4 correction), CB2_PSA, CB2_PokedexScreen (whole dex),
+               TeachyTvCallback, MainCB2_FameCheckerMain, CB2_PokeStorage, CB2_NamingScreen,
+               CB2_HofIdle, CB2_BuyMenu, CB2_RunSlotMachine, CB2_LoadMap2 (map-load transition —
+               classifying it stops walk-key leaks BETWEEN overworld sessions). */
+            { 0x08088370u, 0x08089084u, 0x080C08C8u, 0x08137F60u, 0x0813CE78u, 0x081318DCu,
+              0x0811C774u, 0x0810254Cu, 0x0815AC0Cu, 0x0812C40Cu, 0x0808CDD8u, 0x0809FB84u,
+              0x080F1E38u, 0x0809ADF8u, 0x0813F9C4u, 0x08056760u } },
   { "BPGE", 0x03005008u, 0x02022B4Cu, 0x02023FF8u, 0x02023FFCu, 0x02023BE4u, 0x02022976u,
             0x0203B0A0u, 0x02024029u, 0x030030F4u, 0x0811EBA0u, 0x0811EBD0u, 0x0303011Eu,
             0x03004FE0u, 0x0802E674u, 0x03004FF4u, 0x02023BD6u, 0x02023BCCu, 0x02023D70u, 0x02023BC4u, 0x03005040u,
@@ -110,7 +171,19 @@ static const GameProfile PROFILES[] = {
                pokeleafgreen.sym AND pokeleafgreen_rev1.sym (both on pret/pokefirered's `symbols`
                branch; both agree). VERIFIED-SYM, NOT FR-derived.
                  0202063c gSprites / 020371f8 gPlttBufferUnfaded / 02037078 gPlayerAvatar */
-            0x0202063Cu, 0x020371F8u, 0x02037078u },
+            0x0202063Cu, 0x020371F8u, 0x02037078u,
+            /* phase 22.0 rev-alternate ROM anchors: none wired yet for LG (the primaries above
+               are FR-rev0-derived and LG-UNVERIFIED — the declared risk; the reconciliation
+               against RS-REV2-VERIFICATION.md §6 lands as its own change with its own pins). */
+            0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
+            0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
+            0x00000000u,
+            /* phase 22.0 cb2 screen classes: NONE — no LeafGreen census visit has run (no LG ROM
+               boot yet), and FRLG cb2 ROM addresses differ per build, so FR's values would be
+               WRONG here. All-zero lists = the NAMED degradation: LG's undetected screens keep
+               the GCTX_OVERWORLD fall-through until the LG delta pass harvests them live. */
+            { 0x00000000u },
+            { 0x00000000u } },
 
   // ===================== Ruby / Sapphire (SPEC-coop §P3) =====================================
   // Every RAM value below is VERIFIED-SYM against pret's byte-matched `symbols` branch, all FOUR
@@ -224,7 +297,20 @@ static const GameProfile PROFILES[] = {
                other value in this row these have never been EXECUTED. The cheap proof is the same
                one P3.6 names, plus one field: boot Ruby beside Sapphire and check that
                g_presDiag.sprReason reads 0. *** */                                              \
-            0x02020004u, 0x0202EAC8u, 0x0202E858u
+            0x02020004u, 0x0202EAC8u, 0x0202E858u,                                               \
+            /* phase 22.0 rev-alternate ROM anchors: ALL 13 = 0. The ROM-address ban that governs
+               this row (rev0/1/2 ROM symbols differ above 0x0803FBBC; RS-REV2-VERIFICATION.md
+               §2.3) applies to alternates exactly as it does to primaries — and the primaries
+               they would shadow are themselves 0 here. Explicit zeros, not C zero-fill (P3.5.2). */ \
+            0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,        \
+            0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,        \
+            0x00000000u,                                                                         \
+            /* phase 22.0 cb2 screen classes: NONE — no RS census visit has ever run (no RS ROM on
+               this machine). Named degradation: RS undetected screens keep the GCTX_OVERWORLD
+               fall-through until the RS delta pass harvests them live (any future RS cb2 must be
+               read from pokeruby_rev1/rev2.sym, NOT rev0 — §5's promotion rule). */             \
+            { 0x00000000u },                                                                     \
+            { 0x00000000u }
   { "AXVE", RS_PROFILE_BODY },   // Pokemon Ruby      (US, rev0 and rev1 — the RAM maps are identical)
   { "AXPE", RS_PROFILE_BODY },   // Pokemon Sapphire  (US, rev0 and rev1 — same body, pinned above)
   #undef RS_PROFILE_BODY
@@ -248,13 +334,23 @@ static bool task_active(GbaCore* c, const GameProfile* p, uint32_t handler) {
 	return false;
 }
 
+// Phase 22.0 dual-revision matching: a ROM anchor and its rev-ALTERNATE are both tested, because
+// profile_for keys on the 4-char game code and cannot see the cart's revision byte (FRLG rev1
+// moved every ROM function — the census's headline finding). A wrong-rev anchor is compare-only:
+// it never fires on the other revision's RAM, so testing both is fail-safe by construction.
+static bool task_active2(GbaCore* c, const GameProfile* p, uint32_t handler, uint32_t handlerAlt) {
+	return task_active(c, p, handler) || task_active(c, p, handlerAlt);
+}
+
 // Find the live bag ListMenu task: scan gTasks (16 entries, 40-byte stride) for the active bag input
-// handler, then return its list-task base (gTasks + 40*listTaskId + 8); 0 if none.
+// handler (either revision's — phase 22.0), then return its list-task base
+// (gTasks + 40*listTaskId + 8); 0 if none.
 static uint32_t find_bag_list_task(GbaCore* c, const GameProfile* p) {
 	for (int t = 0; t < 16; t++) {
 		uint32_t task = p->gTasksBase + 40u * (uint32_t)t;
 		if (gbacore_read8(c, task + 4) == 0) continue;                 // isActive
-		if ((gbacore_read32(c, task + 0) & ~1u) != p->bagHandler) continue;
+		uint32_t fn = gbacore_read32(c, task + 0) & ~1u;
+		if (!((p->bagHandler && fn == p->bagHandler) || (p->bagHandlerAlt && fn == p->bagHandlerAlt))) continue;
 		int16_t listId = (int16_t)gbacore_read16(c, task + 8);          // data[0] = listTaskId
 		if (listId < 0 || listId >= 16) return 0;
 		return p->gTasksBase + 40u * (uint32_t)listId + 8u;
@@ -317,7 +413,10 @@ bool game_read(GbaCore* c, const GameProfile* p, GameState* out) {
 	// 'In battle' = the battle main loop is the active callback2. (gBattleTypeFlags is zeroed at battle
 	// SETUP, not end, so it lingers into the overworld -> the old battleFlags test made the whole
 	// post-battle field read as a battle dialog = tap-anywhere-A. callback2 returns to the field cleanly.)
-	bool inBattle = p->battleMainCb && out->cb2 == p->battleMainCb;
+	// Phase 22.0: EITHER revision's BattleMainCB2 counts (battleMainCbAlt = the census's FR-rev1 fix —
+	// live-verified [exact]; without it every battle on the user's rev1 cart read as overworld).
+	bool inBattle = (p->battleMainCb    && out->cb2 == p->battleMainCb)
+	             || (p->battleMainCbAlt && out->cb2 == p->battleMainCbAlt);
 
 	// Menu detection is TASK-BASED (scan gTasks for the menu's active input handler): robust and
 	// FAIL-SAFE — a wrong/absent address just means "not detected" (the overworld still WALKS), never a
@@ -326,10 +425,11 @@ bool game_read(GbaCore* c, const GameProfile* p, GameState* out) {
 	  if (lb) { out->ctx = GCTX_BAG; out->bagListTaskBase = lb; return true; } }
 	// sMenu-driven popups (party SUMMARY/SWITCH popup, YES-NO, multichoice) — field OR battle. These all
 	// drive sMenu.cursorPos, so GCTX_FIELDMENU's hit-test handles them. Task-detected => fail-safe.
-	if (task_active(c, p, p->selMenuTask) || task_active(c, p, p->yesNoTask) || task_active(c, p, p->multiTask)) {
+	if (task_active2(c, p, p->selMenuTask, p->selMenuTaskAlt) || task_active2(c, p, p->yesNoTask, p->yesNoTaskAlt)
+	    || task_active2(c, p, p->multiTask, p->multiTaskAlt)) {
 		out->ctx = GCTX_FIELDMENU; return true;
 	}
-	if (task_active(c, p, p->partyTask)) {                       // party slot pick (field, or battle send-out/use)
+	if (task_active2(c, p, p->partyTask, p->partyTaskAlt)) {     // party slot pick (field, or battle send-out/use)
 		out->ctx = GCTX_PARTY;
 		uint8_t mt8 = gbacore_read8(c, p->partyMenu + PM_TYPE_OFF);
 		int lay = (mt8 >> 4) & 0x03, cnt = gbacore_read8(c, p->partyCount);
@@ -342,22 +442,36 @@ bool game_read(GbaCore* c, const GameProfile* p, GameState* out) {
 		// START menu — detect by its TASK (active only while open). The old callback compare
 		// (gMenuCallback==HandleStartMenuInput) false-positived: gMenuCallback isn't cleared on close,
 		// so once you opened START, the overworld read as a menu forever -> walk stuck on A (Emerald).
-		if (task_active(c, p, p->startMenuTask)) { out->ctx = GCTX_FIELDMENU; return true; }
+		if (task_active2(c, p, p->startMenuTask, p->startMenuTaskAlt)) { out->ctx = GCTX_FIELDMENU; return true; }
+		// Phase 22.0 census promotion — POSITIVELY classify the screens whose cb2 the census
+		// live-harvested ([exact], CB2-HARVEST.md), instead of letting them hide in the
+		// GCTX_OVERWORLD fall-through where taps leak walk/A/START keys and the tilt/presence
+		// gates (which test ctx == GCTX_OVERWORLD) stay open. Runs AFTER every task-based menu
+		// check (a task match is more specific) and BEFORE the fall-through. A zero slot never
+		// matches (a cb2 is never 0); ctxResolved stays true — these are positive matches.
+		for (int i = 0; i < GS_N_TITLE; i++)
+			if (p->cb2Title[i] && out->cb2 == p->cb2Title[i]) { out->ctx = GCTX_TITLE; return true; }
+		for (int i = 0; i < GS_N_FULLUI; i++)
+			if (p->cb2FullUi[i] && out->cb2 == p->cb2FullUi[i]) { out->ctx = GCTX_FULLUI; return true; }
 		out->ctx = GCTX_OVERWORLD;
 		out->ctxResolved = false;   // overworld OR an undetected screen that fell through here -> inspect cb2 in the log
 		// On-screen field text — precise per-band kill signals for the renderer's DoF. The BG0
 		// text-layer scan in main.c is the game-agnostic catch-all; these are exact backups.
 		// Fail-safe: unknown address -> false (the BG0 scan still covers it).
 		out->textDlg    = p->fieldMsgMode && gbacore_read8(c, p->fieldMsgMode) != 0;
-		out->textBanner = task_active(c, p, p->mapNameTask);
+		out->textBanner = task_active2(c, p, p->mapNameTask, p->mapNameTaskAlt);
 		return true;
 	}
 
 	// In battle. Target-select is its own controller state — test it first (not by bg0y).
+	// Phase 22.0: either revision's HandleInputChooseTarget counts (0 never matches — the read
+	// is masked ~1u, so a live Thumb pointer is never 0).
 	int bc = gbacore_read8(c, p->battlersCount);
 	bool targetSel = false;
-	for (int b = 0; b < bc && b < 4; b++)
-		if ((gbacore_read32(c, p->ctrlFuncs + 4u * b) & ~1u) == p->chooseTarget) { targetSel = true; break; }
+	for (int b = 0; b < bc && b < 4; b++) {
+		uint32_t fn = gbacore_read32(c, p->ctrlFuncs + 4u * b) & ~1u;
+		if ((p->chooseTarget && fn == p->chooseTarget) || (p->chooseTargetAlt && fn == p->chooseTargetAlt)) { targetSel = true; break; }
+	}
 	if (targetSel) {
 		out->ctx = GCTX_BATTLE_TARGET;
 		out->battlersCount = bc;
@@ -385,7 +499,8 @@ bool game_read(GbaCore* c, const GameProfile* p, GameState* out) {
 // never changes touch/3D/gameplay. Edge-triggered ring + one-shot SD dump (the netlog pattern, verbatim).
 
 static const char* const GS_CTXN[] = {   // index = GameCtx; matches main.c's teal-line names
-	"none", "field", "b.act", "b.move", "b.tgt", "party", "fmenu", "bag", "b.oth"
+	"none", "field", "b.act", "b.move", "b.tgt", "party", "fmenu", "bag", "b.oth",
+	"title", "fullui"                    // phase 22.0 census promotion (GCTX_TITLE / GCTX_FULLUI)
 };
 const char* gamestate_ctx_name(int ctx) {
 	return (ctx >= 0 && ctx < (int)(sizeof GS_CTXN / sizeof GS_CTXN[0])) ? GS_CTXN[ctx] : "?";
@@ -519,8 +634,8 @@ void gamestate_log_dump(const char* path) {
 	FILE* f = fopen(path, "w");
 	if (!f) return;
 	fprintf(f, "# 3DGBA game-state log  heartbeat=%u frames  scr: 0=top/3D 1=bottom/touch  (cb1/cb2 = raw gMain callbacks, Thumb-stripped)\n", GS_HEARTBEAT_FRAMES);
-	fprintf(f, "# undetected screens (pokedex/townmap/summary/card/keyboard/title) fall through to ctx=field with resolved=0:\n");
-	fprintf(f, "# read the cb2 column for each one you visit, then promote that value into a GameProfile later (logging only; no detection wired yet).\n");
+	fprintf(f, "# undetected screens fall through to ctx=field with resolved=0 (phase 22.0 promoted the census-harvested EM/FR sets to ctx=title/fullui; BPGE+RS lists are still empty):\n");
+	fprintf(f, "# read the cb2 column for each one you visit, then promote that value into that profile's cb2Title/cb2FullUi list (the census pipeline, CB2-HARVEST.md).\n");
 	fprintf(f, "# geo: px,py=camera tile; objX,objY=true avatar tile; mapG,mapN=which map; face 1=D 2=U 3=L 4=R (NPC-overlay inputs). inj=injected touch key. d_*=3D-effect health (top rows).\n");
 	fprintf(f, "# 3D detail (top rows; px @ FULL slider = the pop_eye disparity unit BEFORE *eyeSl, so slider-independent): d_feetMin/Max=grounded-feet disparity range; d_headMin/Max=head disparity (feet+standup, clamped); d_tallOk/d_tallFail=#sprites whose head exceeds feet by ~standup (tall renders taller) vs not; d_ordOk=1 if the on-screen set is monotonic in screen-y vs feet disparity (lower/closer pops >=); d_s3d=1 stereoscopic engaged this frame.\n");
 	fprintf(f, "# link: lerr=gLinkErrorOccurred (1=game flagged a link error); lstat=gLinkStatus (live); lbuf0/lbuf1=sLinkErrorBuffer 8B LATCHED at error (lbuf0=status word, lbuf1 low bytes=send/recv queue counts+disconnected); lnotrecv=gRemoteLinkPlayersNotReceived. cb2=0800B1A0(EM)/0800AF2C(FR) = CB2_PrintErrorMessage = the red error screen.\n");

@@ -16,8 +16,23 @@ typedef enum {
 	GCTX_PARTY,           // party menu open (in-battle send-out)
 	GCTX_FIELDMENU,       // overworld sMenu up (START / YES-NO / script multichoice)
 	GCTX_BAG,             // bag menu open (field or battle "ITEM")
-	GCTX_BATTLE_OTHER     // some other battle screen (dialog/animation) — tap = advance (A)
+	GCTX_BATTLE_OTHER,    // some other battle screen (dialog/animation) — tap = advance (A)
+	// --- phase 22.0 census promotion (docs/phase21-touch-census/CB2-HARVEST.md). APPENDED so every
+	// existing value is stable: main.c pins GCTX_OVERWORLD == TILT_CTX_FIELD == FIELD_CTX_OVERWORLD
+	// with _Static_asserts, and the gs-log ring stores ctx as a u8. Both classes are matched
+	// POSITIVELY by live-harvested cb2 fingerprints (GameProfile.cb2Title/cb2FullUi below), which
+	// un-hides those screens from the GCTX_OVERWORLD fall-through: touch stops leaking walk/A/START
+	// keys into them (touch.c dispatch: default -> 0 keys), and the tilt/presence/field gates —
+	// which all test ctx == GCTX_OVERWORLD — shut on them with ZERO logic change at the gates.
+	GCTX_TITLE,           // pre-game screens: intro / title / main menu / new-game scene (no save ctx)
+	GCTX_FULLUI           // a full-screen UI over a loaded save (dex/summary/card/storage/naming/...)
 } GameCtx;
+
+// Capacity of the phase-22.0 cb2 screen-class fingerprint lists (GameProfile.cb2Title/cb2FullUi).
+// Sized to the largest harvested set (FR: 5 title-class, 16 fullui-class cb2s) plus headroom for
+// the LG/RS delta passes; unused slots are 0 and never match (a cb2 is never 0).
+#define GS_N_TITLE  6
+#define GS_N_FULLUI 18
 
 // Per-game RAM map (all absolute GBA bus addresses; EM=Emerald, FR=FireRed/LeafGreen).
 typedef struct {
@@ -177,6 +192,41 @@ typedef struct {
 	uint32_t plttUnfaded;   // gPlttBufferUnfaded u16[512]: BG banks 0-15 then OBJ banks 0-15, so
 	                        //   OBJ bank n colour i is at +512 + 32*n + 2*i BYTES
 	uint32_t playerAvatar;  // gPlayerAvatar (+0x00 flags, +0x04 spriteId) — the cross-check only
+	// --- phase 22.0 (census S2 merge) REV-ALTERNATE ROM anchors. The census's FR visit proved the
+	// one thing the row comments above got wrong: FRLG ROM function addresses MOVE between rev0 and
+	// rev1 (shifts 0x14-0x78 observed; RAM is rev-identical) — the user's FireRed is rev1, so every
+	// BPRE ROM anchor above was silently dead on the real cart (VISITED-firered.md headline).
+	// profile_for keys on the 4-char game code and cannot see the header's revision byte, so the
+	// row must detect BOTH revisions: each rev-sensitive ROM anchor gains an ALTERNATE that every
+	// compare site in gamestate.c tests alongside the primary (task_active2 / inBattle / the
+	// ctrlFuncs scan). A wrong-rev anchor is compare-only — it never fires, never dereferences —
+	// so carrying both is fail-safe by construction. 0 = no alternate. Appending is the only safe
+	// edit: PROFILES[] is POSITIONAL-initialised (same licence as every appended block above). ---
+	uint32_t battleMainCbAlt;   // BattleMainCB2 (other rev)         BPRE/BPGE rev1: 0x08011114
+	uint32_t cb2UpdPartyAlt;    // CB2_UpdatePartyMenu (other rev)
+	uint32_t cb2InitPartyAlt;   // CB2_InitPartyMenu (other rev)
+	uint32_t chooseTargetAlt;   // HandleInputChooseTarget (other rev)
+	uint32_t startCbInputAlt;   // StartCB_HandleInput (other rev)
+	uint32_t cb2BagRunAlt;      // CB2_BagMenuRun (other rev)
+	uint32_t bagHandlerAlt;     // Task_BagMenu_HandleInput (other rev)
+	uint32_t partyTaskAlt;      // Task_HandleChooseMonInput (other rev)
+	uint32_t yesNoTaskAlt;      // Task_YesNoMenu_HandleInput (other rev)
+	uint32_t multiTaskAlt;      // Task_MultichoiceMenu_HandleInput (other rev)
+	uint32_t selMenuTaskAlt;    // Task_HandleSelectionMenuInput (other rev)
+	uint32_t startMenuTaskAlt;  // Task_StartMenuHandleInput (other rev)
+	uint32_t mapNameTaskAlt;    // Task_MapNamePopup (other rev)
+	// --- phase 22.0 (census S2 merge) cb2 SCREEN-CLASS fingerprints — the promotion of the
+	// phase-21 harvest (docs/phase21-touch-census/CB2-HARVEST.md; every non-zero value below was
+	// read [exact] from a LIVE game via the gs-logger gdb channel and resolved on the pret
+	// byte-matched sym maps — zero guesses). game_read matches gMain.callback2 against these AFTER
+	// every task-based menu check and BEFORE the overworld fall-through, so a listed screen stops
+	// hiding in GCTX_OVERWORLD (where taps leak walk keys and the tilt/presence gates stay open).
+	// 0 = unused slot (arrays are brace-initialised per row; trailing slots zero-fill, and a zero
+	// slot never matches because a cb2 is never 0). Games without a census visit yet (BPGE, RS)
+	// carry all-zero lists — a NAMED degradation: their undetected screens keep the pre-phase-22
+	// fall-through behaviour until their own harvest pass runs (LG/RS delta lanes). ---
+	uint32_t cb2Title[GS_N_TITLE];    // GCTX_TITLE class: intro / title / main menu / new-game
+	uint32_t cb2FullUi[GS_N_FULLUI];  // GCTX_FULLUI class: full-screen UIs over a loaded save
 } GameProfile;
 
 // One-pass snapshot of the live game.

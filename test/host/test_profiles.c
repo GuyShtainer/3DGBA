@@ -462,6 +462,156 @@ static void test_peersprite_columns(void) {
 	      "OBJ bank 15 colour 15 lies inside gPlttBufferUnfaded's 0x400 bytes");
 }
 
+// ============================================================================================
+// TEST 11 — PHASE 22.0: the census cb2 screen-class fingerprint lists, per game
+// (docs/phase21-touch-census/CB2-HARVEST.md — every EM/FR value below was read [exact] from the
+//  LIVE game; the lists' whole job is to stop those 40 screens hiding in GCTX_OVERWORLD.)
+// ============================================================================================
+static void test_screen_classes(void) {
+	printf("TEST 11: phase-22.0 cb2Title / cb2FullUi lists, per game\n");
+	static const uint32_t EM_TITLE[GS_N_TITLE] = { 0x0816CC00u, 0x080AAB2Cu, 0x0802F6B0u };
+	static const uint32_t EM_FULL[GS_N_FULLUI] = {
+		0x080BA4B0u, 0x080C2710u, 0x081248D4u, 0x080C5438u, 0x081BFAB4u, 0x08177C54u,
+		0x080BB774u, 0x081C7400u, 0x0813591Cu, 0x0816631Cu, 0x08179B68u, 0x08170274u,
+		0x08134C9Cu, 0x080E4F58u, 0x080C7D54u, 0x0812A670u };
+	static const uint32_t FR_TITLE[GS_N_TITLE] = {
+		0x080EC9E8u, 0x080EC878u, 0x08078BB0u, 0x0800C2E8u, 0x0812EB88u };
+	static const uint32_t FR_FULL[GS_N_FULLUI] = {
+		0x08088370u, 0x08089084u, 0x080C08C8u, 0x08137F60u, 0x0813CE78u, 0x081318DCu,
+		0x0811C774u, 0x0810254Cu, 0x0815AC0Cu, 0x0812C40Cu, 0x0808CDD8u, 0x0809FB84u,
+		0x080F1E38u, 0x0809ADF8u, 0x0813F9C4u, 0x08056760u };
+	static const uint32_t NONE_T[GS_N_TITLE]  = { 0 };
+	static const uint32_t NONE_F[GS_N_FULLUI] = { 0 };
+	struct { const char* code; const uint32_t* title; const uint32_t* full; int visited; } W[] = {
+		{ "BPEE", EM_TITLE, EM_FULL, 1 },   // census boots #1/#2, live-harvested
+		{ "BPRE", FR_TITLE, FR_FULL, 1 },   // FR visit pass on the user's rev1 cart
+		{ "BPGE", NONE_T,   NONE_F,  0 },   // no LG boot yet -> named degradation (empty lists)
+		{ "AXVE", NONE_T,   NONE_F,  0 },   // no RS ROM on this machine
+		{ "AXPE", NONE_T,   NONE_F,  0 },
+	};
+	for (unsigned i = 0; i < sizeof W / sizeof W[0]; i++) {
+		const GameProfile* p = prof(W[i].code);
+		if (!p) { CHECK(0, "%s row missing", W[i].code); continue; }
+		for (int k = 0; k < GS_N_TITLE; k++)
+			EQU(p->cb2Title[k],  W[i].title[k], "%s cb2Title[%d]",  W[i].code, k);
+		for (int k = 0; k < GS_N_FULLUI; k++)
+			EQU(p->cb2FullUi[k], W[i].full[k],  "%s cb2FullUi[%d]", W[i].code, k);
+		// Structure: every nonzero entry is ROM-space, and no cb2 appears twice across BOTH lists
+		// (one screen must classify one way).
+		uint32_t all[GS_N_TITLE + GS_N_FULLUI]; int n = 0;
+		for (int k = 0; k < GS_N_TITLE;  k++) if (p->cb2Title[k])  all[n++] = p->cb2Title[k];
+		for (int k = 0; k < GS_N_FULLUI; k++) if (p->cb2FullUi[k]) all[n++] = p->cb2FullUi[k];
+		for (int a = 0; a < n; a++) {
+			CHECK((all[a] >> 24) == 0x08u, "%s class cb2 0x%08X is ROM-space", W[i].code, all[a]);
+			for (int b = a + 1; b < n; b++)
+				CHECK(all[a] != all[b], "%s cb2 0x%08X listed once only", W[i].code, all[a]);
+		}
+		if (!W[i].visited)
+			CHECK(n == 0, "%s (never census-visited) ships EMPTY class lists — no guessed cb2s", W[i].code);
+	}
+}
+
+// ============================================================================================
+// TEST 12 — PHASE 22.0 BEHAVIOUR through the real game_read: the alternates actually detect,
+// the class lists actually classify, precedence holds, and the fall-through is undisturbed.
+// This is the "FR rev1 un-deaded" claim executed rather than asserted.
+// ============================================================================================
+static void put_task(GbaCore* c, const GameProfile* p, int slot, uint32_t fn, uint8_t active) {
+	uint32_t task = p->gTasksBase + 40u * (uint32_t)slot;
+	bus_w32(c, task + 0, fn);
+	bus_w8 (c, task + 4, active);
+}
+
+static void test_phase22_behaviour(void) {
+	printf("TEST 12: phase-22.0 behaviour — alternates detect, classes classify, precedence holds\n");
+
+	// --- (a) FR rev1 battle via the ALTERNATE cb2 (the user's cart) — was dead pre-phase-22.
+	{
+		GbaCore c; bus_reset(&c, "BPRE");
+		const GameProfile* p = profile_for(&c);
+		GameState gs;
+		bus_w32(&c, p->mainCb2, p->battleMainCbAlt | 1u);   // live cb2 carries the Thumb bit
+		bus_w32(&c, p->bg0y, 160u);                          // (bg0y is u16; low half = 160)
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_BATTLE_ACTION, "BPRE rev1: BattleMainCB2 0x08011114 -> GCTX_BATTLE_ACTION");
+		// ...and the rev0 PRIMARY still works (a rev0 cart is not broken by the fix).
+		bus_w32(&c, p->mainCb2, p->battleMainCb | 1u);
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_BATTLE_ACTION, "BPRE rev0: BattleMainCB2 0x08011100 still detects");
+	}
+	// --- (b) FR rev1 party / start-menu / bag via ALTERNATE task handlers.
+	{
+		GbaCore c; bus_reset(&c, "BPRE");
+		const GameProfile* p = profile_for(&c);
+		GameState gs;
+		put_task(&c, p, 3, p->partyTaskAlt | 1u, 1);
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_PARTY, "BPRE rev1: Task_HandleChooseMonInput alt -> GCTX_PARTY");
+		bus_reset(&c, "BPRE"); p = profile_for(&c);
+		put_task(&c, p, 0, p->startMenuTaskAlt | 1u, 1);
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_FIELDMENU, "BPRE rev1: Task_StartMenuHandleInput alt -> GCTX_FIELDMENU");
+		bus_reset(&c, "BPRE"); p = profile_for(&c);
+		put_task(&c, p, 2, p->bagHandlerAlt | 1u, 1);        // bag input task, data[0] = listTaskId
+		bus_w8(&c, p->gTasksBase + 40u * 2u + 8u, 5);
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_BAG, "BPRE rev1: Task_BagMenu_HandleInput alt -> GCTX_BAG");
+		EQU(gs.bagListTaskBase, p->gTasksBase + 40u * 5u + 8u, "BPRE rev1: bag list task resolved");
+	}
+	// --- (c) the census screen classes classify POSITIVELY (resolved=true, no key-leaking
+	//     overworld fall-through), on both harvested games.
+	{
+		GbaCore c; bus_reset(&c, "BPRE");
+		const GameProfile* p = profile_for(&c);
+		GameState gs;
+		bus_w32(&c, p->mainCb2, 0x08078BB0u | 1u);           // CB2_TitleScreenRun [exact]
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_TITLE, "BPRE: title screen classifies as GCTX_TITLE");
+		CHECK(gs.ctxResolved, "BPRE: ...and it is a POSITIVE match (resolved)");
+		bus_w32(&c, p->mainCb2, 0x0810254Cu | 1u);           // CB2_PokedexScreen [exact]
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_FULLUI, "BPRE: Pokedex classifies as GCTX_FULLUI");
+		CHECK(gs.ctxResolved, "BPRE: ...positively (resolved)");
+	}
+	{
+		GbaCore c; bus_reset(&c, "BPEE");
+		const GameProfile* p = profile_for(&c);
+		GameState gs;
+		bus_w32(&c, p->mainCb2, 0x0816CC00u | 1u);           // MainCB2_Intro [exact]
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_TITLE, "BPEE: GF intro classifies as GCTX_TITLE");
+		bus_w32(&c, p->mainCb2, 0x081C7400u | 1u);           // CB2_Pokenav [exact]
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_FULLUI, "BPEE: PokeNav classifies as GCTX_FULLUI");
+	}
+	// --- (d) PRECEDENCE: a task-detected menu beats the class lists (more specific wins), and
+	//     the class check never runs in battle.
+	{
+		GbaCore c; bus_reset(&c, "BPEE");
+		const GameProfile* p = profile_for(&c);
+		GameState gs;
+		bus_w32(&c, p->mainCb2, 0x081BFAB4u | 1u);           // summary screen cb2 (FULLUI-listed)
+		put_task(&c, p, 1, p->yesNoTask | 1u, 1);            // ...with a yes/no popup task live
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_FIELDMENU, "BPEE: an active menu TASK outranks the FULLUI class");
+	}
+	// --- (e) the fall-through is undisturbed: an UNKNOWN cb2 still lands in GCTX_OVERWORLD with
+	//     resolved=false (the residual the gs-log promotion pipeline reads).
+	{
+		GbaCore c; bus_reset(&c, "BPEE");
+		const GameProfile* p = profile_for(&c);
+		GameState gs;
+		bus_w32(&c, p->mainCb2, 0x08ABCDE0u | 1u);           // not in any list
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_OVERWORLD, "BPEE: unknown cb2 still falls through to GCTX_OVERWORLD");
+		CHECK(!gs.ctxResolved, "BPEE: ...with resolved=false (the promotion pipeline's hook)");
+	}
+	// --- (f) the ctx name table kept up (the HUD/log surface of the new contexts).
+	CHECK(!strcmp(gamestate_ctx_name(GCTX_TITLE),  "title"),  "GCTX_TITLE prints as 'title'");
+	CHECK(!strcmp(gamestate_ctx_name(GCTX_FULLUI), "fullui"), "GCTX_FULLUI prints as 'fullui'");
+	CHECK(!strcmp(gamestate_ctx_name(GCTX_BATTLE_OTHER), "b.oth"), "existing names undisturbed");
+}
+
 int main(void) {
 	printf("test_profiles — the per-game RAM map (source/gamestate.c PROFILES[])\n\n");
 	test_lookup();
@@ -473,6 +623,8 @@ int main(void) {
 	test_rs_ident();
 	test_address_sanity();
 	test_peersprite_columns();   // phase 20
+	test_screen_classes();       // phase 22.0
+	test_phase22_behaviour();    // phase 22.0
 	printf("\n=== %d checks, %d failures ===\n", g_checks, g_fails);
 	return g_fails ? 1 : 0;
 }
