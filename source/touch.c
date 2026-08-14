@@ -445,6 +445,7 @@ static bool walk_plan(GbaCore* core, const GameProfile* p, int px, int py, int g
 static int prog_plan(GbaCore* core, const GameProfile* p, int px, int py, int gx, int gy,
                      int mapG, int mapN);   // fwd: the phase-22.2 conditional-edge planner
 static bool prog_surfing(GbaCore* core, const GameProfile* p);   // fwd: gPlayerAvatar surf bit
+static int  prog_facing(GbaCore* core, const GameProfile* p);    // fwd: gObjectEvents[0] facing
 
 static u16 walk_update_inner(bool touching, bool newPress, bool gvalid, int gx, int gy,
                              int px, int py, int mapG, int mapN, GbaCore* core, const GameProfile* p,
@@ -600,6 +601,7 @@ static u16 walk_update(bool touching, bool newPress, bool gvalid, int gx, int gy
 	// program, so the one question a Surf proof asks — "is the player afloat NOW?" — was
 	// unreadable the moment the program ended. It is a read of the game's own gPlayerAvatar.
 	g_fieldDbg.progSurf = prog_surfing(core, p) ? 1 : 0;
+	g_fieldDbg.progFacing = prog_facing(core, p);   // ...and which way we are aiming an A
 	return k;
 }
 
@@ -644,6 +646,10 @@ enum { TPE_NONE = 0, TPE_ARRIVED, TPE_HANDOFF, TPE_CANCEL, TPE_KEY, TPE_MAPCHANG
 // prompt, so a menu that never closes ends the program instead of drumming A forever.
 #define TP_ANSWER_EVERY 8
 #define TP_ANSWER_MAX   8
+// The FACE phase is closed-loop on the avatar's own facing (see TPH_FACE); this is only the give-up
+// bound, and TP_SETTLE_FRAMES lets the turn/bump animation end before the A that aims at it.
+#define TP_FACE_BUDGET  90
+#define TP_SETTLE_FRAMES 10
 
 static FtProgram s_prog;                 // ~17 KB: static for the fieldpath reason (render thread)
 static bool s_progOn = false, s_progSwallow = false;
@@ -685,6 +691,17 @@ static bool prog_surfing(GbaCore* core, const GameProfile* p) {
 }
 // The tracked object slot's active:1 bit. This going 0 IS the proof a Cut / Rock Smash landed
 // (the scripts' `removeobject VAR_LAST_TALKED`) — not a frame count, not a screenshot.
+// The avatar's OWN facing, read exactly where gamestate.c reads it (gObjectEvents[0].facingDirection
+// low nibble, +0x18 — gamestate.c game_read). 1 = D, 2 = U, 3 = L, 4 = R; -1 = unreadable, which the
+// caller treats as "fall back to the old fixed-frame hold" rather than as a wrong direction.
+static int prog_facing(GbaCore* core, const GameProfile* p) {
+	if (!core || !p || !p->mapObjects) return -1;
+	int f = gbacore_read8(core, p->mapObjects + 0x18) & 0x0F;
+	return (f >= 1 && f <= 4) ? f : -1;
+}
+// dir (0 R / 1 L / 2 D / 3 U — s_keyDir order) -> the game's facing code.
+static const uint8_t s_faceOfDir[4] = { 4, 3, 1, 2 };
+
 static bool prog_obj_active(GbaCore* core, const GameProfile* p, int slot) {
 	if (!core || !p || !p->mapObjects || slot < 0 || slot >= 16) return false;
 	return (gbacore_read32(core, p->mapObjects + 0x24u * (uint32_t)slot) & 1u) != 0;
@@ -907,11 +924,30 @@ static u16 prog_update(const TouchSmart* sm, bool touching, bool newPress,
 			prog_replan(core, p, px, py, mapG, mapN);
 			return 0;
 		}
-		if (s_progFrames >= TP_FACE_FRAMES) { s_progPhase = TPH_A; s_progFrames = 0; return 0; }
 		if (mv.dir < 0 || mv.dir > 3) { prog_end(TPE_STALL, "STOPPED"); return 0; }
+		// PHASE 24: CLOSED-LOOP on the game's own facing, not on a frame count. A fixed 8-frame
+		// hold is a guess, and it loses exactly when the interact matters: Gen 3 ignores field
+		// input while the avatar is still animating its previous step (field_player_avatar.c —
+		// MovePlayerNotOnBike only runs from the field controller when the avatar is idle), so the
+		// whole hold can be swallowed by the walk step that just ended and the avatar keeps facing
+		// the way it was WALKING. Every A after that is aimed one tile off, which is precisely what
+		// the Route 117 cut tree did: plan correct, walk correct, five A presses, no dialog, and a
+		// hand-driven U+A at the same tile opened it instantly. So hold until the game says we face
+		// the obstacle. -1 (unreadable facing) degrades to the old fixed hold rather than hanging.
+		{
+			int face = prog_facing(core, p);
+			bool ok = (face < 0) ? (s_progFrames >= TP_FACE_FRAMES)
+			                     : (face == (int)s_faceOfDir[mv.dir] && s_progFrames >= 2);
+			if (ok) { s_progPhase = TPH_A; s_progFrames = 0; return 0; }
+			if (s_progFrames >= TP_FACE_BUDGET) { prog_end(TPE_STALL, "STOPPED"); return 0; }
+		}
 		return s_keyDir[mv.dir];
 	}
 	case TPH_A:
+		// Settle first: the turn/bump that just finished is an ANIMATION, and the field controller
+		// does not read A while it runs. Releasing every key for a few frames costs nothing and
+		// makes the first press the one that lands (the DLG retry below covers the rest).
+		if (s_progFrames < TP_SETTLE_FRAMES) return 0;
 		s_progAPulse = 3;                       // the shipped 3-frame A-pulse shape
 		s_progPhase = TPH_DLG; s_progFrames = 0;
 		return 0;

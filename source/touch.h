@@ -137,6 +137,11 @@ typedef struct {
 	// (touch.c TPH_ANSWER). APPENDED, so every offset above is unchanged. ---
 	int32_t progAKeys;      // +0xA0  frames on which the program injected A (cumulative, per boot)
 	int32_t progAnswers;    // +0xA4  YES presses aimed at a predicted yes/no (cumulative)
+	int32_t progFacing;     // +0xA8  the game's OWN gObjectEvents[0] facing (1 D / 2 U / 3 L / 4 R,
+	                        //   -1 unreadable), restamped every overworld frame. THE reason a
+	                        //   correctly-planned Cut can still do nothing: an A is aimed by the
+	                        //   avatar's facing, and a fixed-length direction hold does not
+	                        //   guarantee it (touch.c TPH_FACE).
 } FieldDbg;
 extern FieldDbg g_fieldDbg;
 
