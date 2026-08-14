@@ -226,7 +226,11 @@ typedef struct {
 	uint32_t cb2BagRunAlt;      // CB2_BagMenuRun (other rev)
 	uint32_t bagHandlerAlt;     // Task_BagMenu_HandleInput (other rev)
 	uint32_t partyTaskAlt;      // Task_HandleChooseMonInput (other rev)
-	uint32_t yesNoTaskAlt;      // Task_YesNoMenu_HandleInput (other rev)
+	uint32_t yesNoTaskAlt;      // Task_YesNoMenu_HandleInput (other rev). BPGE DEVIATES: it
+	                            //   carries Task_CallYesOrNoCallback 0x080BF548 (LG rev1, live-
+	                            //   verified twice) — FRLG bypasses Task_YesNoMenu_HandleInput on
+	                            //   every common yes/no flow (LANE-B-LG.md #8), so the bag-toss /
+	                            //   mart-buy confirms detect via this slot instead.
 	uint32_t multiTaskAlt;      // Task_MultichoiceMenu_HandleInput (other rev)
 	uint32_t selMenuTaskAlt;    // Task_HandleSelectionMenuInput (other rev)
 	uint32_t startMenuTaskAlt;  // Task_StartMenuHandleInput (other rev)
@@ -238,9 +242,11 @@ typedef struct {
 	// every task-based menu check and BEFORE the overworld fall-through, so a listed screen stops
 	// hiding in GCTX_OVERWORLD (where taps leak walk keys and the tilt/presence gates stay open).
 	// 0 = unused slot (arrays are brace-initialised per row; trailing slots zero-fill, and a zero
-	// slot never matches because a cb2 is never 0). Games without a census visit yet (BPGE, RS)
-	// carry all-zero lists — a NAMED degradation: their undetected screens keep the pre-phase-22
-	// fall-through behaviour until their own harvest pass runs (LG/RS delta lanes). ---
+	// slot never matches because a cb2 is never 0). Lane B (2026-08-14) filled the RS lists from
+	// LIVE reads — PER TITLE, because Ruby and Sapphire ROM addresses drift (AXVE != AXPE here;
+	// LANE-B-RS.md §2 — never copy a cb2 across the two). BPGE still carries all-zero lists — a
+	// NAMED degradation: its undetected screens keep the pre-phase-22 fall-through behaviour
+	// until the LG harvest (already banked in LANE-B-LG.md) is promoted in its own slice. ---
 	uint32_t cb2Title[GS_N_TITLE];    // GCTX_TITLE class: intro / title / main menu / new-game
 	uint32_t cb2FullUi[GS_N_FULLUI];  // GCTX_FULLUI class: full-screen UIs over a loaded save
 	// --- phase 22.1 (lane A) — KEYBOARD + LISTS family anchors. Every non-zero value below was

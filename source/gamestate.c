@@ -179,12 +179,29 @@ static const GameProfile PROFILES[] = {
   // BPGE ROM anchors — REPLACED phase 22.0 (they were FireRed-rev0 values, wrong for EVERY
   // LeafGreen revision; battle/party/bag/menu detection was silently dead on LG). PRIMARIES are
   // now LG **rev1** — the user's cart is rev 1.1 — re-derived field-by-field from
-  // pokeleafgreen_rev1.sym (RS-REV2-VERIFICATION.md §6, per-symbol line citations there);
-  // sym-derived / VERIFY-IN-EMULATOR (the LG delta pass proves them live). The LG **rev0** values
-  // sit in the ALTERNATE block at the end of the row, so both LG revisions detect. RAM columns
-  // were already correct (LG rev1 == LG rev0 == FR for every RAM field — §6a). newKeys also
-  // carries the §7 transposition fix (0x0303011E -> gMain 0x030030F0 + 0x2E = 0x0300311E;
-  // unused field, fixed with citation + suite pin, never silently).
+  // pokeleafgreen_rev1.sym (RS-REV2-VERIFICATION.md §6, per-symbol line citations there).
+  // The LG **rev0** values sit in the ALTERNATE block at the end of the row, so both LG
+  // revisions detect. RAM columns were already correct (LG rev1 == LG rev0 == FR for every RAM
+  // field — §6a). newKeys also carries the §7 transposition fix (0x0303011E -> gMain 0x030030F0
+  // + 0x2E = 0x0300311E; unused field, fixed with citation + suite pin, never silently).
+  //
+  // LANE-B LIVE PROMOTION (2026-08-14, LANE-B-LG.md — the delta pass this row was waiting for):
+  // 10 of the 13 rev1 primaries are now LIVE-VERIFIED [exact] on the RUNNING LG rev1.1 fixture
+  // (instance b, gs-ring reads resolved on pokeleafgreen_rev1.sym):
+  //   cb2UpdParty 0x0811EBF0, cb2InitParty 0x0811EC20 (ctx=party fired, first time ever on LG),
+  //   cb2BagRun 0x08107F30 + bagHandler 0x08108F5C (ctx=bag fired), partyTask 0x0811FB78,
+  //   multiTask 0x0809CC80 (nurse yes/no -> ctx=fmenu), selMenuTask 0x08122CAC,
+  //   startMenuTask 0x0806F204 (ctx=fmenu fired), battleMainCb 0x08011114 (trainer battle;
+  //   full b.oth -> b.act -> b.move gate sequence observed), mapNameTask 0x08098194.
+  // The 3 honest non-verdicts stay flagged AS-IS (LANE-B-LG.md table #3/#4/#8):
+  //   chooseTarget 0x0802E688  — NOT EXERCISED (needs a double battle's target-choose screen);
+  //                              sym-verified [exact] on the map only.
+  //   startCbInput 0x0806F294  — UNUSED-BY-CODE (START detection is task-only since the
+  //                              callback-compare false-positive fix below); sym-verified value.
+  //   yesNoTask   0x0809CE3C   — map-correct, LIVE-UNREACHED: FRLG routes every common yes/no
+  //                              through OTHER handlers (save prompt stays under the start-menu
+  //                              task; script yes/no = multiTask; bag-toss + mart-buy confirms =
+  //                              Task_CallYesOrNoCallback — carried as yesNoTaskAlt below).
   { "BPGE", 0x03005008u, 0x02022B4Cu, 0x02023FF8u, 0x02023FFCu, 0x02023BE4u, 0x02022976u,
             0x0203B0A0u, 0x02024029u, 0x030030F4u, 0x0811EBF0u, 0x0811EC20u, 0x0300311Eu,
             0x03004FE0u, 0x0802E688u, 0x03004FF4u, 0x02023BD6u, 0x02023BCCu, 0x02023D70u, 0x02023BC4u, 0x03005040u,
@@ -219,14 +236,25 @@ static const GameProfile PROFILES[] = {
                sym-derived / verify-in-emulator, same order as the BPRE block:
                battleMainCbAlt, cb2UpdPartyAlt, cb2InitPartyAlt, chooseTargetAlt, startCbInputAlt,
                cb2BagRunAlt, bagHandlerAlt, partyTaskAlt, yesNoTaskAlt, multiTaskAlt,
-               selMenuTaskAlt, startMenuTaskAlt, mapNameTaskAlt. */
+               selMenuTaskAlt, startMenuTaskAlt, mapNameTaskAlt.
+               *** yesNoTaskAlt DEVIATES from the rev0 convention (lane-B promotion, LANE-B-LG.md
+               #8): it carries Task_CallYesOrNoCallback 0x080BF548 (LG rev1, LIVE-VERIFIED [exact]
+               TWICE — bag-toss confirm AND mart buy confirm), because FRLG BYPASSES
+               Task_YesNoMenu_HandleInput on every common yes/no flow — the rev1 primary above is
+               loaded-but-never-fired, so without this alternate both money-and-item confirm
+               screens read as `field` and taps leak walk keys. The displaced rev0 value
+               (Task_YesNoMenu_HandleInput rev0 0x0809CE28) loses nothing: the bypass is a
+               code-structure property of FRLG, not of a revision. Compare-only => fail-safe. */
             0x08011100u, 0x0811EB78u, 0x0811EBA8u, 0x0802E674u, 0x0806F280u,
-            0x08107EB8u, 0x08108EE4u, 0x0811FB00u, 0x0809CE28u, 0x0809CC6Cu,
+            0x08107EB8u, 0x08108EE4u, 0x0811FB00u, 0x080BF548u, 0x0809CC6Cu,
             0x08122C34u, 0x0806F1F0u, 0x08098180u,
-            /* phase 22.0 cb2 screen classes: NONE — no LeafGreen census visit has run (no LG ROM
-               boot yet), and FRLG cb2 ROM addresses differ per build, so FR's values would be
-               WRONG here. All-zero lists = the NAMED degradation: LG's undetected screens keep
-               the GCTX_OVERWORLD fall-through until the LG delta pass harvests them live. */
+            /* phase 22.0 cb2 screen classes: still EMPTY. The lane-B LG boot DID spot-harvest
+               live [exact] TITLE/FULLUI candidates (LANE-B-LG.md census table: CB2_Intro
+               0x080EC9C0, CB2_TitleScreenRun 0x08078BB0, CB2_MainMenu 0x0800C2E8, options/dex/
+               trainer-card/buy-menu loops) — but their promotion is its OWN slice, not this
+               fold-in; the lists stay all-zero = the NAMED degradation (LG's unlisted screens
+               keep the GCTX_OVERWORLD fall-through). FRLG cb2 ROM addresses differ per build,
+               so FR's values would be WRONG here regardless. */
             { 0x00000000u },
             { 0x00000000u },
             /* phase 22.1 keyboard+lists anchors (LG: primaries rev1 = the user's 1.1 cart,
@@ -300,25 +328,37 @@ static const GameProfile PROFILES[] = {
   //    diagnostic-only (the shipped sub-tile source is fieldCamera+0x10/+0x14, which RS has and
   //    which is verified above), so 0 costs nothing and a value here would read a wrong address.
   //
-  // TWO columns are verify-on-hw-pending and must NOT be promoted without a run:
-  //  * battleMainCb 0x0800F808 (BattleMainCB2, pokeruby.sym:1378) — THE ONE ROM ADDRESS SHIPPED,
-  //    and only because all four maps give the identical value. It is load-bearing: without it
-  //    inBattle is always false, RS always reports GCTX_OVERWORLD, and a peer avatar would be
-  //    painted over battle screens. Promoted by one run that enters an RS battle and sees ctx leave
-  //    the field.
-  //  * partyCount 0x03004350 — IWRAM, symbol size 4, read as a u8. Only read inside the partyTask
-  //    branch, which RS never enters (partyTask = 0), so it is inert today.
+  // battleMainCb 0x0800F808 (BattleMainCB2, pokeruby.sym:1378) — THE ONE ROM ADDRESS SHIPPED in
+  // the RAM body, and only because all four maps give the identical value. It is load-bearing:
+  // without it inBattle is always false, RS always reports GCTX_OVERWORLD, and a peer avatar
+  // would be painted over battle screens. The promotion run HAPPENED: lane B (LANE-B-RS.md §1,
+  // 2026-08-14) entered a wild battle on the live Ruby fixture and cb2 flipped to 0x0800F808
+  // [exact] with ctx leaving `field` for the first time (b.oth -> b.act -> b.move -> field) —
+  // LIVE-VERIFIED in the emulator; the hardware run is still owed per the done-gate.
+  // partyCount 0x03004350 (IWRAM, symbol size 4, read as a u8) stays verify-on-hw-pending: only
+  // read inside the partyTask branch, which RS never enters (partyTask = 0) — inert today.
   //
-  // NOT ONE of these addresses has been EXECUTED: no Ruby or Sapphire ROM exists on this machine
-  // (sdmc:/dual-gba/ holds BPEE + BPRE only), so the whole row is VERIFIED-SYM / VERIFY-ON-HW.
-  // The cheap proof, per P3.6: boot Ruby in one core and Sapphire in the other and confirm smart
-  // touch's tap-to-walk works on both — that exercises sb1ptr + mapObjects + mapLayout, i.e. the
-  // exact three columns presence depends on, before a single avatar is drawn.
+  // EXECUTION STATUS (updated by the lane-B fold-in — this replaces the old "no RS ROM exists
+  // on this machine" caveat): lane B BOOTED AND LIVE-VERIFIED both titles (LANE-B-RS.md,
+  // 2026-08-14, instance b, resolved on pokeruby_rev2.sym / pokesapphire_rev2.sym = the correct
+  // maps for the user's rev-2 carts). Ruby: profile row matched (p1=AXVE), mainCb2/sb1ptr(direct)
+  // /mapObjects/gTasksBase all VERIFIED against the running game (closed-loop D4 walks, door warp
+  // + route connection, 7 task fps resolving [exact]). Sapphire: AXPE matched in BOTH seats
+  // (co-op gameB + solo primary). The P3.6 cheap proof ran as the RS CO-OP boot: the phase-18
+  // universe gate PASSED live (both titles -> PRES_GAME_HOENN_RS, pairReason=0, CO-OP chip
+  // rendered, record exchange symmetric ±(33,30)). Emulator-verified; hardware sign-off owed.
   //
-  // AXVE and AXPE are TWO LITERAL ROWS with IDENTICAL BODIES, never one prefix match: the 4-char
-  // code is the app's only game identity and profile_for compares all four bytes (P3.5.1).
-  //   ***  IF YOU EDIT ONE OF THE NEXT TWO ROWS, EDIT THE OTHER — they are pinned together.  ***
-  #define RS_PROFILE_BODY \
+  // AXVE and AXPE are TWO LITERAL ROWS sharing ONE RAM BODY (RS_PROFILE_BODY_RAM /
+  // RS_PROFILE_BODY_TAIL), never one prefix match: the 4-char code is the app's only game
+  // identity and profile_for compares all four bytes (P3.5.1). The ONE licensed per-title
+  // difference is the cb2Title/cb2FullUi class lists between the two macro halves — lane B
+  // proved Ruby and Sapphire ROM addresses DRIFT (title MainCB2 0x0807C474 vs 0x0807C478,
+  // CB2_Overworld +4, CB2_PartyMenuMain drifts; LANE-B-RS.md §2 headline), so those lists carry
+  // per-title live-read values and MUST NEVER be copied across titles. The phase-18 "727 RAM
+  // symbols identical" proof was RAM-ONLY and does not extend to ROM.
+  //   ***  IF YOU EDIT THE SHARED MACROS BELOW, BOTH ROWS CHANGE — that is the point. IF YOU
+  //        EDIT A PER-TITLE cb2 LIST, NEVER COPY A VALUE TO THE OTHER TITLE (the drift).  ***
+  #define RS_PROFILE_BODY_RAM \
             /* sb1ptr(DIRECT) battleFlags  actionCur    moveCur      battleMons   bg0y        */ \
             0x02025734u, 0x020239F8u, 0x02024E60u, 0x02024E64u, 0x02024A80u, 0x030042A0u,       \
             /* partyMenu=0   partyCount   mainCb2      cb2Upd=0     cb2Init=0    newKeys     */ \
@@ -353,10 +393,10 @@ static const GameProfile PROFILES[] = {
                  02020004 g 00001144 gSprites
                  0202eac8 g 00000400 gPlttBufferUnfaded
                  0202e858 g 00000024 gPlayerAvatar
-               *** VERIFIED-SYM / VERIFY-ON-HW: no RS ROM exists on this machine, so like every
-               other value in this row these have never been EXECUTED. The cheap proof is the same
-               one P3.6 names, plus one field: boot Ruby beside Sapphire and check that
-               g_presDiag.sprReason reads 0. *** */                                              \
+               *** VERIFIED-SYM / VERIFY-ON-HW for the sprite columns themselves: the lane-B
+               co-op boot (LANE-B-RS.md §2) ran both titles and the presence pair gate passed
+               live (pairReason=0, CO-OP chip rendered), but g_presDiag.sprReason==0 was not
+               specifically read for these three columns — that named check is still owed. *** */ \
             0x02020004u, 0x0202EAC8u, 0x0202E858u,                                               \
             /* phase 22.0 rev-alternate ROM anchors: ALL 13 = 0. The ROM-address ban that governs
                this row (rev0/1/2 ROM symbols differ above 0x0803FBBC; RS-REV2-VERIFICATION.md
@@ -364,13 +404,10 @@ static const GameProfile PROFILES[] = {
                they would shadow are themselves 0 here. Explicit zeros, not C zero-fill (P3.5.2). */ \
             0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,        \
             0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,        \
-            0x00000000u,                                                                         \
-            /* phase 22.0 cb2 screen classes: NONE — no RS census visit has ever run (no RS ROM on
-               this machine). Named degradation: RS undetected screens keep the GCTX_OVERWORLD
-               fall-through until the RS delta pass harvests them live (any future RS cb2 must be
-               read from pokeruby_rev1/rev2.sym, NOT rev0 — §5's promotion rule). */             \
-            { 0x00000000u },                                                                     \
-            { 0x00000000u },                                                                     \
+            0x00000000u
+  /* The cb2Title/cb2FullUi lists sit BETWEEN the two macro halves and are written PER ROW —
+     the lane-B fold-in (LANE-B-RS.md, 2026-08-14). See the drift rule in the block comment. */
+  #define RS_PROFILE_BODY_TAIL \
             /* phase 22.1 keyboard+lists anchors: ALL 0 — the ROM-address ban again (every one of
                these is a ROM fn or a module-static EWRAM ptr with no RS verification), plus the
                RS naming screen is an OLDER module the keyboard spec explicitly defers
@@ -380,9 +417,35 @@ static const GameProfile PROFILES[] = {
             0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,                                  \
             0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,                                  \
             0x00000000u, 0x00000000u, 0x00000000u, 0, 0
-  { "AXVE", RS_PROFILE_BODY },   // Pokemon Ruby      (US, rev0 and rev1 — the RAM maps are identical)
-  { "AXPE", RS_PROFILE_BODY },   // Pokemon Sapphire  (US, rev0 and rev1 — same body, pinned above)
-  #undef RS_PROFILE_BODY
+  // Pokemon Ruby (US; the values below were LIVE-READ on the rev-2 fixture ROM = the user's
+  // cart, and rev1 == rev2 are byte-identical maps — RS-REV2-VERIFICATION.md §5's promotion
+  // rule; a rev0 cart's drifted screens simply keep the fall-through, compare-only fail-safe).
+  { "AXVE", RS_PROFILE_BODY_RAM,
+            /* lane-B RS promotion — RUBY's own cb2 screen classes, ALL live-read [exact] on the
+               running game, resolved on pokeruby_rev2.sym (LANE-B-RS.md §1 harvest table):
+               TITLE: MainCB2_Intro 0x0813B7B8 (GF intro), MainCB2 0x0807C474 (title screen),
+                      CB2_MainMenu 0x080096C4. */
+            { 0x0813B7B8u, 0x0807C474u, 0x080096C4u },
+            /* FULLUI: CB2_PartyMenuMain 0x0806AEFC (party menu — RS has no partyTask symbol, so
+               the cb2 class is the only party detection RS gets), bag run loop 0x080A3138
+               (rev-drifted `sub_80A3118`+0x20 name; the address is the live run-loop entry). */
+            { 0x0806AEFCu, 0x080A3138u },
+            RS_PROFILE_BODY_TAIL },
+  // Pokemon Sapphire (US; same promotion rule — every value below was measured on SAPPHIRE
+  // itself, live [exact] on pokesapphire_rev2.sym; LANE-B-RS.md §2 drift table + §3 solo smoke).
+  { "AXPE", RS_PROFILE_BODY_RAM,
+            /* TITLE: MainCB2_Intro 0x0813B7B8 (same as Ruby — measured, not copied), MainCB2
+               0x0807C478 (the +4 DRIFT vs Ruby — the headline), CB2_MainMenu 0x080096C4. */
+            { 0x0813B7B8u, 0x0807C478u, 0x080096C4u },
+            /* FULLUI: bag run loop 0x080A3138 (`sub_80A3118` [exact] on both RS maps). Sapphire's
+               CB2_PartyMenuMain was NOT measured (Ruby's 0x0806AEFC resolves inside
+               Task_ResetRtcScreen on the sapphire map — copying it across the drift is exactly
+               the BPGE failure mode) -> NAMED degradation: the Sapphire party menu keeps the
+               GCTX_OVERWORLD fall-through until a Sapphire party visit measures its own value. */
+            { 0x080A3138u },
+            RS_PROFILE_BODY_TAIL },
+  #undef RS_PROFILE_BODY_RAM
+  #undef RS_PROFILE_BODY_TAIL
 };
 
 const GameProfile* profile_for(GbaCore* c) {
@@ -738,7 +801,7 @@ void gamestate_log_dump(const char* path) {
 	FILE* f = fopen(path, "w");
 	if (!f) return;
 	fprintf(f, "# 3DGBA game-state log  heartbeat=%u frames  scr: 0=top/3D 1=bottom/touch  (cb1/cb2 = raw gMain callbacks, Thumb-stripped)\n", GS_HEARTBEAT_FRAMES);
-	fprintf(f, "# undetected screens fall through to ctx=field with resolved=0 (phase 22.0 promoted the census-harvested EM/FR sets to ctx=title/fullui; BPGE+RS lists are still empty):\n");
+	fprintf(f, "# undetected screens fall through to ctx=field with resolved=0 (phase 22.0 promoted the census-harvested EM/FR sets to ctx=title/fullui; lane B added per-title RS sets — AXVE != AXPE, ROM drift; BPGE lists are still empty):\n");
 	fprintf(f, "# read the cb2 column for each one you visit, then promote that value into that profile's cb2Title/cb2FullUi list (the census pipeline, CB2-HARVEST.md).\n");
 	fprintf(f, "# geo: px,py=camera tile; objX,objY=true avatar tile; mapG,mapN=which map; face 1=D 2=U 3=L 4=R (NPC-overlay inputs). inj=injected touch key. d_*=3D-effect health (top rows).\n");
 	fprintf(f, "# 3D detail (top rows; px @ FULL slider = the pop_eye disparity unit BEFORE *eyeSl, so slider-independent): d_feetMin/Max=grounded-feet disparity range; d_headMin/Max=head disparity (feet+standup, clamped); d_tallOk/d_tallFail=#sprites whose head exceeds feet by ~standup (tall renders taller) vs not; d_ordOk=1 if the on-screen set is monotonic in screen-y vs feet disparity (lower/closer pops >=); d_s3d=1 stereoscopic engaged this frame.\n");

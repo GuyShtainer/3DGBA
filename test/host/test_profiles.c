@@ -2,7 +2,9 @@
 // and the phase-18 `sbDirect` save-block indirection it introduced.
 //
 //   clang -std=c11 -Wall -Wextra -O2 -I source -I test/host test/host/test_profiles.c \
-//         source/gamestate.c source/presence_read.c source/presence.c -o /tmp/tpr && /tmp/tpr
+//         source/gamestate.c source/presence_read.c source/presence.c source/peersprite.c \
+//         -o /tmp/tpr && /tmp/tpr
+//   (peersprite.c joined the link when presence_read.c grew its pspr_capture call — phase 20.)
 //
 // WHY THIS SUITE EXISTS AND WHY IT IS NOT A TABLE COPY (SPEC-coop P4.6.2). The spec offered two
 // shapes: host-compile the real table, or copy it into the test and pin the copy with
@@ -229,7 +231,10 @@ static void test_sbdirect_behaviour(void) {
 // TEST 4 — the RS rows carry no ROM address except the licensed one (SPEC-coop P3.3.2)
 // Ruby vs Sapphire vs rev0 vs rev1 agree on every RAM symbol and disagree on ~90 000 ROM ones,
 // so an 0x08... value in an RS row is wrong for three of the four cartridges it will meet. The
-// ONE exception is battleMainCb, which is identical in all four maps and is load-bearing.
+// ONE exception in the walked span is battleMainCb, which is identical in all four maps and is
+// load-bearing (and since lane B, live-verified in a real Ruby battle — LANE-B-RS.md §1).
+// The phase-22.0 cb2Title/cb2FullUi lists sit OUTSIDE this span and carry the lane-B exception:
+// PER-TITLE ROM values live-read on the rev-2 fixtures (= the user's carts) — TEST 11 pins them.
 // ============================================================================================
 static void test_rs_no_rom(void) {
 	printf("TEST 4: no ROM address in the RS rows except the licensed battleMainCb\n");
@@ -285,10 +290,13 @@ static void test_rs_no_rom(void) {
 }
 
 // ============================================================================================
-// TEST 5 — AXVE and AXPE are byte-identical apart from the code (SPEC-coop P3.5.1)
+// TEST 5 — AXVE and AXPE share ONE RAM body (SPEC-coop P3.5.1) — and, since the lane-B fold-in,
+// differ in EXACTLY one more place: the per-title cb2Title/cb2FullUi class lists (Ruby and
+// Sapphire ROM addresses DRIFT — LANE-B-RS.md §2 headline; the lists were live-read per title
+// and must never be copied across). Everything else stays byte-identical, pinned here.
 // ============================================================================================
 static void test_rs_rows_pinned(void) {
-	printf("TEST 5: the Ruby and Sapphire rows are one body, pinned together\n");
+	printf("TEST 5: the RS rows share one RAM body; only the per-title cb2 lists differ\n");
 	const GameProfile* ru = prof("AXVE");
 	const GameProfile* sa = prof("AXPE");
 	CHECK(ru && sa, "both RS rows exist");
@@ -296,8 +304,20 @@ static void test_rs_rows_pinned(void) {
 	GameProfile a = *ru, b = *sa;
 	memset(a.code, 0, sizeof a.code);
 	memset(b.code, 0, sizeof b.code);
+	memset(a.cb2Title,  0, sizeof a.cb2Title);  memset(b.cb2Title,  0, sizeof b.cb2Title);
+	memset(a.cb2FullUi, 0, sizeof a.cb2FullUi); memset(b.cb2FullUi, 0, sizeof b.cb2FullUi);
 	CHECK(memcmp(&a, &b, sizeof a) == 0,
-	      "AXVE and AXPE differ ONLY in their 4-char code (one build, one RAM map)");
+	      "AXVE and AXPE differ ONLY in code + the per-title cb2 class lists (one RAM map)");
+	// The drift itself, as lane B measured it LIVE on both titles (never copy across):
+	EQU(ru->cb2Title[0], sa->cb2Title[0], "MainCB2_Intro is identical (measured on BOTH, not copied)");
+	EQU(ru->cb2Title[1] + 4u, sa->cb2Title[1], "title MainCB2 drifts +4 Ruby->Sapphire (live both)");
+	EQU(ru->cb2Title[2], sa->cb2Title[2], "CB2_MainMenu is identical (measured on both)");
+	// Ruby's party-menu cb2 must NOT appear anywhere in Sapphire's lists (it resolves inside
+	// Task_ResetRtcScreen on the sapphire map — the exact cross-title copy this test bans).
+	for (int k = 0; k < GS_N_TITLE; k++)
+		CHECK(sa->cb2Title[k] != 0x0806AEFCu, "Sapphire title[%d] is not Ruby's party cb2", k);
+	for (int k = 0; k < GS_N_FULLUI; k++)
+		CHECK(sa->cb2FullUi[k] != 0x0806AEFCu, "Sapphire fullui[%d] is not Ruby's party cb2", k);
 }
 
 // ============================================================================================
@@ -479,9 +499,13 @@ static void test_rev_alternates(void) {
 	// live-verified [exact] census 2026-08-14 (BattleMainCB2, CB2_UpdatePartyMenu, CB2_BagMenuRun,
 	// Task_HandleChooseMonInput, Task_StartMenuHandleInput, Task_HandleSelectionMenuInput); the
 	// other seven are rev1 sym-derived (pokefirered_rev1.sym), verify-in-emulator.
-	// BPGE: primary = LG rev1 (user's cart is rev 1.1); alt = LG rev0. Both columns sym-derived
-	// from pokeleafgreen{,_rev1}.sym (RS-REV2-VERIFICATION.md §6), verify-in-emulator. The old
-	// primaries were FR-rev0 values — wrong for EVERY LeafGreen revision.
+	// BPGE: primary = LG rev1 (user's cart is rev 1.1); alt = LG rev0. Lane B live-verified 10 of
+	// the 13 primaries [exact] on the running LG fixture (LANE-B-LG.md; chooseTarget needs a
+	// double battle, startCbInput is unused-by-code, yesNoTask is live-unreached). The old
+	// primaries were FR-rev0 values — wrong for EVERY LeafGreen revision. yesNoTaskAlt DEVIATES
+	// from the rev0 convention: it carries Task_CallYesOrNoCallback 0x080BF548 (LG rev1, live
+	// [exact] twice — bag-toss + mart-buy confirms), the handler FRLG actually routes its common
+	// yes/no prompts through (the LANE-B-LG.md #8 bypass finding).
 	// BPEE: one revision in play, primaries live-verified by the census -> all alternates 0.
 	// AXVE/AXPE: the RS ROM-address ban covers alternates too -> all 0.
 	struct { const char* code;
@@ -505,8 +529,8 @@ static void test_rev_alternates(void) {
 		  0x08011114u, 0x0811EBF0u, 0x0811EC20u, 0x0802E688u, 0x0806F294u, 0x08107F30u, 0x08108F5Cu,
 		  0x0811FB78u, 0x0809CE3Cu, 0x0809CC80u, 0x08122CACu, 0x0806F204u, 0x08098194u,
 		  0x08011100u, 0x0811EB78u, 0x0811EBA8u, 0x0802E674u, 0x0806F280u, 0x08107EB8u, 0x08108EE4u,
-		  0x0811FB00u, 0x0809CE28u, 0x0809CC6Cu, 0x08122C34u, 0x0806F1F0u, 0x08098180u,
-		  0x0300311Eu },                                    // §7 fix (same gMain as FR)
+		  0x0811FB00u, 0x080BF548u, 0x0809CC6Cu, 0x08122C34u, 0x0806F1F0u, 0x08098180u,
+		  0x0300311Eu },   // §7 fix (same gMain as FR); yesNo alt = Task_CallYesOrNoCallback (lane B)
 		{ "AXVE",
 		  0x0800F808u, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 		  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -586,12 +610,20 @@ static void test_screen_classes(void) {
 		0x080F1E38u, 0x0809ADF8u, 0x0813F9C4u, 0x08056760u };
 	static const uint32_t NONE_T[GS_N_TITLE]  = { 0 };
 	static const uint32_t NONE_F[GS_N_FULLUI] = { 0 };
+	// Lane-B RS promotion (LANE-B-RS.md): PER-TITLE lists — Ruby and Sapphire ROM addresses
+	// drift (title MainCB2 +4; party drifts), so AXVE and AXPE pin DIFFERENT values where lane B
+	// measured both, and Sapphire's party slot stays EMPTY (only Ruby was measured — never copy
+	// across the drift). All values live-read [exact] on pokeruby_rev2.sym / pokesapphire_rev2.sym.
+	static const uint32_t RU_TITLE[GS_N_TITLE] = { 0x0813B7B8u, 0x0807C474u, 0x080096C4u };
+	static const uint32_t RU_FULL[GS_N_FULLUI] = { 0x0806AEFCu, 0x080A3138u };
+	static const uint32_t SA_TITLE[GS_N_TITLE] = { 0x0813B7B8u, 0x0807C478u, 0x080096C4u };
+	static const uint32_t SA_FULL[GS_N_FULLUI] = { 0x080A3138u };
 	struct { const char* code; const uint32_t* title; const uint32_t* full; int visited; } W[] = {
 		{ "BPEE", EM_TITLE, EM_FULL, 1 },   // census boots #1/#2, live-harvested
 		{ "BPRE", FR_TITLE, FR_FULL, 1 },   // FR visit pass on the user's rev1 cart
-		{ "BPGE", NONE_T,   NONE_F,  0 },   // no LG boot yet -> named degradation (empty lists)
-		{ "AXVE", NONE_T,   NONE_F,  0 },   // no RS ROM on this machine
-		{ "AXPE", NONE_T,   NONE_F,  0 },
+		{ "BPGE", NONE_T,   NONE_F,  0 },   // LG harvest banked (LANE-B-LG.md) but not yet promoted
+		{ "AXVE", RU_TITLE, RU_FULL, 1 },   // lane-B Ruby boot (user's 600h save fixture)
+		{ "AXPE", SA_TITLE, SA_FULL, 1 },   // lane-B Sapphire co-op + solo smoke
 	};
 	for (unsigned i = 0; i < sizeof W / sizeof W[0]; i++) {
 		const GameProfile* p = prof(W[i].code);
@@ -714,6 +746,58 @@ static void test_phase22_behaviour(void) {
 	CHECK(!strcmp(gamestate_ctx_name(GCTX_TITLE),  "title"),  "GCTX_TITLE prints as 'title'");
 	CHECK(!strcmp(gamestate_ctx_name(GCTX_FULLUI), "fullui"), "GCTX_FULLUI prints as 'fullui'");
 	CHECK(!strcmp(gamestate_ctx_name(GCTX_BATTLE_OTHER), "b.oth"), "existing names undisturbed");
+	// --- (g) lane-B RS promotion behaviour (LANE-B-RS.md): the per-title lists classify on
+	//     their OWN title and a cross-title (drifted) value NEVER fires — executed, not asserted.
+	{
+		GbaCore c; bus_reset(&c, "AXVE");
+		const GameProfile* p = profile_for(&c);
+		GameState gs;
+		bus_w32(&c, p->mainCb2, 0x0813B7B8u | 1u);           // MainCB2_Intro (live both titles)
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_TITLE, "AXVE: GF intro classifies as GCTX_TITLE");
+		CHECK(gs.ctxResolved, "AXVE: ...positively (resolved)");
+		bus_w32(&c, p->mainCb2, 0x0806AEFCu | 1u);           // Ruby CB2_PartyMenuMain [exact]
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_FULLUI, "AXVE: party menu classifies as GCTX_FULLUI (RS has no partyTask)");
+		bus_w32(&c, p->mainCb2, 0x0807C478u | 1u);           // SAPPHIRE's drifted title MainCB2
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_OVERWORLD, "AXVE: Sapphire's +4-drifted title cb2 does NOT fire on Ruby");
+		CHECK(!gs.ctxResolved, "AXVE: ...it falls through unresolved (the drift rule held)");
+	}
+	{
+		GbaCore c; bus_reset(&c, "AXPE");
+		const GameProfile* p = profile_for(&c);
+		GameState gs;
+		bus_w32(&c, p->mainCb2, 0x0807C478u | 1u);           // Sapphire's own title MainCB2 [exact]
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_TITLE, "AXPE: Sapphire title screen classifies as GCTX_TITLE");
+		bus_w32(&c, p->mainCb2, 0x080A3138u | 1u);           // bag run loop ([exact] both RS maps)
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_FULLUI, "AXPE: bag run loop classifies as GCTX_FULLUI");
+		bus_w32(&c, p->mainCb2, 0x0807C474u | 1u);           // RUBY's title MainCB2 on Sapphire
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_OVERWORLD, "AXPE: Ruby's title cb2 does NOT fire on Sapphire");
+		bus_w32(&c, p->mainCb2, 0x0806AEFCu | 1u);           // Ruby's party cb2 = Task_ResetRtcScreen here
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_OVERWORLD, "AXPE: Ruby's party cb2 does NOT fire (named degradation kept)");
+		CHECK(!gs.ctxResolved, "AXPE: ...unresolved fall-through (promotion hook stays open)");
+	}
+	// --- (h) the lane-B LG yes/no bypass fix (LANE-B-LG.md #8): Task_CallYesOrNoCallback — the
+	//     handler FRLG actually routes bag-toss/mart-buy confirms through — detects as FIELDMENU
+	//     via the yesNoTaskAlt slot, and the rev1 primary still detects too.
+	{
+		GbaCore c; bus_reset(&c, "BPGE");
+		const GameProfile* p = profile_for(&c);
+		GameState gs;
+		EQU(p->yesNoTaskAlt, 0x080BF548u, "BPGE: yesNoTaskAlt IS Task_CallYesOrNoCallback (LG rev1)");
+		put_task(&c, p, 3, 0x080BF548u | 1u, 1);
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_FIELDMENU, "BPGE: Task_CallYesOrNoCallback -> GCTX_FIELDMENU (confirms detect)");
+		bus_reset(&c, "BPGE"); p = profile_for(&c);
+		put_task(&c, p, 3, p->yesNoTask | 1u, 1);            // rev1 Task_YesNoMenu_HandleInput
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_FIELDMENU, "BPGE: the rev1 yes/no primary still detects (nothing displaced)");
+	}
 }
 
 // ============================================================================================

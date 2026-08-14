@@ -530,3 +530,44 @@ user's recent.bin restored), settings.bin restored byte-identical from the .lane
 - 2 defects found live + 1 fixed in-code (pocket-tab pacing committed; dex drag pacing
   banked as follow-up), 3 harness landmines documented (movie tail, sdmc spawn snapshot,
   quest-log walk).
+
+## Promotion Entry 1 — lane-B verdicts FOLDED into the profiles, all suites green
+
+Serial code slice (subagent, 2026-08-14 ~06:20). Sources: LANE-B-RS.md + LANE-B-LG.md.
+What landed (source/gamestate.{h,c} + test/host/test_profiles.c only; frozen paths untouched):
+
+1. **BPGE (LANE-B-LG.md):** the row comment now carries the live verdicts — 10 of the 13 rev1
+   primaries marked LIVE-VERIFIED [exact] (party/bag/fmenu ctxs fired on LG for the first time;
+   full b.oth→b.act→b.move battle chain; mapNameTask caught in a heartbeat row); the 3 honest
+   non-verdicts stay flagged AS-IS (chooseTarget = needs a double battle; startCbInput =
+   unused-by-code; yesNoTask = map-correct, LIVE-UNREACHED). The #8 bypass finding is now CODE:
+   **yesNoTaskAlt = Task_CallYesOrNoCallback 0x080BF548** (LG rev1, live [exact] TWICE —
+   bag-toss + mart-buy confirms), displacing the never-fired rev0 Task_YesNoMenu alternate
+   (bypass is a code-structure property of FRLG, not a revision; displacement cost = zero,
+   named in the comment). The two money-and-item confirm screens stop reading as `field`.
+   LG's TITLE/FULLUI spot-harvest stays UNPROMOTED (its own slice; comment updated honestly).
+2. **RS (LANE-B-RS.md):** RS_PROFILE_BODY split into RS_PROFILE_BODY_RAM + _TAIL with the
+   cb2Title/cb2FullUi lists written PER ROW — the drift headline made structural. AXVE gets
+   Ruby's live-read [exact] set (title: MainCB2_Intro 0x0813B7B8 / MainCB2 0x0807C474 /
+   CB2_MainMenu 0x080096C4; fullui: CB2_PartyMenuMain 0x0806AEFC + bag run 0x080A3138); AXPE
+   gets SAPPHIRE's OWN measured set (0x0813B7B8 / 0x0807C478 (+4 drift) / 0x080096C4; fullui:
+   bag 0x080A3138 only — the party slot stays EMPTY, named degradation: Ruby's value resolves
+   inside Task_ResetRtcScreen on the sapphire map, never copied across). Stale row comments
+   fixed: battleMainCb 0x0800F808 promoted to LIVE-VERIFIED-in-emulator (lane-B wild battle,
+   ctx left field; hw still owed), "no RS ROM on this machine / never EXECUTED" replaced with
+   the lane-B execution record (both titles booted, P3.6 co-op proof ran, pairReason=0).
+3. **Suites:** TEST 5 rewritten (shared RAM body pinned with the cb2 lists excluded + the
+   drift itself pinned: intro/mainmenu identical-measured, title +4, Ruby's party cb2 banned
+   from every Sapphire slot); TEST 10 pins the new BPGE yesNoTaskAlt; TEST 11 pins both RS
+   per-title lists exact (visited=1); TEST 12 grew (g) RS behaviour — per-title classes
+   classify positively AND cross-title drifted values fall through unresolved on BOTH titles —
+   and (h) Task_CallYesOrNoCallback → GCTX_FIELDMENU with the rev1 primary still detecting.
+   test_profiles 1295 → **1480 checks, 0 failures**.
+
+Gate (fresh runs this slice): celiolink 1259 · control 6940 · diag 376 · fieldpath 1808 ·
+netlink 66 · peersprite 62078 · presence 61376 · profiles **1480** · theme 83444 · tilt 1723 ·
+touchgeom 115396 · trace_replay 58 (4 loud SKIPs) · typography 1419 · uigeom 18332 · uihit
+1834 = **356 589 checks, 0 failures** (15 suites). `make -j8` → 3DGBA.3dsx 4 377 424 B;
+`make cia` → 3DGBA.cia 2 015 168 B (both clean 06:23; only the pre-existing frozen-mgba
+warnings). Note: test_profiles' link line now needs source/peersprite.c (presence_read
+references pspr_capture since phase 20; the header comment's 4-file line no longer links).
