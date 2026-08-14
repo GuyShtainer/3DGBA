@@ -373,3 +373,30 @@ messages crossed once: f8f78cd = lane B's RS-coop evidence + this lane's buildlo
 **6b93a69 = the real lane-A code milestone (exactly the 12 lane-A files)**. No content lost,
 history append-only. Lesson for the morning: two lanes in ONE work tree race on the INDEX,
 not just the ref — worktrees per lane next time.
+
+## Lane A Entry 3 — TWO instance-a harness landmines found + fixed (movie tail + sdmc snapshot)
+
+Three lost boots (~40 min) root-caused, both findings verified by controlled repro:
+
+1. **A CTM movie that ENDS wedges the whole app** (Azahar 2125.1.2, instance a, dual boot,
+   gdb client attached): runs/sweep-verify/resume.ctm has only a ~67-emulated-second tail;
+   at tonight's ~8-19 fps the end lands 3-5 min into the session and the WHOLE 3DS render
+   freezes — two `see shot top` captures 8 s apart PIXEL-IDENTICAL (HUD clock stuck), D4
+   token clock stopped, gdb stub unresponsive. This also retro-explains every "gdb died on
+   me" event tonight. The census never hit it because boot_resume.ctm carries a 6-HOUR idle
+   tail (VISITED-emerald.md:3). FIX: state/lane_a_resume.ctm — wait900 + tap A +
+   780 000-frame tail (~3.6 h emulated; outlives any session).
+2. **sdmc file visibility SNAPSHOTS at app spawn**: control files created on the host
+   AFTER Azahar spawns are NEVER seen by the app (stat fails forever), even though files
+   present at spawn are picked up and consumed normally. Verified: pre-staged files all
+   consumed at session start; the same file re-dropped mid-run sat unconsumed 4+ min in a
+   LIVE session (token clock advancing). Consequence: **the drop-a-file-mid-run workflow
+   the census describes does NOT work on this box tonight** — every route + touch script
+   must be PRE-STAGED before `azctl boot`, one proof arc per boot. (How the census
+   iterated mid-run remains unexplained — flagged for the morning; suspicion: it may have
+   always been boot-cycled without saying so, or an Azahar/macOS update changed FS
+   behaviour in between.)
+
+Also learned: D4.11 counts touch-injected keys as "real input" -> a touch op ABORTS a
+running move script (by design). Sequencing rule: the touch script opens with w-waits
+sized past the route's end.
