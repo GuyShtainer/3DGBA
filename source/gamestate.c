@@ -221,7 +221,17 @@ static const GameProfile PROFILES[] = {
                              is included in newAndRepeatedKeys, so a 1-frame injected edge counts.
                NOTE both are rev-INSENSITIVE in the sense that matters: cb2Pager is compared, never
                dereferenced, and it is only ever consulted for a cb2 that already matched
-               cb2FullUi — a rev0 cart simply matches neither list and gets the class default. */
+               cb2FullUi — a rev0 cart simply matches neither list and gets the class default.
+               *** STATUS: LIVE-UNEXERCISED (phase-23 lane B, OVERNIGHT2-BUILDLOG Entry 3). The FR
+               boot proved the FAM-DLG class itself on this cart (tap-advance carried title -> main
+               menu -> overworld; hold=B backed out of CB2_PokedexScreen 0x0810254C, live [exact])
+               but never reached the options or summary screen — FireRed's quest-log replay ate the
+               session's budget. Recorded as UNKNOWN, never as a pass (the verdict.sh prime
+               directive). Worst case if a value is wrong: that screen behaves like an ordinary
+               FAM-DLG screen (tap=A / hold=B / drag) instead of gaining edge zones — compare-only,
+               fail-safe, and TEST 16 already pins it as a SUBSET of cb2FullUi so it can never
+               become detection. OWED: one FR boot that reaches START > OPTION and reads
+               g_touchDbg.dlgPager == 1 (+0xC0). *** */
             { 0x08137F60u, 0x08088370u } },
   // BPGE ROM anchors — REPLACED phase 22.0 (they were FireRed-rev0 values, wrong for EVERY
   // LeafGreen revision; battle/party/bag/menu detection was silently dead on LG). PRIMARIES are
