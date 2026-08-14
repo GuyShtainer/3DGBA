@@ -1585,8 +1585,8 @@ static void map_reset(void) {
                             // x 6 frames = 162, so this only ever fires on a screen that stopped
                             // accepting input — a fade, a zoom, a sub-menu)
 
-typedef struct { int curX, curY, secId, secType; } MapState;
-static int map_read(const TouchSmart* sm, MapState* ms) {
+typedef struct { int curX, curY, secId, secType; } RMapState;
+static int rmap_read(const TouchSmart* sm, RMapState* ms) {
 	const GameProfile* p = sm->prof;
 	if (!sm->core || !p || !p->rmPtr) return 0;
 	uint32_t base = gbacore_read32(sm->core, p->rmPtr);      // sRegionMap: a POINTER, always deref
@@ -1610,8 +1610,8 @@ static void map_arm(int cx, int cy, int act) {
 
 static u16 map_update(const TouchSmart* sm, bool touching, bool newPress, bool gvalid,
                       int gx, int gy) {
-	MapState ms;
-	if (!map_read(sm, &ms)) { map_reset(); return 0; }        // no anchors / not a live full map
+	RMapState ms;
+	if (!rmap_read(sm, &ms)) { map_reset(); return 0; }        // no anchors / not a live full map
 	if (s_mpATick > 0) { s_mpATick--; return 1 << GBAKEY_A; } // finish the 2-frame confirm pulse
 
 	if (newPress && gvalid) {
@@ -1872,7 +1872,7 @@ static void touch_dbg_stamp(const TouchSmart* sm, u16 ret) {
 	d->msgMode = -1;
 	// PHASE 24 / lane B2 — FAM-MAP, stamped beside the FAM-DLG block for the same survive-every-
 	// early-return reason. The counters are app-side and always valid; the four live reads are -1
-	// until map_read succeeds, which is itself the diagnosis when a tap "does nothing".
+	// until rmap_read succeeds, which is itself the diagnosis when a tap "does nothing".
 	d->mapTaps = s_mpTaps; d->mapSteps = s_mpSteps; d->mapArrive = s_mpArrive;
 	d->mapFlies = s_mpFly; d->mapHolds = s_mpHolds;
 	d->mapTgtX = s_mpTgtX; d->mapTgtY = (s_mpTgtX < 0) ? -1 : s_mpTgtY;
@@ -1881,8 +1881,8 @@ static void touch_dbg_stamp(const TouchSmart* sm, u16 ret) {
 	const GameProfile* p = sm->prof;
 	if (!sm->core || !p) return;
 	if (sm->ctx == GCTX_MAP) {
-		MapState ms;
-		if (map_read(sm, &ms)) {
+		RMapState ms;
+		if (rmap_read(sm, &ms)) {
 			d->mapCurX = ms.curX; d->mapCurY = ms.curY;
 			d->mapSecId = ms.secId; d->mapSecType = ms.secType;
 		}
