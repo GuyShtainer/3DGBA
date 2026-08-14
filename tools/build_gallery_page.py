@@ -231,12 +231,18 @@ CSS = f"""{CSS_START}
 
   .qnav {{ position:sticky; top:10px; z-index:20; margin:34px 0 8px; }}
   .qnav-in {{ display:flex; gap:2px; overflow-x:auto; scrollbar-width:none; padding:5px 6px;
+              width:max-content; max-width:100%;
               background:var(--panel);
               background:color-mix(in srgb,var(--panel) 92%,transparent);
               -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px);
               border:1px solid var(--line); border-radius:999px; box-shadow:var(--shadow);
-              -webkit-mask-image:linear-gradient(90deg,#000 0 calc(100% - 26px),transparent);
-              mask-image:linear-gradient(90deg,#000 0 calc(100% - 26px),transparent); }}
+              }}
+  /* The 8 pills measure ~710px. Fade the right edge ONLY where the rail can actually scroll —
+     an unconditional mask ate the rail's own border and rounded cap on desktop. */
+  @media (max-width:780px) {{
+    .qnav-in {{ -webkit-mask-image:linear-gradient(90deg,#000 0 calc(100% - 26px),transparent);
+                mask-image:linear-gradient(90deg,#000 0 calc(100% - 26px),transparent); }}
+  }}
   .qnav-in::-webkit-scrollbar {{ display:none; }}
   .qnav a {{ flex:none; text-decoration:none; color:var(--dim); font-family:var(--mono);
              font-size:10.5px; letter-spacing:.13em; text-transform:uppercase; white-space:nowrap;
