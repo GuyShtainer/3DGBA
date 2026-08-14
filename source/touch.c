@@ -2198,8 +2198,13 @@ static void touch_dbg_stamp(const TouchSmart* sm, u16 ret) {
 	d->mapTgtX = s_mpTgtX; d->mapTgtY = (s_mpTgtX < 0) ? -1 : s_mpTgtY;
 	d->mapIsFly = sm->mapFly ? 1 : 0;
 	d->mapCurX = d->mapCurY = d->mapSecId = d->mapSecType = -1;
+	d->qlState = -1;                     // PHASE 25: -1 = no quest log for this game / no profile
 	const GameProfile* p = sm->prof;
 	if (!sm->core || !p) return;
+	// PHASE 25 (lane C1): stamped immediately after the null check, i.e. ABOVE the GCTX_MAP /
+	// GCTX_NAMING early returns, because "why did touch go silent" must be answerable on every
+	// screen — including the ones whose own mirrors bail out.
+	if (p->questLog) d->qlState = (int32_t)gbacore_read8(sm->core, p->questLog);
 	if (sm->ctx == GCTX_MAP) {
 		RMapState ms;
 		if (rmap_read(sm, &ms)) {
@@ -2472,6 +2477,15 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 	case GCTX_FULLUI:
 		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset(); map_reset();
 		ret = dlg_update(sm, touching, newPress, gvalid, gx, gy, 1);
+		break;
+	// --- PHASE 25 (lane C1): the INERT class. The `default` arm below would already return 0, but
+	// this is written out because "nothing" is the FEATURE here, not a fall-through: the credits
+	// (TOUCH-PLAN L2) must not take the FAM-DLG hold verb, since pokeemerald credits.c:349 reads a
+	// held B as the credits FAST-FORWARD, and FRLG quest-log playback (K4) must not take anything
+	// at all. all_reset() so a half-finished gesture from the screen before cannot leak in.
+	case GCTX_INERT:
+		all_reset();
+		ret = 0;
 		break;
 	case GCTX_TITLE:
 		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset(); map_reset();

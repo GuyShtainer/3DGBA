@@ -263,6 +263,11 @@ typedef struct {
 	int32_t  mapTgtX;        // +0xF8  the armed target cell (-1 = idle)
 	int32_t  mapTgtY;        // +0xFC
 	int32_t  mapIsFly;       // +0x100 TouchSmart.mapFly as the dispatcher saw it (1 = fly map)
+	// --- PHASE 25 / lane C1: the INERT class's proof channel. APPENDED (every offset above is
+	// unchanged). `ctx == 15 (GCTX_INERT)` says touch went silent; this says WHICH rule did it:
+	// a quest-log playback state (2 or 3) or, with qlState 0/1, the credits cb2 list. -1 = this
+	// game has no quest log (Emerald / RS) or the profile was unreadable. LOGGING ONLY.
+	int32_t  qlState;        // +0x104 raw GameProfile.questLog byte (gQuestLogState on FRLG)
 } TouchDbg;
 extern TouchDbg g_touchDbg;
 

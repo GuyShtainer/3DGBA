@@ -63,9 +63,34 @@ static const GameProfile PROFILES[] = {
                sub-apps), CB2_PokeblockMenu, CB2_UsePokeblockMenu, CB2_PokeblockFeed,
                MCB2_FieldUpdateRegionMap (the RUN loop — catalog correction), CB2_WallClock,
                CB2_NamingScreen, CB2_PokeStorage, CB2_SlotMachine. */
+            /* PHASE 25 (lane C1) — the thirteen values from `0x08173560` on are the harvest that
+               unblocks lane B1's BROKEN `TAP` rows (LANE-C-HARVEST.md). Two are LIVE [exact],
+               read off the running game this session; the rest are VERIFIED-SYM on the same
+               pokeemerald.sym that resolved every live read [exact] in this file, with the screen
+               named so a later visit can upgrade the marking:
+                 0x08173560 CB2_HallOfFame           **LIVE [exact]** — rows E15 + L1. ONE value
+                            covers both: CB2_DoHallOfFameScreen (:417) and CB2_DoHallOfFamePC
+                            (:797) both end at SetMainCallback2(CB2_HallOfFame) (:401/:852).
+                 0x08121C64 CB2_MailRead             **LIVE [exact]** — row E8.
+                 0x081219F0 CB2_InitMailRead         (sym) its 2-frame starter.
+                 0x0813E3A4 CB2_EvolutionSceneUpdate (sym) — row C20, the run loop
+                            (evolution_scene.c:308/:372).
+                 0x0813E3C0 CB2_TradeEvolutionSceneUpdate (sym) — the link-trade variant (:462/:527).
+                 0x0813DD7C CB2_EvolutionSceneLoadGraphics / 0x0813DF70 its trade twin (sym) —
+                            multi-state loaders that run for many frames and leaked just as badly.
+                 0x080F5C00 CB2_ShowContestResults   (sym) — row H4.
+                 0x0812FDF8 CB2_HoldContestPainting  (sym) — row H5.
+                 0x08081898 CB2_PlayBlender / 0x08081FC8 CB2_EndBlenderGame (sym) — row H6, the
+                            minigame loop and its results screen ("the honest mapping IS tap=A").
+                 0x0800B1A0 CB2_PrintErrorMessage / 0x0800AF30 CB2_LinkError (sym) — row A10.
+               UNREACHED-BY-DESIGN note: the sym-derived twelve are compare-only, so a wrong value
+               can only leave a screen exactly as broken as it is today — never mis-key one. */
             { 0x080BA4B0u, 0x080C2710u, 0x081248D4u, 0x080C5438u, 0x081BFAB4u, 0x08177C54u,
               0x080BB774u, 0x081C7400u, 0x0813591Cu, 0x0816631Cu, 0x08179B68u, 0x08170274u,
-              0x08134C9Cu, 0x080E4F58u, 0x080C7D54u, 0x0812A670u },
+              0x08134C9Cu, 0x080E4F58u, 0x080C7D54u, 0x0812A670u,
+              0x08173560u, 0x08121C64u, 0x081219F0u, 0x0813E3A4u, 0x0813E3C0u, 0x0813DD7Cu,
+              0x0813DF70u, 0x080F5C00u, 0x0812FDF8u, 0x08081898u, 0x08081FC8u, 0x0800B1A0u,
+              0x0800AF30u },
             /* phase 22.1 keyboard+lists anchors (EM, one US revision — all alternates 0). Every
                value re-read from pokeemerald.sym this session (scratchpad syms/):
                  080e4f58 CB2_NamingScreen [census live-verified], 02039f94 sNamingScreen,
@@ -121,7 +146,16 @@ static const GameProfile PROFILES[] = {
             /* phase 24 (lane B2) cb2List = 0: Emerald has no Berry Pouch / TM Case (berries live
                in the bag, which has a REAL anchor), and every other EM list screen already has
                one — a discovered list would be strictly worse. Explicit zeros (P3.5.2). */
-            { 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u } },
+            { 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u },
+            /* phase 25 (lane C1) cb2Inert — the CREDITS, detected and given nothing (TOUCH-PLAN
+               L2). CB2_Credits 0x081754DC + CB2_StartCreditsSequence 0x08175620 (the multi-state
+               starter set at hall_of_fame.c:781). VERIFIED-SYM on pokeemerald.sym, LIVE-UNREACHED
+               and honestly so: the credits play once after the Elite Four and Gen 3 has no
+               replay, so no save on this machine can visit them. Compare-only => a wrong value
+               can only mean "no change". */
+            { 0x081754DCu, 0x08175620u, 0x00000000u, 0x00000000u },
+            /* phase 25 questLog = 0: Emerald has no quest log (an FRLG feature). */
+            0x00000000u },
   // BPRE ROM anchors: the PRIMARIES below are FR rev0 (correct for a rev0 cart); the REV1 values —
   // the user's cart — live in the phase-22.0 ALTERNATE block at the end of the row. newKeys was
   // 0x0303011E (a digit transposition, RS-REV2-VERIFICATION.md §7): gMain 0x030030F0
@@ -200,9 +234,25 @@ static const GameProfile PROFILES[] = {
                TeachyTvCallback, MainCB2_FameCheckerMain, CB2_PokeStorage, CB2_NamingScreen,
                CB2_HofIdle, CB2_BuyMenu, CB2_RunSlotMachine, CB2_LoadMap2 (map-load transition —
                classifying it stops walk-key leaks BETWEEN overworld sessions). */
+            /* PHASE 25 (lane C1) — the FireRed halves of the same nine rows, all VERIFIED-SYM on
+               `pokefirered_rev1.sym` (the user's cart) and all LIVE-UNVERIFIED: this lane's boot
+               spent its Emerald budget on the EM screens and parked FireRed at its title. Named
+               per screen so a later FR arc can upgrade each marking one visit at a time:
+                 0x080CE724 CB2_EvolutionSceneUpdate / 0x080CE740 its trade twin — row C20;
+                 0x080CE0FC CB2_EvolutionSceneLoadGraphics / 0x080CE2F0 its trade twin;
+                 0x080BF37C CB2_RunShowMailCB — row E8, the FR mail run loop (src/mail.c:691;
+                            :630 is where CB2_InitMailView hands over), with the starter
+                 0x080BF124 CB2_InitMailView (:624) and 0x080EC274 CB2_ReturnToMailbox (the
+                            PC-mailbox return loop the census caught in the same module);
+                 0x080F29F0 CB2_InitHofPC — row E15's FR init loop (CB2_HofIdle 0x080F1E38 is
+                            already in this list from the census, which is why B1 scored FR's HoF
+                            half as covered);
+                 0x0800AF40 CB2_PrintErrorMessage / 0x0800ACE8 CB2_LinkError — row A10. */
             { 0x08088370u, 0x08089084u, 0x080C08C8u, 0x08137F60u, 0x0813CE78u, 0x081318DCu,
               0x0811C774u, 0x0810254Cu, 0x0815AC0Cu, 0x0812C40Cu, 0x0808CDD8u, 0x0809FB84u,
-              0x080F1E38u, 0x0809ADF8u, 0x0813F9C4u, 0x08056760u },
+              0x080F1E38u, 0x0809ADF8u, 0x0813F9C4u, 0x08056760u,
+              0x080CE724u, 0x080CE740u, 0x080CE0FCu, 0x080CE2F0u, 0x080BF37Cu, 0x080BF124u,
+              0x080EC274u, 0x080F29F0u, 0x0800AF40u, 0x0800ACE8u },
             /* phase 22.1 keyboard+lists anchors (FR: primaries rev0, alternates rev1 — the BPRE
                row convention). Re-read from pokefirered.sym / pokefirered_rev1.sym this session:
                  CB2_NamingScreen  0809fb70 / 0809fb84   (rev1 also census-live in cb2FullUi)
@@ -281,7 +331,18 @@ static const GameProfile PROFILES[] = {
                keeps the FAM-DLG default. That is the same named degradation cb2Pager carries.
                The list itself is found by the rev-alternate-aware lmDummyTask scan, so the part
                that IS rev-sensitive is already covered on both revisions. */
-            { 0x0813CE78u, 0x081318DCu, 0x00000000u, 0x00000000u } },
+            { 0x0813CE78u, 0x081318DCu, 0x00000000u, 0x00000000u },
+            /* phase 25 (lane C1) cb2Inert — the CREDITS (TOUCH-PLAN L2). CB2_Credits 0x080F3A60,
+               VERIFIED-SYM on pokefirered_rev1.sym, LIVE-UNREACHED (same reason as Emerald).
+               FR's credits main loop is the same shape as EM's; the row ships one value because
+               FRLG's starter is not a separate long-lived callback. */
+            { 0x080F3A60u, 0x00000000u, 0x00000000u, 0x00000000u },
+            /* phase 25 (lane C1) questLog = gQuestLogState 0x0203ADFA (row K4). EWRAM, and
+               IDENTICAL in pokefirered.sym / pokefirered_rev1.sym / both LeafGreen maps —
+               revision-insensitive, so unlike every ROM anchor in this row it needs no alternate.
+               game_read applies the game's own QL_IS_PLAYBACK_STATE test (2 or 3), never
+               "non-zero": ordinary play sits at QL_STATE_RECORDING (1). */
+            0x0203ADFAu },
   // BPGE ROM anchors — REPLACED phase 22.0 (they were FireRed-rev0 values, wrong for EVERY
   // LeafGreen revision; battle/party/bag/menu detection was silently dead on LG). PRIMARIES are
   // now LG **rev1** — the user's cart is rev 1.1 — re-derived field-by-field from
@@ -404,7 +465,17 @@ static const GameProfile PROFILES[] = {
             /* phase 24 (lane B2) cb2List = 0. LeafGreen's Berry Pouch / TM Case cb2s were never
                harvested on LG itself, and copying FireRed's is precisely the BPGE failure mode
                this row was rebuilt to end (RS-REV2-VERIFICATION §6). Explicit zeros. */
-            { 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u } },
+            { 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u },
+            /* phase 25 (lane C1) cb2Inert = 0: LG's whole cb2Title/cb2FullUi pair is still empty
+               (its census is its own slice) and copying FireRed's ROM value is the exact BPGE
+               failure mode this row was rebuilt to end. Explicit zeros. */
+            { 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u },
+            /* phase 25 (lane C1) questLog = 0x0203ADFA — the ONE phase-25 value LeafGreen DOES
+               get, and precisely because it is not a ROM address: gQuestLogState sits at the same
+               EWRAM address in pokeleafgreen.sym, pokeleafgreen_rev1.sym, pokefirered.sym and
+               pokefirered_rev1.sym (all four checked this session). LG's quest log replays on
+               every CONTINUE exactly like FireRed's. VERIFIED-SYM, live-unverified on LG. */
+            0x0203ADFAu },
 
   // ===================== Ruby / Sapphire (SPEC-coop §P3) =====================================
   // Every RAM value below is VERIFIED-SYM against pret's byte-matched `symbols` branch, all FOUR
@@ -604,7 +675,12 @@ static const GameProfile PROFILES[] = {
             0x00000000u, 0x00000000u, 0x00000000u,
             /* phase 24 (lane B2) cb2List = 0 — the RS ROM-address ban, and RS has neither screen
                anyway. Explicit zeros, not C zero-fill (P3.5.2). */
-            { 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u } },
+            { 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u },
+            /* phase 25 (lane C1) cb2Inert = 0 — the RS ROM-address ban (RS does have credits;
+               its cb2 was never harvested and RS ROM values are not promoted from a sym map).
+               questLog = 0 — the quest log is an FRLG feature, RS has none. Explicit zeros. */
+            { 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u },
+            0x00000000u },
   // Pokemon Sapphire (US; same promotion rule — every value below was measured on SAPPHIRE
   // itself, live [exact] on pokesapphire_rev2.sym; LANE-B-RS.md §2 drift table + §3 solo smoke).
   { "AXPE", RS_PROFILE_BODY_RAM,
@@ -639,7 +715,12 @@ static const GameProfile PROFILES[] = {
             0x00000000u, 0x00000000u, 0x00000000u,
             /* phase 24 (lane B2) cb2List = 0 — the RS ROM-address ban, and RS has neither screen
                anyway. Explicit zeros, not C zero-fill (P3.5.2). */
-            { 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u } },
+            { 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u },
+            /* phase 25 (lane C1) cb2Inert = 0 — the RS ROM-address ban (RS does have credits;
+               its cb2 was never harvested and RS ROM values are not promoted from a sym map).
+               questLog = 0 — the quest log is an FRLG feature, RS has none. Explicit zeros. */
+            { 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u },
+            0x00000000u },
   #undef RS_PROFILE_BODY_RAM
   #undef RS_PROFILE_BODY_TAIL
 };
@@ -763,6 +844,26 @@ bool game_read(GbaCore* c, const GameProfile* p, GameState* out) {
 		out->objY   = (int16_t)gbacore_read16(c, p->mapObjects + 0x12); // currentCoords.y
 		out->facing = gbacore_read8 (c, p->mapObjects + 0x18) & 0x0F;   // facingDirection — offset verify-on-hw (FR/LG base also suspect)
 	}
+
+	// --- PHASE 25 (lane C1): the INERT class, tested BEFORE everything else -------------------
+	// Both rules say "this screen must be given nothing", which is a statement about the WHOLE
+	// frame — so nothing more specific may override them, and they run ahead of the battle test,
+	// the task-based menu tests and the class loops alike.
+	//
+	// (a) row K4 — FRLG QUEST-LOG PLAYBACK. The replay drives the avatar, opens menus and prints
+	//     text under CB2_Overworld with no cb2 of its own; lane B1 measured sLockFieldControls at
+	//     0 for most of it and three taps arming routes (planSeq 5) at a game the player does not
+	//     control. The test is the GAME'S OWN `QL_IS_PLAYBACK_STATE` (state 2 or 3), never
+	//     "non-zero" — ordinary FRLG play sits at QL_STATE_RECORDING (1).
+	out->questLogState = p->questLog ? (uint8_t)gbacore_read8(c, p->questLog) : 0;
+	if (p->questLog && (out->questLogState == 2 || out->questLogState == 3)) {
+		out->ctx = GCTX_INERT; return true;
+	}
+	// (b) row L2 — the CREDITS. Named by cb2 like every other promoted screen, but into its own
+	//     list: the FAM-DLG default would map a resting finger to a held B, which credits.c:349
+	//     reads as the FAST-FORWARD.
+	for (int i = 0; i < GS_N_INERT; i++)
+		if (p->cb2Inert[i] && out->cb2 == p->cb2Inert[i]) { out->ctx = GCTX_INERT; return true; }
 
 	// 'In battle' = the battle main loop is the active callback2. (gBattleTypeFlags is zeroed at battle
 	// SETUP, not end, so it lingers into the overworld -> the old battleFlags test made the whole
@@ -913,7 +1014,12 @@ static const char* const GS_CTXN[] = {   // index = GameCtx; matches main.c's te
 	"none", "field", "b.act", "b.move", "b.tgt", "party", "fmenu", "bag", "b.oth",
 	"title", "fullui",                   // phase 22.0 census promotion (GCTX_TITLE / GCTX_FULLUI)
 	"naming", "list",                    // phase 22.1 keyboard + lists families
-	"stor"                               // phase 22.2 grid family (PC storage boxes)
+	"stor",                              // phase 22.2 grid family (PC storage boxes)
+	"map",                               // phase 24 (lane B2) FAM-MAP — was MISSING: GCTX_MAP is
+	                                     //   14 and this table stopped at 13, so every region-map
+	                                     //   row in the gs ring and on the diag HUD printed "?".
+	                                     //   Reported, not silently fixed: see LANE-C-HARVEST.md.
+	"inert"                              // phase 25 (lane C1) INERT class (credits / QL playback)
 };
 const char* gamestate_ctx_name(int ctx) {
 	return (ctx >= 0 && ctx < (int)(sizeof GS_CTXN / sizeof GS_CTXN[0])) ? GS_CTXN[ctx] : "?";

@@ -40,7 +40,22 @@ typedef enum {
 	// (every value above stays stable); matched by cb2 == GameProfile.rmFlyCb / rmWallCb BEFORE
 	// the cb2FullUi loop, exactly like GCTX_NAMING and GCTX_STORAGE (more specific wins; both
 	// values stay in cb2FullUi so a game without the map anchors keeps today's FAM-DLG default).
-	GCTX_MAP              // region map: fly map (A confirms) or wall map (cursor only) — see mapFly
+	GCTX_MAP,             // region map: fly map (A confirms) or wall map (cursor only) — see mapFly
+	// --- phase 25 (lane C1): the INERT class — "detected, and deliberately SILENT". Appended, so
+	// every value above stays stable. It is NOT the same thing as the pre-phase-23 default: an
+	// unknown screen falls through to GCTX_OVERWORLD and gets the whole walk machinery, while this
+	// says the classifier KNOWS the screen and the right verb there is *nothing*. Two members:
+	//   * the CREDITS (TOUCH-PLAN L2, "tap = nothing — don't skip by accident"). Not a preference:
+	//     pokeemerald src/credits.c:349-357 makes JOY_HELD(B_BUTTON) the credits FAST-FORWARD and
+	//     latches sUsedSpeedUp, so the FAM-DLG hold verb would double-speed the credits under a
+	//     resting finger. GameProfile.cb2Inert names the screen.
+	//   * FRLG QUEST-LOG PLAYBACK (row K4) — a cutscene the player does not control, which runs
+	//     under CB2_Overworld with no cb2 of its own and, as lane B1 MEASURED, with
+	//     sLockFieldControls at 0 for most of it, so taps armed routes at a game the player was
+	//     not driving. GameProfile.questLog names the state instead of the screen.
+	// Dispatch: touch.c returns 0 keys for this ctx (and the tilt/presence/field gates, which all
+	// test ctx == GCTX_OVERWORLD, shut on it with zero gate-logic change).
+	GCTX_INERT
 } GameCtx;
 
 // Which list screen GCTX_LIST resolved to (GameState.listKind; SPEC-family-lists §2/§3).
@@ -61,7 +76,15 @@ enum {
 // Sized to the largest harvested set (FR: 5 title-class, 16 fullui-class cb2s) plus headroom for
 // the LG/RS delta passes; unused slots are 0 and never match (a cb2 is never 0).
 #define GS_N_TITLE  6
-#define GS_N_FULLUI 18
+// PHASE 25 (lane C1): 18 -> 32. The phase-24 lane-B1 tap-verify found that nine of its ten BROKEN
+// `TAP` rows share one cause — the screen has no fingerprint, so the "safe default" never runs
+// there — and this lane's harvest adds 13 EM + 10 FR values (evolution, mail, Hall of Fame,
+// contest results/painting, Berry Blender, link error). 32 keeps headroom for the LG/RS passes.
+// The list is a linear compare of u32s on a frame that already does dozens of bus reads.
+#define GS_N_FULLUI 32
+// Capacity of the phase-25 INERT list (GameProfile.cb2Inert) — screens that must be DETECTED and
+// then given nothing. v1 ships 2 per EM/FR row (the credits run loop + its multi-frame starter).
+#define GS_N_INERT  4
 // Capacity of the phase-23 FAM-DLG pager list (GameProfile.cb2Pager) — the FULLUI screens on which
 // LEFT/RIGHT is a real page/value verb, so the tap-advance family gives them edge-zone taps. v1
 // ships 2 per FRLG/EM row (summary + options); sized to 4 for the dex-entry / trainer-card / berry
@@ -463,6 +486,26 @@ typedef struct {
 	//         the BPGE drift lesson). AXVE/AXPE: 0 (the ROM-address ban).
 	// 0 = unused slot and never matches. Appending is the only safe edit: PROFILES[] is POSITIONAL.
 	uint32_t cb2List[GS_N_LISTCB2];
+	// --- PHASE 25 (lane C1): the INERT class (GCTX_INERT above) -------------------------------
+	// cb2s that must be DETECTED and then given NOTHING. Tested before every other rule, because
+	// "do not touch this screen" cannot be overridden by something more specific.
+	//   BPEE: CB2_Credits 0x081754DC + CB2_StartCreditsSequence 0x08175620 (its multi-state
+	//         starter, hall_of_fame.c:781 SetMainCallback2(CB2_StartCreditsSequence)).
+	//   BPRE: CB2_Credits 0x080F3A60.
+	//   BPGE/AXVE/AXPE: 0 — LG's whole class list is still empty (its census is its own slice) and
+	//         RS ROM addresses are banned. NAMED degradation: those games keep today's behaviour.
+	// VERIFIED-SYM, not [exact]: the credits play once, after the Elite Four, and Gen 3 has no
+	// replay — no save on this machine can reach the screen, so this lane refused to claim a live
+	// read. The read is compare-only: a wrong value simply never matches and nothing changes.
+	uint32_t cb2Inert[GS_N_INERT];
+	// FRLG QUEST-LOG state byte (row K4). `gQuestLogState`, EWRAM 0x0203ADFA — IDENTICAL in
+	// pokefirered.sym, pokefirered_rev1.sym and BOTH LeafGreen maps, i.e. revision-insensitive
+	// (checked on this machine, 2026-08-14). The game's own playback test is
+	// `QL_IS_PLAYBACK_STATE` = state == QL_STATE_PLAYBACK (2) || state == QL_STATE_PLAYBACK_LAST
+	// (3) (pokefirered include/constants/quest_log.h), and that is exactly what game_read applies:
+	// never "non-zero", because ordinary play sits at QL_STATE_RECORDING (1) and would then be
+	// mistaken for a cutscene. 0 = this game has no quest log (EM/RS) -> the guard never runs.
+	uint32_t questLog;
 } GameProfile;
 
 // One-pass snapshot of the live game.
@@ -513,6 +556,10 @@ typedef struct {
 	uint32_t linkErrBuf0, linkErrBuf1;   // sLinkErrorBuffer[0..3] / [4..7] (latched status + queue counts)
 	uint32_t linkNotRecv;     // gRemoteLinkPlayersNotReceived
 	uint8_t  linkErr;         // gLinkErrorOccurred (1 = the game flagged a link error)
+	// PHASE 25 (lane C1): the raw GameProfile.questLog byte, published so "why did touch go dead"
+	// / "why did it NOT go dead" is one gdb read instead of a theory (g_touchDbg.qlState). 0 when
+	// the game has no quest log. LOGGING ONLY — the ctx decision is made in game_read.
+	uint8_t  questLogState;
 } GameState;
 
 // Optional 3D-effect health, logged alongside the TOP game's row (pass NULL for the bottom game).

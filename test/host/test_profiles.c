@@ -615,16 +615,26 @@ static void test_rev_alternates(void) {
 static void test_screen_classes(void) {
 	printf("TEST 11: phase-22.0 cb2Title / cb2FullUi lists, per game\n");
 	static const uint32_t EM_TITLE[GS_N_TITLE] = { 0x0816CC00u, 0x080AAB2Cu, 0x0802F6B0u };
+	// PHASE 25 (lane C1): entries 16.. are the harvest that unblocks lane B1's nine BROKEN TAP
+	// rows. 0x08173560 (CB2_HallOfFame, rows E15+L1) and 0x08121C64 (CB2_MailRead, row E8) were
+	// read LIVE [exact] this session; the rest are VERIFIED-SYM per LANE-C-HARVEST.md.
 	static const uint32_t EM_FULL[GS_N_FULLUI] = {
 		0x080BA4B0u, 0x080C2710u, 0x081248D4u, 0x080C5438u, 0x081BFAB4u, 0x08177C54u,
 		0x080BB774u, 0x081C7400u, 0x0813591Cu, 0x0816631Cu, 0x08179B68u, 0x08170274u,
-		0x08134C9Cu, 0x080E4F58u, 0x080C7D54u, 0x0812A670u };
+		0x08134C9Cu, 0x080E4F58u, 0x080C7D54u, 0x0812A670u,
+		0x08173560u, 0x08121C64u, 0x081219F0u, 0x0813E3A4u, 0x0813E3C0u, 0x0813DD7Cu,
+		0x0813DF70u, 0x080F5C00u, 0x0812FDF8u, 0x08081898u, 0x08081FC8u, 0x0800B1A0u,
+		0x0800AF30u };
 	static const uint32_t FR_TITLE[GS_N_TITLE] = {
 		0x080EC9E8u, 0x080EC878u, 0x08078BB0u, 0x0800C2E8u, 0x0812EB88u };
+	// PHASE 25: entries 16.. are the FireRed halves of the same rows, VERIFIED-SYM on
+	// pokefirered_rev1.sym and live-unverified (this lane's boot parked FR at its title).
 	static const uint32_t FR_FULL[GS_N_FULLUI] = {
 		0x08088370u, 0x08089084u, 0x080C08C8u, 0x08137F60u, 0x0813CE78u, 0x081318DCu,
 		0x0811C774u, 0x0810254Cu, 0x0815AC0Cu, 0x0812C40Cu, 0x0808CDD8u, 0x0809FB84u,
-		0x080F1E38u, 0x0809ADF8u, 0x0813F9C4u, 0x08056760u };
+		0x080F1E38u, 0x0809ADF8u, 0x0813F9C4u, 0x08056760u,
+		0x080CE724u, 0x080CE740u, 0x080CE0FCu, 0x080CE2F0u, 0x080BF37Cu, 0x080BF124u,
+		0x080EC274u, 0x080F29F0u, 0x0800AF40u, 0x0800ACE8u };
 	static const uint32_t NONE_T[GS_N_TITLE]  = { 0 };
 	static const uint32_t NONE_F[GS_N_FULLUI] = { 0 };
 	// Lane-B RS promotion (LANE-B-RS.md): PER-TITLE lists — Ruby and Sapphire ROM addresses
@@ -1374,6 +1384,129 @@ static void test_family24_listcb2(void) {
 	    "ListMenu task sitting in gTasks");
 }
 
+// ============================================================================================
+// TEST 20 — PHASE 25 (lane C1): the INERT class — "detected, and deliberately SILENT".
+// Two rules share one context and both are graded here, as columns AND as behaviour:
+//   (a) row L2, the CREDITS, named by cb2 (GameProfile.cb2Inert). It has its own list rather
+//       than living in cb2FullUi because the FAM-DLG hold verb would be a held B, which
+//       pokeemerald credits.c:349 reads as the credits FAST-FORWARD. So the list must be
+//       DISJOINT from the two class lists — a screen classifies exactly one way;
+//   (b) row K4, FRLG QUEST-LOG PLAYBACK, named by STATE (GameProfile.questLog). The test is the
+//       game's own QL_IS_PLAYBACK_STATE (2 or 3), never "non-zero" — ordinary FRLG play sits at
+//       QL_STATE_RECORDING (1), and a "non-zero" guard would kill touch for the whole game.
+//   Both run BEFORE every other rule in game_read, which is exactly what "do not touch this
+//   screen" has to mean, so the behaviour half proves the guard beats a live menu task AND a
+//   battle callback.
+// It also pins the two live-harvested EM values actually classifying (rows E15/L1 and E8), and
+// the ctx-name table, whose GCTX_MAP entry was MISSING (every region-map row printed "?").
+// ============================================================================================
+static void test_family25_inert(void) {
+	printf("TEST 20: phase-25 INERT class (credits cb2 + FRLG quest-log playback)\n");
+	CHECK(!strcmp(gamestate_ctx_name(GCTX_INERT), "inert"), "GCTX_INERT prints as 'inert'");
+	CHECK(!strcmp(gamestate_ctx_name(GCTX_MAP),   "map"),   "GCTX_MAP prints as 'map' — the table "
+	      "stopped at GCTX_STORAGE, so every phase-24 region-map row logged '?'");
+	CHECK(!strcmp(gamestate_ctx_name(GCTX_STORAGE), "stor"), "existing names undisturbed");
+
+	// --- (a) the columns, per game -----------------------------------------------------------
+	struct { const char* code; uint32_t in0, in1, ql; } W[] = {
+		{ "BPEE", 0x081754DCu, 0x08175620u, 0x00000000u },  // CB2_Credits + CB2_StartCreditsSequence
+		{ "BPRE", 0x080F3A60u, 0x00000000u, 0x0203ADFAu },  // CB2_Credits ; gQuestLogState
+		{ "BPGE", 0x00000000u, 0x00000000u, 0x0203ADFAu },  // no ROM values; the RAM one is shared
+		{ "AXVE", 0x00000000u, 0x00000000u, 0x00000000u },
+		{ "AXPE", 0x00000000u, 0x00000000u, 0x00000000u },
+	};
+	for (unsigned i = 0; i < sizeof W / sizeof W[0]; i++) {
+		const GameProfile* p = prof(W[i].code);
+		if (!p) { CHECK(0, "%s row missing", W[i].code); continue; }
+		EQU(p->cb2Inert[0], W[i].in0, "%s cb2Inert[0]", W[i].code);
+		EQU(p->cb2Inert[1], W[i].in1, "%s cb2Inert[1]", W[i].code);
+		CHECK(p->cb2Inert[2] == 0 && p->cb2Inert[3] == 0, "%s cb2Inert spare slots are 0", W[i].code);
+		EQU(p->questLog, W[i].ql, "%s questLog", W[i].code);
+		if (p->questLog)
+			CHECK((p->questLog >> 24) == 0x02u, "%s questLog is EWRAM (a STATE byte, not a ROM "
+			      "address) — which is why it needs no rev-alternate", W[i].code);
+		// DISJOINTNESS: an inert cb2 must appear in NEITHER class list, or the two rules would
+		// disagree about the same screen.
+		for (int k = 0; k < GS_N_INERT; k++) {
+			if (!p->cb2Inert[k]) continue;
+			CHECK((p->cb2Inert[k] >> 24) == 0x08u, "%s cb2Inert[%d] is ROM-space", W[i].code, k);
+			for (int j = 0; j < GS_N_TITLE; j++)
+				CHECK(p->cb2Title[j] != p->cb2Inert[k], "%s: inert cb2 0x%08X is not also TITLE",
+				      W[i].code, p->cb2Inert[k]);
+			for (int j = 0; j < GS_N_FULLUI; j++)
+				CHECK(p->cb2FullUi[j] != p->cb2Inert[k], "%s: inert cb2 0x%08X is not also FULLUI",
+				      W[i].code, p->cb2Inert[k]);
+		}
+	}
+	// The two LG/RS rows must not have inherited FireRed's ROM value (the BPGE failure mode).
+	{
+		const GameProfile* lg = prof("BPGE");
+		if (lg) CHECK(lg->cb2Inert[0] == 0, "BPGE never inherits FR's credits cb2");
+	}
+
+	// --- (b) behaviour: the CREDITS go inert, the harvest classifies ---------------------------
+	{
+		GbaCore c; bus_reset(&c, "BPEE");
+		const GameProfile* p = profile_for(&c);
+		GameState gs;
+		bus_w32(&c, p->sb1ptr, 0x02025734u);                 // a loaded save under everything
+		bus_w32(&c, p->mainCb2, p->cb2Inert[0] | 1u);        // CB2_Credits (Thumb bit set, as live)
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_INERT, "EM credits cb2 -> GCTX_INERT (not FULLUI: a held B is the "
+		    "credits fast-forward, credits.c:349)");
+		bus_w32(&c, p->mainCb2, p->cb2Inert[1] | 1u);
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_INERT, "…and so does its multi-frame starter");
+		// The two LIVE-harvested values from this lane actually classify.
+		bus_w32(&c, p->mainCb2, 0x08173560u | 1u);           // CB2_HallOfFame (E15 + L1)
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_FULLUI, "EM CB2_HallOfFame 0x08173560 -> GCTX_FULLUI (rows E15 + L1)");
+		bus_w32(&c, p->mainCb2, 0x08121C64u | 1u);           // CB2_MailRead (E8)
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_FULLUI, "EM CB2_MailRead 0x08121C64 -> GCTX_FULLUI (row E8)");
+		bus_w32(&c, p->mainCb2, 0x0813E3A4u | 1u);           // CB2_EvolutionSceneUpdate (C20)
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_FULLUI, "EM evolution scene -> GCTX_FULLUI (row C20)");
+		// Emerald has NO quest log, so the guard can never fire there even if the FRLG address
+		// happens to hold a playback value.
+		bus_w8(&c, 0x0203ADFAu, 2);
+		bus_w32(&c, p->mainCb2, p->cb2Title[0] | 1u);
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_TITLE, "EM is untouched by the FRLG quest-log guard (questLog == 0)");
+		EQU(gs.questLogState, 0, "…and reports questLogState 0");
+	}
+
+	// --- (c) behaviour: the FRLG quest-log guard, and the boundary that makes it safe ----------
+	{
+		GbaCore c; bus_reset(&c, "BPRE");
+		const GameProfile* p = profile_for(&c);
+		GameState gs;
+		bus_w32(&c, p->sb1ptr, 0x02025734u);
+		bus_w32(&c, p->mainCb2, 0x080565C8u | 1u);           // CB2_Overworld — playback's own cb2
+		put_task(&c, p, 2, p->startMenuTaskAlt | 1u, 1);     // the replay opens menus, too
+		for (int v = 0; v <= 4; v++) {
+			bus_w8(&c, p->questLog, (uint8_t)v);
+			game_read(&c, p, &gs);
+			EQU(gs.questLogState, v, "FR questLogState mirrors the raw byte (%d)", v);
+			if (v == 2 || v == 3)
+				EQU(gs.ctx, GCTX_INERT, "FR quest-log state %d (PLAYBACK) -> GCTX_INERT, beating "
+				    "the live start-menu task", v);
+			else
+				EQU(gs.ctx, GCTX_FIELDMENU, "FR quest-log state %d is NOT playback — the menu "
+				    "still detects (state 1 is RECORDING, i.e. ordinary play)", v);
+		}
+		// …and it beats the battle test too, which sits above every menu rule.
+		bus_w32(&c, p->mainCb2, p->battleMainCbAlt | 1u);
+		bus_w32(&c, p->bg0y, 160u);
+		bus_w8(&c, p->questLog, 2);
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_INERT, "the playback guard runs before the battle test");
+		bus_w8(&c, p->questLog, 1);
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_BATTLE_ACTION, "…and with RECORDING (1) the battle detects normally");
+	}
+}
+
 int main(void) {
 	printf("test_profiles — the per-game RAM map (source/gamestate.c PROFILES[])\n\n");
 	test_lookup();
@@ -1395,6 +1528,7 @@ int main(void) {
 	test_field_lock();           // phase 24 (lane B1) sLockFieldControls
 	test_family24_map();         // phase 24 (lane B2) FAM-MAP region map / tap-to-fly
 	test_family24_listcb2();     // phase 24 (lane B2) discovered-list whitelist (FR E4/E5)
+	test_family25_inert();       // phase 25 (lane C1) INERT class: credits + FRLG quest log
 	printf("\n=== %d checks, %d failures ===\n", g_checks, g_fails);
 	return g_fails ? 1 : 0;
 }
