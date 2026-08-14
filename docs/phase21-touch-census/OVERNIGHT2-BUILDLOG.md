@@ -1612,3 +1612,53 @@ Hygiene: two boots, both stopped via `azctl stop` (profile CLEAN, qt-config byte
 `clean-fixtures` run with ROM originals re-hashed untouched, `settings.bin` restored to sha256
 `85dd487e…` after a one-word `traverse` edit, `recent.bin` `72c100ad…` unchanged, no Azahar left
 running, instance **b** never touched, three captures — all hashed, all distinct.
+
+## D1 — FAM-MAP's SECOND ENGINE (FireRed) + row B7 finally VISITED
+
+Session 2026-08-15 (subagent, phase-25 lane D1). Worktree `.claude/worktrees/lane-d1-ph25`
+(branch `lane-d1-frmap`, based on `main` @ `7394be4`), Azahar **instance b** only. Full lane log:
+`docs/phase21-touch-census/LANE-D-FULL.md`.
+
+Lane B2 closed owing three things. Two are paid, one is not — named below rather than glossed.
+
+1. **FireRed's region map (B2's item 1) — PAID, and the answer was a struct field, not a
+   callback.** B2's census finding stands (ONE `CB2_RegionMap` serves the bag's TOWN MAP, the wall
+   map and the FLY map), but pokefirered's region map is a **separate implementation** whose own
+   `struct RegionMap` carries the mode at **+0x4796** (`REGIONMAP_TYPE_NORMAL 0 / _WALL 1 /
+   _FLY 2`), so it is read rather than inferred. New profile columns `rmVariant` / `rmCurPtr` /
+   `rmCbAlt` (appended — `PROFILES[]` is positional); BPRE gets `sRegionMap` **0x020399D4** +
+   `sMapCursor` **0x020399E4** (both EWRAM, byte-identical in `pokefirered.sym` and
+   `pokefirered_rev1.sym`) and the rev1/rev0 `CB2_RegionMap` pair 0x080C08C8 / 0x080C08B4. The
+   geometry that does NOT transplant (cells 0..21 / 0..14, `8·cell+36`, the fly-acceptance pair,
+   an on-screen CANCEL cell) is parameterised in a new `MapGeom`; what DOES transplant is
+   FireRed's input model, which is Emerald's — independent axis reads, a 4-frame slide that polls
+   nothing ⇒ one-frame press = exactly one cell, and never write the cursor.
+   **Live:** `ctx 14 GCTX_MAP`, `mapVariant 2`, `mapFrType 0`, `mapIsFly 0`, cursor opening on the
+   player's own cell (2,3) = INDIGO PLATEAU from the game's own layout table; two taps routed at
+   **exactly** the Chebyshev cost (7 and 10 presses), mapsec ids matching `KANTO_MAPSEC_START + n`
+   both times, and FireRed's drawn CANCEL button tapped to close the map (`mapCancels` 0→1) while
+   `mapFlies` stayed 0 throughout.
+2. **Row B7, the wall map (B2's item 2) — PAID: `VER-mech` → VERIFIED.** The `MB_REGION_MAP` tile
+   B2 could not locate is in **every Emerald Pokémon Center** at map cells (11,1)/(12,1). Finding
+   it needed no ROM scan: behaviour 133 in pret's 70 `metatile_attributes.bin` files → two
+   tilesets → the layouts' `map.bin` → five maps. Visited from lane A2's `emerald-lavaridge`
+   fixture (its start tile is one step from the door) and driven: a tap on **LITTLEROOT TOWN**
+   walked the cursor 8 presses (exact) and **emitted no A on a live `mapSecType` of 2
+   CITY_CANFLY** — the driver declining an A the GAME WOULD HAVE ACCEPTED, which is the half of
+   rule M2 that only this screen can prove. Hold = B closed it.
+3. **NOT paid: the FR Pokédex GRID (B2's item 3) is untouched**, and FireRed's `TYPE_FLY` and
+   `TYPE_WALL` variants are graded in the suite but never visited (the FLY one needs a Fly user in
+   the cart's party, which three party-menu attempts failed to find). Both are written up with a
+   one-boot plan in the lane log's "still owed".
+
+Suites at close, **18** re-run from this worktree: celiolink 1259 · control 6940 · diag 376 ·
+excseq 677 · **fieldpath 1808 (UNMODIFIED)** · fieldtrav 1210 · netlink 66 · peersprite 62078 ·
+presence 61376 · **profiles 2575** (+29, TEST 20) · progseq 877 · theme 83444 · tilt 1756 ·
+**touchgeom 706227** (+334 335, TEST 19) · trace_replay 58 (4 skips) · typography 1419 ·
+uigeom 18332 · uihit 1834 = **952 312 checks, 0 failures**. Every other count is unchanged.
+`make -j8` clean (3DGBA.3dsx 4 405 172 B). Hygiene: three boots, all stopped via `azctl stop`
+(each reporting profile CLEAN / qt-config byte-identical / ROM originals re-hashed untouched), no
+Azahar left running, instance `a` and port 24689 never touched, eight captures — all hashed, all
+distinct. **Two harness landmines banked** (gdbio resolves symbols from `REPO/3DGBA.elf`, so a
+worktree build needs `EMUTEST_ELF`; and a CTM movie ends in a modal dialog that pauses the
+emulator invisibly — make the movie longer than the session).
