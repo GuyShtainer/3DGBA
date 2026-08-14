@@ -189,3 +189,69 @@ textDlg/yesNoTask/object-slot/avatar-flag reads with never-answer-an-unpredicted
 safety property; excursions = one out-and-back warp pair, ROM-planned + live-replanned per
 leg, plan-NOTHING on any doubt. Toggle = g_prefs.smartTraverse 0/1/2 (Off default). Seam
 verdict: no injection-seam change needed. No emulator was booted; no source/ file touched.
+
+## Entry 6 — S3 dual-emulator upgrade STARTED (instance profiles) — plan + probes
+
+Goal (OVERNIGHT2 S3): two fully-isolated Azahar instances A (default, unchanged) and B.
+Probes banked BEFORE code (house rule — cite, don't guess):
+- Azahar 2125.1.2 has NO user-dir CLI flag (full `-x, --…` help-string dump from the binary:
+  only movie/dump/fullscreen/gdbport/install/help/movie-play/movie-record/version/windowed).
+  `%CITRA_USER_DIR%` in strings is a shortcut-template placeholder, not an env override.
+- THE data-dir mechanism (release source, tag 2125.1.2): citra_qt.cpp:4394-4397 forces
+  cwd = <dir containing Azahar.app> at startup (`SetCurrentDir(GetBundleDirectory()+"..")`),
+  then common/file_util.cpp:964-969 uses `<cwd>/user/` as the PORTABLE user dir when it
+  exists (USERDATA_DIR "user", common_paths.h:21; GetCurrentDir appends the trailing '/',
+  file_util.cpp:806-808). macOS default otherwise = ~/Library/Application Support/Azahar
+  (EMU_APPLE_DATA_DIR, common_paths.h:36).
+  => instance B = a PRIVATE BUNDLE COPY at tools/emutest/az-b/Azahar.app + sibling az-b/user/
+  (APFS clone, `cp -Rc`, ~0 extra disk). A symlinked bundle would resolve to the real
+  location (CFBundleCopyBundleURL) and leak to the user's data dir — copy, not symlink.
+- The direct-binary modal ("run directly rather than via the Azahar.app bundle",
+  citra_qt.cpp:487-495) only fires via AppleUtils::IsRunningFromTerminal() — `open -n -a
+  <copied bundle>` avoids it; `-n` forces a second instance despite the shared bundle id.
+- recent.bin (rompicker.c RECENT_PATH/RecentPair): 512 B = char a[256] + char b[256],
+  NUL-terminated (b[0]==0 => single mode); verified against state/recent.bin.bak hexdump.
+- Game-code-per-instance gdb read: `romBuffer` (libmgba global, nm B 0x005d68ec this build)
+  points at the LAST loaded core's ROM (gbacore.c:151-158: first core reuses the boot
+  romBuffer, the SECOND load repoints the global) → the gate boots each instance SOLO
+  (recent.bin single mode) so romBuffer+0xAC = THAT instance's game code, unambiguous.
+Plan: new instance.py (id→state/runs/gdb-port/az-bin/az-data derivation, env overrides win);
+azctl routes paths + pgrep-by-executable-path per instance + `open -n` + template build +
+`--stage-roms` (roms/ → sdmc:/3DGBA fixtures + recent.bin, manifest-tracked); gdbio port
+per instance; see.py window-by-kCGWindowOwnerPID with a pure host-testable seam; per-instance
+locks come free with the per-instance state dir. Gate at the end (5 live proofs + fps tax).
+
+## Entry 7 — S3 GATE PASSED: two isolated Azahar instances live, all 5 proofs + fps tax
+
+Harness upgrade landed (instance.py + azctl/gdbio/see/run + 17 new host tests, suite
+169/169 green). Live gate 2026-08-14 ~01:10Z, Emerald on A / FireRed on B, both booted
+solo via `--stage-roms` (recent.bin single-mode pairing + the wait900/tap-A/idle movie):
+
+(i)  CONCURRENT, DISTINCT PIDS — A pid 10296 (user bundle, port 24689, state/), B pid
+     10477 (az-b clone, port 24690, state-b/); each `azctl status` shows its own pid and
+     lists the other under other_instances_pids. B's boot built the az-b template on
+     first use (APFS bundle clone + qt-config template from A's CLEAN backup + sdmc
+     skeleton + 0-byte dspfirm.cdc) and Azahar ADOPTED the portable az-b/user/ tree
+     (its log rotation + config write-back happened there — the readiness probe's own
+     evidence). Proof the S3 probe was right: cited in instance.py.
+(ii) GDB READS DON'T CROSS — the SAME address (romBuffer -> 0x0800a280, +0xAC) read
+     back-to-back through the two ports returned BPEE (A/Emerald) and BPRE (B/FireRed).
+(iii) SEE CAPTURES DON'T CROSS — both windows sat at IDENTICAL bounds (323,154
+     1280x568), so owner-name matching alone WOULD have cross-captured; the new
+     kCGWindowOwnerPID seam returned each instance's own window: A = "Pokemon Emerald"
+     HUD (GF intro flash), B = FireRed title screen w/ Charizard. Shots read + archived:
+     runs/20260814-010955/gate_A_emerald.top.png, runs-b/20260814-011026/gate_B_firered.top.png.
+(iv) INDEPENDENT TEARDOWN — `azctl stop` on A (harvest + byte-identical restore of the
+     USER config) left B running (uptime 230s, port open, BPRE still readable, capture ok).
+(v)  RESTORE — user's qt-config.ini sha256 dd20792e…9083286 identical pre/post; dual-gba
+     originals re-hashed untouched on BOTH stops; clean-fixtures restored the user's
+     recent.bin byte-identically; sdmc:/3DGBA back to ROM-less.
+
+FPS TAX (renderSeq deltas over ~20 s, display asleep, GBA-core HUD in parens):
+  concurrent: A 22.4/s (HUD ~29fps), B 17.2/s (HUD ~17fps)
+  B solo (after stopping A): 29.1/s
+  => a second instance costs roughly 25-40% of each instance's rate on this machine;
+  budget lanes accordingly (census-era solo boots already ran 13-28 fps in heavy scenes).
+Ops notes for the lanes: `run --instance b <tool> …` everywhere; B's gdb needs its own
+`gdbio resume`; stage via `--stage-roms NAME[,NAME]` (writes recent.bin, movie boots
+land on the resume prompt); NEVER `open` az-b/Azahar.app by hand without -n.

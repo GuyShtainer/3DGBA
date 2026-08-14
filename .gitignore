@@ -36,6 +36,11 @@ tools/.fontcache/
 tools/emutest/.venv/
 tools/emutest/runs/
 tools/emutest/state/
+# per-instance trees (PHASE 21 S3: state-b/, runs-b/, az-b/ with the private Azahar
+# bundle clone + its whole user dir incl. staged ROM fixtures — never commit)
+tools/emutest/runs-*/
+tools/emutest/state-*/
+tools/emutest/az-*/
 tools/emutest/emutest.mapsyms
 # E2: the checked-in test fixtures must survive the global *.elf / *.map ignores
 # (verified with `git check-ignore -v` — without these, a fresh clone has no

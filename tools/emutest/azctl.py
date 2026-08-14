@@ -47,18 +47,21 @@ import subprocess
 import sys
 import time
 
+import instance
+
 # --------------------------------------------------------------------------- paths
 # Defaults are the documented Azahar locations probed 2026-08-08 (SPEC-harness fixed-path
 # table); every one is env-overridable (PHASE invariant 7 — no user paths beyond these).
+# PHASE 21 S3: paths + gdb port now route through instance.py — instance "a" (the default)
+# derives byte-identical values to the pre-S3 constants, other ids get their own isolated
+# state/runs/az-data trees + port (see instance.py's module doc for the probed mechanism).
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 
 
 def az_bin():
-    return os.environ.get(
-        "EMUTEST_AZ_BIN",
-        os.path.expanduser("~/Applications/Azahar.app/Contents/MacOS/azahar"))
+    return instance.az_bin()
 
 
 def az_bundle():
@@ -72,9 +75,7 @@ def az_bundle():
 
 
 def az_data():
-    return os.environ.get(
-        "EMUTEST_AZ_DATA",
-        os.path.expanduser("~/Library/Application Support/Azahar"))
+    return instance.az_data()
 
 
 def az_cfg():
@@ -100,11 +101,11 @@ def app_3dsx():
 
 
 def state_dir():
-    return os.environ.get("EMUTEST_STATE_DIR", os.path.join(HERE, "state"))
+    return instance.state_dir()
 
 
 def runs_dir():
-    return os.environ.get("EMUTEST_RUNS_DIR", os.path.join(HERE, "runs"))
+    return instance.runs_dir()
 
 
 def backup_path():
@@ -193,7 +194,10 @@ def session_owner():
     return os.environ.get("EMUTEST_SESSION") or "ppid:{}".format(os.getppid())
 
 
-GDB_PORT = 24689  # Azahar default (probed qt-config.ini line 215; gdbstub.cpp:162)
+# PHASE 21 S3: per-instance port (a=24689 = the Azahar default probed at qt-config.ini
+# line 215 / gdbstub.cpp:162; b=24690, …). Import-time resolution is safe because the
+# instance id is fixed for a process's lifetime (the `run` shim exports it before exec).
+GDB_PORT = instance.gdb_port()
 
 # [M] Measured live 2026-08-08 (BUILDLOG E1): cold boot on this machine — process visible in
 # ~1 s, log rotated in ~1 s, gdb stub listening (= core booted) in ~4-7 s. 30 s keeps a wide
@@ -351,8 +355,8 @@ def assert_sd_writable(path, allow_netlog_delete=False):
 
 
 # --------------------------------------------------------------------------- process helpers
-def all_azahar_pids():
-    """pgrep -x azahar (the probed tracking method — `open` detaches, no child pid).
+def _pgrep_azahar():
+    """Every azahar of OUR uid, regardless of which bundle it came from.
 
     REVIEW FIX (2026-08-09): scoped to OUR uid (`-U`). Another account's Azahar reads
     that account's own ~/Library/Application Support/Azahar, so it can neither be
@@ -361,6 +365,57 @@ def all_azahar_pids():
     r = subprocess.run(["pgrep", "-x", "-U", str(os.getuid()), "azahar"],
                        capture_output=True, text=True)
     return [int(x) for x in r.stdout.split()] if r.returncode == 0 else []
+
+
+def _proc_exe(pid):
+    """The pid's executable path (`ps -o comm=` prints the full path for GUI apps on
+    macOS — probed 2026-08-14 against the live Azahar). '' when the pid is gone."""
+    r = subprocess.run(["ps", "-o", "comm=", "-p", str(pid)],
+                       capture_output=True, text=True)
+    return r.stdout.strip()
+
+
+def _instance_bundle_pids(pids):
+    """Partition pgrep hits by ownership (PHASE 21 S3, two concurrent instances).
+
+    Discriminator = the process's executable path (each non-default instance runs its
+    own private bundle copy under tools/emutest/az-<id>/ — instance.py module doc):
+      - the DEFAULT instance claims every azahar EXCEPT ones running from an az-<id>/
+        bundle (a user-launched Azahar — even a second install — shares the user's
+        real data dir, so it stays "foreign" and boot-blocking, exactly as before S3;
+        an unresolvable path is kept, conservative old behaviour);
+      - a non-default instance claims ONLY pids running its own bundle copy.
+    Returns (ours, other_instances)."""
+    az_prefix = os.path.join(os.path.realpath(HERE), "az-")   # …/emutest/az-<id>/…
+    ours, others = [], []
+    if instance.is_default():
+        for pid in pids:
+            p = _proc_exe(pid)
+            rp = os.path.realpath(p) if p else ""
+            if rp.startswith(az_prefix):
+                others.append(pid)
+            else:
+                ours.append(pid)
+    else:
+        mine = os.path.realpath(az_bin())
+        for pid in pids:
+            p = _proc_exe(pid)
+            if p and os.path.realpath(p) == mine:
+                ours.append(pid)
+            else:
+                others.append(pid)
+    return ours, others
+
+
+def all_azahar_pids():
+    """The azahar pids THIS INSTANCE may track/kill/wait on (see _instance_bundle_pids).
+    Pre-S3 callers keep their exact semantics on the default instance as long as no
+    az-<id> bundle is running (the only azahars an "a" session must never touch)."""
+    return _instance_bundle_pids(_pgrep_azahar())[0]
+
+
+def other_instance_pids():
+    return _instance_bundle_pids(_pgrep_azahar())[1]
 
 
 def pid_alive(pid):
@@ -664,6 +719,153 @@ def verify_fixture_originals(run_dir):
     return ok
 
 
+# --------------------------------------------------------------------- instance data (S3)
+def ensure_instance_data(run_dir):
+    """Build a NON-default instance's private Azahar tree ONCE from a template
+    (PHASE 21 S3). Idempotent; the default instance is untouched by design.
+
+    Mechanism (probed + cited in instance.py's module doc): a private bundle copy at
+    az-<id>/Azahar.app makes Azahar chdir next to it (citra_qt.cpp:4394-4397) and adopt
+    the sibling az-<id>/user/ as its PORTABLE user dir (file_util.cpp:964-969), so
+    config/, sdmc/ and log/ are fully isolated from the user's real data. Everything
+    here is harness-created; the user's tree is only ever COPIED FROM."""
+    if instance.is_default():
+        return
+    iid = instance.instance_id()
+    marker = ".app/Contents/MacOS/"
+    my_bin = az_bin()
+    if not os.path.exists(my_bin):
+        i = my_bin.find(marker)
+        if i < 0:
+            raise RuntimeError(
+                "instance {}: {} missing and not a bundle path — cannot clone".format(
+                    iid, my_bin))
+        bundle_dst = my_bin[: i + len(".app")]
+        src_bin = instance.template_az_bin()
+        j = src_bin.find(marker)
+        src_bundle = src_bin[: j + len(".app")] if j >= 0 else None
+        if not src_bundle or not os.path.isdir(src_bundle):
+            raise RuntimeError(
+                "instance {}: no template Azahar bundle behind {} — install Azahar at "
+                "the default location or set EMUTEST_AZ_BIN".format(iid, src_bin))
+        os.makedirs(os.path.dirname(bundle_dst), exist_ok=True)
+        # APFS clone (cp -Rc: ~zero extra disk for the 227 MB bundle); ditto fallback.
+        r = subprocess.run(["cp", "-Rc", src_bundle, bundle_dst],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            shutil.rmtree(bundle_dst, ignore_errors=True)
+            r = subprocess.run(["ditto", src_bundle, bundle_dst],
+                               capture_output=True, text=True)
+            if r.returncode != 0:
+                raise RuntimeError("instance {}: bundle copy failed: {}".format(
+                    iid, r.stderr.strip()))
+        _event(run_dir, "instance {}: private bundle clone -> {}".format(iid, bundle_dst))
+    data = az_data()
+    cfg = az_cfg()
+    if not os.path.exists(cfg):
+        os.makedirs(os.path.dirname(cfg), exist_ok=True)
+        # Template config = the default instance's CLEAN user qt-config.ini: its state
+        # backup when instance a is currently APPLIED (backup == the clean copy, S3.4),
+        # else the live file. READ-COPY only. Env override for host tests.
+        default_backup = os.path.join(HERE, "state", "qt-config.ini.bak")
+        candidates = [os.environ.get("EMUTEST_AZ_TEMPLATE_CFG") or "",
+                      default_backup,
+                      os.path.join(instance.DEFAULT_AZ_DATA, "config", "qt-config.ini")]
+        src_cfg = next((c for c in candidates if c and os.path.exists(c)), None)
+        if src_cfg is None:
+            raise RuntimeError(
+                "instance {}: no template qt-config.ini found (run Azahar once manually "
+                "so {} exists)".format(
+                    iid, os.path.join(instance.DEFAULT_AZ_DATA, "config",
+                                      "qt-config.ini")))
+        shutil.copy2(src_cfg, cfg)
+        _event(run_dir, "instance {}: qt-config.ini template <- {}".format(iid, src_cfg))
+    # sdmc skeleton + log dir — all harness-created, so the H4.1 write gate does not
+    # apply here (it protects the USER's virtual SD; this SD belongs to the instance).
+    sd = az_sd()
+    for d in [os.path.join(sd, "3DGBA"), os.path.join(sd, "cias", "control"),
+              os.path.join(sd, "cias", "netlogs"), os.path.join(sd, "3ds"),
+              os.path.join(sd, "dual-gba"), os.path.join(data, "log")]:
+        os.makedirs(d, exist_ok=True)
+    dsp = os.path.join(sd, "3ds", "dspfirm.cdc")
+    if not os.path.exists(dsp):
+        open(dsp, "wb").close()   # a 0-byte dspfirm.cdc satisfies Azahar's ndsp probe
+        _event(run_dir, "instance {}: 0-byte sdmc/3ds/dspfirm.cdc created".format(iid))
+
+
+def build_recent_bin(a, b=""):
+    """The app's recent-pairing record, byte-exact (rompicker.c RecentPair: char a[256] +
+    char b[256], NUL-terminated, 512 B total; b[0]=='\\0' => single-game mode; verified
+    against a live recent.bin hexdump 2026-08-14). Pure — host-tested."""
+    def field(s):
+        raw = s.encode("ascii")
+        if len(raw) > 255:
+            raise ValueError("recent.bin path too long: {!r}".format(s))
+        return raw + b"\x00" * (256 - len(raw))
+    return field(a) + field(b)
+
+
+def stage_roms(run_dir, spec):
+    """--stage-roms NAME[,NAME] (PHASE 21 S3): copy <roms>/<NAME>.gba (+ .sav when
+    present) from the project's gitignored ROM library into sdmc:/3DGBA as
+    gameA/gameB fixtures, and write a matching recent.bin pairing so the very next boot
+    lands on the one-button resume prompt (rompicker.c load_recent/recent_prompt).
+    Same discipline as stage_fixtures: manifest-tracked copies, pre-existing recent.bin
+    backed up, originals never written; clean-fixtures reverses everything."""
+    names = [s.strip() for s in spec.split(",") if s.strip()]
+    if not 1 <= len(names) <= 2:
+        raise RuntimeError("--stage-roms wants 1 or 2 comma-separated names, got {!r}"
+                           .format(spec))
+    src_dir = instance.roms_dir()
+    dst_dir = os.path.join(az_sd(), "3DGBA")
+    os.makedirs(dst_dir, exist_ok=True)
+    st = _fixture_state()
+    old = st["files"]
+    old_dsts = {e["dst"] for e in old}
+    # Whose recent.bin is on disk? Inside an ACTIVE staging period (a manifest exists)
+    # the manifest's flag is authoritative — a recent.bin WE wrote on an earlier
+    # stage call this period must not be re-classified as the user's and backed up.
+    recent_was_users = (st["recent_pre_existing"] if old
+                        else os.path.exists(recent_path()))
+    if recent_was_users and not os.path.exists(recent_backup_path()):
+        os.makedirs(state_dir(), exist_ok=True)
+        shutil.copy2(recent_path(), recent_backup_path())
+        _event(run_dir, "stage-roms: backed up the pre-existing recent.bin ({} bytes)"
+               .format(os.path.getsize(recent_backup_path())))
+    new = []
+    for i, name in enumerate(names):
+        rom = os.path.join(src_dir, name + ".gba")
+        if not os.path.exists(rom):
+            raise RuntimeError("stage-roms: {} not found".format(rom))
+        pairs = [(rom, "game{}.gba".format("AB"[i]))]
+        sav = os.path.join(src_dir, name + ".sav")
+        if os.path.exists(sav):
+            pairs.append((sav, "game{}.sav".format("AB"[i])))
+        for src, dst_name in pairs:
+            dst = os.path.join(dst_dir, dst_name)
+            assert_sd_writable(dst)
+            if os.path.exists(dst) and dst not in old_dsts:
+                raise RuntimeError(
+                    "stage-roms: {} exists and is not in the fixtures manifest — refusing "
+                    "to overwrite a file the harness did not create (H4.2)".format(dst))
+            shutil.copy2(src, dst)
+            new.append({"src": src, "dst": dst, "sha256": _sha256(src),
+                        "src_mtime": os.path.getmtime(src)})
+            _event(run_dir, "stage-roms: {} -> {} ({} bytes)".format(
+                name, dst, os.path.getsize(dst)))
+    rb = build_recent_bin("sdmc:/3DGBA/gameA.gba",
+                          "sdmc:/3DGBA/gameB.gba" if len(names) == 2 else "")
+    assert_sd_writable(recent_path())
+    with open(recent_path(), "wb") as f:
+        f.write(rb)
+    _event(run_dir, "stage-roms: recent.bin written ({} mode) -> boot lands on the "
+                    "resume prompt".format("pair" if len(names) == 2 else "single"))
+    new_dsts = {e["dst"] for e in new}
+    merged = [e for e in old if e["dst"] not in new_dsts] + new
+    with open(fixtures_manifest_path(), "w") as f:
+        json.dump({"files": merged, "recent_pre_existing": recent_was_users}, f, indent=1)
+
+
 # --------------------------------------------------------------------------- harvest
 def harvest(run_dir, spawn_ts):
     """Copy evidence into the run dir (H2.8/H4.3): azahar_log.txt + the rotated
@@ -762,6 +964,10 @@ def cmd_boot(args):
 
     run_dir = new_run_dir()
     _event(run_dir, "boot: run dir {}".format(run_dir))
+    if not instance.is_default():
+        _event(run_dir, "boot: instance {} (state {}, gdb {})".format(
+            instance.instance_id(), state_dir(), GDB_PORT))
+        ensure_instance_data(run_dir)
 
     if not os.path.exists(app_3dsx()):
         _event(run_dir, "FAIL: app missing: {} — build with: export DEVKITPRO=/opt/devkitpro "
@@ -793,6 +999,8 @@ def cmd_boot(args):
         wipe_netlogs(run_dir)
     if args.fresh_sd_fixtures:
         stage_fixtures(run_dir)
+    if getattr(args, "stage_roms", None):
+        stage_roms(run_dir, args.stage_roms)
 
     # Build the launch command. LAUNCH RULE (module docstring): bundle via open(1).
     extra = []
@@ -808,7 +1016,13 @@ def cmd_boot(args):
         extra += ["-p", os.path.abspath(args.movie)]
     if args.record:
         extra += ["-r", os.path.abspath(args.record), "-a", "emutest"]
-    cmd = ["open", "-a", az_bundle(), "--args", "-w"] + extra + [app_3dsx()]
+    # PHASE 21 S3: `-n` forces a NEW app process. Needed whenever a second instance is
+    # in play — LaunchServices dedupes by bundle id, and the private copy shares the
+    # id, so a plain `open -a` would just activate the other instance's window.
+    opn = ["open"]
+    if not instance.is_default() or other_instance_pids():
+        opn.append("-n")
+    cmd = opn + ["-a", az_bundle(), "--args", "-w"] + extra + [app_3dsx()]
     with open(os.path.join(run_dir, "cmdline.txt"), "w") as f:
         f.write(" ".join(cmd) + "\n")
 
@@ -1014,6 +1228,11 @@ def azahar_version():
 
 def cmd_status(_args):
     """Greppable status report (smoke parses the key=value lines)."""
+    print("instance={} gdb_port_cfg={} state_dir={}".format(
+        instance.instance_id(), GDB_PORT, state_dir()))
+    others = other_instance_pids()
+    if others:
+        print("other_instances_pids={}".format(",".join(map(str, others))))
     ours = tracked_live_pid()
     pids = all_azahar_pids()
     if ours is not None:
@@ -1053,6 +1272,10 @@ def main(argv=None):
                         "stream WILL desync a synthesized movie — experiments only)")
     b.add_argument("--fresh-sd-fixtures", action="store_true",
                    help="copy dual-gba ROMs+saves into sdmc:/3DGBA as fixtures (H4.2)")
+    b.add_argument("--stage-roms", metavar="NAME[,NAME]",
+                   help="stage <project>/roms/NAME.gba(+.sav) as gameA[,gameB] fixtures "
+                        "AND write a matching recent.bin pairing, so this boot lands on "
+                        "the one-button resume prompt (S3; clean-fixtures reverses it)")
     b.add_argument("--wipe-netlogs", action="store_true",
                    help="empty sdmc:/cias/netlogs before boot (H4.3)")
     b.add_argument("--force", action="store_true",

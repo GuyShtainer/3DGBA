@@ -134,29 +134,60 @@ def skip_no_permission():
     raise SystemExit(EXIT_SKIP)
 
 
-def find_window():
-    """-> dict(id, x, y, w, h, title) of the Azahar render window, or None.
-    Owner match is case-insensitive: Quartz reports owner 'Azahar' while the unix process
-    is `azahar` (probed 2026-08-08). Largest layer-0 window wins (there is only one in
-    practice: the Qt main window with the embedded render widget)."""
+def pick_window(cands, owner_pid=None):
+    """Pure selection seam (PHASE 21 S3, host-tested): given candidate window dicts
+    (each with a `pid` key), keep only the requested owner pid when one is given —
+    with TWO Azahar instances on screen, owner-name matching alone cross-captures —
+    then pick the largest. owner_pid=None = the pre-S3 behaviour (any Azahar)."""
+    best = None
+    for cand in cands:
+        if owner_pid is not None and cand.get("pid") != owner_pid:
+            continue
+        if best is None or cand["w"] * cand["h"] > best["w"] * best["h"]:
+            best = cand
+    return best
+
+
+def _window_candidates():
+    """All on-screen layer-0 Azahar windows, with their owner pid (kCGWindowOwnerPID).
+    Owner-name match is case-insensitive: Quartz reports owner 'Azahar' while the unix
+    process is `azahar` (probed 2026-08-08)."""
     q = _quartz()
     wins = q.CGWindowListCopyWindowInfo(
         q.kCGWindowListOptionOnScreenOnly | q.kCGWindowListExcludeDesktopElements,
         q.kCGNullWindowID)
-    best = None
+    out = []
     for w in wins or []:
         if str(w.get("kCGWindowOwnerName", "")).lower() != "azahar":
             continue
         if int(w.get("kCGWindowLayer", 0)) != 0:
             continue
         b = w.get("kCGWindowBounds") or {}
-        cand = {"id": int(w["kCGWindowNumber"]),
-                "x": float(b.get("X", 0)), "y": float(b.get("Y", 0)),
-                "w": float(b.get("Width", 0)), "h": float(b.get("Height", 0)),
-                "title": str(w.get("kCGWindowName", "") or "")}
-        if best is None or cand["w"] * cand["h"] > best["w"] * best["h"]:
-            best = cand
-    return best
+        out.append({"id": int(w["kCGWindowNumber"]),
+                    "pid": int(w.get("kCGWindowOwnerPID", 0)),
+                    "x": float(b.get("X", 0)), "y": float(b.get("Y", 0)),
+                    "w": float(b.get("Width", 0)), "h": float(b.get("Height", 0)),
+                    "title": str(w.get("kCGWindowName", "") or "")})
+    return out
+
+
+def _tracked_pid():
+    """THIS instance's booted-azahar pid from azctl's pidfile (instance-scoped state
+    dir), or None when nothing of ours is tracked/alive — then the name-only lookup
+    stands (pre-S3 behaviour, fine while only one Azahar exists)."""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import azctl
+        return azctl.tracked_live_pid()
+    except Exception:                                  # noqa: BLE001 (lookup fallback)
+        return None
+
+
+def find_window():
+    """-> dict(id, pid, x, y, w, h, title) of THIS instance's Azahar render window, or
+    None. Instance scoping = owner-pid filter via azctl's pidfile (S3); largest layer-0
+    window wins (only one exists per instance in practice: the Qt main window)."""
+    return pick_window(_window_candidates(), _tracked_pid())
 
 
 def capture_window(win, out_path):
@@ -572,7 +603,8 @@ def cmd_win(args):
     if w is None:
         print("see: no Azahar window on screen", file=sys.stderr)
         return 1
-    print("id={id} bounds=({x:.0f},{y:.0f} {w:.0f}x{h:.0f} pt) title={title!r}".format(**w))
+    print("id={id} pid={pid} bounds=({x:.0f},{y:.0f} {w:.0f}x{h:.0f} pt) "
+          "title={title!r}".format(**w))
     return 0
 
 

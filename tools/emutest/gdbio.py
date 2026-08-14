@@ -114,8 +114,12 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
+sys.path.insert(0, HERE)
+import instance  # noqa: E402  (PHASE 21 S3: per-instance port + state dir)
 
-GDB_PORT = 24689          # Azahar default port (azctl pins it in the INI profile)
+# PHASE 21 S3: per-instance port (a keeps the Azahar default 24689 azctl pins in the
+# INI profile; b=24690, …). Import-time is safe — the id is fixed per process.
+GDB_PORT = instance.gdb_port()
 RSP_TIMEOUT_S = 5.0       # per-op timeout (SPEC-harness H3.4 "Timeout 5 s per read")
 # Wall-clock default for `poll` — deliberately NOT the per-op timeout: BUILDLOG E2 measured
 # resume -> first render-loop tick at 5-10 s on this machine, so any deadline at or below
@@ -143,7 +147,7 @@ def cache_path():
 
 
 def state_dir():
-    return os.environ.get("EMUTEST_STATE_DIR", os.path.join(HERE, "state"))
+    return instance.state_dir()
 
 
 def broker_sock_path():

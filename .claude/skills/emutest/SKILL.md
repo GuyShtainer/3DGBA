@@ -55,6 +55,37 @@ verdict, 3-panel heat-map via `-o`), `run zoom in.png out.png --rect x,y,w,h --s
 (read tiny glyphs), `run sheet out.html img:caption:ring=x,y:good ...` (one captioned
 HTML artifact per claim — the evidence rule).
 
+## 1b. Instances — TWO Azahars at once (phase-21 S3)
+
+Every tool takes `run --instance <id> …` (or `EMUTEST_INSTANCE=<id>`); the single letter
+derives EVERYTHING: state dir (`state-b/`: lock, pidfile, config backup, broker socket),
+runs dir (`runs-b/`), gdb port (a=24689, b=24690, …; the INI pin and gdbio both follow),
+and for non-default ids a PRIVATE Azahar at `tools/emutest/az-<id>/` — an APFS-clone
+bundle copy plus its own `user/` data tree (config/sdmc/log), built automatically on
+first boot. Mechanism + citations in `instance.py`'s module doc (Azahar has no user-dir
+flag; the portable `user/`-next-to-the-bundle route is the probed override). Instance
+`a` is the legacy default — identical paths/port to pre-S3, so plain calls change nothing.
+
+```bash
+T=tools/emutest
+$T/run azctl boot --gdb --movie m.ctm --stage-roms emerald     # instance A, solo Emerald
+$T/run --instance b azctl boot --gdb --movie m.ctm --stage-roms firered   # B, concurrent
+$T/run --instance b gdbio resume        # B's own port + broker
+$T/run --instance b see shot both b.png # B's own window (owner-PID matched)
+$T/run --instance b azctl stop          # stopping one instance never touches the other
+```
+
+Rules that make it safe: `see` matches the window by **kCGWindowOwnerPID** from the
+instance's pidfile (never by owner name alone — that cross-captures); azctl claims only
+azahar processes from its own bundle path (the default instance still refuses to boot
+over a user-launched Azahar, and never touches `az-*` pids); non-default launches use
+`open -n` (LaunchServices dedupes by bundle id otherwise). `--stage-roms NAME[,NAME]`
+copies `roms/NAME.gba(+.sav)` to `sdmc:/3DGBA/gameA[,gameB]` and writes a matching
+`recent.bin`, so a wait+tap-A movie boots straight into the game; `clean-fixtures`
+reverses it. Instance B never touches the user's real Azahar data or `dual-gba/`
+originals. Measured cost of a second instance (2026-08-14, this machine): see the
+S3 gate entry in `docs/phase21-touch-census/OVERNIGHT2-BUILDLOG.md`.
+
 **Seeing motion (`see rec`).** Azahar's own `--dump-video` is dead on this machine
 (strict libavutil major check vs Homebrew's avutil.60), so the harness records by
 capturing the window on a timer: numbered PNG frames (`top_00037.png` — the model READS

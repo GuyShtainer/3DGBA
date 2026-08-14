@@ -1,6 +1,14 @@
 #!/bin/sh
 # venv shim (SPEC-harness H2): `tools/emutest/run <tool> [args...]` runs tools/emutest/<tool>.py
 # through the setup.sh-built venv, so callers never activate anything.
+# PHASE 21 S3: `run --instance <id> <tool> [args...]` selects an instance profile (state
+# dir, runs dir, gdb port, private Azahar data tree — see instance.py). Exported before
+# exec so every tool, including import-time constants, sees the same id. EMUTEST_INSTANCE
+# set by the caller works identically; the flag wins when both are present.
 d="$(cd "$(dirname "$0")" && pwd)"
+if [ "$1" = "--instance" ]; then
+  EMUTEST_INSTANCE="$2"; export EMUTEST_INSTANCE
+  shift 2
+fi
 t="$1"; shift
 exec "$d/.venv/bin/python" "$d/$t.py" "$@"
