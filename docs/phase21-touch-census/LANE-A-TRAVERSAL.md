@@ -227,3 +227,59 @@ Capture: `EM-P24-P3c-past-the-rock.bottom.png` (through the gap; the second, wal
 still there beside the player).
 
 **Verdict: PROVEN.**
+
+---
+
+## Lane close-out
+
+### Verdicts
+
+| target | verdict | the state read that proves it |
+|---|---|---|
+| **P1 SURF** | **PROVEN** | `progSurf` 0→1 (the game's own `gPlayerAvatar` surf bit) + the player standing on (53,58), an elevation-1 ocean tile |
+| **P2 CUT** | **PROVEN** | the player standing on (11,2), one of the 11 tiles the Route 117 tree gates |
+| **P3 ROCK SMASH** | **PROVEN** | the player standing on (18,99) past a rock that gates 1973 tiles, and `progEdges` 2→1 (the rock's own object slot went inactive) |
+| **P4 LAVARIDGE HOT SPRING** | **PROVEN** | the whole leg trace: (0,12)(9,7) → (4,5)(7,8) → (4,5)(2,1) → (0,12)(8,1) → (0,12)(5,5), `progMapSeq=2`, and the same tap works in reverse |
+
+Every target failed at least once first, and every failure was diagnosed off the game's own state or
+its own source before anything was changed. **Six defects were found and fixed**, all committed
+with the run that exposed them: `2dde03e` (the YES fell inside the yes/no's five dead frames),
+`b0ae8d9` (one A at the object is not enough), `70f963d` (the A was aimed by a frame count instead
+of the avatar's facing), `e11b620` (excursions rejected their own EWRAM map header — the tier had
+never run), `e1c6041` (a leg planned on the frame the warp starts), `a1cbdca` (a boundary the
+follow loop could not see), `2fa4976` (a leg planned on the previous map's grid).
+
+One theme runs through all of them: **a Gen-3 field script is a LEVEL, not an edge.** Every fix was
+"stop pressing once and hoping; watch the game's own state and keep acting until it answers".
+
+### Host gate at close (fresh runs, this tree)
+
+celiolink PASS · control **6940** · diag 376 · **fieldpath 1808 (frozen, unchanged)** ·
+**fieldtrav 1099** · netlink PASS · peersprite 62078 · presence 61376 · profiles 1697 ·
+theme 83444 · tilt 1756 · touchgeom 362691 · trace_replay PASS · typography 1419 · uigeom 18332 ·
+uihit 1834 — **0 failures**; emutest harness `run_host_tests.sh` **169 tests, OK**.
+
+### What is banked for the next session
+
+- **Fixtures** (git-ignored, in `roms/`): `emerald-shore.sav` (Battle Frontier shore, one tap from
+  the Surf proof), `emerald-r117.sav` (Route 117 under the cut tree), `emerald-lavaridge.sav`
+  (Lavaridge fly tile, one tap from the excursion). All saved IN GAME, BY TOUCH.
+- **Recon tools** (session scratchpad): `savepeek.py`, `mapdump.py`, `reach.py`, plus this lane's
+  `gate.py` (is this obstacle a real gate, and which tiles does it open?) and `plan24.py` (a
+  D4 route that avoids wild-encounter tiles and the map's own object events, with Match-Call
+  `a` batches inserted where the avatar faces open ground).
+- **`st.py`** — one-line live state: ctx + the whole `g_fieldDbg` (now including `progAKeys`,
+  `progAnswers`, `progFacing`).
+
+### Operational notes (each paid for in lost time)
+
+1. `smartTraverse` must be **2 (HM+Via)** for P4-class excursions; the emulator's settings.bin was
+   restored to the value this lane found it at (1 = HM). One line re-arms it:
+   `python3 -c "import struct;p='<sdmc>/3DGBA/settings.bin';d=bytearray(open(p,'rb').read());struct.pack_into('<i',d,100,2);open(p,'wb').write(d)"`.
+2. **Wait for a D4 script to FINISH, not to be picked up.** `move_p<N>.txt` disappears at PICKUP;
+   a touch dropped while the script still runs aborts it (`ABORT real-input`, because the touch
+   mask is routed to the seat as real input) and lands on whatever screen is up.
+3. **Never `make` while a session is live** (landmine 7, paid again this session): the ELF relinks,
+   every gdb read silently returns the wrong address, and the app looks dead.
+4. The main menu classifies as `GCTX_TITLE` **while SaveBlock1 already holds the save's position** —
+   so a live `pos` read is NOT proof the overworld is up. Check `ctx` too.
