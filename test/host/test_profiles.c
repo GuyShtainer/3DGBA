@@ -1296,6 +1296,84 @@ static void test_family24_map(void) {
 	}
 }
 
+
+// ============================================================================================
+// TEST 19 — PHASE 24 (lane B2): the DISCOVERED-LIST whitelist (GameProfile.cb2List) — the
+// mechanism that gives TOUCH-PLAN E4 (FR Berry Pouch) and E5 (FR TM Case) a real list driver
+// without a single new address. The properties that make it safe are the ones graded here:
+//   (a) the two FR values are the census's [exact] cb2s, and BOTH are still inside cb2FullUi —
+//       so a screen in this list can never fail to detect, it can only be READ differently;
+//   (b) every other game is 0, including LeafGreen, where copying FR's values is the exact bug
+//       that row was rebuilt to end;
+//   (c) behaviour through the REAL game_read: with a live ListMenu dummy task present the screen
+//       becomes GCTX_LIST / LK_FULLUI with listBase pointing at that task's struct; with NO live
+//       list it falls back to GCTX_FULLUI (today's FAM-DLG behaviour) rather than to a driven
+//       list with a garbage base; and an UNLISTED cb2 is never claimed even when a list is live.
+static void test_family24_listcb2(void) {
+	printf("TEST 19: phase-24 discovered-list whitelist (cb2List) — FR Berry Pouch + TM Case\n");
+	const GameProfile* fr = prof("BPRE");
+	if (!fr) { CHECK(0, "BPRE row missing"); return; }
+	EQU(fr->cb2List[0], 0x0813CE78u, "BPRE cb2List[0] = CB2_BerryPouchIdle (E4)");
+	EQU(fr->cb2List[1], 0x081318DCu, "BPRE cb2List[1] = CB2_Idle, the TM Case run loop (E5)");
+	CHECK(fr->cb2List[2] == 0 && fr->cb2List[3] == 0, "the spare slots are 0 (never match)");
+	CHECK(fr->lmDummyTask && fr->lmDummyTaskAlt, "the scan anchor exists on BOTH FR revisions — "
+	      "the whitelist has no rev-alternate, but the part that IS rev-sensitive (finding the "
+	      "list) is covered on rev0 and rev1 alike");
+	for (int i = 0; i < 2; i++) {
+		int in = 0;
+		for (int j = 0; j < GS_N_FULLUI; j++) if (fr->cb2FullUi[j] == fr->cb2List[i]) in = 1;
+		CHECK(in, "cb2List[%d] 0x%08X is still in BPRE's cb2FullUi list — the whitelist changes "
+		      "how a tap READS, never whether the screen detects", i, fr->cb2List[i]);
+	}
+	const char* zero[] = { "BPEE", "BPGE", "AXVE", "AXPE" };
+	for (unsigned i = 0; i < 4; i++) {
+		const GameProfile* q = prof(zero[i]);
+		if (!q) { CHECK(0, "%s row missing", zero[i]); continue; }
+		int any = 0;
+		for (int j = 0; j < GS_N_LISTCB2; j++) if (q->cb2List[j]) any = 1;
+		CHECK(!any, "%s cb2List is all-0 (EM has neither screen and real anchors elsewhere; LG "
+		      "never harvested its own values and must NEVER inherit FR's; RS is banned)", zero[i]);
+	}
+
+	// --- behaviour through the real game_read ---------------------------------------------
+	GbaCore c; bus_reset(&c, "BPRE");
+	const GameProfile* p = profile_for(&c);
+	GameState gs;
+	bus_w32(&c, p->sb1ptr, 0x02025734u);                    // a loaded save
+	bus_w32(&c, p->mainCb2, p->cb2List[0] | 1u);            // the Berry Pouch is up
+
+	// (c1) listed screen, NO live ListMenu -> the shipped FULLUI behaviour, not a driven list
+	game_read(&c, p, &gs);
+	EQU(gs.ctx, GCTX_FULLUI, "listed cb2 with no live ListMenu -> GCTX_FULLUI (no upgrade, and "
+	    "certainly not a driven list with a garbage base)");
+	CHECK(gs.listBase == 0, "…and listBase stays 0");
+
+	// (c2) listed screen WITH a live ListMenu dummy task -> driven list, base = that task + 8
+	put_task(&c, p, 5, p->lmDummyTaskAlt | 1u, 1);          // rev1 anchor, live in gTasks[5]
+	game_read(&c, p, &gs);
+	EQU(gs.ctx, GCTX_LIST, "Berry Pouch + a live ListMenu -> GCTX_LIST");
+	EQU(gs.listKind, LK_FULLUI, "…resolved as LK_FULLUI (the discovered kind)");
+	EQU(gs.listBase, p->gTasksBase + 40u * 5u + 8u, "…with listBase = gTasks[5] + 8, i.e. the "
+	    "ListMenu struct the engine embedded in that task");
+	// the rev0 anchor works identically (a rev0 cart still finds its own list)
+	put_task(&c, p, 5, p->lmDummyTask | 1u, 1);
+	game_read(&c, p, &gs);
+	EQU(gs.ctx, GCTX_LIST, "the rev0 ListMenuDummyTask is found too");
+
+	// (c3) the TM Case, the second entry
+	bus_w32(&c, p->mainCb2, p->cb2List[1] | 1u);
+	game_read(&c, p, &gs);
+	EQU(gs.ctx, GCTX_LIST, "TM Case (CB2_Idle) + a live ListMenu -> GCTX_LIST");
+	EQU(gs.listKind, LK_FULLUI, "…LK_FULLUI");
+
+	// (c4) an UNLISTED fullui screen with the SAME live list is NOT claimed — this is the whole
+	// safety argument for the whitelist, so it is graded rather than asserted in a comment.
+	bus_w32(&c, p->mainCb2, 0x08137F60u | 1u);              // the FR summary screen
+	game_read(&c, p, &gs);
+	EQU(gs.ctx, GCTX_FULLUI, "an unlisted FULLUI screen is never claimed, even with a live "
+	    "ListMenu task sitting in gTasks");
+}
+
 int main(void) {
 	printf("test_profiles — the per-game RAM map (source/gamestate.c PROFILES[])\n\n");
 	test_lookup();
@@ -1316,6 +1394,7 @@ int main(void) {
 	test_family23_pager();       // phase 23 (FAM-DLG pager whitelist)
 	test_field_lock();           // phase 24 (lane B1) sLockFieldControls
 	test_family24_map();         // phase 24 (lane B2) FAM-MAP region map / tap-to-fly
+	test_family24_listcb2();     // phase 24 (lane B2) discovered-list whitelist (FR E4/E5)
 	printf("\n=== %d checks, %d failures ===\n", g_checks, g_fails);
 	return g_fails ? 1 : 0;
 }

@@ -117,7 +117,11 @@ static const GameProfile PROFILES[] = {
                Struct offsets used by the driver (VERIFIED-SRC, include/region_map.h:28-83):
                mapSecId +0x000 u16, mapSecType +0x002 u8, cursorPosX +0x054 u16, cursorPosY
                +0x056 u16, zoomed +0x078 bool8. */
-            0x0203A144u, 0x081248D4u, 0x08170274u },
+            0x0203A144u, 0x081248D4u, 0x08170274u,
+            /* phase 24 (lane B2) cb2List = 0: Emerald has no Berry Pouch / TM Case (berries live
+               in the bag, which has a REAL anchor), and every other EM list screen already has
+               one — a discovered list would be strictly worse. Explicit zeros (P3.5.2). */
+            { 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u } },
   // BPRE ROM anchors: the PRIMARIES below are FR rev0 (correct for a rev0 cart); the REV1 values —
   // the user's cart — live in the phase-22.0 ALTERNATE block at the end of the row. newKeys was
   // 0x0303011E (a digit transposition, RS-REV2-VERIFICATION.md §7): gMain 0x030030F0
@@ -264,7 +268,20 @@ static const GameProfile PROFILES[] = {
                zeros (P3.5.2). Named degradation: the FR map keeps the shipped FAM-DLG default
                (tap = A, hold = B, drag = one D-pad edge per 14 px), which already moves its
                cursor. Owed: FR's region-map struct pointer + a fly-vs-wall discriminator. */
-            0x00000000u, 0x00000000u, 0x00000000u },
+            0x00000000u, 0x00000000u, 0x00000000u,
+            /* phase 24 (lane B2) cb2List — the DISCOVERED-LIST whitelist. Both values are census
+               live-harvest [exact] (CB2-HARVEST.md FR rows E4/E5) and both are ALREADY in this
+               row's cb2FullUi list above, so this cannot make a screen start or stop detecting:
+                 0x0813CE78  CB2_BerryPouchIdle  (berry_pouch.c)  -> TOUCH-PLAN E4
+                 0x081318DC  CB2_Idle            (tm_case.c)      -> TOUCH-PLAN E5, the census's
+                             catalog correction ("CB2_Idle IS the TM Case run loop, not unused")
+               Rev note: unlike the keyboard/list ANCHORS above (primaries rev0, alternates rev1),
+               these two are the values read LIVE off the user's rev1 cart during the census, and
+               a cb2 whitelist has no alternate slot — a rev0 cart simply matches neither and
+               keeps the FAM-DLG default. That is the same named degradation cb2Pager carries.
+               The list itself is found by the rev-alternate-aware lmDummyTask scan, so the part
+               that IS rev-sensitive is already covered on both revisions. */
+            { 0x0813CE78u, 0x081318DCu, 0x00000000u, 0x00000000u } },
   // BPGE ROM anchors — REPLACED phase 22.0 (they were FireRed-rev0 values, wrong for EVERY
   // LeafGreen revision; battle/party/bag/menu detection was silently dead on LG). PRIMARIES are
   // now LG **rev1** — the user's cart is rev 1.1 — re-derived field-by-field from
@@ -383,7 +400,11 @@ static const GameProfile PROFILES[] = {
             /* phase 24 (lane B2) FAM-MAP: 0, as for FireRed above (one shared cb2 for both map
                screens, no LG symbol map read this session) — and LG's whole cb2FullUi list is
                still empty, so the map screen does not even classify here yet. Explicit zeros. */
-            0x00000000u, 0x00000000u, 0x00000000u },
+            0x00000000u, 0x00000000u, 0x00000000u,
+            /* phase 24 (lane B2) cb2List = 0. LeafGreen's Berry Pouch / TM Case cb2s were never
+               harvested on LG itself, and copying FireRed's is precisely the BPGE failure mode
+               this row was rebuilt to end (RS-REV2-VERIFICATION §6). Explicit zeros. */
+            { 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u } },
 
   // ===================== Ruby / Sapphire (SPEC-coop §P3) =====================================
   // Every RAM value below is VERIFIED-SYM against pret's byte-matched `symbols` branch, all FOUR
@@ -580,7 +601,10 @@ static const GameProfile PROFILES[] = {
             /* phase 24 (lane B2) FAM-MAP: 0 — the RS ROM/statics ban (the region-map module is a
                different, older one and neither its cb2 nor its struct pointer was verified for
                RS). Explicit zeros, not C zero-fill (P3.5.2). */
-            0x00000000u, 0x00000000u, 0x00000000u },
+            0x00000000u, 0x00000000u, 0x00000000u,
+            /* phase 24 (lane B2) cb2List = 0 — the RS ROM-address ban, and RS has neither screen
+               anyway. Explicit zeros, not C zero-fill (P3.5.2). */
+            { 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u } },
   // Pokemon Sapphire (US; same promotion rule — every value below was measured on SAPPHIRE
   // itself, live [exact] on pokesapphire_rev2.sym; LANE-B-RS.md §2 drift table + §3 solo smoke).
   { "AXPE", RS_PROFILE_BODY_RAM,
@@ -612,7 +636,10 @@ static const GameProfile PROFILES[] = {
             /* phase 24 (lane B2) FAM-MAP: 0 — the RS ROM/statics ban (the region-map module is a
                different, older one and neither its cb2 nor its struct pointer was verified for
                RS). Explicit zeros, not C zero-fill (P3.5.2). */
-            0x00000000u, 0x00000000u, 0x00000000u },
+            0x00000000u, 0x00000000u, 0x00000000u,
+            /* phase 24 (lane B2) cb2List = 0 — the RS ROM-address ban, and RS has neither screen
+               anyway. Explicit zeros, not C zero-fill (P3.5.2). */
+            { 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u } },
   #undef RS_PROFILE_BODY_RAM
   #undef RS_PROFILE_BODY_TAIL
 };
@@ -662,6 +689,25 @@ static uint32_t find_list_task(GbaCore* c, const GameProfile* p,
 	}
 	return 0;
 }
+// PHASE 24 (lane B2): the DISCOVERED list — the P-D probe promoted from instrument to driver for
+// the screens named in GameProfile.cb2List. Every live ListMenu owns a task whose function is
+// ListMenuDummyTask (that is what the probe has been mirroring to g_touchDbg since phase 22.1),
+// so the screen's list can be found without knowing the screen's own input task or the data[]
+// slot its list id hides in — which is exactly what was missing for FR's Berry Pouch / TM Case.
+// Returns the ListMenu struct base (task + 8) or 0. Scans in slot order and takes the FIRST:
+// these screens run one list at a time (the whitelist is what makes that safe to assume).
+static uint32_t find_lm_list_task(GbaCore* c, const GameProfile* p) {
+	if (!p->lmDummyTask && !p->lmDummyTaskAlt) return 0;
+	for (int t = 0; t < 16; t++) {
+		uint32_t task = p->gTasksBase + 40u * (uint32_t)t;
+		if (gbacore_read8(c, task + 4) == 0) continue;                 // isActive
+		uint32_t fn = gbacore_read32(c, task + 0) & ~1u;
+		if ((p->lmDummyTask && fn == p->lmDummyTask) ||
+		    (p->lmDummyTaskAlt && fn == p->lmDummyTaskAlt)) return task + 8u;
+	}
+	return 0;
+}
+
 static uint32_t find_bag_list_task(GbaCore* c, const GameProfile* p) {
 	return find_list_task(c, p, p->bagHandler, p->bagHandlerAlt, 0);   // bag: data[0] = tListTaskId
 }
@@ -791,6 +837,18 @@ bool game_read(GbaCore* c, const GameProfile* p, GameState* out) {
 		if (task_active(c, p, p->dexTask)) {                        // EM dex LIST (task is unique
 			out->ctx = GCTX_LIST; out->listKind = LK_DEX;           //   to the list screen)
 			return true;
+		}
+		// Phase 24 (lane B2): the DISCOVERED-LIST whitelist (gamestate.h cb2List) — TOUCH-PLAN's
+		// "FAM-LIST free instantiation" for FR's Berry Pouch (E4) and TM Case (E5). Tested here,
+		// just above the class loops, so a listed screen becomes a DRIVEN list and an unlisted one
+		// is untouched. If the screen is listed but no live ListMenu is found, we fall through to
+		// the cb2FullUi loop below and it keeps exactly today's FAM-DLG behaviour — the failure
+		// mode is "no upgrade", never a wrong key.
+		for (int i = 0; i < GS_N_LISTCB2; i++) {
+			if (!p->cb2List[i] || out->cb2 != p->cb2List[i]) continue;
+			uint32_t lb = find_lm_list_task(c, p);
+			if (lb) { out->ctx = GCTX_LIST; out->listKind = LK_FULLUI; out->listBase = lb; return true; }
+			break;                                          // listed but no live list -> FULLUI
 		}
 		// Phase 22.0 census promotion — POSITIVELY classify the screens whose cb2 the census
 		// live-harvested ([exact], CB2-HARVEST.md), instead of letting them hide in the

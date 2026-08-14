@@ -2113,7 +2113,11 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 		if (s_lPrevKind != (int)sm->listKind) { list_reset(); s_lPrevKind = (int)sm->listKind; }
 		switch (sm->listKind) {
 		case LK_BUY:
-		case LK_PCITEM: ret = list_update(sm, sm->listBase, 0, touching, newPress, gvalid, gx, gy); break;
+		case LK_PCITEM:
+		// PHASE 24 (lane B2): the DISCOVERED list (FR Berry Pouch / TM Case). Deliberately the
+		// SAME driver and the same flags as an anchored list — the only thing that differed was
+		// how listBase was found, and by the time it reaches here that difference is gone.
+		case LK_FULLUI: ret = list_update(sm, sm->listBase, 0, touching, newPress, gvalid, gx, gy); break;
 		case LK_QTY:    ret = qty_update(sm, touching, newPress, gvalid, gx, gy); break;
 		case LK_DEX:    ret = dex_update(sm, touching, newPress, gvalid, gx, gy); break;
 		default:        ret = 0; break;               // unknown kind: emit nothing (L10)
