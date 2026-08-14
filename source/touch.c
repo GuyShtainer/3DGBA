@@ -1790,7 +1790,13 @@ void touch_draw(TouchMode mode, u16 held, const TouchSmart* sm, C2D_TextBuf buf)
 		// to watch ("SURF >", "CUT >") appears at PLAN time, i.e. before the walk to the shore even
 		// starts, and the terminal states hang around for ~1 s so a route that gave up says so.
 		// Drawn one chip-height ABOVE the mode chip so the two never collide.
-		if (s_progOn || s_progChipHold > 0) {
+		// PHASE 23: an EXCURSION uses the same chip slot and the same rule — it moves the player
+		// across MAPS, which is even less acceptable to do silently — so it takes precedence while
+		// one is running ("VIA DOOR - LEG 1/3", counting up per leg).
+		if (s_excOn && s_excChip) {
+			touch_chip(buf, s_excChip, 160.0f, (float)UIHIT_TOUCH_CHIP_Y - TCHIP_H - 3.0f,
+			           C2D_Color32(0x7A, 0xE0, 0xFF, 0xE6));
+		} else if (s_progOn || s_progChipHold > 0) {
 			if (s_progChipHold > 0) s_progChipHold--;
 			if (s_progChip)
 				touch_chip(buf, s_progChip, 160.0f, (float)UIHIT_TOUCH_CHIP_Y - TCHIP_H - 3.0f,
