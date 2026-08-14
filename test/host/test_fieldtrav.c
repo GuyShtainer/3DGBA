@@ -52,15 +52,23 @@ static int g_checks = 0, g_fail = 0;
 // ---------------- the fixture bus + a writable RAM overlay ----------------
 // Reads hit the overlay first, then the fixture image, then open bus (0) — the same degradation
 // ladder the module has to survive on a real console.
-#define OV_N 3
+#define OV_N 4
 static struct { uint32_t addr; uint32_t len; uint8_t* p; } g_ov[OV_N];
 static uint8_t g_ovObj[0x24 * 16];      // gObjectEvents[16]
 static uint8_t g_ovSb1[0x1500];         // SaveBlock1 head THROUGH the flags array (EM's
                                         // flags[] runs 0x1270..0x139B, so 0x1300 would truncate it)
 static uint8_t g_ovParty[100 * 6];      // gPlayerParty[6]
+// PHASE 24: struct PokemonStorage — u8 currentBox at +0, BoxPokemon boxes[14][30] at +4
+// (14*30*80 = 0x8340, which is why boxNames sits at +0x8344 in pret's own struct).
+static uint8_t g_ovStore[4 + 14 * 30 * 80];
 
 #define SB1_BASE   0x02025734u          // an EWRAM address; the module takes sb1 already resolved
 #define PARTY_BASE 0x02024000u
+// gPokemonStoragePtr's target. 0x02008000 is chosen so the 0x8344-byte struct ends at
+// 0x02010344 — clear of the party overlay (0x02024000), SaveBlock1 (0x02025734) and every
+// fixture region (the map grids live at 0x02030000). An overlay that overlapped the grid would
+// silently rewrite the WORLD, which is exactly how the first draft of this test broke TEST 9.
+#define STORE_BASE 0x02008000u
 
 static const FxMap* g_fx;
 static uint8_t ov_r8(void* ctx, uint32_t a) {
@@ -93,9 +101,11 @@ static void bind(const char* name, FpBus* bus, FpMap* m, int pElev) {
 	memset(g_ovObj, 0, sizeof g_ovObj);
 	memset(g_ovSb1, 0, sizeof g_ovSb1);
 	memset(g_ovParty, 0, sizeof g_ovParty);
+	memset(g_ovStore, 0, sizeof g_ovStore);
 	g_ov[0].addr = f->mapObjects; g_ov[0].len = sizeof g_ovObj;   g_ov[0].p = g_ovObj;
 	g_ov[1].addr = SB1_BASE;      g_ov[1].len = sizeof g_ovSb1;   g_ov[1].p = g_ovSb1;
 	g_ov[2].addr = PARTY_BASE;    g_ov[2].len = sizeof g_ovParty; g_ov[2].p = g_ovParty;
+	g_ov[3].addr = STORE_BASE;    g_ov[3].len = sizeof g_ovStore; g_ov[3].p = g_ovStore;
 	ov_w32(g_ovObj, 0x00, 1u);                                    // slot 0 (the player) active
 	ov_w8 (g_ovObj, 0x0B, (uint8_t)(pElev & 0x0F));               // currentElevation
 	bus->read8 = ov_r8; bus->read16 = ov_r16; bus->read32 = ov_r32; bus->ctx = (void*)f;
@@ -189,10 +199,12 @@ static void set_obj(int slot, uint8_t gfx, int mapX, int mapY) {
 // (DecryptBoxMon), and the checksum is the sum of all 24 decrypted u16 (CalculateBoxMonChecksum).
 // A test that hand-waved any of those three would be testing a different function than the one
 // that runs on the console.
-static void put_mon(int idx, uint32_t pers, uint32_t otId, const uint16_t moves[4],
-                    int hasSpecies, int isEgg, int corruptChecksum) {
-	uint8_t* mon = g_ovParty + 100 * idx;
-	memset(mon, 0, 100);
+// PHASE 24: the writer is parameterised by SPECIES and writes to an arbitrary 80-byte BoxPokemon
+// head, because the census reads party slots (100-byte stride) and PC slots (80-byte stride)
+// through the SAME rail — a helper that could only write the party could not test that.
+static void put_mon_at(uint8_t* mon, uint32_t pers, uint32_t otId, const uint16_t moves[4],
+                       uint16_t species, int hasSpecies, int isEgg, int corruptChecksum) {
+	memset(mon, 0, 80);
 	ov_w32(mon, 0x00, pers);
 	ov_w32(mon, 0x04, otId);
 	ov_w8 (mon, 0x13, (uint8_t)((hasSpecies ? 2 : 0) | (isEgg ? 4 : 0)));
@@ -202,7 +214,7 @@ static void put_mon(int idx, uint32_t pers, uint32_t otId, const uint16_t moves[
 	int slot = fieldtrav_substruct_slot(pers, 1);        // the Attacks substruct
 	for (int i = 0; i < 4; i++) plain[slot * 6 + i] = moves[i];
 	// Growth substruct (type 0) slot gets a plausible species so the block is not all zeros.
-	plain[fieldtrav_substruct_slot(pers, 0) * 6 + 0] = 260;   // arbitrary species id
+	plain[fieldtrav_substruct_slot(pers, 0) * 6 + 0] = species;
 
 	uint16_t sum = 0;
 	for (int i = 0; i < 24; i++) sum = (uint16_t)(sum + plain[i]);
@@ -214,11 +226,20 @@ static void put_mon(int idx, uint32_t pers, uint32_t otId, const uint16_t moves[
 		ov_w32(mon, 0x20 + 4 * w, v ^ key);
 	}
 }
+// The party writer, unchanged in behaviour: slot idx of the 100-byte-stride gPlayerParty, the
+// same arbitrary species 260 every pre-phase-24 test was written against.
+static void put_mon(int idx, uint32_t pers, uint32_t otId, const uint16_t moves[4],
+                    int hasSpecies, int isEgg, int corruptChecksum) {
+	uint8_t* mon = g_ovParty + 100 * idx;
+	memset(mon, 0, 100);
+	put_mon_at(mon, pers, otId, moves, 260, hasSpecies, isEgg, corruptChecksum);
+}
 static FtParty party_of(int count) {
 	FtParty p; p.sb1 = SB1_BASE; p.partyBase = PARTY_BASE; p.partyCount = count; return p;
 }
 
 #define MOVE_CUT   15
+#define MOVE_FLY   19
 #define MOVE_SURF  57
 #define MOVE_SMASH 249
 #define MOVE_TACKLE 33
@@ -897,6 +918,113 @@ int main(void) {
 		      "a goal outside the search window plans nothing");
 		CHECK(ex4.outcome == FT_OUT_WINDOW, "…and says so (outcome %d)", ex4.outcome);
 	}
+	}
+
+	// ---------------------------------------------------------------- TEST 17
+	// PHASE 24 / lane A. The census is a DIAGNOSTIC — it answers "where is the mon that knows
+	// Fly?", which the yes/no eligibility rail cannot express — but it reads through the very
+	// same decrypt+checksum rail, so it must inherit every one of that rail's refusals. These
+	// checks are the proof it does, on the same golden-byte construction TEST 5 uses.
+	printf("TEST 17 — fieldtrav_read_mon + the party/PC census\n");
+	{
+		FpBus bus; FpMap m; bind("route117", &bus, &m, 3);
+		const uint16_t surfSet[4] = { MOVE_TACKLE, MOVE_SURF, 0, 0 };
+		const uint16_t cutSet[4]  = { MOVE_CUT, MOVE_SMASH, 0, 0 };
+		const uint16_t wanted[]   = { MOVE_CUT, MOVE_FLY, MOVE_SURF, MOVE_SMASH };
+
+		// --- fieldtrav_read_mon itself: species AND moves, both permutations, all refusals.
+		FtMon mon;
+		put_mon(0, 0x12345678u, 0xCAFEBABEu, surfSet, 1, 0, 0);      // permutation row 0
+		CHECK(fieldtrav_read_mon(&bus, PARTY_BASE, &mon), "row-0 mon decrypts");
+		CHECK(mon.species == 260, "…species read from the GROWTH substruct (got %u)", mon.species);
+		CHECK(mon.moves[0] == MOVE_TACKLE && mon.moves[1] == MOVE_SURF,
+		      "…moves read from the ATTACKS substruct (got %u,%u)", mon.moves[0], mon.moves[1]);
+		put_mon(0, 0x1234568Bu, 0x00010203u, surfSet, 1, 0, 0);      // permutation row 19
+		CHECK(fieldtrav_read_mon(&bus, PARTY_BASE, &mon) && mon.species == 260 &&
+		      mon.moves[1] == MOVE_SURF, "row-19 mon decrypts through its own permutation");
+		put_mon(0, 0x12345678u, 0xCAFEBABEu, surfSet, 1, 0, 1);
+		CHECK(!fieldtrav_read_mon(&bus, PARTY_BASE, &mon), "a bad checksum is refused (the rail)");
+		put_mon(0, 0x12345678u, 0xCAFEBABEu, surfSet, 1, 1, 0);
+		CHECK(!fieldtrav_read_mon(&bus, PARTY_BASE, &mon), "an EGG is refused");
+		put_mon(0, 0x12345678u, 0xCAFEBABEu, surfSet, 0, 0, 0);
+		CHECK(!fieldtrav_read_mon(&bus, PARTY_BASE, &mon), "an empty slot is refused");
+		CHECK(!fieldtrav_read_mon(&bus, 0x08000000u, &mon), "a ROM address is refused");
+		CHECK(!fieldtrav_read_mon(&bus, 0, &mon), "address 0 is refused");
+		CHECK(!fieldtrav_read_mon(&bus, PARTY_BASE, NULL), "a NULL out is refused");
+
+		// --- the census: party slots whole, PC slots only when they match a wanted move.
+		memset(g_ovParty, 0, sizeof g_ovParty);
+		put_mon(0, 0x12345678u, 0xCAFEBABEu, cutSet,  1, 0, 0);
+		put_mon(1, 0x1234568Bu, 0x00010203u, surfSet, 1, 0, 0);
+		// box 3 slot 7 = the Lugia-shaped case: a SURF+FLY mon sitting in the PC, invisible to
+		// fieldtrav_usable (which only ever reads the party) and the whole reason this exists.
+		uint8_t* b37 = g_ovStore + 4 + 80 * (3 * 30 + 7);
+		const uint16_t lugiaSet[4] = { MOVE_SURF, MOVE_FLY, 0, 0 };
+		put_mon_at(b37, 0x12345678u, 0xCAFEBABEu, lugiaSet, 249, 1, 0, 0);   // species 249 = LUGIA
+		// box 0 slot 0 = a mon with no field move at all: live, decryptable, NOT recorded.
+		const uint16_t dudSet[4] = { MOVE_TACKLE, 0, 0, 0 };
+		put_mon_at(g_ovStore + 4, 0x12345678u, 0xCAFEBABEu, dudSet, 19, 1, 0, 0);
+		// box 13 slot 29 = the far corner, so the sweep really covers 14 x 30.
+		uint8_t* bLast = g_ovStore + 4 + 80 * (13 * 30 + 29);
+		put_mon_at(bLast, 0x1234568Bu, 0x00010203u, cutSet, 123, 1, 0, 0);
+		// box 1 slot 0 = a CORRUPT box mon: counted live, but never recorded (the rail again).
+		put_mon_at(g_ovStore + 4 + 80 * 30, 0x12345678u, 0xCAFEBABEu, surfSet, 130, 1, 0, 1);
+
+		FtCensus cen;
+		int n = fieldtrav_census(&bus, PARTY_BASE, 2, STORE_BASE, wanted, 4, &cen);
+		CHECK(cen.nParty == 2, "both party slots decrypted (got %d)", cen.nParty);
+		CHECK(cen.party[0].box == -1 && cen.party[0].slot == 0 &&
+		      cen.party[0].moves[0] == MOVE_CUT, "party slot 0 recorded with its moves");
+		CHECK(cen.party[1].slot == 1 && cen.party[1].moves[1] == MOVE_SURF,
+		      "party slot 1 recorded with its moves");
+		CHECK(cen.boxLive == 4, "every live PC slot is counted (got %d)", cen.boxLive);
+		CHECK(cen.boxOk == 3, "…and the corrupt one fails the rail (ok=%d)", cen.boxOk);
+		CHECK(cen.nBox == 2, "only field-move box mons are recorded (got %d)", cen.nBox);
+		CHECK(n == cen.nParty + cen.nBox, "the return value is the record total (%d)", n);
+		int lug = -1;
+		for (int i = 0; i < cen.nBox; i++) if (cen.box[i].species == 249) lug = i;
+		CHECK(lug >= 0, "the PC mon that knows SURF+FLY is found");
+		if (lug >= 0) {
+			CHECK(cen.box[lug].box == 3 && cen.box[lug].slot == 7,
+			      "…at box 3 slot 7 (got box %d slot %d)", cen.box[lug].box, cen.box[lug].slot);
+			CHECK(cen.box[lug].moves[0] == MOVE_SURF && cen.box[lug].moves[1] == MOVE_FLY,
+			      "…with both moves readable");
+		}
+		int last = -1;
+		for (int i = 0; i < cen.nBox; i++) if (cen.box[i].species == 123) last = i;
+		CHECK(last >= 0 && cen.box[last].box == 13 && cen.box[last].slot == 29,
+		      "the sweep really reaches box 13 slot 29 (the 420th slot)");
+		for (int i = 0; i < cen.nBox; i++)
+			CHECK(cen.box[i].species != 19 && cen.box[i].species != 130,
+			      "neither the move-less nor the corrupt box mon is recorded");
+
+		// Degradations — each one a NAMED behaviour, never a guess.
+		CHECK(fieldtrav_census(&bus, PARTY_BASE, 2, 0, wanted, 4, &cen) == 2 && cen.nBox == 0,
+		      "storage 0 -> party only, no PC scan");
+		CHECK(fieldtrav_census(&bus, PARTY_BASE, 2, 0x08000000u, wanted, 4, &cen) == 2 &&
+		      cen.boxLive == 0, "a ROM storage base is refused");
+		CHECK(fieldtrav_census(&bus, PARTY_BASE, 2, STORE_BASE, NULL, 0, &cen) == 2 &&
+		      cen.nBox == 0, "no wanted-move list -> no PC records");
+		CHECK(fieldtrav_census(&bus, 0, 0, STORE_BASE, wanted, 4, &cen) == 2 && cen.nParty == 0,
+		      "partyBase 0 -> the PC scan still runs (got %d box records)", cen.nBox);
+		CHECK(fieldtrav_census(&bus, PARTY_BASE, 99, STORE_BASE, wanted, 4, &cen) >= 0 &&
+		      cen.nParty <= 6, "an over-large party count is clamped to 6");
+		CHECK(fieldtrav_census(&bus, PARTY_BASE, 2, STORE_BASE, wanted, 4, NULL) == 0,
+		      "a NULL out is refused");
+		CHECK(fieldtrav_census(NULL, PARTY_BASE, 2, STORE_BASE, wanted, 4, &cen) == 0,
+		      "a NULL bus is refused");
+
+		// The record cap holds: 40 field-move mons in the PC, 24 kept, nothing written past it.
+		memset(g_ovStore, 0, sizeof g_ovStore);
+		for (int i = 0; i < 40; i++)
+			put_mon_at(g_ovStore + 4 + 80 * i, 0x12345678u, 0xCAFEBABEu, surfSet,
+			           (uint16_t)(300 + i), 1, 0, 0);
+		fieldtrav_census(&bus, PARTY_BASE, 2, STORE_BASE, wanted, 4, &cen);
+		CHECK(cen.boxLive == 40 && cen.boxOk == 40, "all 40 are read (%d/%d)", cen.boxLive, cen.boxOk);
+		CHECK(cen.nBox == FT_CENSUS_MAX, "…and exactly %d records are kept (got %d)",
+		      FT_CENSUS_MAX, cen.nBox);
+		CHECK(cen.box[FT_CENSUS_MAX - 1].species == (uint16_t)(300 + FT_CENSUS_MAX - 1),
+		      "…the last kept record is the %dth mon, in slot order", FT_CENSUS_MAX);
 	}
 
 	printf("\n%d checks, %d failures\n", g_checks, g_fail);

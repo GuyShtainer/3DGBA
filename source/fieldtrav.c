@@ -153,45 +153,101 @@ int fieldtrav_substruct_slot(uint32_t personality, int type) {
 #define FT_SECURE_OFF   0x20u
 #define FT_SUBSTRUCT_SZ 12u
 
-bool fieldtrav_party_has_move(const FpBus* bus, const FtParty* pty, uint16_t moveId) {
-	if (!pty || !pty->partyBase || pty->partyCount <= 0) return false;
+// THE decrypt rail — one implementation, three callers (party has-move, the census's party pass,
+// the census's PC pass). PHASE 24 factored it out of fieldtrav_party_has_move without changing a
+// single rule: same hasSpecies/isEgg/isBadEgg rejections, same whole-block decrypt, same checksum
+// gate BEFORE any field is believed.
+bool fieldtrav_read_mon(const FpBus* bus, uint32_t monAddr, FtMon* out) {
+	if (!bus || !out || !monAddr) return false;
+	uint32_t bank = monAddr >> 24;
 	// gPlayerParty lives in EWRAM in Emerald/FRLG (0x02...) and in IWRAM in Ruby/Sapphire
 	// (0x03004360, pokeruby.sym) — accept both rather than hard-coding one game's memory map.
-	uint32_t bank = pty->partyBase >> 24;
 	if (bank != 0x02u && bank != 0x03u) return false;
+
+	uint8_t bits = bus->read8(bus->ctx, monAddr + 0x13u);
+	if (!((bits >> 1) & 1u)) return false;         // hasSpecies == 0 -> empty slot
+	if ((bits >> 2) & 1u) return false;            // isEgg -> the game refuses it too
+	if (bits & 1u) return false;                   // isBadEgg -> never trust its data
+
+	uint32_t pers = bus->read32(bus->ctx, monAddr + 0x00u);
+	uint32_t otId = bus->read32(bus->ctx, monAddr + 0x04u);
+	uint32_t key  = pers ^ otId;
+
+	// Decrypt the whole 48-byte secure block once, so the checksum can be verified BEFORE a
+	// single move id is believed. 24 u16 summed == BoxPokemon.checksum
+	// (src/pokemon.c CalculateBoxMonChecksum sums all four substructs' raw[] u16s).
+	uint16_t dec[24];
+	uint16_t sum = 0;
+	for (int w = 0; w < 12; w++) {                       // 12 u32 = 48 bytes
+		uint32_t v = bus->read32(bus->ctx, monAddr + FT_SECURE_OFF + 4u * (uint32_t)w) ^ key;
+		dec[2 * w + 0] = (uint16_t)(v & 0xFFFFu);
+		dec[2 * w + 1] = (uint16_t)(v >> 16);
+		sum = (uint16_t)(sum + dec[2 * w + 0] + dec[2 * w + 1]);
+	}
+	if (sum != bus->read16(bus->ctx, monAddr + 0x1Cu)) return false;   // decrypt-integrity rail
+
+	// Growth (type 0) +0x00 = species; Attacks (type 1) +0x00 = moves[4].
+	int g = fieldtrav_substruct_slot(pers, 0) * (int)(FT_SUBSTRUCT_SZ / 2);   // u16 units
+	int a = fieldtrav_substruct_slot(pers, 1) * (int)(FT_SUBSTRUCT_SZ / 2);
+	out->species = dec[g];
+	for (int mv = 0; mv < 4; mv++) out->moves[mv] = dec[a + mv];
+	return true;
+}
+
+bool fieldtrav_party_has_move(const FpBus* bus, const FtParty* pty, uint16_t moveId) {
+	if (!pty || !pty->partyBase || pty->partyCount <= 0) return false;
 	int n = pty->partyCount; if (n > FT_PARTY_SIZE) n = FT_PARTY_SIZE;
-
 	for (int i = 0; i < n; i++) {
-		uint32_t mon = pty->partyBase + FT_MON_STRIDE * (uint32_t)i;
-		uint8_t bits = bus->read8(bus->ctx, mon + 0x13u);
-		if (!((bits >> 1) & 1u)) continue;         // hasSpecies == 0 -> empty slot
-		if ((bits >> 2) & 1u) continue;            // isEgg -> the game refuses it too
-		if (bits & 1u) continue;                   // isBadEgg -> never trust its data
-
-		uint32_t pers = bus->read32(bus->ctx, mon + 0x00u);
-		uint32_t otId = bus->read32(bus->ctx, mon + 0x04u);
-		uint32_t key  = pers ^ otId;
-
-		// Decrypt the whole 48-byte secure block once, so the checksum can be verified BEFORE a
-		// single move id is believed. 24 u16 summed == BoxPokemon.checksum
-		// (src/pokemon.c CalculateBoxMonChecksum sums all four substructs' raw[] u16s).
-		uint16_t dec[24];
-		uint16_t sum = 0;
-		for (int w = 0; w < 12; w++) {                       // 12 u32 = 48 bytes
-			uint32_t v = bus->read32(bus->ctx, mon + FT_SECURE_OFF + 4u * (uint32_t)w) ^ key;
-			dec[2 * w + 0] = (uint16_t)(v & 0xFFFFu);
-			dec[2 * w + 1] = (uint16_t)(v >> 16);
-			sum = (uint16_t)(sum + dec[2 * w + 0] + dec[2 * w + 1]);
-		}
-		if (sum != bus->read16(bus->ctx, mon + 0x1Cu)) continue;   // the decrypt-integrity rail
-
-		// The Attacks substruct (type 1) holds moves[4] at its +0x00.
-		int slot = fieldtrav_substruct_slot(pers, 1);
-		int base = slot * (int)(FT_SUBSTRUCT_SZ / 2);              // in u16 units
+		FtMon m;
+		if (!fieldtrav_read_mon(bus, pty->partyBase + FT_MON_STRIDE * (uint32_t)i, &m)) continue;
 		for (int mv = 0; mv < 4; mv++)
-			if (dec[base + mv] == moveId) return true;
+			if (m.moves[mv] == moveId) return true;
 	}
 	return false;
+}
+
+// The census. Party: every live slot, recorded whole. PC: 14 x 30 slots, and a record is kept
+// ONLY for a mon that knows one of the caller's moves — that is what keeps a 420-slot sweep
+// inside a 24-record struct. Pure reads; nothing here can influence a route.
+int fieldtrav_census(const FpBus* bus, uint32_t partyBase, int partyCount, uint32_t storageBase,
+                     const uint16_t* moves, int nMoves, FtCensus* out) {
+	if (!bus || !out) return 0;
+	for (int i = 0; i < (int)sizeof *out; i++) ((uint8_t*)out)[i] = 0;
+	out->partyCount = partyCount;
+
+	if (partyBase && partyCount > 0) {
+		int n = partyCount > FT_PARTY_SIZE ? FT_PARTY_SIZE : partyCount;
+		for (int i = 0; i < n; i++) {
+			FtMon m;
+			if (!fieldtrav_read_mon(bus, partyBase + FT_MON_STRIDE * (uint32_t)i, &m)) continue;
+			FtMonRec* r = &out->party[out->nParty++];
+			r->box = -1; r->slot = (int16_t)i; r->species = m.species;
+			for (int mv = 0; mv < 4; mv++) r->moves[mv] = m.moves[mv];
+		}
+	}
+
+	if (storageBase && (storageBase >> 24) == 0x02u && moves && nMoves > 0) {
+		for (int b = 0; b < FT_BOX_COUNT; b++) {
+			for (int s = 0; s < FT_BOX_SLOTS; s++) {
+				uint32_t mon = storageBase + 4u
+				             + 80u * (uint32_t)(b * FT_BOX_SLOTS + s);   // BoxPokemon stride 80
+				if (!((bus->read8(bus->ctx, mon + 0x13u) >> 1) & 1u)) continue;   // hasSpecies
+				out->boxLive++;
+				FtMon m;
+				if (!fieldtrav_read_mon(bus, mon, &m)) continue;   // egg / bad egg / bad checksum
+				out->boxOk++;
+				bool want = false;
+				for (int mv = 0; mv < 4 && !want; mv++)
+					for (int w = 0; w < nMoves; w++)
+						if (m.moves[mv] && m.moves[mv] == moves[w]) { want = true; break; }
+				if (!want || out->nBox >= FT_CENSUS_MAX) continue;
+				FtMonRec* r = &out->box[out->nBox++];
+				r->box = (int16_t)b; r->slot = (int16_t)s; r->species = m.species;
+				for (int mv = 0; mv < 4; mv++) r->moves[mv] = m.moves[mv];
+			}
+		}
+	}
+	return out->nParty + out->nBox;
 }
 
 // Move ids (engine-invariant; pokeemerald include/constants/moves.h:19/61/74/131/253).

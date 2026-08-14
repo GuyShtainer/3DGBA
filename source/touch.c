@@ -1748,6 +1748,38 @@ static void touch_dbg_stamp(const TouchSmart* sm, u16 ret) {
 	}
 }
 
+// --- PHASE 24 / lane A: the party + PC mon census mirror (LOGGING ONLY; touch.h documents it) --
+// One call into fieldtrav_census — the SAME decrypt+checksum rail fieldtrav_usable gates on — so
+// the answer to "which mon knows Fly, and is it in the party or a box?" comes from the code the
+// router already trusts rather than a second parser. Throttled; reads only.
+MonDbg g_monDbg = { 0 };
+#define MONDBG_EVERY 90        // render frames between sweeps (~1.5 s at 60 fps)
+static void mon_census_stamp(const TouchSmart* sm) {
+	static int s_tick = 0;
+	if (s_tick > 0) { s_tick--; return; }
+	s_tick = MONDBG_EVERY;
+	const GameProfile* p = sm ? sm->prof : 0;
+	if (!sm || !sm->core || !p || !p->partyBase) return;
+	// The moves worth naming: the five field moves the traversal family gates on, plus FLY —
+	// which the router never uses but the PLAYER needs in the party for a cross-region proof, and
+	// which is exactly the mon the census exists to locate. pokeemerald include/constants/moves.h:
+	// MOVE_CUT 15, MOVE_FLY 19, MOVE_SURF 57, MOVE_STRENGTH 70, MOVE_DIVE 291, MOVE_WATERFALL 127,
+	// MOVE_ROCK_SMASH 249.
+	static const uint16_t kWanted[] = { 15, 19, 57, 70, 127, 249, 291 };
+	uint32_t storage = 0;
+	if (p->pcStoragePtr) {
+		uint32_t s = gbacore_read32(sm->core, p->pcStoragePtr);
+		if ((s >> 24) == 0x02u) storage = s;          // an unloaded save reads as garbage/0
+	}
+	int count = (sm->partyCount >= 0 && sm->partyCount <= 6) ? sm->partyCount : 0;
+	FpBus bus = { fp_r8, fp_r16, fp_r32, sm->core };
+	fieldtrav_census(&bus, p->partyBase, count, storage, kWanted,
+	                 (int)(sizeof kWanted / sizeof kWanted[0]), &g_monDbg.c);
+	g_monDbg.storage = (int32_t)storage;
+	g_monDbg.partyBase = (int32_t)p->partyBase;
+	g_monDbg.seq++;
+}
+
 // ================================ dispatch ==================================
 static void all_reset(void) { battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset(); dlg_reset(); prog_reset(); }
 
@@ -1760,6 +1792,8 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 	if (mode == TOUCH_PAD)   { all_reset(); return touching ? pad_keys(sx, sy) : 0; }
 	if (mode != TOUCH_SMART) { all_reset(); return 0; }            // TOUCH_OFF
 	if (!sm || !sm->valid)   { all_reset(); return 0; }
+
+	mon_census_stamp(sm);      // LOGGING ONLY (phase 24) — throttled, reads only, injects nothing
 
 	// LOGGING ONLY: read the ctx cursor BEFORE the dispatch (and AFTER, below) so a row shows old->new.
 	uint32_t cursAddr; int cursSize;

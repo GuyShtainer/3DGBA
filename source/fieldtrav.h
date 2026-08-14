@@ -102,6 +102,56 @@ bool fieldtrav_flag_get(const FpBus* bus, FpEngine eng, uint32_t sb1, int flagId
 // garbage read into a phantom HM.
 bool fieldtrav_party_has_move(const FpBus* bus, const FtParty* pty, uint16_t moveId);
 
+// --- ONE decrypted mon (the rail above, factored out so a reader can also ASK what it found) ---
+// PHASE 24 / lane A. `fieldtrav_party_has_move` answers yes/no for the party; the traversal arc
+// also has to answer "WHERE is the mon that knows Fly, and is it in the party or a PC box?" —
+// a question the yes/no rail cannot express. Same decrypt, same checksum gate, one exported
+// struct instead of an internal bool. Reads 80 bytes; a party mon (100-byte stride) and a boxed
+// mon (80-byte stride) share this identical BoxPokemon head, which is why one reader serves both.
+typedef struct {
+	uint16_t species;   // Growth substruct (type 0) +0x00
+	uint16_t moves[4];  // Attacks substruct (type 1) +0x00..+0x06
+	// Deliberately NOT level: a party mon carries it in the battle tail (+0x54) and a BOXED mon
+	// does not carry it at all (it is recomputed from experience), so one struct cannot honestly
+	// hold it for both. Species + moves is what every caller here actually asks for.
+} FtMon;
+
+// Decrypt the mon at `monAddr`. false = empty slot / egg-bad-egg / CHECKSUM MISMATCH — i.e. the
+// caller can never be handed a move id that the game's own integrity check would reject.
+bool fieldtrav_read_mon(const FpBus* bus, uint32_t monAddr, FtMon* out);
+
+// --- the party+PC census (PHASE 24 / lane A: a diagnostic, never a gameplay input) ------------
+// struct PokemonStorage (pokeemerald include/pokemon_storage.h / pokefirered ditto):
+//   +0x0000 u8 currentBox, +0x0004 BoxPokemon boxes[14][30] (80 B each = 0x8340 bytes, so
+//   boxNames lands at +0x8344 — the arithmetic that cross-checks the +4).
+// `storageBase` is the ALREADY-DEREFERENCED struct address (the caller derefs
+// gPokemonStoragePtr, GameProfile.pcStoragePtr). 0 = no PC scan, party only.
+#define FT_BOX_COUNT   14
+#define FT_BOX_SLOTS   30
+#define FT_CENSUS_MAX  24    // box hits kept; enough to name every field-move mon in a real save
+
+typedef struct {
+	int16_t  box;       // -1 = party
+	int16_t  slot;      // party slot 0..5, or box slot 0..29
+	uint16_t species;
+	uint16_t moves[4];
+} FtMonRec;
+
+typedef struct {
+	int      partyCount;               // slots the caller said are live
+	int      nParty;                   // party records actually decrypted (checksum-verified)
+	FtMonRec party[6];
+	int      boxLive;                  // box slots with hasSpecies set
+	int      boxOk;                    // of those, slots whose checksum verified
+	int      nBox;                     // records kept (<= FT_CENSUS_MAX)
+	FtMonRec box[FT_CENSUS_MAX];
+} FtCensus;
+
+// Census the party (every live slot) and the PC (only mons knowing one of `moves[0..nMoves-1]`,
+// so a full 420-slot scan still fits a small fixed record set). Returns nParty + nBox.
+int fieldtrav_census(const FpBus* bus, uint32_t partyBase, int partyCount, uint32_t storageBase,
+                     const uint16_t* moves, int nMoves, FtCensus* out);
+
 // Bitmask (1 << FT_HM_*) of the field moves the player may use RIGHT NOW: badge AND party move,
 // both read live. This is evaluated once per plan and re-checked at each INTERACT (SPEC H1.6).
 uint32_t fieldtrav_usable(const FpBus* bus, FpEngine eng, const FtParty* pty);

@@ -12,6 +12,7 @@
 #include <3ds.h>
 #include <citro2d.h>
 #include "gamestate.h"   // GameCtx
+#include "fieldtrav.h"   // phase 24: FtCensus (the party/PC mon mirror below)
 
 typedef enum { TOUCH_OFF = 0, TOUCH_PAD = 1, TOUCH_SMART = 2 } TouchMode;
 extern const char* const TOUCH_NAMES[3];   // "Off" / "Gamepad" / "Smart"
@@ -191,6 +192,24 @@ typedef struct {
 	int32_t  dlgPager;       // +0xC0  1 = the live cb2 is in this game's cb2Pager whitelist
 } TouchDbg;
 extern TouchDbg g_touchDbg;
+
+// --- PHASE 24 / lane A: the party + PC MON mirror (LOGGING ONLY) -------------------------------
+// Why it exists: the traversal family's whole eligibility model is "badge AND a party mon that
+// knows the move", and when a proof arc fails the first question is always *which mon, and is it
+// even in the party?* `progUsable` answers only the 5-bit summary, and no screenshot can answer
+// "Lugia is in box 3 slot 7". This restamps `fieldtrav_census` — the SAME decrypt+checksum rail
+// the eligibility gate uses, never a second parser — into one gdb-readable struct.
+// Re-run on a THROTTLE (MONDBG_EVERY frames) so a withdraw/deposit shows up within a second or
+// two; a full 420-slot PC sweep is ~5k bus reads, i.e. far under a frame even at that cadence.
+// Nothing reads it back: it can never change a route.
+typedef struct {
+	int32_t  seq;         // +0x00  bumped once per census run (0 = never ran)
+	int32_t  storage;     // +0x04  the resolved PokemonStorage base (0 = unmapped for this game)
+	int32_t  partyBase;   // +0x08  GameProfile.partyBase, echoed so a bad address is visible
+	int32_t  pad;         // +0x0C  keeps `c` 4-aligned and the offsets below stable
+	FtCensus c;           // +0x10  partyCount/nParty/party[6] then boxLive/boxOk/nBox/box[24]
+} MonDbg;
+extern MonDbg g_monDbg;
 
 // --- Touch-event instrumentation logger (LOGGING ONLY — never changes touch/gameplay) ---------------
 // Self-contained ring in touch.c: touch_update records a row on each touch EVENT (a new press; plus
