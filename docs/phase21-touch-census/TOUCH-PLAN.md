@@ -336,11 +336,28 @@ remains the universal manual fallback.
   H6 (tap=timed A — already honest), fishing B11 (tap=A, works), dex cry F4 (tap=play).
   Wireless minigames J9–J11 deferred with 2P. Each is bespoke; none blocks the families.
 
-### FAM-TRAV — overworld traversal (SPEC-family-traversal.md — ready)
+### FAM-TRAV — overworld traversal (SPEC-family-traversal.md — SHIPPED, host-proven)
 - HM-aware edges (surf/cut/smash/strength/waterfall/dive) with badge+party eligibility
   reads, closed-loop INTERACT scripts (never answer an unpredicted YES), and cross-map
   warp excursions (the Lavaridge case). Own toggle, off by default. Pure-C `fieldtrav`
   layer, host-tested like fieldpath.
+- **Status 2026-08-14 (phase 22.2 + 23).** SLICE 1 (Surf / Cut / Rock Smash on the current
+  map) and SLICE 2 (the cross-map excursion planner + the three-leg executor) are both
+  IMPLEMENTED and green: `test_fieldtrav` 1066 checks, fieldpath UNMODIFIED at 1808, and
+  TEST 15/16 grade the slice-2 pointer chain and the excursion against the **user's own
+  `roms/emerald.gba`** (loud SKIP if the ROM is absent) rather than a fixture.
+- **Emulator proof status: NOT YET LANDED, and the reason is the SAVE, not the code.** The
+  fixture Emerald save stands in `BattleFrontier_BattleArenaLobby` with all 8 badges but
+  **only SURF** among the HMs and **no FLY**, so the mainland — and with it every spot
+  SPEC T6 names (Route 103, Route 116, Rusturf, Lavaridge) — is unreachable. The nearest
+  water is 28 tiles away on `BattleFrontier_OutsideEast`'s south beach, and the walk there
+  is broken by **step-counted field scripts at ~6 and ~36 outdoor steps** (OVERNIGHT2
+  Entry 10) that time out a D4 walk token and abort the script.
+- **The unlock, for whoever picks this up:** walk the approach ONCE and then **SAVE
+  in-game**, so every later arc resumes standing where the proof needs it. That single
+  save turns P1/P2/P3 and the slice-2 excursion proof from a 10-minute gamble each into a
+  short, repeatable arc — and it is also what a Cut/Rock-Smash proof needs, since those
+  first require teaching an HM through the (already live-proven) bag + party touch chain.
 
 ---
 
