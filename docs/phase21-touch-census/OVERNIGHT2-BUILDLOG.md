@@ -1369,3 +1369,70 @@ Suites: touchgeom 158835 → **158971** (TEST 13 grades the route rule), profile
 (TEST 17 pins all five `fieldLock` addresses + behaviour through the real `game_read`); 15 suites,
 0 failures, re-run from the MERGED main tree. `make -j8` clean in the lane worktree; the merged
 main tree was deliberately NOT rebuilt (landmine 7 — instance `a` was live).
+
+## PHASE 24 / LANE B2 — the FULL class: TAP-TO-FLY ships, and the FR list anchors turned out to be unnecessary
+
+Worktree `.claude/worktrees/lane-b2-ph24` (branch `lane-b2-fammap`), instance **b** only, merged
+to main as `64e97ae`. Full log + evidence: `LANE-B2-FAMMAP.md`. Four TOUCH-PLAN rows moved:
+**B8 VERIFIED · E4 VERIFIED · E5 VERIFIED · B7 VERIFIED-mech**.
+
+1. **TAP-TO-FLY IS REAL.** One tap on the fly map, and `SaveBlock1.location` went
+   **26.14 (39,30) → 0.9 (14,9)** with the game drawing its own **`LITTLEROOT TOWN`** banner —
+   TOUCH-PLAN slice 22.4's acceptance test executed verbatim. The tap coordinate was computed
+   from the GAME'S OWN `gRegionMapEntries` table, not read off a screenshot.
+
+2. **Two of the design's premises were wrong, and only the engine source could show it.**
+   - *"Write the cursor + A"* is wrong: Emerald slides the cursor SPRITE incrementally
+     (`SpriteCB_CursorMapFull`, 2 px/frame) instead of deriving it from `cursorPosX/Y`, so a
+     write desyncs what the player sees. The driver **walks the game's own D-pad**, closed-loop.
+   - *A held key* is wrong: `ProcessRegionMapInput_Full` reads JOY_HELD but then ignores input
+     for a 4-frame slide, so a **single-frame press moves exactly one cell** — overshoot becomes
+     impossible, where a held key overshoots because our read lags a frame. X and Y are read
+     independently ⇒ a diagonal is ONE frame, so every route costs `max(|dx|,|dy|)` presses.
+     **Measured live on two taps: 11 and 7, exactly the Chebyshev prediction.**
+   - **A is per-screen, not per-family**: the fly map confirms on A, the wall map EXITS on A.
+     `GameState.mapFly` carries it, and the driver additionally makes the game's own
+     `mapSecType` test before emitting one — proven by a tap on open OCEAN, where the cursor
+     walked 11 cells and `mapFlies` stayed **0**.
+
+3. **The address chain validated ITSELF, twice.** On both openings the fly cursor started on the
+   player's own location and the mirror agreed: first `mapSecId 58 / type 4` at the Battle
+   Frontier, then — after the fly — `mapSecId 0 (LITTLEROOT) / type 2`. Two different answers,
+   both right, from one `sRegionMap` deref. It also settled phase 23's banked open question:
+   the region-map sprite x IS the **cell centre**, so the `gx >> 3` inverse is exact.
+
+4. **THE REUSE FINDING: the FR "list anchor" problem does not need solving, it needs dissolving.**
+   TOUCH-PLAN marks E4/E5 `rev1+substate` because `find_list_task` needs each screen's own input
+   task plus the `data[]` slot its ListMenu id hides in — unresolvable without a pokefirered
+   symbol map. But **every live ListMenu owns a `ListMenuDummyTask` task**, which is the whole
+   premise of the P-D discovery probe this project has carried as LOGGING ONLY since phase 22.1.
+   `GameProfile.cb2List` promotes that probe to a driver **for a whitelist of census-[exact]
+   cb2s**, and both FR screens became driven lists with **zero new addresses**. Live: TM Case
+   `lTotal 45 / maxShowed 5`, tap row 3 → `lRow 0→3` + "HM04 STRENGTH is selected."; Berry Pouch
+   `lTotal 17 / maxShowed 7`, tap row 5 → `lRow 0→5` + "No06 LEPPA BERRY is selected." — two
+   different live geometries, right row on both.
+   **The same mechanism is now available to every remaining list row** (mailbox, move relearner,
+   the FR dex TOC) for the cost of one harvested cb2 each.
+
+5. **Technique note (both boots).** The seat ORDER is the cheapest form of the screen swap: stage
+   `firered,emerald-fix` to put Emerald on the bottom, `emerald-fix,firered` to put FireRed
+   there — no `settings.bin` edit at all. And parking the game you are NOT testing at its title
+   is free: it skips FireRed's ~3.5-minute quest-log replay entirely (boot 1), which you then pay
+   in full when FR is the one you need (boot 2).
+
+Suites at close, re-run from the MERGED main tree, 0 failures: touchgeom 158971 → **362691**
+(TEST 14 round-trips every legal map cell through the pixel the game draws its cursor at + sweeps
+the whole frame for the dead zone; TEST 15 drives an engine model over **176 400 routes** and
+asserts exact-Chebyshev convergence with zero overshoots), profiles 1660 → **1697** (TEST 18
+FAM-MAP columns + fly/wall behaviour, TEST 19 the discovered-list whitelist), fieldpath
+**UNMODIFIED at 1808**, typography 1419, fieldtrav 1099. 15 suites.
+
+**Deliberately NOT done:** the merged main tree was **not rebuilt** — instance `a` was live
+throughout (landmine 7). The merge is source-clean and suite-green; `make -j8` was clean in the
+lane worktree (`3DGBA.3dsx` 4 399 552 B) and that exact build is what every proof above ran on.
+
+**Owed, in priority order:** (1) FireRed's region-map struct pointer + a fly-vs-wall
+discriminator — and FR's **TOWN MAP is a KEY ITEM two taps from where lane B2's second boot
+ended**, so it is one short arc; (2) an `MB_REGION_MAP` wall tile in Emerald, to visit B7 for
+real; (3) the FR dex GRID (parent's item 3), untouched this lane; (4) hardware sign-off —
+`MAPNAV_GAP`/`MAPNAV_A_DELAY` are feel constants only a real 3DS can judge.
