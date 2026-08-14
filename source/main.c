@@ -2863,9 +2863,12 @@ static const char* const TOUCH_EXPLAIN[3] = {
 	// geometry rather than taste: "menus/party/targets," is an unbreakable 19-character token
 	// that occupies 207 of the column's 216 px by itself, so at the new size it dragged the
 	// paragraph to FIVE lines and put the last two on top of the Preview buttons. The rewrite
-	// says the same three things (pointer at the real game UI / tap to walk / tap the menus,
-	// party and targets / double-tap is START) in tokens the wrapper can break. T14 pins it.
-	"Smart — point at the real game UI: tap to walk, tap menus, party and targets. Double-tap = START.",
+	// says the same three things in tokens the wrapper can break. T14 pins it.
+	// PHASE 24 / lane A2: the SELF gestures changed (DECISIONS-overworld-gestures.md D1), so the
+	// last sentence had to. It is SHORTER than the copy it replaces, which is the only property
+	// the 3-line budget cares about — and it names both verbs, because a hold that fires the
+	// registered item is not something a player will discover by accident.
+	"Smart — point at the real game UI: tap to walk, tap menus. Tap yourself = START, hold = SELECT.",
 };
 // PHASE 19 / SPEC-legible L3.2.3 + L3.3.3. Two changes, and they are a pair:
 //   * the paragraph is PROSE, so it leaves the mono rung for TXT_BODY (cap 9, 19.6' — the design's

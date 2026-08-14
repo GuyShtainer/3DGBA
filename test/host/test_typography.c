@@ -1083,7 +1083,7 @@ int main(void) {
 		static const char* const EXPLAIN[3] = {
 			"Off \xE2\x80\x94 a touch opens the pause menu. No game input from the touch screen.",
 			"Gamepad \xE2\x80\x94 a translucent virtual controller (D-pad, A/B, L/R, START) over game B.",
-			"Smart \xE2\x80\x94 point at the real game UI: tap to walk, tap menus, party and targets. Double-tap = START.",
+			"Smart \xE2\x80\x94 point at the real game UI: tap to walk, tap menus. Tap yourself = START, hold = SELECT.",
 		};
 		if (ok[TXT_BODY]) {
 			g_measFont = &f[TXT_BODY];

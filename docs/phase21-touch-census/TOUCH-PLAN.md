@@ -346,8 +346,9 @@ remains the universal manual fallback.
 - **Instances:** every `TAP` row above — script dialogs, TV, cutscenes, rides, HoF, PSA,
   quest log (with the playback guard), title/intro.
 - **Gestures→keys:** tap = A pulse; **hold ≥30 frames = B held** (decline yes/no default,
-  soft-cancel, speed-up); double-tap = START only where a menu exists (overworld rule).
-  Nothing else. This is what GCTX_FULLUI ships as the default for EVERY detected screen
+  soft-cancel, speed-up). Nothing else. (The "double-tap = START where a menu exists" line this
+  plan carried was never implemented in FAM-DLG, and phase 24 lane A2 retired the double-tap
+  from the overworld too — the own-tile verbs are now tap = START / hold = SELECT, decision D1.) This is what GCTX_FULLUI ships as the default for EVERY detected screen
   before its family mapping lands — the residual killer.
 - **Status 2026-08-14 (phase 24, lane B1).** SHIPPED and live-proven, plus one correction the
   family could not have worked without. FAM-DLG originally ran only for `GCTX_TITLE` /

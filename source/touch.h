@@ -6,7 +6,9 @@
 //              action cursor there and presses A.
 //            * Battle move menu: tap the real move -> drives the move cursor + A (empty slots ignored).
 //            * Overworld: touch/hold -> steer toward the touch (directional, any speed incl. bike);
-//              tap yourself = A (interact/advance). Release to stop.
+//              tap yourself = START (the field menu), hold yourself = SELECT (the registered
+//              item) — phase 24 lane A2, DECISIONS-overworld-gestures.md D1. Release to stop.
+//              A routed leg of >= 4 tiles also holds B and RUNS (D2).
 //            Driven by live RAM state (gamestate.c); operates in GBA-screen pixel space.
 #pragma once
 #include <3ds.h>

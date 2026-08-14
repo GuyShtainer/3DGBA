@@ -410,3 +410,34 @@ read lags that by a frame, so the step leaving the bath's neighbour is committed
 our B comes up. It errs on the safe side (we never press B where the game would refuse, we
 occasionally miss one step) and it is one step on a rare tile class. Noted, not chased —
 VERIFY-ON-HW along with the timing constants.
+
+### The regression that matters: A1's flagship excursion, with D2 live
+
+`smartTraverse = 2`, the same `emerald-lavaridge.sav` fixture, **one tap on the hot spring (5,5)**
+— A1's P4 arc, re-run on the D2 build. It completed: `end=ARRIVED`, `beh=0x28`, the player standing
+in the spring beside the two bathers. And the three-leg trace is the best single piece of evidence
+this lane produced, because **one tap exercised three different gates in one route**:
+
+| leg | where | `runLeg` | mask | frames/tile |
+|---|---|---|---|---|
+| 0-1 | **inside the Pokemon Center** (`allow_running: false`) | **0** | `0x020` / `0x040`, no B | **16, 16, 16, 16, 16, 16, 16, 16** |
+| 2 | out the back door, across the north **terrace** | **1** | `0x022` / `0x082`, B held | **8, 8, 8, 8, 8** |
+| 2 (tail) | the last tiles, **inside the hot spring** (`MB_HOT_SPRINGS 0x28`) | 1 | `0x080` / `0x020`, **B dropped** | **16, 16** |
+
+`runFrames` climbs 0 -> 0 across the interior, 10 -> 52 on the terrace, and then **stops at 52**
+the moment the player steps onto a spring tile; the final `runElig` reads **0x0F** with the player
+standing in the water. Per-leg where the leg differs (the map gate), per-STEP where the tile
+differs (the terrain gate) — which is exactly the shape D2 asks for, and exactly what the engine
+does.
+
+Capture: `evidence/impl/EM-P24-D2-excursion-ran-outdoors-walked-in-the-spring.bottom.png`.
+
+### Documentation swept with the behaviour
+
+`COVERAGE.md` §1a's gesture table carried `tap own tile = A` / `double-tap = START` as
+hardware-verified rows; both are replaced, with the hardware-verified claim narrowed to the two
+gestures that still exist (steer + tap-route) and the two new ones marked VERIFY-ON-HW-PENDING. The
+in-app Smart-mode explainer said "Double-tap = START" — it now says "Tap yourself = START, hold =
+SELECT", and it is SHORTER than the copy it replaced, which is the only thing the 3-line wrap
+budget cares about (`test_typography` T14 re-run green). `TOUCH-PLAN.md`'s FAM-DLG line that
+promised a double-tap is corrected in place rather than quietly left standing.
