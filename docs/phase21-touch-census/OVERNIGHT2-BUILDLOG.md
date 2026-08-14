@@ -1513,3 +1513,47 @@ elevations x both engines, TEST 18 all 32 eligibility masks against BOTH predica
 traversal program's own span-gated B has never run (P2 had no approach walk); a terrain veto costs
 one extra walked step (measured, errs safe); and `OWNGEOM_HOLD_FRAMES` / `RUNGEOM_MIN_TILES` are
 feel constants that only a real New 3DS can judge.
+
+## PHASE 25 / LANE C1 — the harvest that unblocks the BROKEN TAP rows, and a class that was missing
+
+Main tree, instance **a** only. Full log + evidence: `LANE-C-HARVEST.md`. Lane B1 found ten BROKEN
+`TAP` rows, nine sharing one cause (the screen has no cb2 fingerprint, so the "safe default" never
+runs there). What this lane did about it:
+
+1. **Two rows harvested LIVE [exact] and proven by touch, in one PC session** — `CB2_HallOfFame`
+   **0x08173560** (rows E15 + L1: `CB2_DoHallOfFameScreen` and `CB2_DoHallOfFamePC` both end at
+   the same run loop) and `CB2_MailRead` **0x08121C64** (row E8). Each was read off the gs ring
+   while the screen was up, then a synthetic tap moved `dlgTaps` and the game itself responded.
+2. **Two rows RE-DIAGNOSED from the engine source before a single boot.** **E19** never needed a
+   fingerprint: `EventScript_CableBoxResults` is `lockall` + `waitbuttonpress` around a plain
+   window, i.e. lane B1's own proven arm — its screen is simply unreachable without a link partner.
+   **L2** is worse than the plan thought: `pokeemerald credits.c:349` makes a **HELD B the credits
+   fast-forward**, so promoting the credits like any other screen would have swapped a walk-key
+   leak for a finger that double-speeds the credits.
+3. **A new context, `GCTX_INERT` — "detected, and deliberately SILENT"** — which this project did
+   not have (a screen was either NAMED and got verbs, or UNKNOWN and got the walker). Two members:
+   the credits by cb2 (`cb2Inert`, pinned DISJOINT from the class lists), and **FRLG quest-log
+   playback by STATE** (`gQuestLogState` 0x0203ADFA, the game's own `QL_IS_PLAYBACK_STATE` = 2 or
+   3 — never "non-zero", because ordinary play sits at RECORDING=1). Both run before every other
+   rule in `game_read`, battle test included.
+4. **K4 VERIFIED by an A/B on ONE boot**: during FireRed's playback, 8 touch ops (3 taps + a 90-frame
+   hold, all confirmed picked up) left `planSeq` at **0**; after the replay ended the same script on
+   the same channel took `planSeq` **0 → 2**. Lane B1's before on that screen was `planSeq 5`.
+5. **The remaining six rows promoted but NOT claimed** (C20 · H4/H5 · H6 · L1 · L2 · A10): their
+   screens could not be reached from the user's saves, and each reason is measured rather than
+   assumed — e.g. C20 is blocked because the party is five final-form Lv71-74 mons plus a **Lv9**
+   Zigzagoon, with 7 Rare Candies (→ Lv16) and no evolution stone in the bag.
+6. **Audit O5 accepted**: rows A1/A2 restated to VERIFIED-mech and the tally corrected to
+   **4 VERIFIED / 21 VERIFIED-mech** in both `TOUCH-PLAN.md` and `LANE-B-TAPVERIFY.md`.
+7. **A latent bug found in passing and reported, not quietly fixed**: `GS_CTXN` stopped at
+   `GCTX_STORAGE`, so **every phase-24 region-map row has been logging `?` instead of `map`** since
+   tap-to-fly shipped.
+
+Suites at close, all 16 re-run from this tree: **profiles 1697 → 2546** (TEST 20), celiolink 1259 ·
+control 6940 · diag 376 · fieldpath **1808 (UNMODIFIED)** · fieldtrav 1210 · netlink 66 ·
+peersprite 62078 · presence 61376 · theme 83444 · tilt 1756 · touchgeom 371892 · trace_replay 58
+(4 skips) · typography 1419 · uigeom 18332 · uihit 1834 = **616 394 checks, 0 failures**.
+`make -j8` + `make cia` clean (3DGBA.3dsx 4 403 340 B, 3DGBA.cia 2 032 576 B).
+Hygiene: both boots stopped via `azctl stop` (profile CLEAN, qt-config byte-identical),
+`clean-fixtures` run, ROM originals re-hashed untouched, `settings.bin` never written
+(sha256 identical before/after), no Azahar left running, instance **b** never touched.
