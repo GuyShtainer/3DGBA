@@ -109,3 +109,39 @@ does not open that file: a partial LG list would claim a census that never happe
 
 Fixture discipline: every EM arc runs on `roms/emerald-fix.{gba,sav}` (a real copy, the `.gba` a
 symlink), never the user's `emerald.sav`.
+
+---
+
+## Entry 1 — 🎉 E15(EM) harvested [exact] AND proven by touch, on the first screen of the arc
+
+Boot `runs/20260814-184139`, instance a, **`--stage-roms firered,emerald-fix`** — the pair, with
+Emerald as gameB so it renders on the BOTTOM screen and owns touch (main.c:3547); FireRed sits on
+the top screen at its title, deliberately never continued (that skips its ~3.5-minute quest-log
+replay until the boot that needs it). `emerald-fix.sav` wakes at **26.28 (13,8)** — the Battle
+Arena lobby, two tiles below its PC, which is where the by-touch storage arc saved it.
+
+Route: `U1` + `a` (KEY) → "GUYA booted up the PC." → `a` → the **LANETTE'S PC / GUYA's PC / HALL OF
+FAME / LOG OFF** multichoice → `D D a`.
+
+| # | reading | value |
+|---|---|---|
+| 1 | gs ring, screen 1, while the HoF screen is up | **`cb2 = 0x08173560`** = `CB2_HallOfFame` **[exact]** on `pokeemerald.sym` |
+| 2 | `ctx` at the same moment | **1 (field)** — undetected, exactly the BROKEN diagnosis |
+| 3 | `fieldLock` / `dlgOwns` | **1 / 1** |
+| 4 | one synthetic tap (`t 208 80 8`) | `dlgTaps` **0 → 1** |
+| 5 | the game | the ⓐEXIT prompt fired: cb2 `0x08173560 → 0x08085E5C`, ctx `field → fmenu`, back at "Which PC should be accessed?" |
+
+Captures: `evidence/impl/EM-P25-hof-pc-replay-cb2.bottom.png` (the screen the harvest was read on)
+and `EM-P25-hof-tap-exited.bottom.png` (the same screen after the tap).
+
+**Row E15 (EM half) = VERIFIED**, with a nuance worth more than the row: rows 3-5 say the tap
+already works there *today*, before any promotion — because the **PC's own `lockall` is still
+held** while the Hall-of-Fame sub-program runs, so lane B1's `fieldLock` route claims the frame.
+B1's diagnosis ("no fingerprint ⇒ the walker owns it") is right about the fingerprint and wrong
+about the consequence **for screens entered from a locked field script**. The promotion still
+matters and still ships: the REAL Hall of Fame (row **L1**) is entered from the league battle
+chain with no script holding the field, so it has nothing to fall back on.
+
+Incidental: this save's HoF sector reads **"The HALL OF FAME data is corrupted."** — the screen,
+its cb2 and its ⓐEXIT verb are all real, but the induction replay itself never plays here. Named,
+not hidden.
