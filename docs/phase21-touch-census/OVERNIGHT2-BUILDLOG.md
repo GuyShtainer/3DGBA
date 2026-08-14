@@ -868,3 +868,42 @@ The shape worth remembering (it is the reusable pattern for ANY multi-map touch 
    exists, but there is no waterfall this save can reach either.
 3. `progMapSeq` carries the leg index; the fplog `progSeq/step/hm` columns do not yet carry
    a leg column of their own.
+
+## Lane A Entry 12 (phase 23) — landmine 8: ONE gdb client per boot, and two readers race for it
+
+`gdbio` multiplexes through a broker that holds the stub's single client slot. Running a
+long background poller AND issuing direct `gdbio read` calls at the same time raced them:
+the broker died, and because **Azahar's stub accepts exactly one client per boot** (the
+module doc's own fact 5) it could not be re-established — `cannot connect to the gdb stub
+… this boot's one gdb client was already consumed`. The app kept running perfectly; only
+the RAM proof channel was lost, which on a proof arc is most of the value.
+
+Rule: **one gdb reader at a time.** Start the poller, then read its log — never poll and
+`gdbio read` concurrently. If a poller must be replaced, stop it and wait for the broker to
+release before starting the next one.
+
+## Lane A Entry 13 (phase 23) — the second script wall, at ~36 outdoor steps
+
+Arc 4 cleared the 6-step wall (Entry 10) exactly as designed — `d4 r1 d1` + eight `a`
+tokens, and the avatar walked straight through (40,36), the tile the previous attempt died
+on — and then froze again 30 steps later. Control log, verbatim:
+
+```
+tok 39 r3 start (48,50)->(51,50) f=5368   … done f=5391    (23 frames — normal)
+tok 40 d2 start (51,50)->(51,52) f=5392   … done f=5505    (113 frames — slowing)
+tok 41 r1 start (51,52)->(52,52) f=5506   … done f=5710    (204 frames — crawling)
+tok 42 d2 start (52,52)->(52,54) f=5711   TIMEOUT at (52,53)
+```
+
+So the wall is not a hard stop: movement DEGRADES for a few tiles and then halts, which is
+what a script taking over the field controller looks like. Step count at the freeze: **36**.
+Combined with the 6-step wall, the working model is a step-counted field script that
+re-arms, so a long D4 route on this save needs an `a` batch roughly every 30 steps, placed
+at a token boundary where the avatar faces open ground.
+
+Also proven in arc 4, and worth keeping: once the D4 script died, the pre-staged touch taps
+took over and the SHIPPED tap-to-walk router carried the avatar **10 tiles east across the
+plaza** (52,53) -> (62,53), replanning around the frontier's buildings on the live grid.
+That is the phase-18 router working in a real overworld, on camera
+(`evidence/impl/EM-traversal-taproute-10tiles.bottom.png`) — the thing `phase18-crisp/
+RESULTS.md:16` said had "never been watched working in an actual overworld".
