@@ -384,7 +384,11 @@ static FpEngine fp_engine(const GameProfile* p) {
 static FtExcursion s_exc;
 static bool s_excOn = false;
 static int  s_excLeg = 0;                 // 0 = out, 1 = interior, 2 = home
-static int  s_excMapG = -1, s_excMapN = -1;   // the map the CURRENT leg is walked on
+static int  s_excMapG = -1, s_excMapN = -1;   // the HOME map: where the tap happened, and where
+                                              //   leg 2 walks to the goal
+static int  s_excCurG = -1, s_excCurN = -1;   // the map the CURRENT leg is being walked on — the
+                                              //   reference a leg boundary is detected against
+                                              //   (phase 24; see the boundary watcher)
 static int  s_excGoalX = 0, s_excGoalY = 0;   // the tapped goal, kept for leg 2
 static int  s_excSeq = 0;
 static const char* s_excChip = 0;
@@ -402,6 +406,7 @@ static int  s_excPendFrames = 0;
 
 static void exc_reset(void) {
 	s_excOn = false; s_excLeg = 0; s_excMapG = s_excMapN = -1; s_excChip = 0;
+	s_excCurG = s_excCurN = -1;
 	s_excPend = 0; s_excPendFrames = 0;
 }
 // "VIA DOOR - LEG n/3" (T4.2). The leg counter is the honest v1: map NAMES would need the ROM
@@ -530,6 +535,16 @@ static u16 walk_update_inner(bool touching, bool newPress, bool gvalid, int gx, 
 		if (s_aPulse > 0)     { s_aPulse--;     return 1 << GBAKEY_A; }
 	}
 
+	// PHASE 24: a leg boundary is a MAP CHANGE, and it has to be noticed whether or not a route is
+	// still being followed. The LAST leg's terminal is a STEP warp: the walker arrives on the warp
+	// tile, declares the route finished (s_walking = false) and only THEN does the warp fire — so
+	// the kill-switch inside the follow loop below never saw it, and the excursion parked on the
+	// terrace it had just stepped out onto. One watcher, for the whole machine.
+	if (s_excOn && !s_excPend && (mapG != s_excCurG || mapN != s_excCurN)) {
+		s_walking = false; s_termActive = false;
+		exc_leg_boundary(core, p, px, py, mapG, mapN);
+	}
+
 	// PHASE 24: the armed leg of an excursion, planned as soon as the arrival map is really loaded
 	// (see exc_leg_boundary). Retried on a cadence rather than every frame — each attempt is a BFS
 	// on the render thread — and given up on loudly instead of leaving the player parked.
@@ -540,10 +555,14 @@ static u16 walk_update_inner(bool touching, bool newPress, bool gvalid, int gx, 
 			s_walking = true; s_lpx = px; s_lpy = py; s_stall = 0; s_replans = 0;
 			s_excPend = 0; s_excPendFrames = 0;
 			s_mapG = mapG; s_mapN = mapN;      // the leg is walked on THIS map now
+			s_excCurG = mapG; s_excCurN = mapN;
 		} else if (++s_excPendFrames > EXC_SETTLE_BUDGET) {
 			exc_reset();
 		}
 	}
+	// The last leg's route ending IS the end of the excursion — otherwise the machine (and its
+	// "VIA DOOR - LEG 3/3" chip) would linger until some later map change happened to clear it.
+	if (s_excOn && !s_excPend && !s_walking && s_excLeg >= 2) exc_reset();
 
 	if (!s_walking || !core || !p) return 0;            // path-follow (released, routing)
 	int w, h; uint32_t ptr;
@@ -553,10 +572,9 @@ static u16 walk_update_inner(bool touching, bool newPress, bool gvalid, int gx, 
 	// map. Both nets are kept.
 	if (mapG != s_mapG || mapN != s_mapN) {
 		s_walking = false; s_termActive = false; route_end(core, FDBG_END_MAPCHANGE);
-		// PHASE 23: for an excursion this is not the end of the route, it is the END OF A LEG —
-		// but ONLY if the map we landed on is the one the plan predicted. Anything else (a wrong
-		// door, a script warp, a Fly) is exactly the case the kill-switch exists for.
-		if (s_excOn) exc_leg_boundary(core, p, px, py, mapG, mapN);
+		// PHASE 23/24: for an excursion this is the END OF A LEG, not the end of the route — but
+		// the boundary is now watched ABOVE, unconditionally, because the last leg's terminal is a
+		// STEP warp the walker finishes before the warp fires (so this branch never saw it).
 		return 0;
 	}
 	if (!map_read(core, p, &w, &h, &ptr) || ptr != s_mapPtr || w != s_mapW || h != s_mapH) {
@@ -833,6 +851,7 @@ static int exc_plan(GbaCore* core, const GameProfile* p, int px, int py, int gx,
 	s_walking = true; s_lpx = px; s_lpy = py; s_stall = 0; s_replans = 0;
 	s_excOn = true; s_excLeg = 0;
 	s_excMapG = mapG; s_excMapN = mapN;
+	s_excCurG = mapG; s_excCurN = mapN;
 	s_excGoalX = gx; s_excGoalY = gy;
 	s_excChip = exc_chip_for(0);
 	g_fieldDbg.progSeq = ++s_excSeq;
