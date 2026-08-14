@@ -145,3 +145,39 @@ chain with no script holding the field, so it has nothing to fall back on.
 Incidental: this save's HoF sector reads **"The HALL OF FAME data is corrupted."** — the screen,
 its cb2 and its ⓐEXIT verb are all real, but the induction replay itself never plays here. Named,
 not hidden.
+
+## Entry 2 — E8 (mail read) harvested [exact] and proven, same boot, same PC
+
+Continuing the same PC session: `GUYA's PC` → `MAILBOX` → the save's one letter, **ROMAN's MAIL** →
+`READ`.
+
+| # | reading | value |
+|---|---|---|
+| 1 | gs ring, screen 1, mail viewer up | **`cb2 = 0x08121C64`** = `CB2_MailRead` **[exact]** (`pokeemerald.sym`) |
+| 2 | `ctx` | **1 (field)** — undetected, as diagnosed |
+| 3 | `fieldLock` / `dlgOwns` | 1 / 1 (again the PC script's `lockall`) |
+| 4 | one synthetic tap | `dlgTaps` **1 → 2** |
+| 5 | the game | the viewer closed and the MAILBOX list came back; cb2 `0x08121C64 → 0x08085E5C` |
+
+Captures: `EM-P25-mail-read-cb2.bottom.png` (the letter — "BE NICE / TO PLUSLE / ! VOLBEAT / WILL
+BE / FANTASTIC. From ROMAN") and `EM-P25-mail-tap-closed.bottom.png`.
+
+**Row E8 = VERIFIED.** Same nuance as E15: the mailbox route inherits the PC script's `lockall`, so
+that half already worked; the **held-mail** route (party → MAIL → READ) is opened from a menu with
+no script holding the field, and only the promoted fingerprint can cover it.
+
+### E19 — re-diagnosed, and the screen is out of reach for a different reason than B1 gave
+
+`EventScript_CableBoxResults` is reached from `field_control_avatar.c:378-380 / 404-406` —
+`MetatileBehavior_IsCableBoxResults1/2`, i.e. the results machine is a **metatile in a cable-club
+room** (`MAP_TRADE_CENTER` / `MAP_RECORD_CORNER` / the Union-Room side), and those maps are only
+entered through a live link session. So:
+
+- the row is **NOT** blocked on a fingerprint (there is no cb2 to harvest — `ShowLinkBattleRecords`
+  only adds a window; `lockall` + `waitbuttonpress` hold the field around it), and
+- its **screen is UNREACHABLE from a solo save** — you cannot stand in front of that machine
+  without a link partner, and the app's link path (`celiolink.c`) is frozen for this lane.
+
+Verdict: **VERIFIED-mech** (the mechanism is B3's, proven live in lane B1 and again on this boot's
+PC dialog: `fieldLock 1` → `dlgOwns 1` → tap = A), with the honest note that the screen itself was
+not visited. That is a strictly better answer than "BROKEN: undetected cb2", which was wrong.
