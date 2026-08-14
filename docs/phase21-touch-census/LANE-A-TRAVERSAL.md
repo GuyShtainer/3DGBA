@@ -619,12 +619,144 @@ Ruby or Sapphire ROM exists on this machine". **That is false and was corrected 
 Sapphire captures are committed under `evidence/`. The claim was inherited verbatim from the phase-18
 HANDOFF, where it was true at the time, and never re-checked.
 
-So what is actually owed is smaller and *achievable today*: the table, the seam and the property are
-proven, and a **live RS run is now possible** rather than blocked. The decisive check is cheap — the
-user's Ruby save is a ~600-hour completed game, so every badge flag should read SET; under the old
-Emerald offsets those reads land in `vars[]` and cannot be reliably 1. Note the carts are **rev 2**,
-while `SaveBlock1.flags` was cited from pokeruby master; the layout is not revision-conditional in
-that source, but a live run is what turns that from a reading into a measurement.
+So what was actually owed was smaller and *achievable today*: the table, the seam and the property
+were proven, and a **live RS run was possible** rather than blocked.
+
+**That debt is now PAID — see the RS-P24 section below (2026-08-14).** The row ran against the
+user's own Ruby *and* Sapphire rev-2 carts in Azahar and answered correctly on both; the pre-fix
+numbering answered **zero badges on a 614-hour completed game**. This paragraph is left standing
+rather than deleted because the lesson is the point.
 
 *(Lesson worth keeping: a stale caveat is as damaging as a stale claim — it caused a real, available
 proof to be written off as impossible. Re-check the caveats, not just the assertions.)*
+
+---
+
+# RS-P24 (2026-08-14) — the Ruby/Sapphire flag row, PROVEN against live carts
+
+**Verdict: PROVEN.** The `FT_VAR_RS` row added in `c2a58db` reads the user's real Ruby and Sapphire
+saves correctly; the numbering it replaced reads **zero badges** on both. Emulator run (Azahar
+2125.1.2), both titles in one dual-screen boot, evidence in `evidence/impl/RS-P24-*`.
+
+## How it was read — the shipped function, not a re-implementation
+
+A hand-rolled save parser proves nothing about the shipped reader, and no screenshot can show a
+flag. So a **logging-only probe** (`g_badgeProbe[2]`, `touch.h` / `touch.c` `badgeprobe_stamp`,
+called once per frame per seat from `main.c` in the existing parked-worker window) restamps the
+**shipped `fieldtrav_flag_get`**, with the **shipped `fieldtrav_cfg` rows** and the **shipped
+`fieldtrav_variant` title map**, TWICE per game:
+
+* **NEW** — through the row the title really selects (`ft_variant(p)`), i.e. what ships today;
+* **OLD** — through `FT_VAR_EMERALD`, which on an AXVE/AXPE cart is byte-for-byte what the code did
+  before `c2a58db` (`FT_VAR_EMERALD == FP_ENG_RSE == 0`, the value `fieldtrav_cfg` used to receive).
+
+The probe contributes **no numbering of its own**. The eight badge ids are `cfg->badgeCut + 0..7`
+(pret defines `FLAG_BADGE01_GET..FLAG_BADGE08_GET` as `SYSTEM_FLAGS + 0x07..0x0E`, consecutive), and
+`rowConsec` **grades that derivation against the same row's other four shipped ids** (SMASH = +2,
+STRENGTH = +3, SURF = +4, WATERFALL = +7) so it can never quietly invent a numbering the table under
+test disagrees with. `fieldpath.{c,h}` untouched; no constant in `fieldtrav.c` changed.
+
+`nm`-resolved at `g_badgeProbe @ 0x005f83a8`; raw dumps in
+`evidence/impl/RS-P24-gdb-badgeprobe.txt`.
+
+## Ruby — AXVE rev 2, the user's 614:46 save
+
+Ground truth first, from the game's **own** Trainer Card (`RS-P24-03-trainercard.top.png`,
+`RS-P24-04-ruby-badges-zoom.png`): NAME GUY · ID 31835 · POKéDEX 259 · PLAY TIME **614:46** ·
+**eight badge icons, all present**.
+
+| word | value | meaning |
+|---|---|---|
+| `code` | `AXVE` | the title the profile matched |
+| `variant` | **2** | `fieldtrav_variant("AXVE")` → `FT_VAR_RS` |
+| `sb1` | **0x02025734** | `sbDirect` SaveBlock1 — the RS-REV2-VERIFICATION row, now measured on a rev-2 cart |
+| `flagsOffNew` / `Old` | **0x1220** / 0x1270 | pokeruby `global.h:701` vs Emerald's |
+| `badge01New` / `Old` | **0x807** / 0x867 | `SYSTEM_FLAGS` 0x800 vs 0x860 |
+| `addrNew` / `addrOld` | **0x02026A54** / 0x02026AB0 | the byte each rail actually read |
+| **`badgesNew`** | **0xFF** | **all eight badges SET** |
+| **`badgesOld`** | **0x00** | the pre-fix rail: **no badges at all** |
+| `shoesNew` / `shoesOld` | 1 / 1 | `FLAG_SYS_B_DASH` 0x860@0x1220 vs 0x8C0@0x1270 |
+| `rowConsec` | 1 | the RS row's badge ids really are consecutive from BADGE01 |
+| `runElig` | 0x1D | `RUNG_SHOES|ONFOOT|FREE|TERRAIN`; `RUNG_MAP` clear — RS never sets it, by design (`touch.c:860-864`) |
+
+Per badge, both rails, side by side:
+
+| badge | NEW id | NEW | OLD id | OLD | Trainer Card |
+|---|---|---|---|---|---|
+| BADGE01 Stone     | 0x807 | **SET** | 0x867 | clear | present |
+| BADGE02 Knuckle   | 0x808 | **SET** | 0x868 | clear | present |
+| BADGE03 Dynamo    | 0x809 | **SET** | 0x869 | clear | present |
+| BADGE04 Heat      | 0x80A | **SET** | 0x86A | clear | present |
+| BADGE05 Balance   | 0x80B | **SET** | 0x86B | clear | present |
+| BADGE06 Feather   | 0x80C | **SET** | 0x86C | clear | present |
+| BADGE07 Mind      | 0x80D | **SET** | 0x86D | clear | present |
+| BADGE08 Rain      | 0x80E | **SET** | 0x86E | clear | present |
+| Running Shoes     | 0x860 | **SET** | 0x8C0 | set (accidental) | — |
+
+**The arithmetic, confirmed live rather than on paper:** Ruby's `flags[]` runs
+`sb1+0x1220 .. sb1+0x1340`, i.e. `0x02026954..0x02026A74`. The old rail's BADGE01 byte is
+`0x02026AB0` — **0x3C bytes past the end of `flags[]`, inside `vars[]`**, exactly as the fix
+commit predicted. Every HM gate and the Running-Shoes gate were reading game variables.
+
+## Sapphire — AXPE rev 2, a 26:33 save (the discriminating case)
+
+This one matters more than Ruby, because "all ones" is the answer a broken probe would also give.
+Sapphire's Trainer Card (`RS-P24-03-trainercard.bottom.png`, `RS-P24-05-sapphire-badges-zoom.png`)
+shows NAME TERRY · ID 15287 · POKéDEX 13 · PLAY TIME 26:33 · **seven badges, the eighth slot an
+empty placeholder box**.
+
+`badgesNew` = **0x7F** — BADGE01..07 set, **BADGE08 clear**. Bit for bit the card, including *which*
+badge is missing. `badgesOld` = **0x00**. `shoesNew` = 1; `shoesOld` = **0** — so the old rail is not
+merely pessimistic, it **disagrees with itself across two saves** that both provably have the
+Running Shoes (you cannot reach a second gym without Mom's gift, and both saves have 7+ badges).
+
+## The control — is the OLD rail just a dead code path?
+
+No. A second boot staged **Emerald (BPEE) + FireRed (BPRE)** and re-read the same probe
+(`RS-P24-06-control-emerald-firered.*`, `RS-P24-07-emerald-badges-zoom.png`, second block of the
+gdb dump):
+
+* **BPEE** — `variant` 0, `flagsOffNew == flagsOffOld == 0x1270`, `badge01New == badge01Old ==
+  0x867`, `addrNew == addrOld == 0x02026DDC`, and **`badgesNew == badgesOld == 0xFF`**, matching the
+  eight badges on that save's own card. Two results in one: the OLD arm returns **real** badge data
+  when the offsets fit the save (so `0x00` on Ruby is a genuine `vars[]` read, not a broken arm),
+  and **BPEE behaviour is unchanged by `c2a58db`**, measured rather than asserted.
+* **BPRE** — `variant` 1, `flagsOff` 0x0EE0, `badge01New` 0x821, and **`rowConsec` = 0**. That is the
+  guard working as designed and it is reported, not hidden: FireRed's `badgeCut` is **BADGE02**
+  (`fieldtrav.c` FRLG row), so `badgeCut + 0..7` is *not* BADGE01..08 there and **the FRLG badge
+  mask this probe prints is not interpretable as the eight Kanto badges**. Nothing about FRLG is
+  claimed from it. (FRLG was never affected by this defect; it always had its own row.)
+
+## Honest limits
+
+1. **Emulator, not hardware.** CLAUDE.md rule 6 still stands for anything timing-sensitive. This is
+   not timing-sensitive — it is a memory read of a save the emulator loaded from the user's own
+   `.sav` — but it has still never executed on a real New 3DS.
+2. **Two saves, not all saves.** Proven for AXVE rev 2 and AXPE rev 2 with these two saves. The
+   pokeruby sources say the layout is not revision-conditional; rev 0 and rev 1 remain inferred.
+3. **The badge rail, not every flag.** `strengthLatch` (0x829) and the object graphics ids were not
+   exercised here; they come from the same row and the same citations, but they were not measured.
+4. **The probe is an instrument, not a feature.** `g_badgeProbe` is logging-only, appended, read by
+   nothing, and cannot change a route — the same contract `g_fieldDbg` and `g_monDbg` carry.
+
+## Evidence + user-data discipline
+
+`evidence/impl/RS-P24-proof.html` is the captioned contact sheet. Captures: `RS-P24-00-boot.*`
+(GAME FREAK intro — the boot, before the saves are up), `RS-P24-01-progress.*` (both saves live in
+the overworld), `RS-P24-02-startmenu.top.png` (the RS START menu, showing the Trainer Card is entry
+4 = "GUY"), `RS-P24-03..05` (the two Trainer Cards + badge zooms), `RS-P24-06..07` (the control).
+State: `RS-P24-gdb-badgeprobe.txt` (both boots, hex block + every word individually).
+
+ROMs and saves were staged as **copies** (`azctl boot --stage-roms`); azctl re-hashed the originals
+after both runs ("originals re-hashed, all untouched"). `qt-config.ini` restored byte-identically by
+`azctl stop`; `sdmc:/3DGBA` fixtures removed by `clean-fixtures` and the dir restored from a
+pre-run copy. A full before/after `shasum -a 256` sweep of `roms/*.gba`, `roms/*.sav`,
+`qt-config.ini`, `sdmc:/3DGBA/**` and `sdmc:/dual-gba/**` **diffs empty**. No Azahar left running.
+
+## Gate
+
+**16 suites, 0 failures**, unchanged from the pre-run numbers: celiolink 1259 · control 6940 ·
+diag 376 · fieldpath **1808 (frozen)** · fieldtrav **1210** · netlink 66 · peersprite 62078 ·
+presence 61376 · profiles 1697 · theme 83444 · tilt 1756 · touchgeom 371892 · trace 58 (+4 loud
+SKIPs) · typography 1419 · uigeom 18332 · uihit 1834. `make -j8` clean → `3DGBA.3dsx`, no new
+warnings. `make cia` not run.

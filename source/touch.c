@@ -828,6 +828,58 @@ static uint32_t prog_sb1(GbaCore* core, const GameProfile* p) {
 	uint32_t sb1 = p->sbDirect ? p->sb1ptr : gbacore_read32(core, p->sb1ptr);
 	return ((sb1 >> 24) == 0x02u) ? sb1 : 0;
 }
+
+// --- PHASE 24 / lane A3 (RS-P24): the flag-rail probe. See touch.h for why it exists. ---------
+// LOGGING ONLY. Every read below goes through the SHIPPED fieldtrav_flag_get + fieldtrav_cfg +
+// fieldtrav_variant; this function contributes no numbering of its own, which is the whole point
+// (a probe that re-derives the offsets could only ever agree with itself).
+BadgeProbe g_badgeProbe[2];
+
+void badgeprobe_stamp(int seat, GbaCore* core, const GameProfile* p) {
+	if (seat < 0 || seat > 1) return;
+	BadgeProbe* b = &g_badgeProbe[seat];
+	if (!core || !p) { b->seq++; b->sb1 = 0; return; }
+
+	FpBus bus = { fp_r8, fp_r16, fp_r32, core };
+	FtVariant var = ft_variant(p);                       // the shipped title -> numbering map
+	const FtEngCfg* cN = fieldtrav_cfg(var);             // the row this title really selects
+	const FtEngCfg* cE = fieldtrav_cfg(FT_VAR_EMERALD);  // ...and the row the DEFECT selected
+	uint32_t sb1 = prog_sb1(core, p);
+
+	b->code = (int32_t)((uint32_t)(uint8_t)p->code[0]        |
+	                    ((uint32_t)(uint8_t)p->code[1] << 8) |
+	                    ((uint32_t)(uint8_t)p->code[2] << 16)|
+	                    ((uint32_t)(uint8_t)p->code[3] << 24));
+	b->variant     = (int32_t)var;
+	b->sb1         = (int32_t)sb1;
+	b->flagsOffNew = (int32_t)cN->flagsOff;
+	b->flagsOffOld = (int32_t)cE->flagsOff;
+	b->badge01New  = (int32_t)cN->badgeCut;   // FLAG_BADGE01_GET — the Cut badge in RS and Emerald
+	b->badge01Old  = (int32_t)cE->badgeCut;
+	// pret: FLAG_BADGE01_GET..FLAG_BADGE08_GET = SYSTEM_FLAGS + 0x07..0x0E, consecutive. Graded
+	// against the SAME row's other four ids rather than asserted (pokeruby flags.h:789-796 /
+	// pokeemerald flags.h:1359-1366: SMASH = BADGE03, STRENGTH = BADGE04, SURF = BADGE05,
+	// WATERFALL = BADGE08).
+	b->rowConsec = (cN->badgeSmash     == (uint16_t)(cN->badgeCut + 2) &&
+	                cN->badgeStrength  == (uint16_t)(cN->badgeCut + 3) &&
+	                cN->badgeSurf      == (uint16_t)(cN->badgeCut + 4) &&
+	                cN->badgeWaterfall == (uint16_t)(cN->badgeCut + 7)) ? 1 : 0;
+
+	int32_t mN = 0, mO = 0;
+	for (int i = 0; i < 8; i++) {
+		if (fieldtrav_flag_get(&bus, var,            sb1, cN->badgeCut + i)) mN |= 1 << i;
+		if (fieldtrav_flag_get(&bus, FT_VAR_EMERALD, sb1, cE->badgeCut + i)) mO |= 1 << i;
+	}
+	b->badgesNew = mN;
+	b->badgesOld = mO;
+	b->shoesNew  = fieldtrav_flag_get(&bus, var,            sb1, cN->runShoes) ? 1 : 0;
+	b->shoesOld  = fieldtrav_flag_get(&bus, FT_VAR_EMERALD, sb1, cE->runShoes) ? 1 : 0;
+	b->addrNew   = (int32_t)(sb1 + cN->flagsOff + ((uint32_t)cN->badgeCut >> 3));
+	b->addrOld   = (int32_t)(sb1 + cE->flagsOff + ((uint32_t)cE->badgeCut >> 3));
+	b->runElig   = (int32_t)run_elig(core, p);
+	b->seq++;
+}
+
 // gPlayerAvatar +0x00 flags, bit 3 = PLAYER_AVATAR_FLAG_SURFING (pokeemerald / pokefirered
 // include/global.fieldmap.h — bit 3 in both, re-read this session). 0 addr -> "not surfing",
 // which is the safe answer: it only ever suppresses a mount we would otherwise plan.

@@ -3547,6 +3547,12 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
 				}
 				u16 g = to_gba_keys(kHeld);
+				// PHASE 24 / lane A3 (RS-P24) — LOGGING ONLY. Both seats, every frame, workers parked
+				// (the pipeline wait above). Deliberately OUTSIDE the touch branch: the flag rail is a
+				// property of the SAVE, not of the pointer, so it must be readable on a boot where
+				// touch is Off and on the TOP game as well as the bottom one. touch.h explains it.
+				badgeprobe_stamp(0, emuA.core, profile_for(emuA.core));
+				badgeprobe_stamp(1, emuB.core, profile_for(emuB.core));
 				// Touchscreen drives the BOTTOM game (A is on bottom iff swapped) as a POINTER on the
 				// real game UI. touch_update is stateful (menu-cursor driver + tap-to-walk) -> run it
 				// every gameplay frame when enabled.

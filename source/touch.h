@@ -284,6 +284,50 @@ typedef struct {
 } MonDbg;
 extern MonDbg g_monDbg;
 
+// --- PHASE 24 / lane A3 (RS-P24): the FLAG-RAIL probe (LOGGING ONLY) --------------------------
+// Why it exists: commit c2a58db gave Ruby/Sapphire their own flag numbering (flags[] at 0x1220,
+// SYSTEM_FLAGS 0x800) after they had been reading EMERALD's (0x1270 / 0x860) — a read that landed
+// inside `vars[]`. That fix is host-proven, but the host cannot prove it against a REAL Ruby
+// cartridge, and no screenshot can: the badge case is invisible on screen except through the
+// game's own Trainer Card, and a hand-rolled save parser proves nothing about the SHIPPED reader.
+//
+// So this restamps the SHIPPED `fieldtrav_flag_get` — the exact function `run_elig` and the HM
+// eligibility gates call, with the exact `fieldtrav_cfg` rows and the exact `fieldtrav_variant`
+// title map — TWICE per game: once through the row the title really selects, and once through the
+// EMERALD row, which is byte-for-byte what the pre-fix code did on an AXVE/AXPE cart. The two
+// masks side by side ARE the proof; `sb1`/`addr*` publish the arithmetic so it can be checked by
+// hand. Nothing here is a re-implementation and nothing reads it back — it cannot change a route.
+//
+// The 8 badge ids are derived as BADGE01 + 0..7 from the SHIPPED row's own `badgeCut`, because
+// pret defines FLAG_BADGE01_GET..FLAG_BADGE08_GET as SYSTEM_FLAGS + 0x07..0x0E, consecutive, in
+// all three games. `rowConsec` grades that derivation against the four OTHER shipped badge ids in
+// the same row (SMASH = +2, STRENGTH = +3, SURF = +4, WATERFALL = +7), so the probe can never
+// quietly invent a numbering the table under test does not agree with.
+typedef struct {
+	int32_t seq;          // +0x00  bumped every stamp (0 = never ran)
+	int32_t code;         // +0x04  the 4-char game code, byte 0 in the LOW byte ('A','X','V','E')
+	int32_t variant;      // +0x08  FtVariant fieldtrav_variant() chose (0 EM / 1 FRLG / 2 RS)
+	int32_t sb1;          // +0x0C  SaveBlock1 base as prog_sb1() resolved it (0 = no save loaded)
+	int32_t flagsOffNew;  // +0x10  shipped cfg->flagsOff for `variant`
+	int32_t flagsOffOld;  // +0x14  the Emerald row's flagsOff (what the defect used)
+	int32_t badge01New;   // +0x18  shipped row's FLAG_BADGE01_GET id
+	int32_t badge01Old;   // +0x1C  Emerald row's FLAG_BADGE01_GET id
+	int32_t badgesNew;    // +0x20  bit i (0..7) = BADGE0(i+1) read through the SHIPPED row
+	int32_t badgesOld;    // +0x24  the SAME eight badges read through the EMERALD row (pre-fix)
+	int32_t shoesNew;     // +0x28  FLAG_SYS_B_DASH through the shipped row (run_elig's RUNG_SHOES)
+	int32_t shoesOld;     // +0x2C  ...and through the Emerald row
+	int32_t addrNew;      // +0x30  sb1 + flagsOffNew + (badge01New>>3) — the byte actually read
+	int32_t addrOld;      // +0x34  sb1 + flagsOffOld + (badge01Old>>3)
+	int32_t rowConsec;    // +0x38  1 = the shipped row's five badge ids are consecutive per pret
+	int32_t runElig;      // +0x3C  run_elig()'s live five-gate mask, stamped here too so the
+	                      //        Running-Shoes gate is readable without driving a route
+} BadgeProbe;
+extern BadgeProbe g_badgeProbe[2];   // [0] = seat A, [1] = seat B
+
+// Stamp the probe for one seat. Call once per frame with the workers PARKED (main thread only —
+// it reads emulated RAM through the same bus every other live read uses).
+void badgeprobe_stamp(int seat, GbaCore* core, const GameProfile* p);
+
 // --- Touch-event instrumentation logger (LOGGING ONLY — never changes touch/gameplay) ---------------
 // Self-contained ring in touch.c: touch_update records a row on each touch EVENT (a new press; plus
 // drags/holds where they matter — bag + overworld/PC). Each row captures the ctx fingerprint and the
