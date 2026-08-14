@@ -54,3 +54,49 @@ the exception — `FLAG_HIDE_*`, permanently gone on an 8-badge save, so they ar
 **Consequence for the arc order:** P1 needs no Fly (walk from the lobby, phase-23's proven route);
 P2/P3/P4 each start with a Fly, which is a menu arc driven by bare-direction D4 tokens (region-map
 cursor: BATTLE FRONTIER is grid (22,12), LAVARIDGE (5,3), VERDANTURF (4,6), MAUVILLE (8,6)).
+
+---
+
+## P1 — SURF, end to end: **PROVEN**
+
+Boot `runs/20260814-143803`, dual Emerald from `roms/emerald-shore.sav`, instance a.
+One tap. Nothing else was sent to the game between the tap and the screenshot.
+
+**The act:** `t 256 128 6 30` — a tap on the ocean six tiles east of the player
+(tap geometry `screen = (40 + (7+ddx)*16 + 8, 40 + (5+ddy)*16 + 8)`, ddx +6 → world (53,58),
+`MB_OCEAN_WATER 0x15`).
+
+**What the game's own state said** (`g_fieldDbg` over gdb, one line per read, ~5 s apart):
+
+| read | ctx | pos | SURF | prog |
+|---|---|---|---|---|
+| before | OVERWORLD | (47,58) | **0** | seq=0 |
+| +5 s | OVERWORLD | (47,58) | 0 | seq=1 **PLANNED** moves=6 inter=1 hm=**SURF** phase=**5 (ANSWER)** aKeys=12 **answers=2** |
+| +10 s | OVERWORLD | (47,58) | **1** | phase=6 (DONE) aKeys=22 answers=2 |
+| +15 s | OVERWORLD | **(49,58)** | 1 | end=**HANDOFF** — the mount consumed the step, the replan handed the rest to the shipped walker (`walking=1`) |
+| +20 s | OVERWORLD | **(53,58)** | **1** | plan seq=3 goal=(53,58) beh=0x15 end=ARRIVED |
+
+`SURF` is the game's own `gPlayerAvatar` bit 3 (PLAYER_AVATAR_FLAG_SURFING) and (53,58) is a
+water tile with elevation 1 — a walking player cannot stand there. Both had to be true, and both
+are read off the game, not off a picture.
+
+**`answers=2` is the load-bearing number.** It says the executor aimed at the YES twice: the first
+press fell inside `Task_HandleYesNoInput`'s five dead frames and was discarded, the second landed.
+Before the fix that first press was the ONLY one, which is exactly why the phase-23 run — and this
+lane's first run — left the prompt open with YES highlighted forever.
+
+Captures: `evidence/impl/EM-P24-P1a-shore-arrival.bottom.png` (the walked approach),
+`EM-P24-P1b-surf-mounted.bottom.png` (the game's own "Would you like to SURF?" with ▶YES),
+`EM-P24-P1c-surfing-on-the-tapped-tile.bottom.png` (afloat, on the tapped tile).
+
+**Verdict: PROVEN** — plan, walk, face, A, the game's own YES, the mount, and the ride to the
+tapped tile, from one tap, with the state read at every stage.
+
+### The defect this target found (fixed, commit `2dde03e`)
+
+`Task_HandleYesNoInput` (pokeemerald src/script_menu.c) ignores input for its first five frames;
+our ctx flips to `GCTX_FIELDMENU` the instant that task exists, so the single A pulse was always
+spent inside the dead window. The retry that should have covered it was gated on `textDlg`, and
+`sFieldMessageBoxMode` returns to HIDDEN as soon as the text finishes printing — false for the
+whole "box up, waiting for A" window. Fix: level-triggered ANSWER (cursor held on YES, a fresh
+edge every 8 frames, capped at 8) + textDlg-free advances in YESNO/DONE.
