@@ -274,3 +274,44 @@ Emulator hygiene: `azctl stop` (profile CLEAN, qt-config restored byte-identical
 `72c100ad…` identical to the pre-lane copy), `settings.bin` **never written** (sha256
 `85dd487e…` identical before and after both boots), no Azahar left running, instance **b** never
 touched.
+
+---
+
+## Entry 5 — THE VERDICTS: the ten rows, one line each
+
+Verdict vocabulary is lane B1's, unchanged, plus one this lane needed: **PROMOTED** — the
+fingerprint now ships, but no save on this machine could reach the screen, so there is no live
+verb delta and the row is NOT claimed as verified.
+
+| Row | Verdict | cb2 harvested / promoted | The state delta (or the reason there is none) |
+|---|---|---|---|
+| **E15** HoF PC replay (EM) | **VERIFIED** | `CB2_HallOfFame` **0x08173560** — LIVE **[exact]** | ring `scr 0 cb2=0x08173560`; tap → `dlgTaps` 0→1 and the game exited to the PC menu. Post-promotion the same screen reads `ctx=fullui` where it read `field` |
+| **E8** Mail read | **VERIFIED** | `CB2_MailRead` **0x08121C64** — LIVE **[exact]** (+ `CB2_InitMailRead` 0x081219F0 sym) | ring `scr 0 cb2=0x08121C64` on ROMAN's letter; tap → `dlgTaps` 1→2 and the viewer closed |
+| **K4** FR quest-log guard | **VERIFIED** | *(not a cb2)* `gQuestLogState` **0x0203ADFA**, state 2/3 | during playback: `ctx` **15 INERT**, `qlState` **2**, 8 touch ops → `planSeq` **0**; after playback the same script → `planSeq` **0→2**. B1's before: `planSeq` 5 |
+| **E19** Battle records | **RE-DIAGNOSED → VERIFIED-mech** | **none needed** | `EventScript_CableBoxResults` = `lockall` + `waitbuttonpress` around a window; the B3 arm owns it. Screen UNREACHABLE solo: the machine is a cable-club metatile (`field_control_avatar.c:378/404`) |
+| **L2** Credits | **FIXED IN CLASS · screen UNREACHABLE** | `CB2_Credits` EM **0x081754DC** + starter 0x08175620, FR **0x080F3A60** (sym) | the leak is dead by construction: `GCTX_INERT` injects nothing. The class is live-proven on K4. The screen cannot be revisited — Gen 3 plays the credits once, after the Elite Four |
+| **L1** Hall of Fame (EM) | **PROMOTED · screen UNREACHABLE** | the SAME **0x08173560** E15 proved live | source-verified that both entries share the run loop (`:401` / `:852`); the scene itself needs the league beaten again |
+| **C20** Evolution | **PROMOTED-SYM · screen UNREACHABLE this session** | EM 0x0813E3A4 + 0x0813E3C0 + loaders; FR 0x080CE724 + 0x080CE740 + loaders | measured, not assumed: the party is five final-form Lv71-74 mons + a **Lv9** Zigzagoon (Linoone is Lv20), the bag has **7 Rare Candies** (→ Lv16) and **no evolution stone**, and shared EXP from the reachable wild mons is ~10² per KO. No cheap trigger existed |
+| **H4/H5** Contest results / painting | **PROMOTED-SYM · UNREACHABLE (budget)** | 0x080F5C00 / 0x0812FDF8 | a contest run is a multi-minute progression event; the painting additionally needs a Master-rank win |
+| **H6** Berry Blender | **PROMOTED-SYM · UNREACHABLE (budget)** | 0x08081898 + 0x08081FC8 | needs a flight to a Contest Hall and a berry; deferred behind the cheap rows |
+| **A10** Link error | **PROMOTED-SYM · UNREACHABLE** | EM 0x0800B1A0 + 0x0800AF30, FR 0x0800AF40 + 0x0800ACE8 | a deliberate link failure runs through `celiolink.c`, which is FROZEN for this lane |
+
+Score for the brief: of the nine "one harvest unblocks them" rows, **two are verified live, one was
+re-diagnosed as never needing the harvest, and six are promoted with their screens honestly marked
+unreached**; the tenth (K4) got the real guard it needed and is verified live. Nothing was graded
+on a fingerprint this lane could not read or a verb it did not see.
+
+### Owed, in priority order
+
+1. **The six unvisited screens, one visit each** — every one is now a `ctx == 10` read away from
+   VERIFIED. The cheapest by far: an **evolution** on a scratch save (a fresh starter reaches its
+   first evolution in minutes, where this endgame save cannot evolve anything), then a **Berry
+   Blender** and a **contest** from a Lilycove flight (tap-to-fly makes the travel one tap).
+2. **The FireRed halves** of E8/C20/A10 (and LG's whole class list) are sym-derived and
+   live-unverified — one FR arc past the quest-log replay would upgrade several at once.
+3. **A10 honestly may never be worth reaching**: TOUCH-PLAN's own DEFER logic calls fault paths
+   optional, and the only route runs through the frozen link stack.
+4. **Hardware sign-off**: everything here is emulator-proven. `GCTX_INERT` in particular is a
+   *feel* decision on the credits (a real 3DS is where "my finger did nothing" is judged).
+5. The **ctx-name table** fix (`"map"`) means gs-ring rows logged before this commit print `?` for
+   every region-map screen — worth knowing when reading phase-24 logs.
