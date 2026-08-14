@@ -426,3 +426,21 @@ plan, live:
 - Bonus 22.0 live proof: the Birch speech classifies GCTX_TITLE (CB2_MainMenu is EM's
   new-game loop) and taps were DEAD there — the census promotion's walk-leak cure seen
   working on a real screen it was designed for.
+
+## Lane A Entry 5 — LIST family live on EM: bag driver proven (boot 20260814-024128)
+
+- **fmenu chain**: touch-tap on the START menu's BAG row (the shipped fmenu write-then-A)
+  opened the bag — GCTX_BAG resolved (gdb ctx=7), the whole route driven by ONE pre-staged
+  touch script after CONTINUE on the endgame save.
+- **Drag scroll (L4)**: first drag scrolled 6 rows down (capture: list at REPEL..MAX ETHER,
+  cursor mid-list, both scroll arrows up+down live: EM-bag-drag-scrolled.bottom.png);
+  second drag returned scrollOffset to 0 — read live via g_touchDbg (lScroll 0, lRow 0,
+  lTotal 16 = ITEMS 15+CANCEL, lMaxShowed 8 — the live template read working).
+- **Tap-select (L3/P-A)**: tap on visible row 2 wrote selectedRow=2 + A -> "REPEAT BALL is
+  selected." + GIVE/TOSS/CANCEL popup (EM-bag-rowtap-submenu-repeatball.bottom.png). The
+  popup itself resolved GCTX_FIELDMENU (the L-C tier working over the list).
+- **DEFECT found + FIXED: pocket-dot delta edges at 1-per-2-frames lost 2 of 3 edges** (the
+  bag ignores switch keys during its ~16f swap anim) — landed on POKE BALLS instead of
+  BERRIES. Fix: LIST_SEQ_FRAMES=24 pacing (committed; re-proof rides the next bag touch).
+- Fling: exercised in-run (no isolated read window this boot — re-proven on FR next).
+- Blank-row clamp: host-proven (115k-check sweep); live negative probe deferred.
