@@ -146,3 +146,13 @@ detection — the exact BPGE failure mode all over again.
   at (8,8) — go L to x=7 first.
 
 Captures: `evidence/rs-coop/` (both-screen pairs + the CO-OP chip frame).
+
+## 3. Sapphire solo smoke (task 4)
+
+One solo boot (`--stage-roms sapphire`): control header `p1=AXPE` — **the AXPE row also
+matches in the PRIMARY seat** (the co-op boot only proved it as gameB); intro
+`MainCB2_Intro` 0x0813B7B8 [exact], overworld `CB2_Overworld` 0x080543C8 [exact] (the
+sapphire-drifted value, §2), sb1/mapObjects coherent (px 10,2 / obj 17,9 / map 15,2 =
+the Sootopolis Center resume), closed-loop D3 walk (10,2)→(10,5) verified per-token.
+gs ring logging sane throughout. Captures: `evidence/sapphire/` (3 files).
+Instance stopped clean (config restored byte-identically, fixtures re-hashed untouched).

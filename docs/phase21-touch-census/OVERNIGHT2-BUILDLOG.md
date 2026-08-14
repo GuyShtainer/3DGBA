@@ -463,3 +463,16 @@ discovered: FRLG quest-log playback leaks HISTORICAL map/pos rows into the gs ri
 Full table + ops routes: LANE-B-LG.md; 16 captures -> evidence/leafgreen/.
 Mid-leg incident: a Lane-A rebuild coincided with the gdb stub dying ("emulator closed
 the RSP socket") — one reboot lost; the snapshot-ELF hermetic rule kept all reads valid.
+
+## Entry 12 — LANE B: Sapphire solo smoke + lane wrap
+
+Sapphire solo boot: p1=AXPE matched in the PRIMARY seat, intro/overworld [exact] on the
+sapphire map (incl. its drifted CB2_Overworld 0x080543C8), sb1 coherent, closed-loop D3
+walk verified. Instance b stopped CLEAN (config byte-identical, fixtures untouched).
+LANE B COMPLETE: all four tasks delivered — (1) Ruby first boot: AXVE fully live-verified
+incl. battleMainCb 0x0800F808 [exact] + b.oth/b.act/b.move; (2) RS co-op: universe gate
+ANSWERED (gameId 3/3, pairReason=0, CO-OP chip live) + the per-title Ruby/Sapphire ROM
+drift headline; (3) LG: 10/13 anchors VERIFIED [exact] + the yesNoTask-bypass promotion
+rec (add Task_CallYesOrNoCallback 0x080BF548) + FULLUI/LK_BUY harvest; (4) Sapphire smoke
+green. Deliverables: LANE-B-RS.md, LANE-B-LG.md, evidence/{ruby,rs-coop,leafgreen,
+sapphire}/ (36 captures), 4 commits (8d797df, f8f78cd-carried, 35105be, 997ede0, + this).
