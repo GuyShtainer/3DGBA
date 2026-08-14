@@ -837,3 +837,34 @@ Consequences for every long D4 route on a late-game save:
    `a` advances a Gen-3 textbox, never `b`).
 3. Place those `a` tokens where the avatar faces open ground, so an A that finds NO box
    open does nothing instead of starting an NPC conversation.
+
+## Lane A Entry 11 (phase 23) — slice 2's LEG MACHINE, and what is still owed
+
+`touch.c` now executes an excursion as three legs with a boundary check, not as one plan.
+The shape worth remembering (it is the reusable pattern for ANY multi-map touch feature):
+
+- Every leg is an **ordinary fieldpath route to a warp tile**, so the shipped terminal
+  semantics (door hold / arrow hold / step) fire the warp. There is no second walker, and
+  nothing about the phase-18 router changed.
+- The phase-18 **warp kill-switch IS the leg boundary**. `SaveBlock1.location` changing is
+  still the only trusted signal; with an excursion running it is compared against the map
+  the plan predicted, and any other map ends the excursion where it stands. That is exactly
+  what the kill-switch was built for — it just gained one legal continuation.
+- The next leg is **re-planned on the LIVE grid at arrival**, never executed from the ROM
+  plan. The ROM plan has no object events in it, so an NPC standing in the doorway is
+  invisible at plan time and only the live re-plan can see it.
+- Tier order is now three deep and structural: `walk_plan` (dry) -> `prog_plan` (HM edges)
+  -> `exc_plan` (excursion), each consulted only when the previous DECLINED, and the last
+  only at `smartTraverse >= 2`.
+
+**Still owed for slice 2** (named honestly rather than implied done):
+1. an emulator proof of the leg machine. The planner is proven on the user's ROM (TEST 16),
+   but the executor has never run — it needs a save standing near a two-door building, and
+   the only one this save can reach is the reception gate on `BattleFrontier_OutsideWest`,
+   which is across the map CONNECTION from OutsideEast (~40 tiles of walking the router
+   refuses to plan, T5.9). The cheap unlock is the same one P1 needs: **walk once, then
+   SAVE in-game**, after which every arc starts where the proof needs it.
+2. Waterfall (the other half of the slice) — the up-edge is cheap now that the SURF layer
+   exists, but there is no waterfall this save can reach either.
+3. `progMapSeq` carries the leg index; the fplog `progSeq/step/hm` columns do not yet carry
+   a leg column of their own.
