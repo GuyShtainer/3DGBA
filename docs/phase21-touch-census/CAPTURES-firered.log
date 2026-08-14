@@ -1,0 +1,525 @@
+== A1-intro  19:17:22Z  FR GF intro movie
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x080ec9e8 FR:CB2_Intro [exact]  ctx=field
+== A2-title  19:18:54Z  FR title screen
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x08078bb0 FR:CB2_TitleScreenRun [exact]  ctx=field
+== A3-mainmenu  19:19:24Z  FR main menu (CONTINUE/NEW GAME/OPTION[/MYSTERY GIFT?])
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x0800c2e8 FR:CB2_MainMenu [exact]  ctx=field
+== A3b-mainmenu-scrolled  19:19:52Z  menu scrolled: 3rd item
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x0800c2e8 FR:CB2_MainMenu [exact]  ctx=field
+== A4-newgame-oakspeech  19:21:40Z  FR Oak speech (new-game intro; entered by accident, save untouched)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x0812eb88 FR:CB2_NewGameScene [exact]  ctx=field
+== tmp-menucheck  19:24:46Z  verify CONTINUE selected
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x08078bb0 FR:CB2_TitleScreenRun [exact]  ctx=field
+== B1-overworld  19:25:18Z  FR overworld, continue-save location
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== K4b-questlog2  19:25:55Z  quest log playback, later scene
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== B1-overworld  19:26:22Z  FR overworld after quest log ends (map 9,1 = player's room?)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-qlcheck  19:27:19Z  quest log still playing?
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== B2-startmenu  19:27:53Z  FR start menu
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== F6a-dex-mainmenu  19:29:05Z  FR Pokedex top menu (CB2_PokedexScreen)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x0810254c FR:CB2_PokedexScreen [exact]  ctx=field
+== F6b-dex-list  19:29:30Z  FR dex numerical Kanto list
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x0810254c FR:CB2_PokedexScreen [exact]  ctx=field
+== F6c-dex-entry  19:29:48Z  FR dex entry page (Bulbasaur)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x0810254c FR:CB2_PokedexScreen [exact]  ctx=field
+== F6d-dex-page2  19:30:07Z  FR dex entry: next data page
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x0810254c FR:CB2_PokedexScreen [exact]  ctx=field
+== F6e-dex-habitat  19:30:41Z  FR dex habitat page (Grassland)
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x0810254c FR:CB2_PokedexScreen [exact]  ctx=field
+== F6e-dex-habitat  19:31:11Z  FR dex habitat page (Grassland)
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x0810254c FR:CB2_PokedexScreen [exact]  ctx=field
+== E2-party  19:32:01Z  FR party menu (field)
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== E2-party  19:32:51Z  FR party menu (field) — retry
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x0811ec18 FR:CB2_UpdatePartyMenu [exact]  ctx=field
+== E2b-partysub  19:33:12Z  FR party context sub-menu
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x0811ec18 FR:CB2_UpdatePartyMenu [exact]  ctx=field
+== E1-summary-info  19:33:34Z  FR summary page 1 (INFO)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x08137f60 FR:CB2_RunPokemonSummaryScreen [exact]  ctx=field
+== E1-summary-skills  19:33:45Z  FR summary page 2 (SKILLS)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x08137f60 FR:CB2_RunPokemonSummaryScreen [exact]  ctx=field
+== E1-summary-moves  19:33:49Z  FR summary page 3 (KNOWN MOVES)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x08137f60 FR:CB2_RunPokemonSummaryScreen [exact]  ctx=field
+== tmp-moves-2  19:34:08Z  party mon 2 known moves
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x08137f60 FR:CB2_RunPokemonSummaryScreen [exact]  ctx=field
+== tmp-moves-3  19:34:12Z  party mon 3 known moves
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x08137f60 FR:CB2_RunPokemonSummaryScreen [exact]  ctx=field
+== tmp-moves-4  19:34:16Z  party mon 4 known moves
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x08137f60 FR:CB2_RunPokemonSummaryScreen [exact]  ctx=field
+== tmp-moves-5  19:34:20Z  party mon 5 known moves
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x08137f60 FR:CB2_RunPokemonSummaryScreen [exact]  ctx=field
+== tmp-moves-6  19:34:24Z  party mon 6 known moves
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x08137f60 FR:CB2_RunPokemonSummaryScreen [exact]  ctx=field
+== E1b-summary-movedetail  19:34:56Z  FR summary move-detail mode (A on KNOWN MOVES)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x08137f60 FR:CB2_RunPokemonSummaryScreen [exact]  ctx=field
+== E3-bag-items  19:35:59Z  FR bag ITEMS pocket
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-menu2  19:36:37Z  menu open check
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== E3-bag-items  19:37:00Z  FR bag ITEMS pocket
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x08107f58 FR:CB2_BagMenuRun [exact]  ctx=field
+== E3-bag-keyitems  19:37:20Z  FR bag KEY ITEMS pocket
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x08107f58 FR:CB2_BagMenuRun [exact]  ctx=field
+== E3-bag-pokeballs  19:37:24Z  FR bag POKE BALLS pocket
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x08107f58 FR:CB2_BagMenuRun [exact]  ctx=field
+== E3b-keyitem-submenu  19:37:54Z  FR key-item sub-menu (TOWN MAP: USE/REGISTER/CANCEL)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x08107f58 FR:CB2_BagMenuRun [exact]  ctx=field
+== B7-townmap  19:38:14Z  FR Town Map (from bag)
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x080c08c8 FR:CB2_RegionMap [exact]  ctx=field
+== K1-teachytv  19:38:52Z  FR Teachy TV main
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x0815ac0c FR:TeachyTvCallback [exact]  ctx=field
+== K1b-teachytv-show  19:39:24Z  Teachy TV show intro
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x0815ac0c FR:TeachyTvCallback [exact]  ctx=field
+== C14-pokedude  19:40:19Z  Pokedude demo battle (Teachy TV)
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x0815ac0c FR:TeachyTvCallback [exact]  ctx=field
+== tmp-ttv  19:42:09Z  teachy tv progress check
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x08011114 FR:BattleMainCB2 [exact]  ctx=field
+== C14-pokedude  19:43:08Z  Pokedude demo battle (BattleMainCB2 under Teachy TV)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x08011114 FR:BattleMainCB2 [exact]  ctx=field
+== E5-tmcase  19:44:06Z  FR TM Case
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x081318dc FR:CB2_Idle [exact]  ctx=field
+== E5b-tmcase-submenu  19:44:37Z  TM Case item sub-menu (FLY)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x081318dc FR:CB2_Idle [exact]  ctx=field
+== E2d-party-hmchoose  19:44:58Z  party in TM-teach choose mode
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x0811ec18 FR:CB2_UpdatePartyMenu [exact]  ctx=field
+== tmp-teach  19:45:42Z  teach FLY to Zapdos: confirm dialogs
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x0811ec18 FR:CB2_UpdatePartyMenu [exact]  ctx=field
+== C22-forgetmove  19:46:06Z  forget-move summary hop (FLY over Zapdos)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x0811ec18 FR:CB2_UpdatePartyMenu [exact]  ctx=field
+== C22b-forgetmove-summary  19:46:32Z  forget-move summary screen (pick move to forget)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x08137f60 FR:CB2_RunPokemonSummaryScreen [exact]  ctx=field
+== tmp-taught  19:47:22Z  after teaching FLY
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x0811c774 FR:CB2_PSA [exact]  ctx=field
+== E4-berrypouch  19:48:40Z  FR Berry Pouch
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x0813ce78 FR:CB2_BerryPouchIdle [exact]  ctx=field
+== E3c-keyitems-scrolled  19:49:11Z  key items scrolled further
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x08107f58 FR:CB2_BagMenuRun [exact]  ctx=field
+== K2-famechecker  19:49:42Z  FR Fame Checker (faces grid)
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x0812c40c FR:MainCB2_FameCheckerMain [exact]  ctx=field
+== K2b-famechecker-facts  19:50:01Z  Fame Checker person page (Oak facts)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x0812c40c FR:MainCB2_FameCheckerMain [exact]  ctx=field
+== tmp-menu3  19:50:47Z  start menu again?
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== B6-trainercard-front  19:51:22Z  FR trainer card front (SHOCK)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x08088370 FR:CB2_InitOptionMenu [exact]  ctx=field
+== B6-trainercard-front  19:52:11Z  FR trainer card front
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x08089084 FR:CB2_TrainerCard [exact]  ctx=field
+== B6b-trainercard-back  19:52:27Z  FR trainer card back (A flips)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x08089084 FR:CB2_TrainerCard [exact]  ctx=field
+== B5-savedialog  19:53:09Z  FR save dialog (info + yes/no)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x08089084 FR:CB2_TrainerCard [exact]  ctx=field
+== B5-savedialog  19:53:55Z  FR save dialog
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x08089084 FR:CB2_TrainerCard [exact]  ctx=field
+== B5-savedialog  19:54:54Z  FR save dialog (would you like to save?)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== B5b-saving  19:55:14Z  SAVING... screen (mid-save)
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== B5c-savedone  19:55:47Z  save complete dialog
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-room  19:57:54Z  current room view
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-west  19:58:21Z  walked west
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-esc  19:58:54Z  at escalator?
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-esc2  20:01:06Z  position check
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== B1b-overworld-ip1f  20:05:25Z  Indigo Plateau Center 1F
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-1f2  20:09:20Z  1F after walking up
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== E11-pctopmenu  20:09:45Z  PC top menu attempt
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-nurse  20:10:26Z  near nurse counter
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== E11-pctopmenu  20:10:52Z  PC top menu
+screen0: cb2=0x0816cf0c EM:CB2_InitCopyrightScreenAfterTitleScreen [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-pc2  20:14:40Z  PC attempt 2
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-pc3  20:15:04Z  PC attempt 3
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-pc4  20:19:00Z  PC attempt at counter (15,11)
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-pc5  20:19:28Z  PC attempt (15,12) facing up
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-pc6  20:20:17Z  PC attempt (17,12)
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-pc7  20:20:47Z  PC attempt (19,11)
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== B7b-wallmap  20:21:56Z  field wall-map region map (Indigo Center 1F wall)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080c08c8 FR:CB2_RegionMap [exact]  ctx=field
+== tmp-m4  20:22:21Z  menu check
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== E2c-partysub-fly  20:22:57Z  Zapdos sub-menu with FLY field move
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x0811ec18 FR:CB2_UpdatePartyMenu [exact]  ctx=field
+== B8-flymap  20:23:22Z  FR fly map (FLY to where?)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x0811ec18 FR:CB2_UpdatePartyMenu [exact]  ctx=field
+== B8-flymap  20:30:05Z  FR fly map (outdoors, Zapdos FLY)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080c08c8 FR:CB2_RegionMap [exact]  ctx=field
+== tmp-flycur  20:30:28Z  cursor position check
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080c08c8 FR:CB2_RegionMap [exact]  ctx=field
+== tmp-flycur2  20:30:53Z  cursor check 2
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080c08c8 FR:CB2_RegionMap [exact]  ctx=field
+== tmp-flycur3  20:31:30Z  cursor check 3
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080c08c8 FR:CB2_RegionMap [exact]  ctx=field
+== tmp-flycur4  20:32:11Z  after R
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080c08c8 FR:CB2_RegionMap [exact]  ctx=field
+== tmp-flycur5  20:33:38Z  should be Viridian
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080c08c8 FR:CB2_RegionMap [exact]  ctx=field
+== tmp-landed  20:34:16Z  after fly
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-center  20:35:40Z  Viridian Center interior
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== E11-pctopmenu  20:36:17Z  PC top menu (Viridian)
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-pc8  20:36:43Z  PC from above facing down
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-pc9  20:37:30Z  PC attempt (11,4) facing up
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-pc10  20:37:59Z  PC attempt (10,4)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-pc11  20:39:36Z  PC nook (11,2)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== E11-pctopmenu  20:40:00Z  PC top menu (Bill's/player/Oak/HoF/log off)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== E12a-storagemenu  20:40:22Z  storage task menu
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== E12a-storagemenu  20:40:44Z  storage task menu (retry)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== E12a-storagemenu  20:41:05Z  storage task menu (3rd)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== E12-storage-boxes  20:41:36Z  FR storage boxes UI (MOVE POKEMON)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x0808cdd8 FR:CB2_PokeStorage [exact]  ctx=field
+== E12b-monmenu  20:41:57Z  storage mon popup menu
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x0808cdd8 FR:CB2_PokeStorage [exact]  ctx=field
+== E12c-holding  20:42:18Z  holding a mon (MOVE mode)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x0808cdd8 FR:CB2_PokeStorage [exact]  ctx=field
+== E12d-boxtitlemenu  20:42:40Z  box title menu (JUMP/WALLPAPER/NAME/CANCEL)
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x0808cdd8 FR:CB2_PokeStorage [exact]  ctx=field
+== E12d-boxtitlemenu  20:43:23Z  box title menu attempt 2
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x0808cdd8 FR:CB2_PokeStorage [exact]  ctx=field
+== E12d-boxtitlemenu  20:44:01Z  box title menu attempt 3
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x0808cdd8 FR:CB2_PokeStorage [exact]  ctx=field
+== tmp-title  20:44:37Z  cursor at title bar?
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x0808cdd8 FR:CB2_PokeStorage [exact]  ctx=field
+== E12d-boxtitlemenu  20:44:59Z  box options (JUMP/WALLPAPER/NAME/CANCEL)
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x0808cdd8 FR:CB2_PokeStorage [exact]  ctx=field
+== E10-naming  20:46:38Z  FR naming keyboard (BOX NAME?)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x0809fb84 FR:CB2_NamingScreen [exact]  ctx=field
+== E10b-naming-lower  20:47:02Z  naming keyboard lower page
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x0809fb84 FR:CB2_NamingScreen [exact]  ctx=field
+== tmp-exitstor  20:47:49Z  storage exit state
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== E15-hofpc  20:48:19Z  Hall of Fame PC replay
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080f1e38 FR:CB2_HofIdle [exact]  ctx=field
+== E16-oakpc  20:48:59Z  Prof Oak's PC (dex rating)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== E16b-oakrating  20:49:27Z  Oak's rating text
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-stuck  20:55:48Z  why stuck at (11,2)?
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-viridian  20:58:08Z  Viridian street view
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-mart  20:59:06Z  mart interior
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== I1a-martdialog  21:03:51Z  mart clerk BUY/SELL menu?
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== I1a-martdialog  21:08:38Z  mart clerk attempt 2
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== I1a-martdialog  21:09:24Z  clerk across counter
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== I1-martbuy  21:09:50Z  FR mart buy menu
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x0809adf8 FR:CB2_BuyMenu [exact]  ctx=field
+== I1b-martqty  21:10:10Z  buy quantity picker
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x0809adf8 FR:CB2_BuyMenu [exact]  ctx=field
+== I2-martsell  21:10:30Z  mart sell mode (bag)
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x08107f58 FR:CB2_BagMenuRun [exact]  ctx=field
+== tmp-r22  21:13:04Z  Route 22?
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== C5-battleintro  21:21:51Z  wild battle intro dialog
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x08011114 FR:BattleMainCB2 [exact]  ctx=field
+== C2-battleaction  21:22:02Z  action select (FIGHT/BAG/POKEMON/RUN)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x08011114 FR:BattleMainCB2 [exact]  ctx=field
+== C2-battleaction  21:22:27Z  action select retry
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x08011114 FR:BattleMainCB2 [exact]  ctx=field
+== C2-battleaction  21:22:49Z  action select (FIGHT/BAG/POKEMON/RUN)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x08011114 FR:BattleMainCB2 [exact]  ctx=field
+== C2b-battlebag  21:23:17Z  in-battle bag (BAG from action select)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x08107f58 FR:CB2_BagMenuRun [exact]  ctx=field
+== tmp-battle2  21:24:02Z  battle state check
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x08011114 FR:BattleMainCB2 [exact]  ctx=field
+== K3-vsseeker  21:24:33Z  Vs Seeker use (registered SELECT)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-keyitems2  21:25:15Z  key items below OLD ROD
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-ki3  21:26:04Z  key items scroll bottom
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x08107f58 FR:CB2_BagMenuRun [exact]  ctx=field
+== B10-itemfinder  21:26:33Z  Itemfinder use (Route 22)
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-blocked  21:42:06Z  why can't the player move?
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-b3  21:59:58Z  battle state
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x08011114 FR:BattleMainCB2 [exact]  ctx=field
+== B11-fishing  22:09:13Z  Old Rod cast (Route 22 pond)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== B11-fishing  22:09:56Z  Old Rod cast attempt 2
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== B11b-fishresult  22:10:26Z  fishing result
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-flycel  22:12:48Z  cursor at Celadon?
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x080c08c8 FR:CB2_RegionMap [exact]  ctx=field
+== tmp-flycel2  22:13:08Z  check
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x080c08c8 FR:CB2_RegionMap [exact]  ctx=field
+== tmp-whereami  22:13:51Z  state check
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== B1c-gamecorner  22:15:08Z  Celadon Game Corner interior
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-slot  22:15:39Z  slot attempt
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-slot2  22:16:21Z  facing left result
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== I4-slotintro  22:22:19Z  slot machine entry
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== I4a-slotprompt  22:23:13Z  slot machine prompt
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== I4b-slotprompt2  22:24:06Z  machine prompt attempt
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== I4-slotmachine  22:24:34Z  FR slot machine UI
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x0813f9c4 FR:CB2_RunSlotMachine [exact]  ctx=field
+== I4c-slotspin  22:25:06Z  mid-spin
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x0813f9c4 FR:CB2_RunSlotMachine [exact]  ctx=field
+== tmp-slotexit  22:26:14Z  after stop+b
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x0813f9c4 FR:CB2_RunSlotMachine [exact]  ctx=field
+== I6-coinclerk  22:32:14Z  Game Corner coin counter
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== I6-coinclerk  22:32:49Z  coin counter attempt 2
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== I6b-coinbuy  22:33:11Z  coin purchase prompt
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-prizeroom  22:35:12Z  prize room interior
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== I8-prizemenu  22:35:56Z  prize exchange menu
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== I8-prizemenu  22:36:23Z  prize window attempt 2
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== I8-prizemenu  22:36:47Z  prize dialog attempt 3
+screen0: cb2=0x0816cf0c EM:CB2_InitCopyrightScreenAfterTitleScreen [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-flyfuch  22:38:35Z  cursor at Fuchsia?
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x080c08c8 FR:CB2_RegionMap [exact]  ctx=field
+== B12a-safari-entrance  23:04:31Z  Safari entrance prompt
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== B12b-safari-pay  23:10:10Z  safari pay prompt
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== B12c-safari-dialog  23:10:59Z  safari join dialog
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-safaristate  23:17:42Z  state at entrance
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== B12-safarizone  23:18:40Z  Safari Zone overworld (steps/balls gating)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== C7-safaribattle  23:34:19Z  Safari battle action screen (BALL/BAIT/ROCK/RUN)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x08011114 FR:BattleMainCB2 [exact]  ctx=field
+== B12d-safari-startmenu  23:35:29Z  safari start menu (RETIRE?)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-stuck2  23:48:20Z  stuck at entrance top
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-m5  23:51:06Z  menu cursor check
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-m6  23:51:31Z  menu cursor check 2
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== tmp-flypal  23:52:37Z  cursor at Pallet?
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080c08c8 FR:CB2_RegionMap [exact]  ctx=field
+== tmp-house  23:53:57Z  house 1F
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== B1d-bedroom  00:01:28Z  player's bedroom 2F
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== E13a-playerpc  00:01:59Z  player PC menu (bedroom)
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== E13a-playerpc  00:07:37Z  player PC attempt 2
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== E13a-playerpc  00:13:57Z  player PC attempt 3
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== E13a-playerpc  00:14:30Z  player PC attempt 4
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== E13a-playerpc  00:15:40Z  player PC attempt 5 (2F, bg event 1,1)
+screen0: cb2=0x080aab2c EM:MainCB2 [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
+== E13a-playerpc  00:17:26Z  player PC menu (2F bg 1,1)
+screen0: cb2=0x0816cc00 EM:MainCB2_Intro [exact]  ctx=field
+screen1: cb2=0x080565c8 FR:CB2_Overworld [exact]  ctx=field
