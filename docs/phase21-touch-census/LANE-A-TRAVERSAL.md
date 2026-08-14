@@ -300,3 +300,65 @@ uigeom 18332 · uihit 1834).
 
 Scope: `DECISIONS-overworld-gestures.md` **D1** (tap self = START, hold self = SELECT) and **D2**
 (distance decides walk vs run), each proven host-side as a pure function first and then live.
+
+## The host proofs (banked before the boot)
+
+Both decisions are pure functions before they are wiring, and both are graded by the suite that
+already owns the file they live in — no new suite, no new build line.
+
+- **`owngest_step`** (touchgeom.c) resolves the own-tile gesture from a TIMELINE, because "the
+  release after a hold must stay silent" cannot be said about a single frame. `test_touchgeom`
+  **TEST 16** drives a synthetic touch one frame at a time and asserts over the recorded sequence:
+  every press length from 1 to 4x the hold resolves to EXACTLY ONE event (never both, never none);
+  everything below the threshold is a START on release; everything at or past it is a SELECT whose
+  release fires nothing; every slop-crossing frame kills both verbs (or, after SELECT already
+  fired, leaves it alone and still suppresses the release); a finger that was already down when
+  the machine started is inert; and four hold+tap pairs give exactly 4 SELECTs and 4 STARTs, which
+  is the `fired` latch being per gesture rather than sticky.
+- **`rungeom_tile_ok`** is the engine's own `IsRunningDisallowed` metatile half, graded in
+  **TEST 17** against an independently written oracle over **256 behaviours x 17 elevations x both
+  engines** — including the anti-merge assertion that RSE blocks 7 behaviours and FRLG blocks 1.
+- **`rungeom_decide`** is graded in **TEST 18** over every path length 0..64 and all **32**
+  eligibility masks: exactly one mask runs, and each of the five gates is named as its own veto.
+- **`FtEngCfg.runShoes`** (FLAG_SYS_B_DASH) is pinned per engine in `test_fieldtrav` TEST 2 —
+  EM `0x8C0`, FR `0x82F`, and that the two DIFFER (FR's was fetched from pret master, not derived).
+
+Suites after: touchgeom **362691 -> 371889**, fieldtrav **1099 -> 1102**, fieldpath **unchanged at
+1808**. 16 suites, 0 failures. `make` clean.
+
+## D1 — tap self = START, hold self = SELECT: **PROVEN**
+
+Boot `runs/20260814-164526`, dual Emerald from `roms/emerald-lavaridge.sav`, instance a, touch on
+the bottom seat. The own tile is bottom-screen **(160,128)** (the camera anchors the player at
+screen tile (7,5); `screen = (40 + (7+ddx)*16 + 8, 40 + (5+ddy)*16 + 8)`).
+
+| act | the game's own state |
+|---|---|
+| `t 160 128 6 30` — a 6-frame tap on the player | `ctx` **OVERWORLD -> FIELDMENU**, `ownStarts` 0 -> 1. The START menu is open on screen (POKéDEX/POKéMON/BAG/POKéNAV/GUYA/SAVE/OPTION/EXIT). |
+| `t 160 128 45 30` — a 45-frame hold on the player (>= the 30-frame threshold) | `ownSelects` 0 -> 1, and **the player is on the BICYCLE** — the save's registered item, mounted by the game itself. |
+| the next tap-to-walk plan | **`runElig` 0x1F -> 0x1B**: `RUNG_ONFOOT` (bit 2) went CLEAR. That bit is a read of the game's own `gPlayerAvatar` flags, so it can only be 0 if the SELECT press really reached the game and the game really mounted the bike. |
+| a second 45-frame hold, then a plan | `ownSelects` 1 -> 2, **`runElig` back to 0x1F** — dismounted. |
+
+**`ownStarts` stayed at 1 across BOTH holds.** That is the second half of D1 proven live: the
+release that ends a hold does not also fire the tap.
+
+Captures: `evidence/impl/EM-P24-D1a-start-menu.bottom.png` (one tap on yourself, the field menu),
+`EM-P24-D1b-select-fired-the-bike.bottom.png` (one hold on yourself, on the bike).
+
+## D2 — distance decides walk vs run: **PROVEN**, on the same seven tiles
+
+Lavaridge row y=7 is seven clear `MB_NORMAL` tiles east of the fly tile (host recon: `runrecon.py`
+over the real layout), so the same ground can be covered three ways in one boot.
+
+| act | tiles | `runLeg` | injected mask | **frames per tile** | `runFrames` |
+|---|---|---|---|---|---|
+| hold-steer east from (9,7) (the walking baseline — the steer arm never presses B by construction) | 7 | 0 | `0x010` RIGHT | **16, 16, 16** | 0 |
+| **one tap on (16,7)** from (9,7) | **7** | **1** | **`0x012` RIGHT+B** | **8, 8, 8, 8, 8, 8** | 51 -> 102 |
+| one tap on (13,7) from (16,7) | **3** | 0 | `0x020` LEFT | **16, 16** | 102, unchanged |
+
+Read off the game's own frame counter and its own position, sampled ~18 times a second over gdb.
+The run and the baseline cross **the same tiles (10,7)..(13,7)**: 16 emulated frames each walking,
+**8 each running — exactly the 2x the engine's `PlayerRun` gives** — and the 3-tile route on that
+same row keeps all 16s and never adds a single frame to `runFrames`. The first tile of every route
+costs ~18 frames whichever way it goes; that is the plan plus the turn, and it is why the means
+(9.4 vs 16.7) understate a difference the steady state states exactly.
