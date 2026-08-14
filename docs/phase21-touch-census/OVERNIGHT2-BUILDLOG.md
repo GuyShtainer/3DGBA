@@ -1465,3 +1465,51 @@ and which tiles does it open; `plan24.py` — D4 routes that avoid encounter til
 NPCs). Operational landmines re-paid: a D4 script must be waited out to COMPLETION (the file
 vanishes at pickup), a touch mid-script aborts it as "real input", never `make` during a live
 session, and a cut tree only respawns on a map LOAD (not on continuing a save made on that map).
+
+## PHASE 24 / LANE A2 — THE TWO BANKED GESTURE DECISIONS, D1 AND D2, PROVEN
+
+Full write-up with the traces: **`LANE-A-TRAVERSAL.md`** (the A2 half). A1 left nothing owed — all
+four traversal targets re-read PROVEN off disk — so this lane is entirely
+`DECISIONS-overworld-gestures.md`.
+
+**D1 (tap yourself = START, hold yourself = SELECT)** replaces tap = A / double-tap = START. The
+resolver is a pure state machine in `touchgeom.c` (`owngest_step`) because a gesture is a TIMELINE:
+"the release that ends a hold must stay silent" is not a statement about one frame. Host TEST 16
+drives a synthetic touch frame by frame over the whole duration and slop axes. Live: one tap opened
+the field menu (`ctx` -> `GCTX_FIELDMENU`), one hold **mounted the save's registered Bicycle** — and
+the proof of that is not the picture, it is `runElig` **0x1F -> 0x1B**, i.e. `RUNG_ONFOOT` going
+clear, which is a read of the game's own `gPlayerAvatar`. A second hold put it back to 0x1F.
+`ownStarts` stayed at 1 across both holds: the suppression rule, live.
+
+**D2 (distance decides walk vs run)** finally presses the B the D4 grammar has held since phase 22
+— the touch follower simply never did. A leg of >= `RUNGEOM_MIN_TILES` (4) runs. Live, on ONE row
+of Lavaridge: the hold-steer baseline costs **16 emulated frames a tile**, the 7-tile tap costs
+**8** with B in the mask, and the 3-tile tap on the same tiles is back to 16 with `runFrames`
+unmoved. 4 tiles runs, 3 walks — the constant is where it says it is.
+
+**The defect the live run found, and the reason it matters.** The first build folded the terrain
+gate into the leg decision, so standing on a sand bath (`MB_NO_RUNNING`) made a seven-tile route
+walk **every** step. The engine does not do that — `PlayerNotOnBikeMoving` re-reads
+`currentMetatileBehavior` inside every step — so four gates (save + avatar) now decide the leg and
+the tile is asked live, every frame B would be held (`755faf2`). Re-run from the same tile: the leg
+decides to run, walks off the bath, and runs the other six.
+
+**One tap, three gates.** The regression run of A1's P4 excursion is the lane's best evidence: the
+two Pokemon Center legs WALKED (`allow_running: false` -> `runElig` 0x1D), the terrace leg RAN
+(8 frames a tile), and B DROPPED as the player stepped into the hot spring (`MB_HOT_SPRINGS`,
+`runElig` 0x0F). Per leg where the leg differs, per step where the tile differs.
+
+**The safety property is measured.** Across the P2 CUT program's whole 320-frame interact sequence
+— face, A, textbox, yes/no, ANSWER — `runFrames` moved by **2**, and those two frames are the start
+of the walk after it. In a Gen-3 yes/no, B is NO; it never got near one.
+
+Suites at close, 16 of them, 0 failures: touchgeom 362691 -> **371892** (TEST 16 the gesture
+timeline, TEST 17 the metatile rule against an independent oracle over 256 behaviours x 17
+elevations x both engines, TEST 18 all 32 eligibility masks against BOTH predicates), fieldtrav
+1099 -> **1102** (FLAG_SYS_B_DASH per engine, and that the two differ), **fieldpath UNCHANGED at
+1808**, typography 1419 (T14 re-run: the in-app explainer string changed and is shorter).
+
+**Owed:** `RUNG_SHOES` and `RUNG_FREE` have never been watched CLEARING on a live game; the
+traversal program's own span-gated B has never run (P2 had no approach walk); a terrain veto costs
+one extra walked step (measured, errs safe); and `OWNGEOM_HOLD_FRAMES` / `RUNGEOM_MIN_TILES` are
+feel constants that only a real New 3DS can judge.
