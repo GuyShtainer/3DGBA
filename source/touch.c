@@ -389,8 +389,20 @@ static int  s_excGoalX = 0, s_excGoalY = 0;   // the tapped goal, kept for leg 2
 static int  s_excSeq = 0;
 static const char* s_excChip = 0;
 
+// PHASE 24 (live-proven): the next leg cannot be PLANNED on the frame the map changes. The warp
+// writes SaveBlock1.location when it STARTS — the fade, the map load and the avatar placement all
+// happen after that — so a plan made on the boundary frame reads a half-built world, fails, and
+// killed the whole excursion one door short (observed: leg 0 warped into Lavaridge's PC, leg 1
+// reported FP_OUT_UNREACHABLE to a back door four tiles away). So a boundary ARMS the next leg and
+// the follower plans it as soon as the world answers.
+static int  s_excPend = 0, s_excPendG = -1, s_excPendN = -1, s_excPendX = 0, s_excPendY = 0;
+static int  s_excPendFrames = 0;
+#define EXC_SETTLE_EVERY  8      // re-try cadence (a BFS per frame on the render thread is not free)
+#define EXC_SETTLE_BUDGET 240    // ~4 s at 60 fps: a fade + map load, generously
+
 static void exc_reset(void) {
 	s_excOn = false; s_excLeg = 0; s_excMapG = s_excMapN = -1; s_excChip = 0;
+	s_excPend = 0; s_excPendFrames = 0;
 }
 // "VIA DOOR - LEG n/3" (T4.2). The leg counter is the honest v1: map NAMES would need the ROM
 // region-map strings, which is its own slice.
@@ -516,6 +528,21 @@ static u16 walk_update_inner(bool touching, bool newPress, bool gvalid, int gx, 
 		}
 		if (s_startPulse > 0) { s_startPulse--; return 1 << GBAKEY_START; }
 		if (s_aPulse > 0)     { s_aPulse--;     return 1 << GBAKEY_A; }
+	}
+
+	// PHASE 24: the armed leg of an excursion, planned as soon as the arrival map is really loaded
+	// (see exc_leg_boundary). Retried on a cadence rather than every frame — each attempt is a BFS
+	// on the render thread — and given up on loudly instead of leaving the player parked.
+	if (s_excOn && s_excPend && !s_walking && core && p) {
+		bool settled = (mapG == s_excPendG && mapN == s_excPendN && px >= 0);
+		if (settled && (s_excPendFrames % EXC_SETTLE_EVERY) == 0 &&
+		    walk_plan(core, p, px, py, s_excPendX, s_excPendY, mapG, mapN)) {
+			s_walking = true; s_lpx = px; s_lpy = py; s_stall = 0; s_replans = 0;
+			s_excPend = 0; s_excPendFrames = 0;
+			s_mapG = mapG; s_mapN = mapN;      // the leg is walked on THIS map now
+		} else if (++s_excPendFrames > EXC_SETTLE_BUDGET) {
+			exc_reset();
+		}
 	}
 
 	if (!s_walking || !core || !p) return 0;            // path-follow (released, routing)
@@ -829,10 +856,12 @@ static void exc_leg_boundary(GbaCore* core, const GameProfile* p, int px, int py
 	s_excLeg++;
 	s_excChip = exc_chip_for(s_excLeg);
 	exc_dbg_stamp();
+	(void)core; (void)p; (void)px; (void)py;
+	// ARM the leg; the follower (walk_update_inner) plans it once the new map is really loaded.
 	// The door drops the avatar on (or one step off) the arrival tile; walk_plan starts from where
 	// the player REALLY is, so a +-1 arrival needs no tolerance rule here.
-	if (!walk_plan(core, p, px, py, gx, gy, mapG, mapN)) { exc_reset(); return; }
-	s_walking = true; s_lpx = px; s_lpy = py; s_stall = 0; s_replans = 0;
+	s_excPendG = wantG; s_excPendN = wantN; s_excPendX = gx; s_excPendY = gy;
+	s_excPend = 1; s_excPendFrames = 0;
 }
 
 // Re-plan from LIVE state after every INTERACT (SPEC H0.1: never execute a plan's assumptions
