@@ -747,6 +747,12 @@ bool fieldtrav_excursion(const FpBus* bus, const FpMap* m, uint32_t mapGroupsRom
 		// anything"): the arrival elevation is whatever the doorway carries, and an interior is
 		// exactly where a confident-but-wrong elevation would make the whole map unreachable.
 		ft_dry_bfs(&dbus, &dmap, arrX, arrY, arrX, arrY, 0, 0, 0);
+		// SNAPSHOT it. The leg-3 BFS below runs INSIDE the j loop and reuses the same static
+		// distance field, so a second return-warp candidate would otherwise be measured against
+		// the CURRENT map's distances instead of the interior's — a silent mis-ranking that only
+		// shows up on maps with more than one way back.
+		static int16_t midLeg[NT];
+		memcpy(midLeg, s_dist, sizeof midLeg);
 
 		for (int j = 0; j < nThere; j++) {
 			const FtWarp* wj = &there[j];
@@ -755,7 +761,9 @@ bool fieldtrav_excursion(const FpBus* bus, const FpMap* m, uint32_t mapGroupsRom
 			int back = wj->warpId;
 			if (back == cand[ci]) continue;                       // returns to the door we left by
 			int jx, jy; ft_warp_approach(&dbus, &dmap, wj->x, wj->y, &jx, &jy);
-			int dMid = ft_dist_at(arrX, arrY, jx, jy);
+			int jlx = jx - arrX + FP_WHALF, jly = jy - arrY + FP_WHALF;
+			if (jlx < 0 || jlx >= FP_WBOX || jly < 0 || jly >= FP_WBOX) continue;
+			int dMid = midLeg[jlx + FP_WBOX * jly];
 			if (dMid < 0) continue;                               // the interior does not connect
 
 			int bx, by;
