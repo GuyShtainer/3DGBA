@@ -682,3 +682,68 @@ D2 tap-to-walk RUNS when the routed path is >= ~4 tiles, WALKS when shorter — 
 Mechanism precedent: control.c:151's sprint mode already holds KEY_B in the direction mask; the
 touch route follower simply never does. Implement in the overworld handler + the route-PROGRAM
 layer. Not yet scheduled — pick this up in the next slice after the phase-23 lanes land.
+
+## PHASE 23 / LANE B — Entry 1: FAM-DLG (TAP-ADVANCE) LIVE-PROVEN ON EMERALD
+
+Worktree `worktree-wf_fe79c2e4-600-2`, instance **b**, dual Emerald (`--stage-roms
+emerald,emerald` — landmine #1's single-ROM trap respected), boot
+`runs-b/20260814-065252`, build snapshotted to scratchpad `laneb23/` and reached via
+`EMUTEST_APP/EMUTEST_ELF/EMUTEST_MAP` (azctl.py:100, gdbio.py:133-142) so a lane-A
+rebuild of the shared tree cannot skew a symbol read. Instance **a was never touched**.
+
+**What shipped** (commit `2eee75b`): the tap-advance family for `GCTX_TITLE` /
+`GCTX_FULLUI` — the two contexts phase 22.0 created and then left injecting NOTHING.
+tap=A, hold(30f)=B, drag=D-pad at one edge per 14 GBA px, plus left/right EDGE ZONES on
+an opt-in per-screen whitelist (`GameProfile.cb2Pager`). Design calls + citations live in
+`source/touchgeom.h`; the proof channel is `TouchDbg +0xB0..+0xC0`
+(dlgTaps/dlgHolds/dlgPages/dlgSteps/dlgPager), monotonic per session so a delta is the
+evidence.
+
+**The arc (every step a gdb read + a capture; counters read out of `g_touchDbg`):**
+
+| # | Act | gdb before -> after | Screen proof |
+|---|---|---|---|
+| P1 | tap (160,130) on the **title screen** (ctx 9 TITLE) | dlgTaps **0 -> 1** | title -> MAIN MENU (`EM-dlg-P1-*`) |
+| P2 | tap (160,130) on the **main menu** | dlgTaps **1 -> 2**, ctx **9 -> 1** | the save loaded (GUYA 116:34, 8 badges) |
+| P4 | tap the START menu's OPTION row (shipped fmenu family) | ctx **6 -> 10 FULLUI**, **dlgPager 0 -> 1** | the options screen |
+| P5 | tap the **LEFT edge zone** (30,130) | dlgPages **0 -> 1**, dlgTaps **stays 2** | TEXT SPEED **FAST -> MID** |
+| P6 | **drag down** (160,60)->(160,130) over 30f | dlgSteps **0 -> 3** | highlight walks TEXT SPEED -> **SOUND**, exactly 3 rows |
+| P7 | **hold** 60 frames at (160,130) | dlgHolds **0 -> 1**, ctx **10 -> 6** | B exited options back to the START menu |
+
+Four claims are established by what did NOT move as much as by what did:
+- **P5 dlgTaps stayed 2** — an edge-zone tap on a pager becomes LEFT, never also an A.
+- **P7 dlgTaps stayed 2** — a hold's release does not additionally fire the tap verb.
+- **P7 dlgPager 1 -> 0** — the whitelist is per-screen and follows the live cb2.
+- **P6 = 3 rows for 3 notches** — the direct-manipulation rule (drag DOWN emits DOWN) is
+  the OPPOSITE of FAM-LIST's content-follows-finger, and it is the correct one here: the
+  option row is a cursor, and a cursor follows the finger.
+
+Captures banked to `evidence/impl/EM-dlg-P1|P5|P6|P7-*.bottom.png`.
+
+### ⚠️ LANDMINE #2 IS NARROWER THAN RECORDED — a correction, with evidence
+
+The overnight rule read *"sdmc file visibility SNAPSHOTS at app spawn: pre-stage EVERY
+control file BEFORE boot; one proof arc per boot."* That is **not what the app does**, and
+believing it costs a whole boot per proof step. `main.c:511 ctl_touch_poll` /
+the D4 move poll `stat()` their file **live, every N render frames**; the only thing
+sampled at session start is `s_ctlOn`, i.e. whether the **directory**
+`sdmc:/cias/control` exists (main.c:2521).
+
+Measured this session, after the app was already running for ~90 s: `sdmc drop move 2`
+-> `wait-consumed` **PASS**, and then **six** further `touch.txt` scripts were each picked
+up mid-session (the whole P1-P7 arc above was dropped one file at a time, reading gdb
+between steps). **The corrected rule: `sdmc arm-control` BEFORE boot; every control file
+after it, as many as you like.** This turns the touch families from blind pre-staged
+batches into a closed loop — which is how P4's tap coordinate was chosen from P3's
+capture, and how P6's notch count was verified rather than guessed.
+
+Landmines #1 (dual-ROM staging or SMART is forced to PAD), #3 (touch keys abort a running
+D4 script — the arc sequences them, never overlaps) and #4 (a second instance costs
+25-40% fps — every wait above is 8-14 s of wall clock for well under a second of gesture)
+all held exactly as written.
+
+Suites at this entry: touchgeom 115396 -> **158835** (TEST 11 sweeps every pixel of the
+frame for "on a non-pager screen every px is A"; TEST 12 pins dlggeom's enum against
+touch.c's `s_keyDir` table), profiles 1480 -> **1622** (TEST 16 pins the whitelist and
+proves every pager entry is a SUBSET of `cb2FullUi`, so a pager value can never become
+back-door detection). `make -j8` clean.
