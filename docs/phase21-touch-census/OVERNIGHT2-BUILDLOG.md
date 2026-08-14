@@ -767,3 +767,73 @@ frames (`p(7,12)` on map (26,28) at f=4094→4332, unchanged). This is exactly f
 "a warp eats the in-flight token"). Doors (`MB_ANIMATED_DOOR` 0x69 / `MB_NON_ANIMATED_DOOR`
 0x60) still take one. Cheap pre-flight: dump the exit tile's behaviour from the pret layout
 before writing the route — 0x65/0x66/0x67/0x68 (the four arrow warps) mean two tokens.
+
+## Lane A Entry 8 (phase 23) — landmine 7: never `make` while an emutest session is live
+
+Cost: one poisoned poll window. The harness resolves `g_fieldDbg` (and every other symbol)
+out of `3DGBA.elf` **at read time**, not at boot time. A `make -j8` run while Azahar is
+still executing the OLD `.3dsx` relinks the ELF and the same symbol moves —
+`g_fieldDbg+0x50` went **0x005eccc4 -> 0x005f2fcc** mid-session — so every subsequent
+`gdbio read` silently returns whatever now lives at the new address (zeros, in this case).
+The failure looks exactly like "the app died", which is the expensive part.
+
+Two ways out, both cheap: (1) the lane-B recipe — snapshot ELF+3dsx before the boot and
+point `EMUTEST_ELF`/`EMUTEST_APP` at the snapshot; or (2) what this session did once it
+noticed — resolve the symbol ONCE at boot and then read the RAW ADDRESS for the rest of the
+run (`gdbio read 0x005eccc4 80`). The scratchpad poller now takes `FD_BASE` for exactly that.
+
+## Lane A Entry 9 (phase 23) — SLICE 2 IS HOST-PROVEN ON THE USER'S OWN ROM (TEST 15/16)
+
+`fieldtrav_excursion` + the ROM map graph landed and are graded by two host tests that do
+something new for this suite: they open **`roms/emerald.gba` at run time** and walk the real
+`gMapGroups -> MapHeader -> MapEvents/MapLayout -> warps + grid` chain instead of a
+compiled-in fixture (loud SKIP when the ROM is absent). test_fieldtrav 1032 -> **1066
+checks, 0 failures**; fieldpath UNMODIFIED at 1808.
+
+What TEST 15 pins, all read from the cartridge the user actually plays:
+- gMapGroups **0x08486578** resolves (26,14) to a 72x72 layout with **14 warps**, warp 1 at
+  **(39,29) -> (26,28)** — the exact warp the live arc crossed, arriving at (39,30).
+- the lobby (26,28) has ONE warp, at **(7,12)**, targeting OutsideEast warp 1 — the
+  `MB_SOUTH_ARROW_WARP` that cost a boot to learn about (Entry 7).
+- the ROM-grid bus adapter is graded by running **fieldpath's own reads** through it:
+  (39,29) = MB_ANIMATED_DOOR 0x69 and not walkable, (39,30) walkable, (50,58) =
+  MB_OCEAN_WATER 0x15. Off-map reads refuse rather than guess.
+
+TEST 16 is the Lavaridge-class proof **relocated to a map this save can reach**:
+`BattleFrontier_OutsideWest`'s RECEPTION GATE. Two door tiles — **(26,61)** north
+(MB_SOUTH_ARROW_WARP 0x65) and **(26,65)** south (MB_NON_ANIMATED_DOOR 0x60) — with the
+9x14 gate building between them and no way around. Premise proven first (the dry router
+cannot cross), then the excursion: out through the north warp, across the gate from (4,1)
+to (4,13), back out at (26,65). Symmetric in the other direction; a goal inside the gate's
+wall reports `excursion-none` and plans NOTHING.
+
+One real bug the tests caught in the HARNESS, worth remembering for every future map test:
+the "live" bus must fall through to ROM. The map header and both tilesets are ROM reads even
+for the CURRENT map, so a bus that only answers the grid makes `fieldpath_classify` silently
+blind — it returns kind=NONE for every warp and the whole search comes back empty.
+
+## Lane A Entry 10 (phase 23) — the OutsideEast walk dies at EXACTLY 6 steps, twice
+
+Not randomness — a step-counted script. Two independent attempts, two different routes:
+
+| attempt | route after the warp | stopped at | steps walked |
+|---|---|---|---|
+| 2 | `d4 r1 d7` (down column 40) | (40,35), inside `d7` | 4+1+1 = **6** |
+| 3 | `d11` (down column 39) | (39,36), inside `d11` | **6** |
+
+Both left a field MESSAGE BOX open (captured: a small Pokemon-shaped portrait plus
+"…………" and the ▼ prompt) with the avatar frozen, and in both cases the ROM's own
+blockdata — re-read from the cartridge through `gMapGroups`, not just from pret, after the
+pret data was (wrongly) suspected — says the tile ahead is **collision 0, elevation 3, i.e.
+walkable**. So it is a script, and it fires on a step counter shortly after the map load
+(the Match-Call family of "walked N steps outdoors" triggers is the obvious candidate).
+
+Consequences for every long D4 route on a late-game save:
+1. **A closed-loop walk token cannot survive it.** The box blocks movement, the token's
+   `CTL_WALK_DL(n) = n*60+240` deadline expires, and a TIMEOUT aborts the whole script.
+2. **The fix is to put the boundary between tokens.** Both attempts COMPLETED their 6th
+   step before freezing, so a route whose first outdoor tokens sum to exactly 6 tiles ends
+   cleanly, and a run of `a` tokens right after it advances the box (remember Entry 7: only
+   `a` advances a Gen-3 textbox, never `b`).
+3. Place those `a` tokens where the avatar faces open ground, so an A that finds NO box
+   open does nothing instead of starting an NPC conversation.
