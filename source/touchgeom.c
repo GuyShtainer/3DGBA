@@ -243,3 +243,28 @@ int dlggeom_route(int ctx, int textDlg, int fieldLock) {
 	if (ctx != DLGGEOM_CTX_FIELD) return DLGROUTE_WALK;   // not the fall-through ctx: never ours
 	return (textDlg || fieldLock) ? DLGROUTE_DLG : DLGROUTE_WALK;
 }
+
+// ============== FAM-MAP — the REGION MAP / TAP-TO-FLY family (phase 24, lane B2) ===============
+// See touchgeom.h for the full pret derivation. Stateless like the rest of this file: touch.c owns
+// the armed target, the pacing gap and the arrival A.
+
+int mapgeom_hit(int gx, int gy, int* cx, int* cy) {
+	if (gx < MAPGEOM_X_MIN * 8 || gx >= (MAPGEOM_X_MAX + 1) * 8) return 0;
+	if (gy < MAPGEOM_Y_MIN * 8 || gy >= (MAPGEOM_Y_MAX + 1) * 8) return 0;
+	if (cx) *cx = gx >> 3;   // the exact inverse of the game's own 8*cursorPos + 4 cursor formula
+	if (cy) *cy = gy >> 3;
+	return 1;
+}
+
+int mapnav_step(int curX, int curY, int tgtX, int tgtY) {
+	// Refuse to drive from or to a coordinate the engine cannot hold (a mid-init struct, a zoomed
+	// map, a bad pointer): emitting nothing is always safe, guessing is not.
+	if (curX < MAPGEOM_X_MIN || curX > MAPGEOM_X_MAX || curY < MAPGEOM_Y_MIN || curY > MAPGEOM_Y_MAX) return 0;
+	if (tgtX < MAPGEOM_X_MIN || tgtX > MAPGEOM_X_MAX || tgtY < MAPGEOM_Y_MIN || tgtY > MAPGEOM_Y_MAX) return 0;
+	int k = 0;
+	if (tgtX > curX) k |= MN_RIGHT;
+	else if (tgtX < curX) k |= MN_LEFT;
+	if (tgtY > curY) k |= MN_DOWN;
+	else if (tgtY < curY) k |= MN_UP;
+	return k;
+}

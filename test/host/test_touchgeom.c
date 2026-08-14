@@ -445,6 +445,132 @@ static void test_dlg_route(void) {
 	CHECK(dlggeom_route(DLGGEOM_CTX_FIELD, 0, 255) == DLGROUTE_DLG, "fieldLock=255 counts");
 }
 
+
+// ============================================================================================
+// TEST 14 — PHASE 24 / lane B2: FAM-MAP hit geometry (touchgeom.h mapgeom_hit). The whole
+// tap-to-fly family rests on one claim: the pixel a finger lands on maps to the region-map cell
+// the GAME would put its cursor on. That claim is not a fitted rectangle — it is the exact
+// INVERSE of the engine's own cursor formula (CreateRegionMapCursor, pokeemerald
+// src/region_map.c:1418-1419: cursorSprite->x = 8*cursorPosX + 4, y = 8*cursorPosY + 4), so the
+// test grades it as a round trip: for every legal cell, the pixel the game draws its cursor at
+// must classify back to that cell, and every pixel of the cell's 8x8 body must too.
+//
+// The second half is the DEAD ZONE, and it matters more than it looks: the fly map draws the
+// destination-name window along the bottom and a border at the top. A tap there must be dead, not
+// clamped to the nearest square — clamping would fly the player somewhere they did not point at,
+// which is the one failure this family must never have (rule M1).
+static void test_map_hit(void) {
+	puts("TEST 14: FAM-MAP hit geometry (round trip against the engine's own cursor formula)");
+	int bad = 0;
+	for (int cy = MAPGEOM_Y_MIN; cy <= MAPGEOM_Y_MAX; cy++) {
+		for (int cx = MAPGEOM_X_MIN; cx <= MAPGEOM_X_MAX; cx++) {
+			int gx = 8 * cx + 4, gy = 8 * cy + 4;   // the pixel the GAME puts the cursor at
+			int rx = -1, ry = -1;
+			if (!mapgeom_hit(gx, gy, &rx, &ry) || rx != cx || ry != cy) bad++;
+			else g_checks++;
+		}
+	}
+	CHECK(bad == 0, "every legal cell round-trips through its own cursor pixel (%d bad)", bad);
+	// Every pixel of every cell body resolves to that cell — no gutters inside the map, because
+	// the map has none: the cursor can sit on any of the 28x15 squares.
+	bad = 0;
+	for (int cy = MAPGEOM_Y_MIN; cy <= MAPGEOM_Y_MAX; cy++)
+		for (int cx = MAPGEOM_X_MIN; cx <= MAPGEOM_X_MAX; cx++)
+			for (int dy = 0; dy < 8; dy++)
+				for (int dx = 0; dx < 8; dx++) {
+					int rx = -1, ry = -1;
+					if (!mapgeom_hit(8 * cx + dx, 8 * cy + dy, &rx, &ry) || rx != cx || ry != cy) bad++;
+					else g_checks++;
+				}
+	CHECK(bad == 0, "every pixel of every cell body resolves to that cell (%d bad)", bad);
+	// The dead zone: everything outside the cursor's legal pixel range, swept over the whole frame.
+	int leaks = 0, dead = 0;
+	for (int gy = 0; gy < 160; gy++)
+		for (int gx = 0; gx < 240; gx++) {
+			int inside = (gx >= MAPGEOM_X_MIN * 8 && gx < (MAPGEOM_X_MAX + 1) * 8 &&
+			              gy >= MAPGEOM_Y_MIN * 8 && gy < (MAPGEOM_Y_MAX + 1) * 8);
+			int cx = -1, cy = -1, hit = mapgeom_hit(gx, gy, &cx, &cy);
+			if (hit != inside) leaks++;
+			else if (!inside) dead++;
+		}
+	CHECK(leaks == 0, "the map body is exactly x[8,232) y[16,136); everything else is DEAD "
+	      "(%d misclassified px, %d dead px swept)", leaks, dead);
+	CHECK(mapgeom_hit(120, 150, 0, 0) == 0,
+	      "a tap on the fly map's destination-name window is dead, NOT clamped to the nearest "
+	      "square (rule M1: never fly somewhere the finger did not point)");
+	CHECK(mapgeom_hit(4, 80, 0, 0) == 0, "the left margin (cursorPosX 0 is illegal) is dead");
+	CHECK(mapgeom_hit(120, 8, 0, 0) == 0, "the top border (cursorPosY 0/1 are illegal) is dead");
+	CHECK(mapgeom_hit(236, 80, 0, 0) == 0, "the right margin (cursorPosX 29 is illegal) is dead");
+}
+
+// ============================================================================================
+// TEST 15 — PHASE 24 / lane B2: the FAM-MAP navigator, graded against a MODEL OF THE ENGINE
+// rather than against itself. The model is pokeemerald's own input pair, transcribed:
+//   ProcessRegionMapInput_Full (src/region_map.c:653-690) — JOY_HELD, X and Y read INDEPENDENTLY
+//     (so a diagonal is one frame), each axis clamped at its MAPCURSOR bound, and a move sets
+//     cursorMovementFrameCounter = 4 + swaps the callback;
+//   MoveRegionMapCursor_Full (:700-730) — while the counter is non-zero the input is NOT polled
+//     at all; when it hits 0 the cursorPos fields are written and input resumes.
+// Driving that model with mapnav_step is what proves the two things the emulator cannot show
+// exhaustively: it CONVERGES from every cell to every cell, and it converges in exactly the
+// Chebyshev distance (max(|dx|,|dy|)) — i.e. the diagonal is really being used and no press is
+// wasted. 420 starts x 420 targets = 176 400 routes.
+#define RM_SLIDE 4
+static void test_map_nav(void) {
+	puts("TEST 15: FAM-MAP navigator convergence (engine-model oracle, 176 400 routes)");
+	int worst = 0, bad = 0, overshoot = 0, routes = 0;
+	for (int sy = MAPGEOM_Y_MIN; sy <= MAPGEOM_Y_MAX; sy++)
+	for (int sx = MAPGEOM_X_MIN; sx <= MAPGEOM_X_MAX; sx++)
+	for (int ty = MAPGEOM_Y_MIN; ty <= MAPGEOM_Y_MAX; ty++)
+	for (int tx = MAPGEOM_X_MIN; tx <= MAPGEOM_X_MAX; tx++) {
+		int cx = sx, cy = sy, slide = 0, presses = 0, frames = 0;
+		routes++;
+		int dxn = (tx > sx) ? tx - sx : sx - tx, dyn = (ty > sy) ? ty - sy : sy - ty;
+		int want = (dxn > dyn) ? dxn : dyn;                 // Chebyshev: diagonals are free
+		while ((cx != tx || cy != ty) && frames < 600) {
+			frames++;
+			if (slide > 0) { if (--slide == 0) { /* cursorPos written at slide end */ } continue; }
+			int k = mapnav_step(cx, cy, tx, ty);
+			if (!k) break;                                   // navigator gave up
+			presses++;
+			int ddx = 0, ddy = 0;                            // the engine's own independent reads
+			if ((k & MN_UP)    && cy > MAPGEOM_Y_MIN) ddy = -1;
+			if ((k & MN_DOWN)  && cy < MAPGEOM_Y_MAX) ddy = +1;
+			if ((k & MN_LEFT)  && cx > MAPGEOM_X_MIN) ddx = -1;
+			if ((k & MN_RIGHT) && cx < MAPGEOM_X_MAX) ddx = +1;
+			if (!ddx && !ddy) break;                         // pressed into a wall: would hang
+			cx += ddx; cy += ddy; slide = RM_SLIDE;
+			if ((ddx > 0 && cx > tx) || (ddx < 0 && cx < tx) ||
+			    (ddy > 0 && cy > ty) || (ddy < 0 && cy < ty)) overshoot++;
+		}
+		if (cx != tx || cy != ty) bad++;
+		else if (presses != want) bad++;
+		else g_checks++;
+		if (presses > worst) worst = presses;
+	}
+	CHECK(bad == 0, "every one of %d routes converges in EXACTLY max(|dx|,|dy|) presses "
+	      "(%d failures)", routes, bad);
+	CHECK(overshoot == 0, "no single-frame press ever steps past the target (%d overshoots) — "
+	      "this is why the driver presses one frame per cell instead of holding the key: a held "
+	      "key keeps moving while our read of cursorPosX/Y is still one frame behind", overshoot);
+	CHECK(worst == MAPGEOM_X_MAX - MAPGEOM_X_MIN, "the widest route costs %d presses "
+	      "(28-1 columns; at MAPNAV_GAP+1 = 6 frames each that is ~2.7 s)", worst);
+	// Arrived / illegal inputs must emit NOTHING — the driver treats 0 as "stop", so a wrong read
+	// (a mid-init struct, a zoomed map) can only ever produce silence.
+	CHECK(mapnav_step(5, 5, 5, 5) == 0, "arrived -> no key");
+	CHECK(mapnav_step(0, 5, 5, 5) == 0, "cursorPosX 0 is illegal (MAPCURSOR_X_MIN 1) -> no key");
+	CHECK(mapnav_step(5, 1, 5, 5) == 0, "cursorPosY 1 is illegal (MAPCURSOR_Y_MIN 2) -> no key");
+	CHECK(mapnav_step(29, 5, 5, 5) == 0, "cursorPosX 29 is out of range -> no key");
+	CHECK(mapnav_step(5, 17, 5, 5) == 0, "cursorPosY 17 is out of range -> no key");
+	CHECK(mapnav_step(5, 5, 0, 5) == 0, "an illegal TARGET is refused too");
+	CHECK(mapnav_step(5, 5, 6, 6) == (MN_RIGHT | MN_DOWN), "a diagonal is ONE frame, both bits");
+	CHECK(mapnav_step(5, 5, 4, 4) == (MN_LEFT | MN_UP), "…in every quadrant");
+	CHECK((MN_RIGHT & MN_LEFT) == 0 && (MN_DOWN & MN_UP) == 0, "the four bits are disjoint");
+	CHECK(MAPSECTYPE_CITY_CANFLY == 2 && MAPSECTYPE_BATTLE_FRONTIER == 4,
+	      "the two mapSecType values the fly map accepts (region_map.h:19-26) — the driver makes "
+	      "the game's OWN test before it emits a confirm A");
+}
+
 int main(void) {
 	test_colcount();
 	test_validity();
@@ -459,6 +585,8 @@ int main(void) {
 	test_dlg_tap();
 	test_dlg_drag();
 	test_dlg_route();
+	test_map_hit();
+	test_map_nav();
 	printf("\n=== %d checks, %d failures ===\n", g_checks, g_fails);
 	return g_fails ? 1 : 0;
 }

@@ -35,7 +35,12 @@ typedef enum {
 	// --- phase 22.2 (overnight lane): the GRID family — the PC storage boxes UI. Appended (values
 	// stay stable); matched by cb2 == CB2_PokeStorage (GameProfile.storageCb) BEFORE the cb2FullUi
 	// loop, exactly like GCTX_NAMING (more specific wins; the fullui list keeps the value).
-	GCTX_STORAGE          // PC storage boxes (SPEC-family-grid; EM only in v1 — see storageCb)
+	GCTX_STORAGE,         // PC storage boxes (SPEC-family-grid; EM only in v1 — see storageCb)
+	// --- phase 24 (lane B2): the MAP family — the region map, and with it TAP-TO-FLY. Appended
+	// (every value above stays stable); matched by cb2 == GameProfile.rmFlyCb / rmWallCb BEFORE
+	// the cb2FullUi loop, exactly like GCTX_NAMING and GCTX_STORAGE (more specific wins; both
+	// values stay in cb2FullUi so a game without the map anchors keeps today's FAM-DLG default).
+	GCTX_MAP              // region map: fly map (A confirms) or wall map (cursor only) — see mapFly
 } GameCtx;
 
 // Which list screen GCTX_LIST resolved to (GameState.listKind; SPEC-family-lists §2/§3).
@@ -45,7 +50,11 @@ enum {
 	LK_BUY,      // mart buy menu (Task_BuyMenu live; listBase = its tListTaskId's ListMenu)
 	LK_PCITEM,   // PC item storage list (EM ItemStorage_ProcessInput / FRLG Task_ItemPcMain)
 	LK_QTY,      // "how many?" quantity roller over the buy list (Task_BuyHowManyDialogueHandleInput)
-	LK_DEX       // EM Pokedex list (custom cursor model — key-injection only, L20/L21)
+	LK_DEX,      // EM Pokedex list (custom cursor model — key-injection only, L20/L21)
+	// phase 24 (lane B2): a FULL-SCREEN UI whose list is DISCOVERED rather than anchored — see
+	// GameProfile.cb2List. Same driver as LK_BUY/LK_PCITEM (list_update); the only difference is
+	// where listBase came from.
+	LK_FULLUI    // FR Berry Pouch / TM Case (TOUCH-PLAN E4/E5) and any future opt-in screen
 };
 
 // Capacity of the phase-22.0 cb2 screen-class fingerprint lists (GameProfile.cb2Title/cb2FullUi).
@@ -58,6 +67,10 @@ enum {
 // ships 2 per FRLG/EM row (summary + options); sized to 4 for the dex-entry / trainer-card / berry
 // tag candidates the census still owes a live LEFT/RIGHT confirmation.
 #define GS_N_PAGER  4
+// Capacity of the phase-24 (lane B2) DISCOVERED-LIST whitelist (GameProfile.cb2List). v1 ships
+// 2 entries (FR's Berry Pouch + TM Case); sized to 4 for the mailbox / move-relearner / dex-TOC
+// candidates the census still owes a live confirmation.
+#define GS_N_LISTCB2 4
 
 // Per-game RAM map (all absolute GBA bus addresses; EM=Emerald, FR=FireRed/LeafGreen).
 typedef struct {
@@ -392,6 +405,64 @@ typedef struct {
 	// FAM-DLG therefore cannot take working behaviour away — it can only replace a route that was
 	// going to stall with the A the player actually wanted.
 	uint32_t fieldLock;
+	// --- phase 24 (lane B2) — FAM-MAP: the region map / TAP-TO-FLY anchors -----------------------
+	// TOUCH-PLAN rows B7/B8. Three columns carry the whole family because the engine keeps ONE
+	// module-static pointer for every region-map instance:
+	//   rmPtr    sRegionMap — a POINTER to the live `struct RegionMap` (pokeemerald.sym
+	//            `0203a144 l 00000004 sRegionMap`; InitRegionMapData does `sRegionMap = regionMap`
+	//            for the wall map, the fly map's embedded sFlyMap->regionMap and PokeNav alike).
+	//            DEREFERENCED, so it is the one value here that must be right — every read is
+	//            guarded (EWRAM bank + cursor in range + zoomed == 0) and a failed guard emits
+	//            NOTHING, which is the shipped FULLUI behaviour, never a wrong key.
+	//   rmFlyCb  the FLY map's run-loop cb2 (EM CB2_FlyMap 0x081248D4). On this screen an arrival
+	//            A is emitted, but only when the live mapSecType is CITY_CANFLY/BATTLE_FRONTIER —
+	//            the same test the game's own CB_HandleFlyMapInput makes.
+	//   rmWallCb the FIELD/WALL map's RUN loop (EM MCB2_FieldUpdateRegionMap 0x08170274 — the
+	//            census correction: CB2_FieldShowRegionMap is only the setup). Cursor-only: on
+	//            this screen A **exits**, so a tap that fired one would close the map (M2).
+	// Both cb2s are ALREADY in this row's cb2FullUi list, so this slice cannot make a screen start
+	// detecting that did not detect before — it only upgrades two already-classified screens from
+	// the FAM-DLG default (tap = A, drag = one D-pad edge per 14 px) to one-tap targeting.
+	//
+	// FR/LG: 0 — and the reason is specific, not laziness. The census harvested ONE cb2 for BOTH
+	// FR screens (CB2_RegionMap 0x080C08C8, "town map AND fly map, mode internal"), so `fly` is
+	// not decidable from the callback, and no pokefirered symbol map was available this session to
+	// resolve FR's region-map struct pointer. Named degradation: FR keeps FAM-DLG on the map.
+	// RS: 0 (the ROM/statics ban). Appending is the only safe edit: PROFILES[] is POSITIONAL.
+	uint32_t rmPtr;
+	uint32_t rmFlyCb;
+	uint32_t rmWallCb;
+	// --- phase 24 (lane B2) — the DISCOVERED-LIST whitelist: FAM-LIST's "free instantiation" ----
+	// TOUCH-PLAN rows E4 (FR Berry Pouch) and E5 (FR TM Case) are described as "FAM-LIST free
+	// instantiation" — a list screen that needs no new driver, only a list to point the shipped
+	// one at. The obstacle was always the ANCHOR: `find_list_task` needs the screen's own input
+	// task plus the data[] slot its ListMenu id hides in, and neither was resolvable for these
+	// two FireRed modules this session (no pokefirered symbol map to hand).
+	//
+	// The way around it costs NO new addresses. Every live ListMenu in the engine owns a task
+	// whose function is `ListMenuDummyTask` — that is the whole premise of the P-D discovery
+	// probe, whose anchor (`lmDummyTask`/`lmDummyTaskAlt`) this row has carried since phase 22.1
+	// as LOGGING ONLY. This column promotes that probe from an instrument to a driver, for a
+	// NAMED SET OF SCREENS ONLY: if the live cb2 is in this list, the first live ListMenu found
+	// by the dummy-task scan IS this screen's list, and it gets GCTX_LIST / LK_FULLUI.
+	//
+	// Three things keep it honest:
+	//   * it is an OPT-IN WHITELIST of census-[exact] cb2s, never a class-wide rule — a screen
+	//     that happens to keep a stale ListMenu alive cannot be hijacked unless it is named here;
+	//   * a screen in the list with NO live ListMenu falls through to GCTX_FULLUI, i.e. exactly
+	//     today's FAM-DLG behaviour — the failure mode is "no upgrade", never a wrong key;
+	//   * the driver still applies the L10 sanity gate (`listgeom_valid`) to the discovered
+	//     geometry and emits NOTHING when it fails.
+	//   BPRE: CB2_BerryPouchIdle 0x0813CE78 (E4) + CB2_Idle 0x081318DC (E5, the census's catalog
+	//         correction: `CB2_Idle` IS the TM Case run loop). Both are census-harvested [exact]
+	//         and both already sit in this row's cb2FullUi list, so — exactly like cb2Pager and
+	//         the FAM-MAP columns — this changes how a tap READS, never whether a screen detects.
+	//   BPEE: 0. Emerald's Berry Pouch/TM Case do not exist (berries live in the bag), and its
+	//         other list screens already have real anchors, which are strictly better.
+	//   BPGE: 0 until the LG harvest slice gives it its own [exact] values (never copy FR's —
+	//         the BPGE drift lesson). AXVE/AXPE: 0 (the ROM-address ban).
+	// 0 = unused slot and never matches. Appending is the only safe edit: PROFILES[] is POSITIONAL.
+	uint32_t cb2List[GS_N_LISTCB2];
 } GameProfile;
 
 // One-pass snapshot of the live game.
@@ -422,6 +493,9 @@ typedef struct {
 	bool     fieldLock;       // sLockFieldControls != 0 — a script owns the field: the player cannot
 	                          // move, for the WHOLE sequence (dialog, cutscene, forced walk)
 	bool     textBanner;      // overworld: the map-name banner task is live
+	bool     mapFly;          // GCTX_MAP only: 1 = the FLY map (an arrival A is a fly confirm),
+	                          // 0 = the wall/field map, where A EXITS — so the driver never fires
+	                          // one there (touchgeom.h FAM-MAP, rule M2)
 	// --- instrumentation (LOGGING ONLY; never gate touch/3D/gameplay on these) ---
 	uint32_t cb1, cb2;        // raw gMain.callback1/callback2 (Thumb bit stripped) = the screen fingerprint.
 	                          // cb2 is THE value an undetected screen (pokedex/townmap/summary/card/keyboard/

@@ -3592,6 +3592,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 							// DIALOG to FAM-DLG instead of the walker (touchgeom.h dlggeom_route).
 							// textDlg above only covers the frames the text is still PRINTING.
 							sm.fieldLock = gsr.fieldLock;
+							// phase 24 (lane B2): which region map is up. 1 = the FLY map, where an
+							// arrival A is a fly confirm; 0 = the wall map, where A would CLOSE it.
+							sm.mapFly = gsr.mapFly;
 							sm.padKeys = to_gba_keys(kHeld);
 							sm.traverse = g_prefs.smartTraverse;
 							// cb2 is the touch-log fingerprint AND (phase 23) the FAM-DLG pager gate —
