@@ -438,3 +438,60 @@ the Frontier building now up-screen — the camera moved because the player did)
 
 **Verdict: the interact sequencer's extraction is behaviour-preserving on the live target.** The
 excursion machine is NOT covered by this run (P1 never leaves the map) — Entry 9.
+
+## Entry 9 — 🎉 and the OTHER half: P4, the Lavaridge excursion, re-proved on `excseq`
+
+P1 never leaves the map, so it proves nothing about the leg machine. Boot
+`runs/20260814-201122`, `--stage-roms emerald-lavaridge,emerald-lavaridge`, `smartTraverse` set to
+**2** for the run (the P4 precondition; the file was backed up, edited by one word, and restored —
+see the hygiene note). **One tap**: `t 96 96 6 30` = ddx −4 / ddy −2 from the fly tile (9,7) →
+world **(5,5)**, a hot-spring tile with solid wall under the whole spring block, so no dry route to
+it exists.
+
+| read | map | pos | what the machine was doing |
+|---|---|---|---|
+| +6 s | (0,12) Lavaridge | **(9,6)** | leg 0: `planSeq 2` goal (9,6) **kind 1 = DOOR**, `walking 2` = the terminal hold at the PC's front door |
+| +12 s | **(4,5) PC 1F** | (6,8) | **`progMapSeq 1`** — the boundary armed leg 1 and the follower planned it on the ARRIVAL map: `planSeq 3` goal (2,1) **kind 3 = STEP**, pathLen 12 |
+| +18 s | (4,5) | (2,6) | crossing the room, `walking 1` |
+| +24 s | (4,5) | **(2,1)** | the back door, `routeEnd 1 = ARRIVED` — the route ENDS, and only then does the warp fire |
+| +30 s | **(0,12)** | (9,2) | **`progMapSeq 2`** — the STEP-warp watcher (`a1cbdca`) caught the boundary with no route in flight, `planSeq 4` goal (5,5), and `routeEnd 6 = MAPCHANGE`: the first attempt was killed by the layout check |
+| +36 s | (0,12) | **(5,5)** | `planSeq 5` — the RE-ARMED leg, re-planned on the finished map, `behaviour` **40 = 0x28**, `routeEnd 1 = ARRIVED` |
+
+Every phase-24 excursion fix is exercised there, in one tap: **arm-don't-plan** (`e1c6041` — leg 1
+is planned on the arrival map, not on the boundary frame), the **STEP-warp watcher** (`a1cbdca` —
+leg 2 is armed after the route has already finished), and the **layout-stable rule + re-arm**
+(`2fa4976` — `planSeq 4` dies as MAPCHANGE and `planSeq 5` succeeds). `behaviour 0x28` and the
+final (5,5) match lane A's P4 line for line.
+
+That `planSeq 4 → routeEnd 6 → planSeq 5` sequence is the live counterpart of the residue
+`test_excseq` TEST 6 pins: the dims history survives a leg boundary, so leg 2's first frame looks
+settled on the OLD map's grid and spends one BFS there. The machine recovers exactly as the host
+test says it does. It cost one wasted plan on hardware-class timing, and it is now written down in
+two places instead of nowhere.
+
+Capture: `EM-P25-C2-p4-hot-spring-after-extraction.bottom.png` — the avatar standing IN the spring
+water beside the two bathers, the Pokemon Center it walked through on the right. Hashed, unique.
+
+**Verdict: both extractions are behaviour-preserving on their own live targets.**
+
+### One honest anomaly from this boot, not swept up
+
+Between the CONTINUE and the first tap, the bottom game **went back to its own main menu** (ctx 9,
+the CONTINUE/NEW GAME screen) while the top game sat at its title — so the two cores were in
+different states and the app had not restarted anything. The cause was not established (the D4
+`a`/`b` script and one synthetic tap are the only inputs that were sent, and none of them is the
+Gen-3 soft-reset combo). It is recorded because it cost the first tap of the boot: one more `a` on
+CONTINUE put the save back at (9,7) and the excursion then ran perfectly. **Flagged, not
+explained** — if it recurs, the gs ring dumped on Quit is where to look.
+
+### Emulator hygiene for entries 8-9
+
+- `azctl stop` twice: profile CLEAN, `qt-config.ini` restored byte-identically both times.
+- `azctl clean-fixtures`: ROM originals re-hashed untouched, `sdmc:/3DGBA` ROM-less again, the
+  user's own `recent.bin` restored (sha256 `72c100ad…`, identical to the pre-lane copy).
+- `settings.bin`: backed up before the one-word `traverse 1 → 2` edit and restored afterwards —
+  sha256 **`85dd487e…` before and after**, the same value lane C1 recorded. The run's own file
+  (`ec95a573…`) is gone.
+- No Azahar left running (`ps aux` → 0). Instance **b** never touched. Three captures this lane,
+  all hashed and distinct; the only duplicate pair in `evidence/impl/` is still the phase-23 one
+  entry 6 reported.
