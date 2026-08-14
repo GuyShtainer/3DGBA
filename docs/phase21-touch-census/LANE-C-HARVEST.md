@@ -222,3 +222,55 @@ netlink 66 · peersprite 62078 · presence 61376 · **profiles 2546** · theme 8
 touchgeom 371892 · trace_replay 58 (4 skips) · typography 1419 · uigeom 18332 · uihit 1834 =
 **616 394 checks, 0 failures**. `make -j8` clean, `3DGBA.3dsx` 4 403 340 B (only the pre-existing
 mgba/indentation warnings).
+
+---
+
+## Entry 4 — 🎉 the verification boot: K4 proven by A/B on one boot, and the promotion seen taking effect
+
+Boot `runs/20260814-191846`, the **rebuilt** app, `--stage-roms emerald-fix,firered` — Emerald as
+gameA (top, D4 seat `move_p1`), FireRed as gameB (bottom, so **FireRed owns touch**). One boot,
+two games, each doing its own half of the proof, which is the technique the user named.
+
+### K4 — the FRLG quest-log guard, before and after, same channel, same coordinates
+
+FireRed continues straight into its quest-log playback:
+
+| moment | `ctx` | `qlState` | `fieldLock` | touch script | result |
+|---|---|---|---|---|---|
+| **during playback** | **15 = GCTX_INERT** | **2** (`QL_STATE_PLAYBACK`) | 0 | 3 taps + one 90-frame hold, **all 8 ops picked up** (`[ctl touch] picked up 8 touch ops`) | `planSeq` **0**, `dlgTaps` 0, `dlgHolds` 0, `curKeys` 0, `walking` 0 |
+| **after playback** (same boot, same taps) | 1 = field | **0** | 0 | 2 taps | `planSeq` **0 → 2** — the walker armed routes again |
+
+Lane B1's BEFORE on this exact screen, for comparison: `fieldLock` 0, `msgMode` 0, and **three taps
+produced `planSeq = 5`** — routes armed at a game the player does not control.
+
+The second row is what makes the first one evidence rather than an absence: the identical script on
+the identical channel DOES something the moment the guard stops applying, so "nothing happened"
+cannot be "the taps never arrived". Captures: `FR-P25-questlog-inert.bottom.png` (the grayscale
+"Previously on your quest…4" replay, mid-guard) and `FR-P25-questlog-over-taps-live.bottom.png`
+(the same map in full colour after the replay, with the walker's own target ring drawn on the tile
+the tap picked).
+
+**Row K4 = VERIFIED.** The guard is the game's own playback test, so it costs one EWRAM byte and no
+heuristics — and it is the same `GCTX_INERT` the credits use.
+
+### The promotion, seen taking effect on the screen this lane harvested
+
+While FireRed replayed, Emerald was driven by `move_p1` back to its PC and into **HALL OF FAME**.
+The gs ring, both screens in the same dump:
+
+```
+frame  scr ctx      cb2         map      pos
+ 3946   0 fullui   0x08173560  26.28   13,7      <- Emerald: the Hall-of-Fame PC screen
+ 3980   1 inert    0x080565C8  13.1     3,4      <- FireRed: quest-log playback
+```
+
+That same screen read **`ctx = field`** in Entry 1, on the pre-promotion build, at the same
+coordinates. One value changed and the classifier now names it. Capture:
+`EM-P25-hof-now-fullui.top.png` (the TOP screen this time — Emerald's HUD, 26 fps, the same
+"HALL OF FAME data is corrupted" screen with its ⓐEXIT).
+
+Emulator hygiene: `azctl stop` (profile CLEAN, qt-config restored byte-identically) +
+`clean-fixtures` (ROM originals re-hashed untouched, the user's `recent.bin` restored — sha256
+`72c100ad…` identical to the pre-lane copy), `settings.bin` **never written** (sha256
+`85dd487e…` identical before and after both boots), no Azahar left running, instance **b** never
+touched.
