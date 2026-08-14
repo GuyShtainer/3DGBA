@@ -13,6 +13,8 @@
 #include "fieldtrav.h" // phase 22.2: HM-aware conditional-edge planning (pure C, host-tested)
 #include "uihit.h"     // phase 19 / L3.2.8: the chip boxes, shared with the host suite
 #include "touchgeom.h" // phase 22.1: keyboard + list hit geometry (pure C, host-tested)
+#include "progseq.h"   // phase 25 / audit O2: the interact sequencer (pure C, host-tested)
+#include "excseq.h"    // phase 25 / audit O2: the excursion leg machine (pure C, host-tested)
 
 const char* const TOUCH_NAMES[3] = { "Off", "Gamepad", "Smart" };
 
@@ -417,33 +419,20 @@ static u16 run_key(GbaCore* core, const GameProfile* p, bool runLeg);   // ...an
 // Any other map, or a leg that cannot be re-planned live (an NPC camped in the doorway), ends the
 // excursion where it stands: visible, honest, recoverable. Never a wander (H3.5).
 static FtExcursion s_exc;
-static bool s_excOn = false;
-static int  s_excLeg = 0;                 // 0 = out, 1 = interior, 2 = home
-static int  s_excMapG = -1, s_excMapN = -1;   // the HOME map: where the tap happened, and where
-                                              //   leg 2 walks to the goal
-static int  s_excCurG = -1, s_excCurN = -1;   // the map the CURRENT leg is being walked on — the
-                                              //   reference a leg boundary is detected against
-                                              //   (phase 24; see the boundary watcher)
-static int  s_excGoalX = 0, s_excGoalY = 0;   // the tapped goal, kept for leg 2
+// PHASE 25 / audit O2: the leg SUPERVISOR itself is `source/excseq.c` — pure, host-tested, and the
+// shipped one (there is no second copy). What stays here is what it is not allowed to do: read the
+// game, run a BFS, or draw. Its whole state is this struct.
+// DESIGNATED, not positional: fieldtrav.h's own comment names the trap ("the two tables are
+// positionally initialised, so a new field may only go at the END") and a state struct should not
+// inherit it. Everything not named here is 0, and every field is read only once `on` is set.
+static ExcSeq s_excS = { .homeG = -1, .homeN = -1, .curG = -1, .curN = -1,
+                         .pendG = -1, .pendN = -1, .lastW = -1, .lastH = -1 };
 static int  s_excSeq = 0;
 static const char* s_excChip = 0;
 
-// PHASE 24 (live-proven): the next leg cannot be PLANNED on the frame the map changes. The warp
-// writes SaveBlock1.location when it STARTS — the fade, the map load and the avatar placement all
-// happen after that — so a plan made on the boundary frame reads a half-built world, fails, and
-// killed the whole excursion one door short (observed: leg 0 warped into Lavaridge's PC, leg 1
-// reported FP_OUT_UNREACHABLE to a back door four tiles away). So a boundary ARMS the next leg and
-// the follower plans it as soon as the world answers.
-static int  s_excPend = 0, s_excPendG = -1, s_excPendN = -1, s_excPendX = 0, s_excPendY = 0;
-static int  s_excPendFrames = 0;
-static int  s_excLastW = -1, s_excLastH = -1;   // last backup-layout dims seen while waiting
-#define EXC_SETTLE_EVERY  8      // re-try cadence (a BFS per frame on the render thread is not free)
-#define EXC_SETTLE_BUDGET 240    // ~4 s at 60 fps: a fade + map load, generously
-
 static void exc_reset(void) {
-	s_excOn = false; s_excLeg = 0; s_excMapG = s_excMapN = -1; s_excChip = 0;
-	s_excCurG = s_excCurN = -1;
-	s_excPend = 0; s_excPendFrames = 0; s_excLastW = s_excLastH = -1;
+	excseq_reset(&s_excS);
+	s_excChip = 0;
 }
 // "VIA DOOR - LEG n/3" (T4.2). The leg counter is the honest v1: map NAMES would need the ROM
 // region-map strings, which is its own slice.
@@ -454,7 +443,7 @@ static const char* exc_chip_for(int leg) {
 	default: return "VIA DOOR - LEG 3/3";
 	}
 }
-static void exc_dbg_stamp(void) { g_fieldDbg.progMapSeq = s_excLeg; }
+static void exc_dbg_stamp(void) { g_fieldDbg.progMapSeq = s_excS.leg; }
 // Forward declarations: the two leg-machine entry points are DEFINED next to prog_plan (they need
 // the bus helpers that live there) but are CALLED from walk_update_inner, which comes first.
 static int  exc_plan(GbaCore* core, const GameProfile* p, int px, int py, int gx, int gy,
@@ -620,39 +609,31 @@ static u16 walk_update_inner(bool touching, bool newPress, bool gvalid, int gx, 
 	// tile, declares the route finished (s_walking = false) and only THEN does the warp fire — so
 	// the kill-switch inside the follow loop below never saw it, and the excursion parked on the
 	// terrace it had just stepped out onto. One watcher, for the whole machine.
-	if (s_excOn && !s_excPend && (mapG != s_excCurG || mapN != s_excCurN)) {
+	if (excseq_boundary_due(&s_excS, mapG, mapN)) {
 		s_walking = false; s_termActive = false;
 		exc_leg_boundary(core, p, px, py, mapG, mapN);
 	}
 
 	// PHASE 24: the armed leg of an excursion, planned as soon as the arrival map is really loaded
 	// (see exc_leg_boundary). Retried on a cadence rather than every frame — each attempt is a BFS
-	// on the render thread — and given up on loudly instead of leaving the player parked.
-	if (s_excOn && s_excPend && !s_walking && core && p) {
-		// "Settled" is NOT just the location matching. SaveBlock1.location flips when the warp
-		// starts; gBackupMapLayout is rebuilt later, and a plan made in between is drawn on the
-		// PREVIOUS map's grid — it can even succeed, and then the follow loop's own layout check
-		// kills it as a MAPCHANGE one frame later (observed: leg 2 planned on the Pokemon Center's
-		// 14x9 grid the moment the town's 20x20 was still loading). So require the DIMENSIONS to
-		// be stable across two checks as well; the layout stops moving exactly when the load ends.
+	// on the render thread — and given up on loudly instead of leaving the player parked. The rule
+	// for WHEN is excseq's (pure, host-graded, including the dims-stability half); the map read and
+	// the BFS are the two things it is not allowed to do, so they stay here.
+	if (s_excS.on && s_excS.pend && !s_walking && core && p) {
 		int mw = 0, mh = 0; uint32_t mp = 0;
 		bool haveMap = map_read(core, p, &mw, &mh, &mp);
-		bool stable = haveMap && mw == s_excLastW && mh == s_excLastH;
-		s_excLastW = haveMap ? mw : -1; s_excLastH = haveMap ? mh : -1;
-		bool settled = (mapG == s_excPendG && mapN == s_excPendN && px >= 0 && stable);
-		if (settled && (s_excPendFrames % EXC_SETTLE_EVERY) == 0 &&
-		    walk_plan(core, p, px, py, s_excPendX, s_excPendY, mapG, mapN)) {
+		if (excseq_settle_try(&s_excS, mapG, mapN, px, haveMap ? 1 : 0, mw, mh) == EXC_S_PLAN &&
+		    walk_plan(core, p, px, py, s_excS.pendX, s_excS.pendY, mapG, mapN)) {
 			s_walking = true; s_lpx = px; s_lpy = py; s_stall = 0; s_replans = 0;
-			s_excPend = 0; s_excPendFrames = 0;
 			s_mapG = mapG; s_mapN = mapN;      // the leg is walked on THIS map now
-			s_excCurG = mapG; s_excCurN = mapN;
-		} else if (++s_excPendFrames > EXC_SETTLE_BUDGET) {
-			exc_reset();
+			excseq_settle_planned(&s_excS, mapG, mapN);
+		} else {
+			if (excseq_settle_wait(&s_excS)) s_excChip = 0;   // gave up: the chip goes with it
 		}
 	}
 	// The last leg's route ending IS the end of the excursion — otherwise the machine (and its
 	// "VIA DOOR - LEG 3/3" chip) would linger until some later map change happened to clear it.
-	if (s_excOn && !s_excPend && !s_walking && s_excLeg >= 2) exc_reset();
+	if (excseq_home_done(&s_excS, s_walking ? 1 : 0)) s_excChip = 0;
 
 	if (!s_walking || !core || !p) return 0;            // path-follow (released, routing)
 	int w, h; uint32_t ptr;
@@ -670,10 +651,10 @@ static u16 walk_update_inner(bool touching, bool newPress, bool gvalid, int gx, 
 	if (!map_read(core, p, &w, &h, &ptr) || ptr != s_mapPtr || w != s_mapW || h != s_mapH) {
 		s_walking = false; s_termActive = false; route_end(core, FDBG_END_MAPCHANGE);
 		// PHASE 24: for an excursion this is recoverable — the LAYOUT changed under a leg that was
-		// planned a moment too early. Re-arm the same leg (its target is still in s_excPend*) and
-		// let the settle rule above plan it again on the finished map, instead of throwing away a
-		// route that is two doors along.
-		if (s_excOn) { s_excPend = 1; s_excPendFrames = 0; }
+		// planned a moment too early. Re-arm the same leg (its target is still held) and let the
+		// settle rule above plan it again on the finished map, instead of throwing away a route
+		// that is two doors along.
+		excseq_layout_kill(&s_excS);
 		return 0;
 	}
 
@@ -773,50 +754,29 @@ static u16 walk_update(bool touching, bool newPress, bool gvalid, int gx, int gy
 //     sFieldMessageBoxMode for "the script is talking", the yes/no task for the decision point,
 //     the tree's OWN object slot going inactive for "the Cut landed", gPlayerAvatar's surf bit for
 //     "we are afloat". Budgets exist only to give up, never to advance.
-enum { TPH_WALK = 0, TPH_FACE, TPH_A, TPH_DLG, TPH_YESNO, TPH_ANSWER, TPH_DONE };
-enum { TPE_NONE = 0, TPE_ARRIVED, TPE_HANDOFF, TPE_CANCEL, TPE_KEY, TPE_MAPCHANGE, TPE_CTX,
-       TPE_TIMEOUT, TPE_STALL, TPE_UNEXPECTED, TPE_ELIG, TPE_REPLAN };
-
-// All VERIFY-ON-EMULATOR then VERIFY-ON-HW, exactly like TERM_FRAMES (touch.c:246-250): they are
-// counted in EMULATED frames, so they are independent of the 3DS frame rate, but a wireless
-// session's degraded emulation rate still has to be re-measured (SPEC-door Open Q6).
-#define TP_FACE_FRAMES  8      // turning to face the obstacle (the game's own bump-to-turn)
-#define TP_WALK_BUDGET  48     // one tile step; a normal step is ~16 emulated frames
-#define TP_DLG_BUDGET   120    // A press -> the field textbox appears
-#define TP_YESNO_BUDGET 240    // the textbox(es) -> the yes/no menu ("Want-to-use" can be 2 boxes)
-#define TP_DONE_BUDGET  480    // YES -> the cutscene finishes and the world changes
-#define TP_ADVANCE_EVERY 24    // A-advance cadence while a message box is on screen
-#define TP_MAX_REPLANS  4
-// PHASE 24 (lane A, emulator-proven): the yes/no needs a LEVEL, not one edge — see the citation
-// block in TPH_ANSWER. Pulse cadence and a hard cap on how many times we may aim at the same
-// prompt, so a menu that never closes ends the program instead of drumming A forever.
-#define TP_ANSWER_EVERY 8
-#define TP_ANSWER_MAX   8
-// The FACE phase is closed-loop on the avatar's own facing (see TPH_FACE); this is only the give-up
-// bound, and TP_SETTLE_FRAMES lets the turn/bump animation end before the A that aims at it.
-#define TP_FACE_BUDGET  90
-#define TP_SETTLE_FRAMES 10
+// The phases (TPH_*), the end reasons (TPE_*) and every budget/cadence now live in progseq.h with
+// the machine that uses them — PHASE 25 / audit O2. This file keeps the reads, the writes, the BFS
+// and the HUD; `progseq.c` keeps the decisions, and is host-graded frame by frame.
 
 static FtProgram s_prog;                 // ~17 KB: static for the fieldpath reason (render thread)
-static bool s_progOn = false, s_progSwallow = false;
-static int  s_progStep, s_progPhase, s_progFrames, s_progAPulse, s_progReplans;
+static ProgSeq s_seq;                    // the sequencer's whole state (pure; see progseq.h)
+static bool s_progSwallow = false;
+static int  s_progReplans;
 static int  s_progMapG = -1, s_progMapN = -1, s_progGoalX, s_progGoalY;
-static int  s_progLpx, s_progLpy;
 static int  s_progSeq = 0, s_progEndSeq = 0;
 static int  s_progChipHold = 0;
 // PHASE 23: the "one A to close a dangling textbox" of SPEC T2.4 has to OUTLIVE the program, and
-// s_progAPulse cannot — prog_end() clears s_progOn, and from the very next frame the dispatcher
-// stops calling prog_update at all, so a pulse queued alongside the end is never emitted. Live
-// evidence: the Battle Frontier surf prompt sat open with YES highlighted and nothing ever
-// pressed it. This counter is drained ABOVE the s_progOn gate, so the farewell really lands.
+// the sequencer's own A-pulse cannot — the end clears `s_seq.on`, and from the very next frame the
+// dispatcher stops calling prog_update at all, so a pulse queued alongside the end is never
+// emitted. Live evidence: the Battle Frontier surf prompt sat open with YES highlighted and
+// nothing ever pressed it. This counter is drained ABOVE the s_seq.on gate, so the farewell lands.
 static int  s_progFarewell = 0;
-static int  s_progAnswers = 0;           // phase 24: A presses aimed at the CURRENT yes/no (capped)
 static const char* s_progChip = 0;
 
 static void prog_reset(void) {
-	s_progOn = false; s_progSwallow = false; s_progFarewell = 0;
-	s_progStep = s_progPhase = s_progFrames = s_progAPulse = s_progReplans = 0;
-	s_progAnswers = 0;
+	progseq_reset(&s_seq);
+	s_progSwallow = false; s_progFarewell = 0;
+	s_progReplans = 0;
 	s_progMapG = s_progMapN = -1;
 }
 
@@ -891,14 +851,12 @@ static bool prog_surfing(GbaCore* core, const GameProfile* p) {
 // (the scripts' `removeobject VAR_LAST_TALKED`) — not a frame count, not a screenshot.
 // The avatar's OWN facing, read exactly where gamestate.c reads it (gObjectEvents[0].facingDirection
 // low nibble, +0x18 — gamestate.c game_read). 1 = D, 2 = U, 3 = L, 4 = R; -1 = unreadable, which the
-// caller treats as "fall back to the old fixed-frame hold" rather than as a wrong direction.
+// sequencer treats as "fall back to the old fixed-frame hold" rather than as a wrong direction.
 static int prog_facing(GbaCore* core, const GameProfile* p) {
 	if (!core || !p || !p->mapObjects) return -1;
 	int f = gbacore_read8(core, p->mapObjects + 0x18) & 0x0F;
 	return (f >= 1 && f <= 4) ? f : -1;
 }
-// dir (0 R / 1 L / 2 D / 3 U — s_keyDir order) -> the game's facing code.
-static const uint8_t s_faceOfDir[4] = { 4, 3, 1, 2 };
 
 // PHASE 24 / lane A2 (decision D2) — the five gates of "may this leg RUN", each read off the
 // game's own state, each defaulting to CLEAR. The rule being mirrored is quoted with its pret
@@ -987,15 +945,19 @@ static FtParty prog_party(GbaCore* core, const GameProfile* p) {
 	return pt;
 }
 
-static void prog_dbg_stamp(void) {
+static void prog_dbg_stamp_at(int step, int phase) {
 	g_fieldDbg.progMoves     = s_prog.nMoves;
 	g_fieldDbg.progInteracts = s_prog.nInteracts;
-	g_fieldDbg.progStep      = s_progStep;
-	g_fieldDbg.progHm        = (s_progStep >= 0 && s_progStep < s_prog.nMoves) ? s_prog.mv[s_progStep].hm : 0;
-	g_fieldDbg.progPhase     = s_progPhase;
+	g_fieldDbg.progStep      = step;
+	g_fieldDbg.progHm        = (step >= 0 && step < s_prog.nMoves) ? s_prog.mv[step].hm : 0;
+	g_fieldDbg.progPhase     = phase;
 }
+// The per-frame stamp reports the state the frame STARTED in (progseq hands those two values back
+// in the act) — an end stamp reports where it finished. That asymmetry is the shipped one, and the
+// phase-24 diagnoses were read off it, so the split preserves it exactly.
+static void prog_dbg_stamp(void) { prog_dbg_stamp_at(s_seq.step, s_seq.phase); }
 static void prog_end(int why, const char* chip) {
-	s_progOn = false;
+	s_seq.on = 0;
 	g_fieldDbg.progEnd = why; g_fieldDbg.progEndSeq = ++s_progEndSeq;
 	prog_dbg_stamp();
 	s_progChip = chip; s_progChipHold = 60;   // ~1 s of DONE / STOPPED, per T4.2
@@ -1013,9 +975,9 @@ static const char* prog_chip_for(int hm) {
 	}
 }
 static void prog_chip_refresh(void) {
-	if (!s_progOn) return;
+	if (!s_seq.on) return;
 	int hm = FT_HM_NONE;
-	for (int i = s_progStep; i < s_prog.nMoves; i++)      // the NEXT verb, not the current step
+	for (int i = s_seq.step; i < s_prog.nMoves; i++)      // the NEXT verb, not the current step
 		if (s_prog.mv[i].hm != FT_HM_NONE) { hm = s_prog.mv[i].hm; break; }
 	s_progChip = prog_chip_for(hm);
 	s_progChipHold = 0;                                    // sticky while the program runs
@@ -1042,11 +1004,9 @@ static int prog_plan(GbaCore* core, const GameProfile* p, int px, int py, int gx
 	if (s_prog.outcome == FT_OUT_TIER0) return -1;         // dry paths win (SPEC H1.7)
 	if (!s_prog.ok) return 0;
 
-	s_progOn = true;
-	s_progStep = 0; s_progPhase = TPH_WALK; s_progFrames = 0; s_progAPulse = 0; s_progAnswers = 0;
+	progseq_arm(&s_seq, px, py);
 	s_progMapG = mapG; s_progMapN = mapN;
 	s_progGoalX = gx; s_progGoalY = gy;
-	s_progLpx = px; s_progLpy = py;
 	g_fieldDbg.progSeq = ++s_progSeq;
 	g_fieldDbg.progEnd = TPE_NONE;
 	prog_dbg_stamp();
@@ -1073,10 +1033,7 @@ static int exc_plan(GbaCore* core, const GameProfile* p, int px, int py, int gx,
 	// (door hold / arrow hold / step) fire it. If even that cannot be planned, plan nothing.
 	if (!walk_plan(core, p, px, py, s_exc.wiX, s_exc.wiY, mapG, mapN)) return 0;
 	s_walking = true; s_lpx = px; s_lpy = py; s_stall = 0; s_replans = 0;
-	s_excOn = true; s_excLeg = 0;
-	s_excMapG = mapG; s_excMapN = mapN;
-	s_excCurG = mapG; s_excCurN = mapN;
-	s_excGoalX = gx; s_excGoalY = gy;
+	excseq_arm(&s_excS, mapG, mapN, gx, gy);
 	s_excChip = exc_chip_for(0);
 	g_fieldDbg.progSeq = ++s_excSeq;
 	g_fieldDbg.progOutcome = s_exc.outcome;
@@ -1090,21 +1047,16 @@ static int exc_plan(GbaCore* core, const GameProfile* p, int px, int py, int gx,
 // the ROM plan, which has no NPCs in it and cannot see runtime layout changes.
 static void exc_leg_boundary(GbaCore* core, const GameProfile* p, int px, int py,
                              int mapG, int mapN) {
-	if (!s_excOn) return;
-	int wantG, wantN, gx, gy;
-	if (s_excLeg == 0)      { wantG = s_exc.dGroup; wantN = s_exc.dNum; gx = s_exc.wjX;   gy = s_exc.wjY; }
-	else if (s_excLeg == 1) { wantG = s_excMapG;    wantN = s_excMapN;  gx = s_excGoalX;  gy = s_excGoalY; }
-	else                    { exc_reset(); return; }          // leg 2 ends at the goal, not a warp
-	if (mapG != wantG || mapN != wantN) { exc_reset(); return; }   // not the map we predicted
-	s_excLeg++;
-	s_excChip = exc_chip_for(s_excLeg);
-	exc_dbg_stamp();
 	(void)core; (void)p; (void)px; (void)py;
-	// ARM the leg; the follower (walk_update_inner) plans it once the new map is really loaded.
-	// The door drops the avatar on (or one step off) the arrival tile; walk_plan starts from where
-	// the player REALLY is, so a +-1 arrival needs no tolerance rule here.
-	s_excPendG = wantG; s_excPendN = wantN; s_excPendX = gx; s_excPendY = gy;
-	s_excPend = 1; s_excPendFrames = 0;
+	// The rule is excseq's (host-graded): leg 0 must land on the excursion plan's D map, leg 1 back
+	// on the home map, and anything else ends the excursion where it stands. All this side does is
+	// the two things a pure module must not: the HUD chip and the debug mirror.
+	int r = excseq_boundary(&s_excS, mapG, mapN, s_exc.dGroup, s_exc.dNum, s_exc.wjX, s_exc.wjY);
+	if (r == EXC_B_RESET) { s_excChip = 0; return; }
+	if (r == EXC_B_ARMED) {
+		s_excChip = exc_chip_for(s_excS.leg);
+		exc_dbg_stamp();
+	}
 }
 
 // Re-plan from LIVE state after every INTERACT (SPEC H0.1: never execute a plan's assumptions
@@ -1132,198 +1084,80 @@ static u16 prog_update(const TouchSmart* sm, bool touching, bool newPress,
                        int px, int py, int mapG, int mapN) {
 	GbaCore* core = sm->core; const GameProfile* p = sm->prof;
 	(void)touching;
-	if (!s_progOn || !core || !p) return 0;
+	if (!s_seq.on || !core || !p) return 0;
 
-	// --- the abort ladder (SPEC H0.2 / §2.4). Order matters only in that the CHEAPEST and most
-	// certain tripwires come first; every one of them injects nothing further. ---
-	if (sm->padKeys)                  { prog_end(TPE_KEY, "STOPPED"); return 0; }
-	if (newPress)                     { prog_end(TPE_CANCEL, "STOPPED"); s_progSwallow = true; return 0; }
-	if (mapG != s_progMapG || mapN != s_progMapN) { prog_end(TPE_MAPCHANGE, "STOPPED"); return 0; }
-	// The program legitimately lives across OVERWORLD <-> FIELDMENU (the yes/no it is about to
-	// answer IS a FIELDMENU), and nothing else. A battle, a bag, a party screen = someone else's
-	// world now.
-	if (sm->ctx != GCTX_OVERWORLD && sm->ctx != GCTX_FIELDMENU) { prog_end(TPE_CTX, "STOPPED"); return 0; }
-	if (px < 0 || s_progStep < 0)     { prog_end(TPE_CTX, "STOPPED"); return 0; }
-	if (s_progStep >= s_prog.nMoves)  { prog_end(TPE_ARRIVED, "DONE"); return 0; }
+	// PHASE 25 / audit O2. The phase machine that used to live here — the abort ladder, WALK, the
+	// closed-loop FACE, the A settle, the DLG/YESNO/DONE advance cadences and the LEVEL-triggered
+	// ANSWER — is `source/progseq.c`: pure, host-graded frame by frame, and the SHIPPED one. What
+	// remains here is precisely what a pure module may not do.
+	//
+	//   READ  the game (this block), then ONE step, then
+	//   DO    what it asks: the eligibility re-read, the YES cursor write, the BFS re-plan, the
+	//         HUD chip, the gdb mirror and the key mask.
+	//
+	// `facing` / `surfing` / `objActive` are only CONSULTED by the phase that needs them, so they
+	// are only read in that phase — the same call pattern as before the split. (The exception is
+	// benign and named: a FACE frame whose move turns out to be a plain walk, or a spent A-pulse
+	// frame, now costs one extra side-effect-free EWRAM read.)
+	FtMove mv = { -1, FT_HM_NONE, -1 };
+	if (s_seq.step >= 0 && s_seq.step < s_prog.nMoves) mv = s_prog.mv[s_seq.step];
 
-	FtMove mv = s_prog.mv[s_progStep];
-	bool moved = (px != s_progLpx || py != s_progLpy);
-	s_progFrames++;
-	prog_dbg_stamp();
+	ProgObs o;
+	o.ctx        = (sm->ctx == GCTX_OVERWORLD) ? PSQ_CTX_OVERWORLD
+	             : (sm->ctx == GCTX_FIELDMENU) ? PSQ_CTX_FIELDMENU : PSQ_CTX_OTHER;
+	o.textDlg    = sm->textDlg ? 1 : 0;
+	o.padKeys    = sm->padKeys ? 1 : 0;
+	o.newPress   = newPress ? 1 : 0;
+	o.mapChanged = (mapG != s_progMapG || mapN != s_progMapN) ? 1 : 0;
+	o.px = px; o.py = py;
+	o.facing     = (s_seq.phase == TPH_FACE) ? prog_facing(core, p) : -1;
+	o.surfing    = (s_seq.phase == TPH_DONE) ? (prog_surfing(core, p) ? 1 : 0) : 0;
+	o.objActive  = (s_seq.phase == TPH_DONE) ? (prog_obj_active(core, p, mv.objSlot) ? 1 : 0) : 0;
 
-	if (s_progAPulse > 0) { s_progAPulse--; g_fieldDbg.progAKeys++; return 1u << GBAKEY_A; }
+	ProgAct act;
+	progseq_step(&s_seq, &s_prog, &o, &act);
 
-	// ---------- a plain walk step ----------
-	if (mv.hm == FT_HM_NONE || s_progPhase == TPH_WALK) {
-		if (moved) {
-			s_progLpx = px; s_progLpy = py; s_progFrames = 0;
-			s_progStep++;
-			s_progPhase = TPH_WALK;
-			prog_chip_refresh();
-			if (s_progStep >= s_prog.nMoves) { prog_end(TPE_ARRIVED, "DONE"); return 0; }
-			mv = s_prog.mv[s_progStep];
-			if (mv.hm != FT_HM_NONE) { s_progPhase = TPH_FACE; s_progFrames = 0; return 0; }
+	// --- carry out the action, in the order the shipped executor did these things ---
+	if (act.stamp) prog_dbg_stamp_at(act.stampStep, act.stampPhase);
+
+	// Re-check eligibility at the START of every interact (H1.6). It cannot realistically change
+	// mid-route, but a cheap honest re-read beats an assumption, and a FALSE here means we would
+	// have prompted something the game is about to refuse. It is the one read too expensive (a
+	// party walk + a flag read) to do speculatively every frame, which is why it is a REQUEST.
+	if (act.needElig) {
+		FpBus bus = { fp_r8, fp_r16, fp_r32, core };
+		FtParty pty = prog_party(core, p);
+		uint32_t usable = fieldtrav_usable(&bus, ft_variant(p), &pty);
+		g_fieldDbg.progUsable = (int32_t)usable;
+		if (!(usable & (1u << act.eligHm))) {
+			progseq_elig_fail(&s_seq);
+			prog_end(TPE_ELIG, "STOPPED");
+			return 0;                      // a refusal voids every other field of the act
 		}
-		if (s_progFrames > TP_WALK_BUDGET) {
-			// Blocked: an NPC has walked into the path, or the world is not what we planned.
-			// Re-plan from reality once (bounded), never barge.
-			if (!prog_replan(core, p, px, py, mapG, mapN)) return 0;
-			return 0;
-		}
-		if (mv.hm != FT_HM_NONE) { s_progPhase = TPH_FACE; s_progFrames = 0; return 0; }
-		if (mv.dir < 0 || mv.dir > 3) { prog_end(TPE_STALL, "STOPPED"); return 0; }
-		// PHASE 24 / lane A2 (decision D2): "decide per LEG, not once for the whole program". A
-		// traversal program's leg is the contiguous run of plain walk moves before the next HM
-		// interact, so the span is counted from HERE and shrinks as the obstacle approaches —
-		// which means B is always released at least RUNGEOM_MIN_TILES-1 tiles before any A, and
-		// can never be held into a FACE / A / DLG / YESNO / ANSWER phase. That matters more here
-		// than the speed does: in a yes/no, B is NO.
-		{
-			int span = 0;
-			for (int i = s_progStep; i < s_prog.nMoves && s_prog.mv[i].hm == FT_HM_NONE; i++) span++;
-			bool legRuns = rungeom_decide(span, run_elig(core, p)) != 0;
+	}
+	if (act.chipRefresh) prog_chip_refresh();
+	if (act.stampSurf)   g_fieldDbg.progSurf = o.surfing ? 1 : 0;
+	if (act.writeYes && p->sMenuBase) gbacore_write8(core, p->sMenuBase + 2, 0);
+	if (act.answered)    g_fieldDbg.progAnswers++;
+	if (act.end) {
+		prog_end(act.end, act.end == TPE_ARRIVED ? "DONE" : "STOPPED");
+		if (act.swallow)  s_progSwallow = true;
+		if (act.farewell) s_progFarewell = 3;   // set AFTER prog_end: it must survive the program
+		return 0;
+	}
+	if (act.replan) { prog_replan(core, p, px, py, mapG, mapN); return 0; }
+	if (act.pressA) { g_fieldDbg.progAKeys++; return 1u << GBAKEY_A; }
+	if (act.keyDir >= 0 && act.keyDir < 4) {
+		if (act.runSpan > 0) {
+			// PHASE 24 / lane A2 (decision D2): the LEG's run decision. progseq counts the span (a
+			// property of the plan); the five gates are a live read, so they stay here.
+			bool legRuns = rungeom_decide(act.runSpan, run_elig(core, p)) != 0;
 			g_fieldDbg.runLeg = legRuns ? 1 : 0;
-			return s_keyDir[mv.dir] | run_key(core, p, legRuns);
+			return s_keyDir[act.keyDir] | run_key(core, p, legRuns);
 		}
+		return s_keyDir[act.keyDir];
 	}
-
-	// ---------- the INTERACT sequence ----------
-	switch (s_progPhase) {
-	case TPH_FACE: {
-		// Re-check eligibility at the START of every interact (H1.6). It cannot realistically
-		// change mid-route, but a cheap honest re-read beats an assumption, and a FALSE here means
-		// we would have prompted something the game is about to refuse.
-		if (s_progFrames == 1) {
-			FpBus bus = { fp_r8, fp_r16, fp_r32, core };
-			FtParty pty = prog_party(core, p);
-			uint32_t usable = fieldtrav_usable(&bus, ft_variant(p), &pty);
-			g_fieldDbg.progUsable = (int32_t)usable;
-			if (!(usable & (1u << mv.hm))) { prog_end(TPE_ELIG, "STOPPED"); return 0; }
-		}
-		// Hold the direction so the game turns the avatar to face the obstacle. The tile is
-		// impassable (that is the whole point), so this bumps in place — the game's own
-		// turn-to-face, not a step.
-		if (moved) {   // it was NOT impassable: the world moved under the plan -> re-plan
-			s_progLpx = px; s_progLpy = py;
-			prog_replan(core, p, px, py, mapG, mapN);
-			return 0;
-		}
-		if (mv.dir < 0 || mv.dir > 3) { prog_end(TPE_STALL, "STOPPED"); return 0; }
-		// PHASE 24: CLOSED-LOOP on the game's own facing, not on a frame count. A fixed 8-frame
-		// hold is a guess, and it loses exactly when the interact matters: Gen 3 ignores field
-		// input while the avatar is still animating its previous step (field_player_avatar.c —
-		// MovePlayerNotOnBike only runs from the field controller when the avatar is idle), so the
-		// whole hold can be swallowed by the walk step that just ended and the avatar keeps facing
-		// the way it was WALKING. Every A after that is aimed one tile off, which is precisely what
-		// the Route 117 cut tree did: plan correct, walk correct, five A presses, no dialog, and a
-		// hand-driven U+A at the same tile opened it instantly. So hold until the game says we face
-		// the obstacle. -1 (unreadable facing) degrades to the old fixed hold rather than hanging.
-		{
-			int face = prog_facing(core, p);
-			bool ok = (face < 0) ? (s_progFrames >= TP_FACE_FRAMES)
-			                     : (face == (int)s_faceOfDir[mv.dir] && s_progFrames >= 2);
-			if (ok) { s_progPhase = TPH_A; s_progFrames = 0; return 0; }
-			if (s_progFrames >= TP_FACE_BUDGET) { prog_end(TPE_STALL, "STOPPED"); return 0; }
-		}
-		return s_keyDir[mv.dir];
-	}
-	case TPH_A:
-		// Settle first: the turn/bump that just finished is an ANIMATION, and the field controller
-		// does not read A while it runs. Releasing every key for a few frames costs nothing and
-		// makes the first press the one that lands (the DLG retry below covers the rest).
-		if (s_progFrames < TP_SETTLE_FRAMES) return 0;
-		s_progAPulse = 3;                       // the shipped 3-frame A-pulse shape
-		s_progPhase = TPH_DLG; s_progFrames = 0;
-		return 0;
-	case TPH_DLG:
-		// "The script is talking" = our A landed on the object we aimed at.
-		if (sm->textDlg || sm->ctx == GCTX_FIELDMENU) { s_progPhase = TPH_YESNO; s_progFrames = 0; return 0; }
-		// PHASE 24, second edge-vs-level defect, found on the Route 117 cut tree: ONE A here is
-		// not enough either. TPH_FACE holds the direction into the obstacle, and when the avatar
-		// ALREADY faces it that hold is not a turn but a blocked step — pokeemerald
-		// src/field_player_avatar.c PlayerNotOnBikeCollide plays a walk-in-place ("bump") animation,
-		// and the field controller does not read A while the avatar is animating. So the pulse fired
-		// straight into the bump and vanished (aKeys said we pressed; nothing opened). Water hid
-		// this: there the player arrives facing along the shore, so FACE is a real turn and the A
-		// lands after it. Keep tapping, like a player would, until the script answers or the budget
-		// runs out — A at a tree/rock/water we chose and vetted is the whole point of the phase.
-		if ((s_progFrames % TP_ADVANCE_EVERY) == 0) s_progAPulse = 3;
-		if (s_progFrames > TP_DLG_BUDGET) { prog_end(TPE_TIMEOUT, "STOPPED"); return 0; }
-		return 0;
-	case TPH_YESNO:
-		if (sm->ctx == GCTX_FIELDMENU) { s_progPhase = TPH_ANSWER; s_progFrames = 0; return 0; }
-		if (s_progFrames > TP_YESNO_BUDGET) {
-			// THE CORE SAFETY CASE: a dialog appeared but it was not the yes/no we predicted.
-			// Close it with a single A and kill the program. NEVER guess at an unpredicted prompt.
-			prog_end(TPE_UNEXPECTED, "STOPPED");
-			s_progFarewell = 3;      // set AFTER prog_end: it must survive the program, not die with it
-			return 0;
-		}
-		// Advance the "want to use" message boxes, gently — and NOT gated on textDlg. PHASE 24,
-		// read off pokeemerald src/field_message_box.c Task_DrawFieldMessage case 2: the game sets
-		// sFieldMessageBoxMode back to HIDDEN the moment the text FINISHES PRINTING, so `textDlg`
-		// is false for the whole "box is up, waiting for A" window — the exact window an advance
-		// has to press in. (Cut's Text_WantToCut is a two-page \p message, so this is not a corner
-		// case: without a press the second page never comes and the yes/no never appears.) A on a
-		// field text box is benign, and the phase budget still bounds it.
-		if ((s_progFrames % TP_ADVANCE_EVERY) == 0) s_progAPulse = 3;
-		return 0;
-	case TPH_ANSWER:
-		// THE 5-FRAME ARMING WINDOW — the defect that hung this feature twice (phase 23's open
-		// prompt, and phase 24's first run), root-caused off the game's OWN source rather than
-		// guessed. pokeemerald src/script_menu.c Task_HandleYesNoInput opens with
-		//
-		//     if (gTasks[taskId].tRight < 5) { gTasks[taskId].tRight++; return; }
-		//
-		// i.e. the field yes/no DELIBERATELY ignores input for its first five frames. Our ctx flips
-		// to GCTX_FIELDMENU the instant that task exists (gamestate.c task-based detection), so a
-		// single A pulse fired here lands entirely inside the dead window: its one 0->1 newKeys
-		// edge is discarded, the held frames after it are not edges, and the prompt then sits open
-		// with YES highlighted forever (progAKeys said we pressed; the game never saw it).
-		//
-		// So the answer is LEVEL-triggered: while the menu is up, keep the cursor on YES and keep
-		// making FRESH edges on a cadence — capped, so a menu that never closes ends the program.
-		if (sm->ctx != GCTX_FIELDMENU) { s_progPhase = TPH_DONE; s_progFrames = 0; return 0; }
-		if (p->sMenuBase) gbacore_write8(core, p->sMenuBase + 2, 0);   // YES is row 0 in both engines
-		if ((s_progFrames % TP_ANSWER_EVERY) == 1) {
-			if (s_progAnswers >= TP_ANSWER_MAX) { prog_end(TPE_TIMEOUT, "STOPPED"); return 0; }
-			s_progAnswers++; g_fieldDbg.progAnswers++;
-			s_progAPulse = 2;                  // 2 held frames then >=6 released = a clean new edge
-		}
-		if (s_progFrames > TP_YESNO_BUDGET) { prog_end(TPE_TIMEOUT, "STOPPED"); return 0; }
-		return 0;
-	case TPH_DONE: {
-		bool done = false;
-		if (mv.hm == FT_HM_SURF) {
-			// The mount CONSUMES the step: FLDEFF_USE_SURF puts the player ON the water tile.
-			if (prog_surfing(core, p) && moved) {
-				s_progLpx = px; s_progLpy = py;
-				s_progStep++;
-				done = true;
-			}
-		} else {
-			// Cut / Rock Smash: the object slot deactivates and the player stays put, so the walk
-			// step still has to happen — the same step index, now in WALK phase.
-			if (mv.objSlot >= 0 && !prog_obj_active(core, p, mv.objSlot)) done = true;
-		}
-		g_fieldDbg.progSurf = prog_surfing(core, p) ? 1 : 0;
-		if (done) {
-			if (s_progStep >= s_prog.nMoves) { prog_end(TPE_ARRIVED, "DONE"); return 0; }
-			prog_replan(core, p, px, py, mapG, mapN);    // H0.1: re-plan from reality
-			return 0;
-		}
-		if (s_progFrames > TP_DONE_BUDGET) { prog_end(TPE_TIMEOUT, "STOPPED"); return 0; }
-		// A-advance the "MON used SURF!" / "used CUT!" box while the cutscene plays. Same phase-24
-		// correction as TPH_YESNO: `msgbox MSGBOX_DEFAULT` ends in `waitbuttonpress`, and textDlg
-		// is already false by then, so gating the advance on it left the field move announced and
-		// never performed (the mount is the NEXT script line).
-		if ((s_progFrames % TP_ADVANCE_EVERY) == 0) s_progAPulse = 3;
-		return 0;
-	}
-	default:
-		prog_end(TPE_STALL, "STOPPED");
-		return 0;
-	}
+	return 0;
 }
 
 // =================== SMART: general field menu (sMenu) =======================
@@ -2353,7 +2187,7 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 		g_fieldDbg.progAKeys++;
 		return 1u << GBAKEY_A;
 	}
-	if (s_progOn) {
+	if (s_seq.on) {
 		u16 pk = prog_update(sm, touching, newPress, sm->px, sm->py, sm->mapGroup, sm->mapNum);
 		g_fieldDbg.curKeys = pk;
 		g_fieldDbg.curMapGroup = sm->mapGroup; g_fieldDbg.curMapNum = sm->mapNum;
@@ -2525,14 +2359,14 @@ void touch_draw(TouchMode mode, u16 held, const TouchSmart* sm, C2D_TextBuf buf)
 		// PHASE 23: an EXCURSION uses the same chip slot and the same rule — it moves the player
 		// across MAPS, which is even less acceptable to do silently — so it takes precedence while
 		// one is running ("VIA DOOR - LEG 1/3", counting up per leg).
-		if (s_excOn && s_excChip) {
+		if (s_excS.on && s_excChip) {
 			touch_chip(buf, s_excChip, 160.0f, (float)UIHIT_TOUCH_CHIP_Y - TCHIP_H - 3.0f,
 			           C2D_Color32(0x7A, 0xE0, 0xFF, 0xE6));
-		} else if (s_progOn || s_progChipHold > 0) {
+		} else if (s_seq.on || s_progChipHold > 0) {
 			if (s_progChipHold > 0) s_progChipHold--;
 			if (s_progChip)
 				touch_chip(buf, s_progChip, 160.0f, (float)UIHIT_TOUCH_CHIP_Y - TCHIP_H - 3.0f,
-				           s_progOn ? C2D_Color32(0x7A, 0xE0, 0xFF, 0xE6)      // running: cyan
+				           s_seq.on ? C2D_Color32(0x7A, 0xE0, 0xFF, 0xE6)      // running: cyan
 				                    : C2D_Color32(0xF5, 0xD0, 0x42, 0xE6));   // DONE / STOPPED
 		}
 	}
