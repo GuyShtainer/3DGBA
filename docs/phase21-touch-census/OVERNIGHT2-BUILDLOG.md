@@ -942,3 +942,49 @@ Two operational notes paid for in this arc:
   that it had stalled again. **Let a pre-staged arc run to the end of its touch script** —
   the wait budget is deliberately generous, so "nothing has happened for a minute" is the
   expected state, not a failure.
+
+## Lane A Entry 15 (phase 23) — THE RECIPE, written down so the next session starts at minute zero
+
+Everything below is measured on this machine, on `roms/emerald.sav`, this session. Follow it
+and the surf/cut/excursion proofs are short arcs instead of ten-minute gambles.
+
+**Boot prefix (proven 4x, never once failed):**
+```
+W600 s W300 s W300 s W300 s W300 a W1800
+```
+Four STARTs (inert on the main menu, skip the intro, open the title) and exactly ONE A on
+CONTINUE. The main menu is up by f≈1500; the overworld is live by f≈3830.
+
+**Out of the Battle Arena lobby (arrow warp = TWO tokens):** `d3 d1 d1 W600`
+-> `warp-complete 26.28->26.14`, arrival **(39,30)** every time (warp tile (39,29) + the
+one auto-step out).
+
+**Across BattleFrontier_OutsideEast to the surf shore at (47,58) — the Match-Call-proof route:**
+```
+d4 r1 d1  a a a a a a a a
+d6  a a   r6  a a   d7  a a
+r1 d1 r1 d1 r3  a a a a a a a a
+d2 r1  a a a a  d2 l1 d1 l4 d3
+```
+The two `a` batches sit at the ~6-step and ~32-step boundaries where the Match Call fires.
+Verified walking through both walls with every token completing in 7-57 frames.
+
+**Touch script timing — the one arithmetic that keeps biting:** `w` counts **RENDER** frames
+and they start at APP start, while the D4 log's `f=` counts **EMULATED** frames which start
+~900 render frames later (the movie's A tap on the resume prompt). So
+`render ≈ emu + 900`, and a tap must be scheduled past `walkEndEmu + 900`. This route ends
+around emu f≈6100, so **16 x `w 600` = 9600 render frames** is the right budget with margin.
+
+**Tap geometry (SCALE_1X):** screen `(40 + (7+ddx)*16 + 8, 40 + (5+ddy)*16 + 8)`; offsets
+limited to ddx -7..+7, ddy -5..+4. The surf tap from (47,58) is `t 256 128 6 30` (ddx +6 ->
+the water at (53,58)); the dismount tap is `t 224 128 6 30` (ddx +4 -> the shore at (57,58)).
+
+**Rules that cost a boot each:** only `a` advances a Gen-3 textbox; arrow warps need two
+tokens; never `make` while a session is live (the ELF relinks under the harness — pin the
+raw address); ONE gdb reader at a time; and let a pre-staged arc run to the END of its
+touch script before judging it.
+
+**THE UNLOCK worth doing first next time:** once the avatar is standing at (47,58), drive
+the START menu -> SAVE -> confirm and let the game write `gameB.sav`. Boot WITHOUT
+`--stage-roms` afterwards and every proof arc — P1 surf, the dismount, the negative
+controls, and (after an HM teach) Cut and Rock Smash — starts one tap away.
