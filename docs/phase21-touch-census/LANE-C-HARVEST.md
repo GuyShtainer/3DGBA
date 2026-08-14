@@ -495,3 +495,33 @@ explained** — if it recurs, the gs ring dumped on Quit is where to look.
 - No Azahar left running (`ps aux` → 0). Instance **b** never touched. Three captures this lane,
   all hashed and distinct; the only duplicate pair in `evidence/impl/` is still the phase-23 one
   entry 6 reported.
+
+---
+
+## Entry 10 — what is still NOT covered in `touch.c`, and why (the honest other half of O2)
+
+The brief said to cover what can be made pure and to **say so, with the reason**, for anything that
+cannot. `source/touch.c` is 2 369 lines; `progseq` + `excseq` took the two state machines whose
+defects the audit named. What remains uncovered, in descending order of how much it matters:
+
+| Still in `touch.c` | Why it cannot move (or should not) |
+|---|---|
+| `walk_update_inner` — the route FOLLOWER (stall/replan, the terminal hold, the warp kill-switch) | It is a loop around `walk_plan`, i.e. around a **BFS over live game memory**. Its decisions are already split out where they are pure: `fieldpath_should_replan` (TEST 14), `rungeom_*`, `owngest_step`. What is left is the glue that owns `s_walking`/`s_pathPos` and reads the map every frame. Extractable *in principle* — a `walkfsm` with a map-read callback — but it is the one path every touch proof in three phases has exercised live, so the risk/benefit is the inverse of the two machines this lane took. |
+| `prog_plan` / `exc_plan` / `prog_replan` / `walk_plan` | They ARE the impure side: `map_read`, `read_npcs`, `fieldpath_plan`, `fieldtrav_plan`. The planners they call are already host-graded (`test_fieldpath` 1808, `test_fieldtrav` 1210). |
+| `run_elig` / `prog_surfing` / `prog_facing` / `prog_obj_active` / `prog_party` / `badgeprobe_stamp` | Pure *reads* of emulated RAM through `gbacore_*`. There is nothing to decide in them; the decisions they feed (`rungeom_decide`, the FACE test) are covered. |
+| The per-context dispatch in `touch_update` (battle / party / bag / list / storage / naming / map / dlg arms) | Each arm is `hit_*(gx,gy)` (pure geometry — **already** in `touchgeom.c` / `uihit.c`, 371 892 + 1 834 checks) plus a cursor WRITE into the game. The write is the arm; there is no algorithm between them. |
+| The HUD (`touch_chip`, `pad_overlay`, the chip colours) | citro2d draw calls. `uigeom`/`uihit`/`typography` already grade the geometry and the wrapping. |
+
+So the residual uncovered surface is **glue and I/O**, not judgement — with one named exception
+(the route follower), which is documented here rather than quietly left off the list.
+
+Two things the next lane should pick up:
+
+1. **The `excseq` dims-history residue** (TEST 6, and seen live in Entry 9 as
+   `planSeq 4 → routeEnd 6 → planSeq 5`). The fix is one line — clear `lastW/lastH` in
+   `excseq_boundary` — and it needs a live P4 to re-prove, which is why this lane did not take it.
+2. **C1's six unvisited screens are still unvisited** (C20 · H4/H5 · H6 · L1 · A10, plus L2 whose
+   screen cannot be revisited at all). Nothing in this lane's two boots brought them any closer:
+   `emerald-shore` and `emerald-lavaridge` are the surf and excursion fixtures, and neither stands
+   near a Contest Hall, a Berry Blender or an evolvable mon. They remain **budget-gated visits, not
+   broken rows** — the fingerprints ship and are pinned by `test_profiles` TEST 20.
