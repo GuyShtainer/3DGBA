@@ -229,6 +229,12 @@ uint32_t fieldtrav_usable(const FpBus* bus, FpEngine eng, const FtParty* pty) {
 // the +0x00/+0x10/+0x12 trio is the one touch.c's read_npcs already walks on hardware.
 #define FT_OBJ_STRIDE 0x24u
 #define MAP_OFFSET    7      // pokeemerald include/fieldmap.h:18 == pokefirered :21
+// Slice 2's ROM-grid adapter forges gBackupMapLayout space, so it needs the same two constants
+// fieldpath.c defines privately — kept here with their own citations rather than exported, so
+// fieldpath.c stays untouched (its 1808-check suite must keep passing verbatim).
+#define MAP_OFFSET_W  15     // MAP_OFFSET*2+1 (fieldpath.c:12)
+#define MAP_OFFSET_H  14     // MAP_OFFSET*2   (fieldpath.c:13)
+#define MAPGRID_UNDEFINED 0x03FFu   // == MAPGRID_METATILE_ID_MASK (global.fieldmap.h:7,31)
 
 int fieldtrav_scan_edges(const FpBus* bus, const FpMap* m, FtEdge* out) {
 	int n = 0;
@@ -507,6 +513,276 @@ bool fieldtrav_plan(const FpBus* bus, const FpMap* m, const FtParty* pty,
 		if (out->mv[i].hm != FT_HM_NONE) out->nInteracts++;
 	}
 	out->endMode = (goalState / NT) % FT_MODE_COUNT;
+	out->ok = true;
+	out->outcome = FT_OUT_PLANNED;
+	return true;
+}
+
+// ==============================================================================================
+// SLICE 2 — CROSS-MAP EXCURSIONS (SPEC-family-traversal §3)
+// ==============================================================================================
+// Structure offsets, all re-read from pret this session at the line that uses them:
+//   struct MapHeader   pokeemerald include/global.fieldmap.h — /*0x00*/ mapLayout,
+//                      /*0x04*/ events (identical block in pokefirered).
+//   struct MapEvents   /*0x00*/ objectEventCount, /*0x01*/ warpCount, /*0x08*/ warps.
+//   struct WarpEvent   /*0x00*/ s16 x, /*0x02*/ s16 y, /*0x04*/ u8 elevation, /*0x05*/ u8 warpId,
+//                      /*0x06*/ u8 mapNum, /*0x07*/ u8 mapGroup  — 8 bytes, the record
+//                      fieldpath.c's warp_at already indexes with the same +6/+7 reads.
+//   struct MapLayout   /*0x00*/ s32 width, /*0x04*/ s32 height, /*0x08*/ border, /*0x0C*/ map.
+//   gMapGroups         `const struct MapHeader *const *const gMapGroups[]` — group index first,
+//                      then map number (pret Overworld_GetMapHeaderByGroupAndId, src/overworld.c).
+
+static bool ft_rom_ptr(uint32_t a) { return (a >> 24) == 0x08u || (a >> 24) == 0x09u; }
+
+int fieldtrav_warps(const FpBus* bus, uint32_t events, FtWarp* out, int cap) {
+	if (!bus || !out || cap <= 0 || !ft_rom_ptr(events)) return 0;
+	int n = (int)bus->read8(bus->ctx, events + 0x01u);            // MapEvents.warpCount
+	if (n <= 0 || n > FT_MAX_WARPS) return 0;                     // fieldpath's own sane-count rail
+	uint32_t wp = bus->read32(bus->ctx, events + 0x08u);          // MapEvents.warps
+	if (!ft_rom_ptr(wp)) return 0;
+	if (n > cap) n = cap;
+	for (int i = 0; i < n; i++) {
+		uint32_t b = wp + 8u * (uint32_t)i;
+		out[i].x        = (int16_t)bus->read16(bus->ctx, b + 0u);
+		out[i].y        = (int16_t)bus->read16(bus->ctx, b + 2u);
+		out[i].elev     = bus->read8(bus->ctx, b + 4u);
+		out[i].warpId   = bus->read8(bus->ctx, b + 5u);
+		out[i].mapNum   = bus->read8(bus->ctx, b + 6u);
+		out[i].mapGroup = bus->read8(bus->ctx, b + 7u);
+	}
+	return n;
+}
+
+bool fieldtrav_rom_map(const FpBus* bus, uint32_t mapGroupsRom, int group, int num, FtRomMap* out) {
+	memset(out, 0, sizeof *out);
+	// MAP_GROUPS_COUNT is 34 in Emerald and 43 in FRLG; 64/256 are the loose structural caps that
+	// keep a garbage warp record from indexing halfway across the ROM. A warp's mapGroup/mapNum
+	// are u8, so 255 is the widest a legitimate record can be anyway.
+	if (!bus || !out || !ft_rom_ptr(mapGroupsRom) || group < 0 || group > 63 || num < 0 || num > 255)
+		return false;
+	uint32_t grp = bus->read32(bus->ctx, mapGroupsRom + 4u * (uint32_t)group);
+	if (!ft_rom_ptr(grp)) return false;
+	uint32_t hdr = bus->read32(bus->ctx, grp + 4u * (uint32_t)num);
+	if (!ft_rom_ptr(hdr)) return false;
+	uint32_t lay = bus->read32(bus->ctx, hdr + 0x00u);
+	uint32_t ev  = bus->read32(bus->ctx, hdr + 0x04u);
+	if (!ft_rom_ptr(lay) || !ft_rom_ptr(ev)) return false;
+	int32_t w = (int32_t)bus->read32(bus->ctx, lay + 0x00u);
+	int32_t h = (int32_t)bus->read32(bus->ctx, lay + 0x04u);
+	uint32_t grid = bus->read32(bus->ctx, lay + 0x0Cu);
+	// The largest vanilla layout is well under 256x256; anything outside that is a bad pointer,
+	// and answering "no excursion" is the whole failure mode this guard exists to produce.
+	if (w <= 0 || w > 256 || h <= 0 || h > 256 || !ft_rom_ptr(grid)) return false;
+	out->header = hdr; out->layout = lay; out->events = ev; out->grid = grid;
+	out->w = (int)w; out->h = (int)h;
+	return true;
+}
+
+// --- the ROM-grid bus adapter -----------------------------------------------------------------
+// fieldpath speaks gBackupMapLayout space: grid_word() reads
+// `gridPtr + 2*((x+MAP_OFFSET) + backupW*(y+MAP_OFFSET))` and treats MAPGRID_UNDEFINED as "off
+// the map". A ROM layout is a raw w*h array with no border padding, so instead of forking the
+// rule (the one change that would let the live and ROM grids silently drift apart) we forge an
+// address window and translate inside the bus. fieldpath.c never learns ROM maps exist.
+#define FT_ROMGRID_BASE 0x0F000000u   // unmapped on a GBA: no real read can collide with it
+
+static uint8_t ft_rb_read8(void* ctx, uint32_t a) {
+	const FtRomBus* rb = (const FtRomBus*)ctx;
+	return rb->inner->read8(rb->inner->ctx, a);
+}
+static uint16_t ft_rb_read16(void* ctx, uint32_t a) {
+	const FtRomBus* rb = (const FtRomBus*)ctx;
+	if (a >= FT_ROMGRID_BASE) {
+		uint32_t off = (a - FT_ROMGRID_BASE) >> 1;
+		int bw = rb->rm.w + MAP_OFFSET_W;
+		int gx = (int)(off % (uint32_t)bw), gy = (int)(off / (uint32_t)bw);
+		int x = gx - MAP_OFFSET, y = gy - MAP_OFFSET;
+		if (x < 0 || x >= rb->rm.w || y < 0 || y >= rb->rm.h) return (uint16_t)MAPGRID_UNDEFINED;
+		return rb->inner->read16(rb->inner->ctx, rb->rm.grid + 2u * (uint32_t)(x + rb->rm.w * y));
+	}
+	return rb->inner->read16(rb->inner->ctx, a);
+}
+static uint32_t ft_rb_read32(void* ctx, uint32_t a) {
+	const FtRomBus* rb = (const FtRomBus*)ctx;
+	return rb->inner->read32(rb->inner->ctx, a);
+}
+
+void fieldtrav_rom_bus(FtRomBus* rb, const FpBus* inner, const FtRomMap* rm, FpEngine eng,
+                       FpBus* busOut, FpMap* mapOut) {
+	rb->inner = inner; rb->rm = *rm;
+	busOut->read8 = ft_rb_read8; busOut->read16 = ft_rb_read16; busOut->read32 = ft_rb_read32;
+	busOut->ctx = rb;
+	memset(mapOut, 0, sizeof *mapOut);
+	mapOut->engine     = eng;
+	mapOut->mapHeader  = rm->header;     // behaviour reads walk the REAL tileset chain
+	mapOut->mapObjects = 0;              // ROM has no object events — NPCs are invisible here
+	mapOut->gridPtr    = FT_ROMGRID_BASE;
+	mapOut->backupW    = rm->w + MAP_OFFSET_W;
+	mapOut->backupH    = rm->h + MAP_OFFSET_H;
+}
+
+// --- plain dry reachability, shared by every leg ----------------------------------------------
+// A second, much smaller BFS than fieldtrav_plan's layered one: no modes, no conditional edges,
+// just "can a walker get from A to B on this grid, and in how many steps". Used three times per
+// candidate (out-leg on the live map, mid-leg on D's ROM grid, back-leg on the live map), so the
+// distance field is kept per-call in a static the same way the layered search does.
+static int16_t s_dist[NT];
+static int16_t s_dq[NT];
+
+static void ft_dry_bfs(const FpBus* bus, const FpMap* m, int ox, int oy, int sx, int sy,
+                       int pElev, const short (*npc)[2], int npcN) {
+	for (int i = 0; i < NT; i++) s_dist[i] = -1;
+	int slx = sx - ox + FP_WHALF, sly = sy - oy + FP_WHALF;
+	if (slx < 0 || slx >= FP_WBOX || sly < 0 || sly >= FP_WBOX) return;
+	int head = 0, tail = 0;
+	s_dist[slx + FP_WBOX * sly] = 0;
+	s_dq[tail++] = (int16_t)(slx + FP_WBOX * sly);
+	while (head < tail) {
+		int ti = s_dq[head++];
+		int lx = ti % FP_WBOX, ly = ti / FP_WBOX;
+		int x = ox + lx - FP_WHALF, y = oy + ly - FP_WHALF;
+		for (int d = 0; d < 4; d++) {
+			int nlx = lx + s_dxs[d], nly = ly + s_dys[d];
+			if (nlx < 0 || nlx >= FP_WBOX || nly < 0 || nly >= FP_WBOX) continue;
+			int nti = nlx + FP_WBOX * nly;
+			if (s_dist[nti] >= 0) continue;
+			int nx = x + s_dxs[d], ny = y + s_dys[d];
+			if (!fieldpath_enterable(bus, m, nx, ny, pElev)) continue;
+			bool blocked = false;                       // live NPCs (empty on a ROM map)
+			for (int i = 0; i < npcN; i++)
+				if (npc[i][0] == (short)(nx + MAP_OFFSET) && npc[i][1] == (short)(ny + MAP_OFFSET))
+					{ blocked = true; break; }
+			if (blocked) continue;
+			s_dist[nti] = (int16_t)(s_dist[ti] + 1);
+			s_dq[tail++] = (int16_t)nti;
+		}
+	}
+}
+
+static int ft_dist_at(int ox, int oy, int x, int y) {
+	int lx = x - ox + FP_WHALF, ly = y - oy + FP_WHALF;
+	if (lx < 0 || lx >= FP_WBOX || ly < 0 || ly >= FP_WBOX) return -1;
+	return s_dist[lx + FP_WBOX * ly];
+}
+
+// The tile a walker must actually STAND on to use a warp — fieldpath's own terminal semantics,
+// reused verbatim so an excursion leg is byte-for-byte the route the shipped router already
+// drives: a DOOR is entered from the tile SOUTH of it, everything else is stood on.
+static void ft_warp_approach(const FpBus* bus, const FpMap* m, int wx, int wy, int* ax, int* ay) {
+	FpClass cl = fieldpath_classify(bus, m, wx, wy);
+	*ax = cl.approachX; *ay = cl.approachY;
+}
+
+// The tile the game actually leaves the player on after a warp. A destination warp usually sits
+// ON the door metatile (collision 1, the graphic), and the engine walks the avatar one step out;
+// when the tile itself is walkable (mats, arrow warps, stairs) that is where you stand.
+static void ft_arrival_tile(const FpBus* bus, const FpMap* m, int wx, int wy, int* ax, int* ay) {
+	*ax = wx; *ay = wy;
+	if (!fieldpath_enterable(bus, m, wx, wy, 0)) *ay = wy + 1;   // step out of the doorway
+}
+
+bool fieldtrav_excursion(const FpBus* bus, const FpMap* m, uint32_t mapGroupsRom,
+                         int curGrp, int curNum, int sx, int sy, int gx, int gy,
+                         const short (*npc)[2], int npcN, FtExcursion* out) {
+	memset(out, 0, sizeof *out);
+	out->outcome = FT_OUT_BADMAP;
+	out->wi = out->wj = -1;
+	if (!bus || !m || !out) return false;
+	if (!ft_rom_ptr(mapGroupsRom) || !ft_rom_ptr(m->mapHeader)) return false;
+	if (m->backupW <= 0 || m->backupW > 512 || m->backupH <= 0 || m->backupH > 512) return false;
+	if (abs(gx - sx) > FP_WHALF || abs(gy - sy) > FP_WHALF) { out->outcome = FT_OUT_WINDOW; return false; }
+
+	FtWarp here[FT_MAX_WARPS];
+	uint32_t evHere = bus->read32(bus->ctx, m->mapHeader + 0x04u);
+	int nHere = fieldtrav_warps(bus, evHere, here, FT_MAX_WARPS);
+	if (nHere <= 0) { out->outcome = FT_OUT_NOEXC; return false; }
+
+	// The FOOT elevation, with fieldpath_plan's self-consistency rail (a read that says the tile
+	// the player is standing on is not enterable is a wrong read, not a stuck player).
+	int pElev = fieldpath_player_elev(bus, m);
+	if (pElev != 0 && !fieldpath_enterable(bus, m, sx, sy, pElev)) pElev = 0;
+
+	// Leg 1 distance field: everything reachable on foot from the player, on the LIVE map.
+	ft_dry_bfs(bus, m, sx, sy, sx, sy, pElev, npc, npcN);
+	// Snapshot it — the mid/back BFS passes reuse the same static array.
+	static int16_t outLeg[NT];
+	memcpy(outLeg, s_dist, sizeof outLeg);
+
+	// Rank candidate exits nearest-first and take at most FT_EXC_CAND of them (SPEC H3.2).
+	int cand[FT_MAX_WARPS], nCand = 0;
+	for (int i = 0; i < nHere; i++) {
+		int ax, ay; ft_warp_approach(bus, m, here[i].x, here[i].y, &ax, &ay);
+		int lx = ax - sx + FP_WHALF, ly = ay - sy + FP_WHALF;
+		if (lx < 0 || lx >= FP_WBOX || ly < 0 || ly >= FP_WBOX) continue;
+		if (outLeg[lx + FP_WBOX * ly] < 0) continue;             // not reachable on foot
+		cand[nCand++] = i;
+	}
+	for (int a = 0; a < nCand; a++)                              // insertion sort by out-leg steps
+		for (int b = a + 1; b < nCand; b++) {
+			int aa, ab, ba, bb;
+			ft_warp_approach(bus, m, here[cand[a]].x, here[cand[a]].y, &aa, &ab);
+			ft_warp_approach(bus, m, here[cand[b]].x, here[cand[b]].y, &ba, &bb);
+			int da = outLeg[(aa - sx + FP_WHALF) + FP_WBOX * (ab - sy + FP_WHALF)];
+			int db = outLeg[(ba - sx + FP_WHALF) + FP_WBOX * (bb - sy + FP_WHALF)];
+			if (db < da) { int t = cand[a]; cand[a] = cand[b]; cand[b] = t; }
+		}
+	if (nCand > FT_EXC_CAND) nCand = FT_EXC_CAND;
+
+	int bestScore = 0x7FFFFFFF;
+	for (int ci = 0; ci < nCand; ci++) {
+		const FtWarp* wi = &here[cand[ci]];
+		if (wi->mapGroup == curGrp && wi->mapNum == curNum) continue;   // same-map warp: not an excursion
+		FtRomMap rm;
+		if (!fieldtrav_rom_map(bus, mapGroupsRom, wi->mapGroup, wi->mapNum, &rm)) continue;
+		FtWarp there[FT_MAX_WARPS];
+		int nThere = fieldtrav_warps(bus, rm.events, there, FT_MAX_WARPS);
+		if (nThere <= 0 || wi->warpId >= nThere) continue;
+
+		FtRomBus rb; FpBus dbus; FpMap dmap;
+		fieldtrav_rom_bus(&rb, bus, &rm, m->engine, &dbus, &dmap);
+
+		int arrX, arrY;
+		ft_arrival_tile(&dbus, &dmap, there[wi->warpId].x, there[wi->warpId].y, &arrX, &arrY);
+		// Inside D the elevation rule is disarmed (0 = ELEVATION_TRANSITION, "compatible with
+		// anything"): the arrival elevation is whatever the doorway carries, and an interior is
+		// exactly where a confident-but-wrong elevation would make the whole map unreachable.
+		ft_dry_bfs(&dbus, &dmap, arrX, arrY, arrX, arrY, 0, 0, 0);
+
+		for (int j = 0; j < nThere; j++) {
+			const FtWarp* wj = &there[j];
+			if (wj->mapGroup != curGrp || wj->mapNum != curNum) continue;
+			if (wj->warpId >= nHere) continue;
+			int back = wj->warpId;
+			if (back == cand[ci]) continue;                       // returns to the door we left by
+			int jx, jy; ft_warp_approach(&dbus, &dmap, wj->x, wj->y, &jx, &jy);
+			int dMid = ft_dist_at(arrX, arrY, jx, jy);
+			if (dMid < 0) continue;                               // the interior does not connect
+
+			int bx, by;
+			ft_arrival_tile(bus, m, here[back].x, here[back].y, &bx, &by);
+			if (bx == sx && by == sy) continue;                   // lands where we already are
+			// Leg 3 on the LIVE map, from the return tile to the goal.
+			ft_dry_bfs(bus, m, sx, sy, bx, by, 0, npc, npcN);
+			int dBack = ft_dist_at(sx, sy, gx, gy);
+			if (dBack < 0) continue;
+
+			int ax, ay; ft_warp_approach(bus, m, wi->x, wi->y, &ax, &ay);
+			int dOut = outLeg[(ax - sx + FP_WHALF) + FP_WBOX * (ay - sy + FP_WHALF)];
+			int score = dOut + dMid + dBack;
+			if (score >= bestScore) continue;
+			bestScore   = score;
+			out->wi     = cand[ci];
+			out->wiX    = wi->x;  out->wiY = wi->y;
+			out->dGroup = wi->mapGroup; out->dNum = wi->mapNum;
+			out->arrX   = arrX;   out->arrY = arrY;
+			out->wj     = j;
+			out->wjX    = wj->x;  out->wjY = wj->y;
+			out->backX  = bx;     out->backY = by;
+			out->stepsOut = dOut; out->stepsMid = dMid; out->stepsBack = dBack;
+		}
+	}
+
+	if (out->wi < 0) { out->outcome = FT_OUT_NOEXC; return false; }
 	out->ok = true;
 	out->outcome = FT_OUT_PLANNED;
 	return true;

@@ -132,7 +132,9 @@ typedef enum {
 	FT_OUT_WINDOW,         // goal outside the +-FP_WHALF search window
 	FT_OUT_BADMAP,         // map pointer/dimensions not sane
 	FT_OUT_NOEDGE,         // edges exist on the map but none are eligible (no badge / no mon)
-	FT_OUT_CAP             // a route exists but needs more than FT_MAX_INTERACTS activations
+	FT_OUT_CAP,            // a route exists but needs more than FT_MAX_INTERACTS activations
+	// --- slice 2 (SPEC §3.5), appended so every value above keeps its number ---
+	FT_OUT_NOEXC           // excursion search ran and NO out-and-back candidate survived
 } FtOutcome;
 
 #define FT_MAX_INTERACTS 2                  // SPEC H1.8 hard cap: a 3-HM route fails honestly
@@ -180,3 +182,89 @@ int fieldtrav_scan_edges(const FpBus* bus, const FpMap* m, FtEdge* out);
 // The Attacks-substruct slot for a given personality: sSubstructTable[personality % 24][type].
 // Exposed so the host suite grades the shipped permutation table rather than a restatement of it.
 int fieldtrav_substruct_slot(uint32_t personality, int type);
+
+// ==============================================================================================
+// SLICE 2 — CROSS-MAP EXCURSIONS (SPEC-family-traversal §3, the "Lavaridge class")
+// ==============================================================================================
+// THE ASK (user, same message): "A step beyond could be to include paths in the BFS algorithm
+// through doors. A great example would be lavaridge town, where the jakuzi is seen from outside
+// of it, but freely entered through the pokecenter, being able to simply touch that and the game
+// understanding how to reach that place would be outstanding."
+//
+// The shape, and why it is bounded so hard: a tap is a SCREEN OFFSET from the player
+// (touch.c:432), so the goal is always on the CURRENT map by construction. Every useful
+// excursion therefore RETURNS to the current map, and the whole v1 search is exactly one
+// out-and-back — leave through warp Wi, cross the interior D on foot, come back through a
+// DIFFERENT warp Wj that lands somewhere the goal is reachable from (SPEC H3.1).
+//
+// Honesty limits, stated rather than discovered later (SPEC §3.1):
+//   * neighbour maps are NOT in RAM, so D's grid is read from ROM — it cannot see runtime layout
+//     changes and carries NO object events, i.e. NPCs are invisible at plan time. Plan-time
+//     connectivity is therefore optimistic-but-static, and the executor RE-PLANS every leg on the
+//     LIVE grid at arrival (H3.4), where NPCs exist again.
+//   * map CONNECTIONS (seamless route edges) are NOT modelled — that is the T5.9 refusal, and
+//     pret's own behaviour reads have the identical limitation.
+//   * failure is total: no candidate survives => plan NOTHING (H3.5). Never a partial program,
+//     never "walk toward the door and hope".
+
+// One WarpEvent, as it sits in ROM: struct WarpEvent { s16 x, y; u8 elevation, warpId, mapNum,
+// mapGroup; } — 8 bytes, the same record fieldpath.c's warp_at already indexes.
+typedef struct { int16_t x, y; uint8_t elev, warpId, mapNum, mapGroup; } FtWarp;
+#define FT_MAX_WARPS 64      // fieldpath's own sane-count guard, kept identical
+
+// Read a map's whole warp table out of its MapEvents. `events` is MapHeader.events (+0x04).
+// Returns the count written (<= cap), or 0 if any pointer/count fails validation.
+int fieldtrav_warps(const FpBus* bus, uint32_t events, FtWarp* out, int cap);
+
+// A destination map resolved out of ROM through gMapGroups. gMapGroups is
+// `const struct MapHeader *const *const gMapGroups[]`: index by GROUP to get that group's array
+// of MapHeader pointers, then by NUM (pret Overworld_GetMapHeaderByGroupAndId).
+typedef struct {
+	uint32_t header;      // struct MapHeader*
+	uint32_t layout;      // MapHeader.mapLayout   (+0x00)
+	uint32_t events;      // MapHeader.events      (+0x04)
+	uint32_t grid;        // MapLayout.map         (+0x0C) — raw w*h u16, NO border padding
+	int      w, h;        // MapLayout.width/height (+0x00/+0x04)
+} FtRomMap;
+
+// Resolve (group,num) through gMapGroups. Every pointer is ROM-range checked and the dimensions
+// are sanity-capped, so a bad table degrades to "no excursion", never to a wander.
+bool fieldtrav_rom_map(const FpBus* bus, uint32_t mapGroupsRom, int group, int num, FtRomMap* out);
+
+// The ROM-grid BUS ADAPTER (SPEC §3.1). fieldpath_enterable / fieldpath_behaviour_at /
+// fieldpath_classify all speak gBackupMapLayout space (+MAP_OFFSET, border-padded). Rather than
+// fork those rules for ROM maps — the one thing that would let the two grids drift apart — this
+// wraps the caller's bus so reads inside a synthetic backup-space window resolve into the ROM
+// grid, and hands back an FpMap the SHIPPED functions accept verbatim. fieldpath.c is untouched.
+typedef struct { const FpBus* inner; FtRomMap rm; } FtRomBus;
+void fieldtrav_rom_bus(FtRomBus* rb, const FpBus* inner, const FtRomMap* rm, FpEngine eng,
+                       FpBus* busOut, FpMap* mapOut);
+
+// The result of one out-and-back search. Coordinates are map-local in each map's own space.
+typedef struct {
+	bool     ok;
+	int      outcome;             // FtOutcome (FT_OUT_PLANNED / FT_OUT_NOEXC / FT_OUT_BADMAP / …)
+	int      wi;                  // index into the CURRENT map's warp table — the way out
+	int      wiX, wiY;            // that warp's tile (current map)
+	int      dGroup, dNum;        // the interior we pass through
+	int      arrX, arrY;          // where the game drops us inside D
+	int      wj;                  // index into D's warp table — the way back
+	int      wjX, wjY;            // that warp's tile (D's space)
+	int      backX, backY;        // where we land again on the current map
+	int      stepsOut, stepsMid, stepsBack;   // BFS step counts of the three legs (ranking only)
+} FtExcursion;
+
+#define FT_EXC_CAND 8        // SPEC H3.2: at most 8 candidate exits, nearest first
+
+// Search for a single out-and-back excursion from (sx,sy) to (gx,gy) on the CURRENT map.
+//
+// PRECONDITION, enforced by the caller (touch.c) and not re-litigated here: same-map planning
+// (tier 0 dry walk, then tier 1 conditional edges) has ALREADY failed. Excursions are the last
+// tier, so a same-map route can never be displaced by one.
+//
+// `npc` / `npcN` are the live occupied tiles, in gBackupMapLayout (+MAP_OFFSET) space, exactly as
+// fieldtrav_plan takes them: they block the CURRENT map's two legs. D's leg has no NPC data at
+// all (it is ROM), which is precisely why the executor re-plans it live on arrival.
+bool fieldtrav_excursion(const FpBus* bus, const FpMap* m, uint32_t mapGroupsRom,
+                         int curGrp, int curNum, int sx, int sy, int gx, int gy,
+                         const short (*npc)[2], int npcN, FtExcursion* out);
