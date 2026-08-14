@@ -437,6 +437,7 @@ static bool walk_plan(GbaCore* core, const GameProfile* p, int px, int py, int g
 
 static int prog_plan(GbaCore* core, const GameProfile* p, int px, int py, int gx, int gy,
                      int mapG, int mapN);   // fwd: the phase-22.2 conditional-edge planner
+static bool prog_surfing(GbaCore* core, const GameProfile* p);   // fwd: gPlayerAvatar surf bit
 
 static u16 walk_update_inner(bool touching, bool newPress, bool gvalid, int gx, int gy,
                              int px, int py, int mapG, int mapN, GbaCore* core, const GameProfile* p,
@@ -588,6 +589,10 @@ static u16 walk_update(bool touching, bool newPress, bool gvalid, int gx, int gy
 	g_fieldDbg.curKeys = k;
 	g_fieldDbg.curFrame = core ? (int32_t)gbacore_frame_counter(core) : 0;
 	g_fieldDbg.walking = s_termActive ? 2 : (s_walking ? 1 : 0);
+	// PHASE 24: the surf bit belongs in the LIVE half. It was only written from inside a running
+	// program, so the one question a Surf proof asks — "is the player afloat NOW?" — was
+	// unreadable the moment the program ended. It is a read of the game's own gPlayerAvatar.
+	g_fieldDbg.progSurf = prog_surfing(core, p) ? 1 : 0;
 	return k;
 }
 
@@ -625,8 +630,13 @@ enum { TPE_NONE = 0, TPE_ARRIVED, TPE_HANDOFF, TPE_CANCEL, TPE_KEY, TPE_MAPCHANG
 #define TP_DLG_BUDGET   120    // A press -> the field textbox appears
 #define TP_YESNO_BUDGET 240    // the textbox(es) -> the yes/no menu ("Want-to-use" can be 2 boxes)
 #define TP_DONE_BUDGET  480    // YES -> the cutscene finishes and the world changes
-#define TP_ADVANCE_EVERY 24    // A-advance cadence while a message is being read out
+#define TP_ADVANCE_EVERY 24    // A-advance cadence while a message box is on screen
 #define TP_MAX_REPLANS  4
+// PHASE 24 (lane A, emulator-proven): the yes/no needs a LEVEL, not one edge — see the citation
+// block in TPH_ANSWER. Pulse cadence and a hard cap on how many times we may aim at the same
+// prompt, so a menu that never closes ends the program instead of drumming A forever.
+#define TP_ANSWER_EVERY 8
+#define TP_ANSWER_MAX   8
 
 static FtProgram s_prog;                 // ~17 KB: static for the fieldpath reason (render thread)
 static bool s_progOn = false, s_progSwallow = false;
@@ -641,11 +651,13 @@ static int  s_progChipHold = 0;
 // evidence: the Battle Frontier surf prompt sat open with YES highlighted and nothing ever
 // pressed it. This counter is drained ABOVE the s_progOn gate, so the farewell really lands.
 static int  s_progFarewell = 0;
+static int  s_progAnswers = 0;           // phase 24: A presses aimed at the CURRENT yes/no (capped)
 static const char* s_progChip = 0;
 
 static void prog_reset(void) {
 	s_progOn = false; s_progSwallow = false; s_progFarewell = 0;
 	s_progStep = s_progPhase = s_progFrames = s_progAPulse = s_progReplans = 0;
+	s_progAnswers = 0;
 	s_progMapG = s_progMapN = -1;
 }
 
@@ -738,7 +750,7 @@ static int prog_plan(GbaCore* core, const GameProfile* p, int px, int py, int gx
 	if (!s_prog.ok) return 0;
 
 	s_progOn = true;
-	s_progStep = 0; s_progPhase = TPH_WALK; s_progFrames = 0; s_progAPulse = 0;
+	s_progStep = 0; s_progPhase = TPH_WALK; s_progFrames = 0; s_progAPulse = 0; s_progAnswers = 0;
 	s_progMapG = mapG; s_progMapN = mapN;
 	s_progGoalX = gx; s_progGoalY = gy;
 	s_progLpx = px; s_progLpy = py;
@@ -843,7 +855,7 @@ static u16 prog_update(const TouchSmart* sm, bool touching, bool newPress,
 	s_progFrames++;
 	prog_dbg_stamp();
 
-	if (s_progAPulse > 0) { s_progAPulse--; return 1u << GBAKEY_A; }
+	if (s_progAPulse > 0) { s_progAPulse--; g_fieldDbg.progAKeys++; return 1u << GBAKEY_A; }
 
 	// ---------- a plain walk step ----------
 	if (mv.hm == FT_HM_NONE || s_progPhase == TPH_WALK) {
@@ -910,15 +922,38 @@ static u16 prog_update(const TouchSmart* sm, bool touching, bool newPress,
 			s_progFarewell = 3;      // set AFTER prog_end: it must survive the program, not die with it
 			return 0;
 		}
-		// Advance the "want to use" message boxes, gently.
-		if (sm->textDlg && (s_progFrames % TP_ADVANCE_EVERY) == 0) s_progAPulse = 3;
+		// Advance the "want to use" message boxes, gently — and NOT gated on textDlg. PHASE 24,
+		// read off pokeemerald src/field_message_box.c Task_DrawFieldMessage case 2: the game sets
+		// sFieldMessageBoxMode back to HIDDEN the moment the text FINISHES PRINTING, so `textDlg`
+		// is false for the whole "box is up, waiting for A" window — the exact window an advance
+		// has to press in. (Cut's Text_WantToCut is a two-page \p message, so this is not a corner
+		// case: without a press the second page never comes and the yes/no never appears.) A on a
+		// field text box is benign, and the phase budget still bounds it.
+		if ((s_progFrames % TP_ADVANCE_EVERY) == 0) s_progAPulse = 3;
 		return 0;
 	case TPH_ANSWER:
-		// The shipped fmenu idiom: write the cursor to row 0 (YES is row 0 in both engines' yes/no
-		// menus) and press A. Deterministic — no cursor-walking, no timing race.
-		if (p->sMenuBase) gbacore_write8(core, p->sMenuBase + 2, 0);
-		s_progAPulse = 3;
-		s_progPhase = TPH_DONE; s_progFrames = 0;
+		// THE 5-FRAME ARMING WINDOW — the defect that hung this feature twice (phase 23's open
+		// prompt, and phase 24's first run), root-caused off the game's OWN source rather than
+		// guessed. pokeemerald src/script_menu.c Task_HandleYesNoInput opens with
+		//
+		//     if (gTasks[taskId].tRight < 5) { gTasks[taskId].tRight++; return; }
+		//
+		// i.e. the field yes/no DELIBERATELY ignores input for its first five frames. Our ctx flips
+		// to GCTX_FIELDMENU the instant that task exists (gamestate.c task-based detection), so a
+		// single A pulse fired here lands entirely inside the dead window: its one 0->1 newKeys
+		// edge is discarded, the held frames after it are not edges, and the prompt then sits open
+		// with YES highlighted forever (progAKeys said we pressed; the game never saw it).
+		//
+		// So the answer is LEVEL-triggered: while the menu is up, keep the cursor on YES and keep
+		// making FRESH edges on a cadence — capped, so a menu that never closes ends the program.
+		if (sm->ctx != GCTX_FIELDMENU) { s_progPhase = TPH_DONE; s_progFrames = 0; return 0; }
+		if (p->sMenuBase) gbacore_write8(core, p->sMenuBase + 2, 0);   // YES is row 0 in both engines
+		if ((s_progFrames % TP_ANSWER_EVERY) == 1) {
+			if (s_progAnswers >= TP_ANSWER_MAX) { prog_end(TPE_TIMEOUT, "STOPPED"); return 0; }
+			s_progAnswers++; g_fieldDbg.progAnswers++;
+			s_progAPulse = 2;                  // 2 held frames then >=6 released = a clean new edge
+		}
+		if (s_progFrames > TP_YESNO_BUDGET) { prog_end(TPE_TIMEOUT, "STOPPED"); return 0; }
 		return 0;
 	case TPH_DONE: {
 		bool done = false;
@@ -941,8 +976,11 @@ static u16 prog_update(const TouchSmart* sm, bool touching, bool newPress,
 			return 0;
 		}
 		if (s_progFrames > TP_DONE_BUDGET) { prog_end(TPE_TIMEOUT, "STOPPED"); return 0; }
-		// A-advance the "used CUT!" / "MON used SURF!" boxes while the cutscene plays.
-		if (sm->textDlg && (s_progFrames % TP_ADVANCE_EVERY) == 0) s_progAPulse = 3;
+		// A-advance the "MON used SURF!" / "used CUT!" box while the cutscene plays. Same phase-24
+		// correction as TPH_YESNO: `msgbox MSGBOX_DEFAULT` ends in `waitbuttonpress`, and textDlg
+		// is already false by then, so gating the advance on it left the field move announced and
+		// never performed (the mount is the NEXT script line).
+		if ((s_progFrames % TP_ADVANCE_EVERY) == 0) s_progAPulse = 3;
 		return 0;
 	}
 	default:
@@ -1822,6 +1860,7 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 	if (s_progFarewell > 0) {          // the dangling-textbox A, drained after the program is gone
 		s_progFarewell--;
 		g_fieldDbg.curKeys = 1u << GBAKEY_A;
+		g_fieldDbg.progAKeys++;
 		return 1u << GBAKEY_A;
 	}
 	if (s_progOn) {

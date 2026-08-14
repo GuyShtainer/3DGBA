@@ -120,8 +120,17 @@ typedef struct {
 	int32_t progEndSeq;     // +0x8C  bumped once per program end
 	int32_t progUsable;     // +0x90  the eligibility mask (1<<FtHm) the plan was built against
 	int32_t progEdges;      // +0x94  conditional edge objects found on the map
-	int32_t progSurf;       // +0x98  live PLAYER_AVATAR_FLAG_SURFING bit (1 = afloat)
+	int32_t progSurf;       // +0x98  live PLAYER_AVATAR_FLAG_SURFING bit (1 = afloat). PHASE 24:
+	                        //   restamped on EVERY overworld frame (it used to be written only from
+	                        //   inside a running program, so "did the mount land?" was unreadable
+	                        //   the moment the program ended — which is exactly when it is asked).
 	int32_t progMapSeq;     // +0x9C  slice 2: warp legs completed in the current excursion
+	// --- phase 24 (lane A) — the ANSWER instrument. A screenshot of an open YES/NO cannot say
+	// whether we pressed A and the game ignored it, or we never pressed at all; these two counters
+	// separate those cases in one gdb read, and they are what proved the 5-frame arming window
+	// (touch.c TPH_ANSWER). APPENDED, so every offset above is unchanged. ---
+	int32_t progAKeys;      // +0xA0  frames on which the program injected A (cumulative, per boot)
+	int32_t progAnswers;    // +0xA4  YES presses aimed at a predicted yes/no (cumulative)
 } FieldDbg;
 extern FieldDbg g_fieldDbg;
 
