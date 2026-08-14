@@ -103,3 +103,86 @@ Commit `5b28689` on `lane-b2-fammap`.
 `make -j8` clean in the worktree (`3DGBA.3dsx` 4 399 100 B).
 
 _Emulator proof: Entry 2._
+
+---
+
+## Entry 2 — ✅ **TAP-TO-FLY, LIVE**: one tap on the map and the game flew to Littleroot
+
+Boot `runs-b/20260814-152612`, instance **b**, `--stage-roms firered,emerald-fix` — the pair, with
+**Emerald as gameB so it renders on the BOTTOM screen and owns touch** without touching
+`settings.bin` at all (the seat order IS the swap; B1 flipped the pref instead, this is the
+cheaper half of the same technique). FireRed sat on the top screen at its title the whole time,
+deliberately: leaving it there skips FR's ~3.5-minute quest-log replay, and the lane needed
+Emerald.
+
+### Getting to the screen (the setup, so the proof is reproducible)
+
+| # | act | evidence |
+|---|---|---|
+| 1 | D4 seat 2: boot prefix `W600 s W300 s W300 s W300 s W300 a` then one more `a` (the first landed in a fade) | `ctx = 1`, save = **26.28 (13,8)** = the Battle Frontier building lane A saved in |
+| 2 | D4 `D1 L6 D3` | live p → **(7,12)** — the map's one warp tile |
+| 3 | D4 `D1` (landmine 6: an arrow warp costs a SECOND token) | map **26.28 → 26.14**, p **(39,30)** — outdoors, where FLY is legal |
+| 4 | D4 `s`, `D`, `a` | `ctx = 5` GCTX_PARTY |
+| 5 | D4 `D D D D`, `a` | the popup: **SUMMARY / FLY / SURF / SWITCH / ITEM / CANCEL** on LUGIA (party slot 5 — the mon lane A withdrew from box 8 for exactly this) |
+| 6 | **TOUCH** `t 224 122` on the FLY row | `ctx` **6 → 14 = GCTX_MAP** — the fmenu family opened the fly map, and the new context claimed it |
+
+### The screen classifies, and the struct read is right — proven before any tap
+
+```
+ctx      = 14 (GCTX_MAP)      mapIsFly = 1        (CB2_FlyMap matched rmFlyCb)
+mapCurX  = 23   mapCurY = 14  mapSecId = 58       mapSecType = 4 (BATTLE_FRONTIER)
+```
+
+That is the whole address chain validated in one read, and it validates itself: the game puts
+the fly cursor on **where the player is standing**, and the player was standing at the Battle
+Frontier — `mapSecId 58 = MAPSEC_BATTLE_FRONTIER`, `mapSecType 4 = MAPSECTYPE_BATTLE_FRONTIER`.
+A wrong `rmPtr` or a wrong offset could not produce that agreement.
+The cursor's drawn position agrees too: cell (23,14) → the engine's `8*c+4` formula → GBA px
+(188,116) → screen (251,168) → the capture shows the cursor box at exactly that spot
+(`EM-B8-flymap-open.png`). **That is the calibration phase 23 flagged as "the ONE thing to
+verify live rather than assume" — `sprite->x` is the CELL CENTRE, and `mapgeom_hit`'s
+`gx >> 3` inverse is right.**
+
+### Tap 1 — an OCEAN cell: the cursor walks there and **no A is emitted**
+
+`t 133 179` = GBA (100,124) = cell **(12,15)**, open water.
+
+```
+mapTaps 0 -> 1   mapSteps 0 -> 11   mapArrive 0 -> 1   mapFlies 0 -> 0
+mapCurX -> 12    mapCurY -> 15      mapSecId -> 213 (0xD5 = MAPSEC_NONE)   mapSecType -> 0
+mapTgtX/Y -> -1  (disarmed on arrival)
+```
+
+Three separate things are proven by that one line:
+
+1. **the hit geometry is exact** — the cursor landed on the cell the finger pointed at, and the
+   capture (`EM-B8-tap-ocean-no-A.png`) shows the dashed cursor box out in the ocean with the
+   destination-name window **empty**;
+2. **the navigator costs exactly what the host suite predicted** — `mapSteps = 11 =
+   max(|12-23|, |15-14|)`, the Chebyshev distance, i.e. the diagonal really is one frame and not
+   one press was wasted. TEST 15's oracle and the live game agree on the number;
+3. **the game's own acceptance test is honoured** — `mapSecType = 0`, so `mapFlies` stayed **0**:
+   no A was emitted, the map stayed open, the player did not move. A driver that pressed A on
+   every arrival would have looked identical on screen here and been wrong on the wall map.
+
+### Tap 2 — **LITTLEROOT TOWN**, and the game flew
+
+`t 59 157` = GBA (44,108) = cell **(5,13)** = `gRegionMapEntries[MAPSEC_LITTLEROOT_TOWN]`
+(x 4, y 11 → +MAPCURSOR_X_MIN/Y_MIN), from the pret data file — i.e. the tap coordinate was
+computed from the GAME'S OWN table, not read off a screenshot.
+
+```
+mapTaps  1 -> 2      mapSteps 11 -> 18    (+7 = max(|5-12|,|13-15|), again exact)
+mapArrive 1 -> 2     mapFlies 0 -> 1      <- the confirm fired
+then: ctx 14 -> 1, and every live map read goes to -1 (the struct is freed — the screen is gone)
+
+g_fieldDbg  BEFORE: mapGroup.mapNum = 26.14  p = (39,30)     [Battle Frontier, outdoors]
+            AFTER : mapGroup.mapNum =  0.9   p = (14, 9)     [LITTLEROOT TOWN]
+```
+
+and the game drew its own map-name banner: **`LITTLEROOT TOWN`**
+(`EM-B8-flew-to-littleroot.png`).
+
+That is TOUCH-PLAN slice 22.4's acceptance test executed verbatim — *"tap Littleroot on the fly
+map, read the cursor mapsec before/after, confirm the warp via SaveBlock1.location"* — with the
+before/after on both channels. **Row B8 = VERIFIED.**
