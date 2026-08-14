@@ -635,10 +635,16 @@ static int  s_progMapG = -1, s_progMapN = -1, s_progGoalX, s_progGoalY;
 static int  s_progLpx, s_progLpy;
 static int  s_progSeq = 0, s_progEndSeq = 0;
 static int  s_progChipHold = 0;
+// PHASE 23: the "one A to close a dangling textbox" of SPEC T2.4 has to OUTLIVE the program, and
+// s_progAPulse cannot — prog_end() clears s_progOn, and from the very next frame the dispatcher
+// stops calling prog_update at all, so a pulse queued alongside the end is never emitted. Live
+// evidence: the Battle Frontier surf prompt sat open with YES highlighted and nothing ever
+// pressed it. This counter is drained ABOVE the s_progOn gate, so the farewell really lands.
+static int  s_progFarewell = 0;
 static const char* s_progChip = 0;
 
 static void prog_reset(void) {
-	s_progOn = false; s_progSwallow = false;
+	s_progOn = false; s_progSwallow = false; s_progFarewell = 0;
 	s_progStep = s_progPhase = s_progFrames = s_progAPulse = s_progReplans = 0;
 	s_progMapG = s_progMapN = -1;
 }
@@ -900,8 +906,8 @@ static u16 prog_update(const TouchSmart* sm, bool touching, bool newPress,
 		if (s_progFrames > TP_YESNO_BUDGET) {
 			// THE CORE SAFETY CASE: a dialog appeared but it was not the yes/no we predicted.
 			// Close it with a single A and kill the program. NEVER guess at an unpredicted prompt.
-			s_progAPulse = 3;
 			prog_end(TPE_UNEXPECTED, "STOPPED");
+			s_progFarewell = 3;      // set AFTER prog_end: it must survive the program, not die with it
 			return 0;
 		}
 		// Advance the "want to use" message boxes, gently.
@@ -1679,6 +1685,11 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 	if (s_progSwallow) {
 		if (!touching) s_progSwallow = false;
 		return 0;
+	}
+	if (s_progFarewell > 0) {          // the dangling-textbox A, drained after the program is gone
+		s_progFarewell--;
+		g_fieldDbg.curKeys = 1u << GBAKEY_A;
+		return 1u << GBAKEY_A;
 	}
 	if (s_progOn) {
 		u16 pk = prog_update(sm, touching, newPress, sm->px, sm->py, sm->mapGroup, sm->mapNum);

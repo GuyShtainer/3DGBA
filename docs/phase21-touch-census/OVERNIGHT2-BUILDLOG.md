@@ -1007,3 +1007,41 @@ line lives at `test/test_celiolink.c`, not `test/host/`):
 
 **0 failures.** `fieldpath` unmodified at 1808 is the load-bearing number: slice 2 reads ROM
 maps through a bus ADAPTER precisely so the shipped walkability rule stays one implementation.
+
+## Lane A Entry 17 (phase 23) — 🎉 P1 PARTIAL: THE TAP REACHED THE GAME'S OWN SURF PROMPT
+
+Boot `runs/20260814-075011`, dual Emerald, the Match-Call-proof route. **The whole chain
+ran, unattended, from a pre-staged file:**
+
+1. the 60-token D4 route walked out of the Battle Arena lobby and across
+   `BattleFrontier_OutsideEast` to the south beach, ending — exactly as planned —
+   `tok 58 d3 done at (47,58) f=5999` … `script done (60 tokens) f=6900`;
+2. the pre-staged touch script tapped the OCEAN six tiles east (`t 256 128`, ddx +6 =
+   (53,58), `MB_OCEAN_WATER 0x15`);
+3. the dry router declined (water is foot-impassable by elevation), `fieldtrav` planned a
+   SURF edge, the executor held RIGHT to face the water and pressed A — and the game
+   answered with **its own field-move question**:
+
+   > **"The water is dyed a deep blue… Would you like to SURF?"**  with ▶YES / NO up.
+
+   Capture: `evidence/impl/EM-traversal-P1-surf-prompt-from-tap.bottom.png` (arrival:
+   `EM-traversal-P1-shore-arrival.bottom.png`).
+
+That is T1 (the surfable-metatile edge), T1.4 (badge + a party mon that really knows SURF —
+this save has exactly one), and the first three steps of the T2 INTERACT sequence
+(FACE -> A -> the predicted dialog) **working live**, driven by nothing but a tap.
+
+**What did NOT happen: the YES.** The prompt sat open with the cursor already on YES for
+40+ seconds. `gdb` had died earlier in this boot (Entry 12) so the `prog*` columns that
+would name the phase were lost — but code reading finds a defect that explains it exactly,
+and it is now fixed:
+
+> **`prog_end()` clears `s_progOn`, and the dispatcher only calls `prog_update` while
+> `s_progOn` — so the "one A to close a dangling textbox" that the timeout path queues into
+> `s_progAPulse` is NEVER EMITTED.** The program dies with its farewell still in its hand.
+
+Fixed with `s_progFarewell`, drained ABOVE the `s_progOn` gate so it outlives the program.
+Whether the *primary* path (ctx resolving to `GCTX_FIELDMENU` -> `TPH_ANSWER` writing
+`sMenu.cursorPos = 0` + A) also fired is still unproven: that needs a re-run with the gdb
+channel alive, reading `progPhase`/`progEnd`. **That is the single next experiment**, and
+with the save-at-the-shore unlock it is a two-minute arc.
