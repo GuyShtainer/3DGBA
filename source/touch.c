@@ -1771,7 +1771,16 @@ static void mon_census_stamp(const TouchSmart* sm) {
 		uint32_t s = gbacore_read32(sm->core, p->pcStoragePtr);
 		if ((s >> 24) == 0x02u) storage = s;          // an unloaded save reads as garbage/0
 	}
-	int count = (sm->partyCount >= 0 && sm->partyCount <= 6) ? sm->partyCount : 0;
+	// gPlayerPartyCount is read STRAIGHT off the core, the way prog_party does it — NOT from
+	// TouchSmart.partyCount. Live evidence (2026-08-14, boot runs/20260814-130304): gamestate.c
+	// only fills that field inside GCTX_PARTY (:677), so in the overworld it is -1 and the first
+	// draft of this census reported an EMPTY PARTY on a save with a full one. A diagnostic that
+	// lies about the thing it exists to measure is worse than no diagnostic.
+	int count = 0;
+	if (p->partyCount) {
+		int n = (int)gbacore_read8(sm->core, p->partyCount);
+		count = (n >= 0 && n <= 6) ? n : 0;
+	}
 	FpBus bus = { fp_r8, fp_r16, fp_r32, sm->core };
 	fieldtrav_census(&bus, p->partyBase, count, storage, kWanted,
 	                 (int)(sizeof kWanted / sizeof kWanted[0]), &g_monDbg.c);
