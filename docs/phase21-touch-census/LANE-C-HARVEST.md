@@ -315,3 +315,29 @@ on a fingerprint this lane could not read or a verb it did not see.
    *feel* decision on the credits (a real 3DS is where "my finger did nothing" is judged).
 5. The **ctx-name table** fix (`"map"`) means gs-ring rows logged before this commit print `?` for
    every region-map screen — worth knowing when reading phase-24 logs.
+
+---
+
+## Entry 6 — REPORTED, not touched: a second byte-identical capture pair in `evidence/impl/`
+
+The audit's O4 finding (a renamed screenshot presented as an independent proof) has a sibling that
+nobody has flagged. Hashing every PNG in `evidence/impl/` while checking this lane's own captures
+were unique turned up exactly one duplicate pair, both committed in **`62b3976`** (phase 23,
+lane B):
+
+```
+2d7e33aeb9c1ae00a8a84ad262e88060896e1d1b  FR-dlg-P2-tapped-through-to-overworld-startmenu.bottom.png
+2d7e33aeb9c1ae00a8a84ad262e88060896e1d1b  FR-dlg-P4-hold-B-exited-dex.bottom.png
+```
+
+Opened and looked at: the frame shows the FireRed overworld with the START menu open
+(POKéDEX/POKéMON/BAG/SHOCK/SAVE/OPTION/EXIT). That IS P2's claim. It is also, coincidentally, what
+P4's *end state* looks like (B backs out of the dex to the START menu) — so this may be a rename or
+it may be two genuinely identical frames; a byte comparison cannot tell them apart, which is
+precisely why one file must not carry two claims. **P4's actual evidence is unaffected**: it rests
+on the gdb deltas (`dlgHolds` 0→1, `ctx` 10→6, `dlgTaps` unchanged), not on the picture.
+
+Not renamed, not deleted, not re-graded — it is another lane's file and another lane's row. Flagged
+here so the next audit can settle it, and as the reason this lane hashed its own seven captures
+before writing a word about them (all seven distinct; the two Hall-of-Fame frames are deliberately
+one bottom-screen and one top-screen shot of two different boots).
