@@ -1312,3 +1312,19 @@ travel move for P4, all in one party, obtained by touch.
 Landmines re-confirmed: #3 (never overlap touch scripts with D4 key scripts — every step
 above alternates), and the corrected landmine #2 (`sdmc arm-control` before boot, then any
 number of control files mid-session — this whole 12-step arc was one boot, ~25 file drops).
+
+## 2026-08-14 — TECHNIQUE (user): ONE instance tests TWO games at once
+
+The app IS a dual-GBA emulator: gameA on the top screen, gameB on the bottom. So a single Azahar
+instance hosts BOTH games simultaneously — testing does not need one instance per game.
+
+- `--stage-roms NAME,NAME` already accepts a PAIR (azctl.py:809; the RS co-op work used it).
+- The D4 control channel is PER SEAT (`move_p1.txt` / `move_p2.txt`, control.h:16 — masks OR into
+  `emuA.keys` / `emuB.keys`), so ONE boot can navigate BOTH games independently.
+- TOUCH, however, drives the **BOTTOM game only** (main.c:3547: "Touchscreen drives the BOTTOM
+  game (A is on bottom iff swapped) as a POINTER"). To touch-test the other title, flip the
+  `swapped` pref (ACT_SWAP / the pause DISPLAY toggle) mid-session — no reboot needed.
+- Therefore: 1 boot = 2 games navigable + either one touch-testable (swap to switch).
+  2 instances = 4 games in flight. Prefer PAIRS over solo boots from now on; a solo boot is only
+  right when a proof needs the game unambiguously alone (e.g. the phase-21 S3 port-isolation gate,
+  where libmgba's romBuffer points at the last-loaded core).
