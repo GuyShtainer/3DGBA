@@ -612,6 +612,19 @@ profiles 1697 · theme 83444 · tilt 1756 · touchgeom 371892 · trace 58 (+4 lo
 `-Wmisleading-indentation` notes in `touch.c` hit lines 210–217, verified byte-identical to HEAD).
 `make cia` deliberately NOT run and Azahar not booted — another process owns the emulator.
 
-**Still unproven, as always for RS:** no Ruby or Sapphire ROM exists on this machine, so this row
-has never been executed on a live game. What is proven is the table, the seam and the property; the
-first RS hardware/emulator run remains owed.
+**Still unproven for RS — but not for the reason first written here.** The original text said "no
+Ruby or Sapphire ROM exists on this machine". **That is false and was corrected in the main session:**
+`roms/ruby.gba` and `roms/sapphire.gba` are both present (16 MB each, `AXVE` rev **2** and `AXPE` rev
+**2**), copied from the user's own library, and lane B has already booted both — 12 Ruby and 3
+Sapphire captures are committed under `evidence/`. The claim was inherited verbatim from the phase-18
+HANDOFF, where it was true at the time, and never re-checked.
+
+So what is actually owed is smaller and *achievable today*: the table, the seam and the property are
+proven, and a **live RS run is now possible** rather than blocked. The decisive check is cheap — the
+user's Ruby save is a ~600-hour completed game, so every badge flag should read SET; under the old
+Emerald offsets those reads land in `vars[]` and cannot be reliably 1. Note the carts are **rev 2**,
+while `SaveBlock1.flags` was cited from pokeruby master; the layout is not revision-conditional in
+that source, but a live run is what turns that from a reading into a measurement.
+
+*(Lesson worth keeping: a stale caveat is as damaging as a stale claim — it caused a real, available
+proof to be written off as impossible. Re-check the caveats, not just the assertions.)*
