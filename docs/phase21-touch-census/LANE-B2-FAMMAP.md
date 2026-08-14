@@ -239,3 +239,63 @@ ctx 14 -> 5 (GCTX_PARTY)                    <- B backed out to the menu that ope
 |---|---|---|
 | **B8 fly map** | ✅ **VERIFIED** | tap → cursor → fly → `SaveBlock1.location` changed (Entry 2); drag → cursor only; hold → B |
 | **B7 wall map** | **VERIFIED-mech** (B1's vocabulary) | it is the *same* `sRegionMap`, the same driver and the same geometry, differing only in `mapFly = 0` → the arrival A is never armed. `game_read` resolving `MCB2_FieldUpdateRegionMap` → `GCTX_MAP` with `mapFly = 0` is graded by test_profiles TEST 18 through the REAL `game_read`, and the "no A" half is additionally proven live by the ocean tap (Entry 2), where the driver declined to press A on its own. **Not visited**: an `MB_REGION_MAP` wall tile was not located in this session's reachable maps, and the honest cost of finding one (a ROM metatile scan + a walk) was judged worse value than the FR harvest below. |
+
+---
+
+## Entry 4 — the parent's item #2: **FR BERRY POUCH + TM CASE are driven lists, live** — and the anchor problem was dissolved rather than solved
+
+TOUCH-PLAN calls E4 "FAM-LIST **free instantiation**" — the driver exists, only the LIST was
+missing. The obstacle was never the driver: `find_list_task` needs the screen's own input task
+*and* the `data[]` slot its ListMenu id hides in, and neither was resolvable for these two
+FireRed modules this session (no pokefirered symbol map to hand). The plan therefore marks both
+rows `rev1+substate`.
+
+**The way around costs no addresses at all.** Every live ListMenu in the engine owns a task whose
+function is `ListMenuDummyTask` — that is the entire premise of the **P-D discovery probe**, whose
+anchor this project has carried as LOGGING ONLY since phase 22.1 (`lmDummyTask` = FR rev0
+`0x08106ECC` / rev1 `0x08106F44`, both already in the BPRE row). `GameProfile.cb2List` promotes
+that probe from an instrument to a driver **for a named set of screens only**: if the live cb2 is
+whitelisted, the first live ListMenu the scan finds IS this screen's list →
+`GCTX_LIST` / **`LK_FULLUI`** → the shipped `list_update`.
+
+Three things keep it honest, and all three are graded by test_profiles **TEST 19**:
+opt-in whitelist of census-[exact] cb2s (never class-wide) · a listed screen with **no** live list
+falls through to `GCTX_FULLUI`, i.e. today's FAM-DLG behaviour, so the failure mode is "no
+upgrade" and never a wrong key · an **unlisted** screen with the same live ListMenu is never
+claimed.
+
+### Live, on the user's own FireRed cart (second boot, `runs-b/20260814-154829`)
+
+Staged `emerald-fix,firered` this time — **FireRed as gameB, so FR renders on the BOTTOM and owns
+touch**, with Emerald parked at its title. Route to the screens was itself all touch after the
+D4 boot prefix (the ~3.5-minute quest-log replay had to run out first — landmine):
+
+| act | how | result |
+|---|---|---|
+| bag pocket ITEMS → **KEY ITEMS** | **TOUCH** `t 96 109` — the FR pocket-switch arrow (`baggeom_fr_pocket_arrow`) | the pocket changed; TOWN MAP / TM CASE / BERRY POUCH all in one list |
+| TM CASE row | **TOUCH** `t 156 100` | "TM CASE is selected." + the OPEN/REGISTER/CANCEL popup |
+| OPEN | **TOUCH** `t 261 164` (fmenu) | **`ctx = 12 GCTX_LIST`, `listKind = 5 LK_FULLUI`** |
+
+```
+TM CASE   listBase 0x030050C0  lTotal 45  lMaxShowed 5  window (80,8) 152x80  lRow 0
+  tap row 3 (t 160 99)  ->  lRow 0 -> 3, and the game drew "HM04 STRENGTH is selected."
+                            with its own USE/GIVE/EXIT popup   (FR-E5-tmcase-*.png)
+
+BERRY POUCH  listBase 0x030050C0  lTotal 17  lMaxShowed 7  window (88,8) 144x112  lRow 0
+  tap row 5 (t 173 141) ->  lRow 0 -> 5, "No06 LEPPA BERRY is selected." + USE/GIVE/TOSS/EXIT
+                                                            (FR-E4-berrypouch-*.png)
+```
+
+Note the two screens report **different live geometry** (5 rows in an 80-px window vs 7 rows in a
+112-px one) and the driver hit the right row on both — i.e. it is reading the game's own window
+rect through the discovered list, not a hard-coded rectangle. `lRow` is the game's own
+`ListMenu.selectedRow`: the before/after on it is the L-family proof channel, and the popup the
+game opened by itself is the game agreeing.
+
+**E4 = VERIFIED · E5 = VERIFIED.** Both rows lose their `substate`/`rev1` symbol requirement
+entirely — the whitelist is two cb2s the census had already harvested.
+
+**Bonus sighting for a later lane:** FireRed's KEY ITEMS pocket also holds **TOWN MAP**, i.e. FR's
+region-map screen is two taps away from where this arc ended. That is the cheapest possible
+follow-up for the FR half of FAM-MAP — open it, read `s_lastCb2` and probe for FR's region-map
+struct, and the fly-vs-wall discriminator this lane could not decide becomes a measurement.
