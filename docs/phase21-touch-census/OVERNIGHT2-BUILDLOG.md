@@ -736,3 +736,34 @@ Consequences, stated honestly rather than worked around:
    a 28-tile approach has to be walked by D4 first.
 6. Route to the shore, BFS'd around the map's 26 object events:
    `d4 r1 d7 r6 d7 r1 d1 r1 d1 r3 d2 r1 d2 l1 d1 l4 d3` = 46 steps, (39,30) -> (47,58).
+
+## Lane A Entry 7 (phase 23) — two more harness landmines, both paid for in lost boots
+
+Both found driving the P1 surf arc from the Battle Frontier save; both are general, not
+traversal-specific, so they belong beside the other four.
+
+**5. `b` does NOT close a Gen-3 message box — only `a` advances it.** The obvious-looking
+"press A a few times to get through intro → title → main menu, then B to clear anything I
+opened by accident" prefix is a trap: the SECOND `a` landed in the loaded overworld, the
+player's saved facing pointed at the lobby's BLACK_BELT (7,7), and the resulting dialog ate
+the rest of the boot. The two `b` tokens did nothing at all — in Gen 3, B never dismisses a
+textbox. Control log, verbatim:
+`tok 9 a done f=1845` … `tok 15 d3 start (7,8)->(7,11) f=3671` … `TIMEOUT tok 15 d3 at (7,8)`.
+**The rule: the boot prefix must contain exactly ONE `a`, and every press before it must be
+`s` (START).** START skips the GF intro, opens the title, and is INERT on the main menu, so
+a whole ladder of `s` tokens is free insurance; the single `a` is then the only key that can
+reach the overworld, and it lands on CONTINUE. Measured on this save: main menu is up by
+f≈1500, so `W600 s W300 s W300 s W300 s W300 a W1800` is comfortable at any fps.
+
+**6. A `d1` walk token onto a SOUTH-ARROW warp arrives and STOPS — it never fires the warp.**
+The Battle Arena lobby's exit (7,12) is `MB_SOUTH_ARROW_WARP` (**0x65**, resolved off pret's
+`metatile_behaviors.h`), not a door: the game warps you only when you press the arrow's
+direction WHILE STANDING ON IT. A closed-loop walk token's job is finished the moment the
+coords match, so it releases the key on arrival and the script then sat on the tile for 600
+frames (`p(7,12)` on map (26,28) at f=4094→4332, unchanged). This is exactly fieldpath's
+**WK_DIR** class (stand ON it, hold its direction) seen from the harness side.
+**The rule: an arrow-warp crossing costs TWO tokens** — `d1` onto the tile, then a second
+`d1` whose DOWN press fires the warp (and which the warp then consumes whole, per landmine
+"a warp eats the in-flight token"). Doors (`MB_ANIMATED_DOOR` 0x69 / `MB_NON_ANIMATED_DOOR`
+0x60) still take one. Cheap pre-flight: dump the exit tile's behaviour from the pret layout
+before writing the route — 0x65/0x66/0x67/0x68 (the four arrow warps) mean two tokens.
