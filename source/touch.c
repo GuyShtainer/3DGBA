@@ -11,6 +11,7 @@
 #include "assets.h"    // baked fonts: the mode/menu chips draw TXT_CHIP at its native size
 #include "fieldpath.h" // phase 18: warp classification + the elevation-correct router (pure C)
 #include "uihit.h"     // phase 19 / L3.2.8: the chip boxes, shared with the host suite
+#include "touchgeom.h" // phase 22.1: keyboard + list hit geometry (pure C, host-tested)
 
 const char* const TOUCH_NAMES[3] = { "Off", "Gamepad", "Smart" };
 
@@ -554,45 +555,291 @@ static u16 fmenu_select(GbaCore* core, const GameProfile* p) {
 	return k;
 }
 
-// ============================ SMART: bag menu ===============================
-// Tap a visible item row -> write the live ListMenu row (+26) + A. Visible rows only (no scroll v1);
-// the bottom row is CLOSE BAG. EM: 8 rows from y16; FR/LG: 6 rows from y8 (pitch 16, both).
-static int s_bag = -1, s_bagTick = 0;            // pending tap-select (visible row) + A pulse
-static bool s_bagDown = false, s_bagDrag = false;
-static int s_bagDownX, s_bagDownY, s_bagLastX, s_bagLastY, s_bagRow;
-static void bag_reset(void) { s_bag = -1; s_bagTick = 0; s_bagDown = false; s_bagDrag = false; }
-
-static int hit_bag(const TouchSmart* sm, int gx, int gy) {
-	bool fr = sm->prof && (sm->prof->code[2] == 'R' || sm->prof->code[2] == 'G');
-	int x0 = fr ? 88 : 112, y0 = fr ? 8 : 16, rows = fr ? 6 : 8;
-	if (gx < x0 || gx >= 232 || gy < y0 || gy >= y0 + rows * 16) return -1;
-	int r = (gy - y0) / 16;
-	return (r >= 0 && r < rows) ? r : -1;
+// ================= SMART: the LIST family (bag / mart / PC items / qty / dex) =================
+// PHASE 22.1 (SPEC-family-lists). ONE generic driver replaces the bespoke bag handler: the live
+// ListMenu template is read every frame (window rect, totalItems, maxShowed — L2), a clean tap
+// writes selectedRow (+26) then pulses A (the shipped bag idiom), a vertical drag injects one
+// UP/DOWN edge per 14 px, a fast release becomes a capped HELD key (the honest fling, L5), and a
+// tap in the blank space below a short list is DEAD (the L3 clamp — the old "tap blank -> CLOSE
+// BAG" wart is gone). scrollOffset (+24) is read for the clamp only and NEVER written (L4).
+// The same gesture state serves LK_QTY (drag = ±1/±10 roller) and LK_DEX (key-injection only)
+// because the kinds are mutually exclusive; a kind change resets it (list_reset).
+static int  s_lRow = -1, s_lTick = 0;            // pending tap-select (visible row) + A pulse
+static bool s_lDown = false, s_lDrag = false;
+static int  s_lDownX, s_lDownY, s_lLastX, s_lLastY;
+static int  s_lPressRow = -1, s_lPressArrow = -1, s_lPressTab = -1;
+static int  s_lVel[4], s_lVelN = 0;              // per-frame dy ring (fling velocity, L5)
+static int  s_lFling = 0; static u16 s_lFlingKey = 0;   // fling-hold frames + key
+static int  s_lSeq = 0, s_lSeqTick = 0; static u16 s_lSeqKey = 0;  // queued tab edges (1 per 2 frames)
+static int  s_lPrevKind = -1;                    // kind change inside GCTX_LIST -> reset
+static void list_reset(void) {
+	s_lRow = -1; s_lTick = 0; s_lDown = false; s_lDrag = false;
+	s_lPressRow = s_lPressArrow = s_lPressTab = -1;
+	s_lVelN = 0; s_lFling = 0; s_lFlingKey = 0; s_lSeq = 0; s_lSeqTick = 0; s_lSeqKey = 0;
+	s_lPrevKind = -1;
 }
-// Phone-style: TAP a row -> select on release (write live row +26, then A). DRAG vertically ->
-// scroll (inject UP/DOWN, using the game's own cursor+scroll). DRAG horizontally -> switch pocket
-// (inject LEFT/RIGHT). Never writes the scroll field directly (that path is racy).
-static u16 bag_update(const TouchSmart* sm, bool touching, bool newPress, bool gvalid, int gx, int gy) {
-	if (s_bag >= 0) {                                  // finish a pending tap-select pulse
-		if (sm->core && sm->bagListTaskBase) gbacore_write16(sm->core, sm->bagListTaskBase + 26, (uint16_t)s_bag);
-		u16 k = (s_bagTick == 1) ? (1 << GBAKEY_A) : 0;
-		if (++s_bagTick >= 2) { s_bag = -1; s_bagTick = 0; }
+
+// Live geometry read (L2): template fields out of the ListMenu struct + the window rect out of
+// gWindows — the identical read hit_fieldmenu ships for sMenu. Returns 0 => emit NOTHING (L10).
+static int list_read_geom(const TouchSmart* sm, uint32_t listBase, ListGeom* g) {
+	if (!sm->core || !sm->prof || !listBase || !sm->prof->gWindowsBase) return 0;
+	g->totalItems   = gbacore_read16(sm->core, listBase + 12);
+	g->maxShowed    = gbacore_read16(sm->core, listBase + 14);
+	g->scrollOffset = gbacore_read16(sm->core, listBase + 24);
+	uint8_t wid = gbacore_read8(sm->core, listBase + 16);
+	if (wid >= 32) return 0;
+	uint32_t win = sm->prof->gWindowsBase + 12u * (uint32_t)wid;
+	g->x0 = gbacore_read8(sm->core, win + 1) * 8;
+	g->y0 = gbacore_read8(sm->core, win + 2) * 8;
+	g->w  = gbacore_read8(sm->core, win + 3) * 8;
+	g->h  = gbacore_read8(sm->core, win + 4) * 8;
+	return listgeom_valid(g);
+}
+
+#define LF_BAG 1   // bag flavor: horizontal swipe = pocket switch + the pocket-tab targets (L12)
+
+// The generic tier L-A driver (bag + mart buy + PC items).
+static u16 list_update(const TouchSmart* sm, uint32_t listBase, int flags,
+                       bool touching, bool newPress, bool gvalid, int gx, int gy) {
+	if (s_lRow >= 0) {                               // finish a pending write-then-A select
+		if (sm->core && listBase) gbacore_write16(sm->core, listBase + 26, (uint16_t)s_lRow);
+		u16 k = (s_lTick == 1) ? (1 << GBAKEY_A) : 0;
+		if (++s_lTick >= 2) { s_lRow = -1; s_lTick = 0; }
 		return k;
 	}
-	if (newPress && gvalid) { s_bagDown = true; s_bagDrag = false; s_bagDownX = s_bagLastX = gx; s_bagDownY = s_bagLastY = gy; s_bagRow = hit_bag(sm, gx, gy); }
-	if (touching && s_bagDown && gvalid) {
-		if (!s_bagDrag && (abs(gx - s_bagDownX) > 6 || abs(gy - s_bagDownY) > 6)) s_bagDrag = true;
-		if (s_bagDrag) {
-			if (gy - s_bagLastY >= 14) { s_bagLastX = gx; s_bagLastY = gy; return 1 << GBAKEY_UP; }    // drag down -> items above
-			if (s_bagLastY - gy >= 14) { s_bagLastX = gx; s_bagLastY = gy; return 1 << GBAKEY_DOWN; }  // drag up -> items below
-			if (gx - s_bagLastX >= 30) { s_bagLastX = gx; s_bagLastY = gy; return 1 << GBAKEY_LEFT; }  // swipe right -> prev pocket
-			if (s_bagLastX - gx >= 30) { s_bagLastX = gx; s_bagLastY = gy; return 1 << GBAKEY_RIGHT; } // swipe left  -> next pocket
+	if (s_lSeq > 0) {                                // queued pocket-tab edges, one per 2 frames
+		u16 k = (s_lSeqTick == 0) ? s_lSeqKey : 0;
+		if (++s_lSeqTick >= 2) { s_lSeqTick = 0; s_lSeq--; }
+		return k;
+	}
+	if (s_lFling > 0) {                              // fling-hold: the game's own key repeat scrolls
+		if (newPress) { s_lFling = 0; }              // any new touch cancels (L5) — dead frame
+		else { s_lFling--; return s_lFlingKey; }
+		return 0;
+	}
+	ListGeom g;
+	int geomOk = list_read_geom(sm, listBase, &g);
+	if (newPress && gvalid) {
+		s_lDown = true; s_lDrag = false;
+		s_lDownX = s_lLastX = gx; s_lDownY = s_lLastY = gy;
+		s_lVelN = 0;
+		s_lPressRow   = geomOk ? listgeom_tap_row(&g, gx, gy) : -1;
+		s_lPressArrow = geomOk ? listgeom_arrow_band(&g, gx, gy) : -1;
+		s_lPressTab   = -1;
+		if (flags & LF_BAG) {                        // pocket tabs (L12)
+			bool fr = sm->prof && (sm->prof->code[2] == 'R' || sm->prof->code[2] == 'G');
+			if (fr) { int a = baggeom_fr_pocket_arrow(gx, gy); if (a >= 0) s_lPressTab = 16 + a; }
+			else    { int d = baggeom_em_pocket_dot(gx, gy);   if (d >= 0) s_lPressTab = d; }
+		}
+	}
+	if (touching && s_lDown && gvalid) {
+		if (!s_lDrag && (abs(gx - s_lDownX) > LISTGEOM_SLOP_PX || abs(gy - s_lDownY) > LISTGEOM_SLOP_PX))
+			s_lDrag = true;
+		if (!s_lDrag && s_lPressArrow >= 0)          // held arrow band = held key (L7)
+			return (s_lPressArrow == 0) ? (1 << GBAKEY_UP) : (1 << GBAKEY_DOWN);
+		if (s_lDrag) {
+			int dy = gy - s_lLastY;                  // velocity sample (px/frame, this frame)
+			s_lVel[s_lVelN++ & 3] = dy;
+			if (dy >= LISTGEOM_DRAG_PX)      { s_lLastX = gx; s_lLastY = gy; return 1 << GBAKEY_UP; }    // drag down -> items above
+			if (dy <= -LISTGEOM_DRAG_PX)     { s_lLastX = gx; s_lLastY = gy; return 1 << GBAKEY_DOWN; }  // drag up -> items below
+			if (flags & LF_BAG) {
+				if (gx - s_lLastX >= LISTGEOM_SWIPE_PX)  { s_lLastX = gx; s_lLastY = gy; return 1 << GBAKEY_LEFT; }
+				if (s_lLastX - gx >= LISTGEOM_SWIPE_PX)  { s_lLastX = gx; s_lLastY = gy; return 1 << GBAKEY_RIGHT; }
+			}
 		}
 		return 0;
 	}
-	if (!touching && s_bagDown) {                      // released
-		s_bagDown = false;
-		if (!s_bagDrag && s_bagRow >= 0) { s_bag = s_bagRow; s_bagTick = 0; }   // a clean tap -> select
+	if (!touching && s_lDown) {                      // released
+		s_lDown = false;
+		if (s_lDrag) {                               // fling? (L5: avg of the last 4 dy samples)
+			int n = (s_lVelN < 4) ? s_lVelN : 4, sum = 0;
+			for (int i = 0; i < n; i++) sum += s_lVel[i];
+			int v = n ? sum / n : 0;
+			int f = listgeom_fling_frames(v);
+			if (f > 0) { s_lFling = f; s_lFlingKey = (v > 0) ? (1 << GBAKEY_UP) : (1 << GBAKEY_DOWN); }
+		} else if (s_lPressTab >= 16) {              // FR pocket arrow: one LEFT/RIGHT edge
+			s_lSeq = 1; s_lSeqTick = 0;
+			s_lSeqKey = (s_lPressTab == 16) ? (1 << GBAKEY_LEFT) : (1 << GBAKEY_RIGHT);
+		} else if (s_lPressTab >= 0) {               // EM pocket dot i: |delta| sequenced edges
+			if (sm->core && sm->prof && sm->prof->bagPocket) {
+				int cur = gbacore_read8(sm->core, sm->prof->bagPocket);
+				int d = s_lPressTab - cur;
+				if (cur >= 0 && cur < 5 && d != 0) {
+					s_lSeq = (d > 0) ? d : -d; s_lSeqTick = 0;
+					s_lSeqKey = (d > 0) ? (1 << GBAKEY_RIGHT) : (1 << GBAKEY_LEFT);
+				}
+			}
+		} else if (s_lPressRow >= 0 && geomOk && listBase) {   // clean tap -> select (L3)
+			s_lRow = s_lPressRow; s_lTick = 0;
+		}
+		s_lPressRow = s_lPressArrow = s_lPressTab = -1;
+	}
+	return 0;
+}
+
+// LK_QTY — the "how many?" roller (L8). No RAM writes: the game maps UP/DOWN = ±1 and
+// LEFT/RIGHT = ∓/±10 (AdjustQuantityAccordingToDPadInput), so a vertical drag steps ±1 per
+// 14 px, a horizontal drag ±10 per 30 px, and a clean tap = A (confirm). DEVIATION from L8's
+// window-band taps, reasoned: the qty window rect is not carried in the task data and no
+// capture-derived rects are banked for it — the drag roller + tap-confirm needs no rect at all
+// and cannot mis-hit. Recorded in OVERNIGHT2-BUILDLOG.
+static u16 qty_update(const TouchSmart* sm, bool touching, bool newPress, bool gvalid, int gx, int gy) {
+	(void)sm;
+	if (newPress && gvalid) {
+		s_lDown = true; s_lDrag = false;
+		s_lDownX = s_lLastX = gx; s_lDownY = s_lLastY = gy;
+	}
+	if (touching && s_lDown && gvalid) {
+		if (!s_lDrag && (abs(gx - s_lDownX) > LISTGEOM_SLOP_PX || abs(gy - s_lDownY) > LISTGEOM_SLOP_PX))
+			s_lDrag = true;
+		if (s_lDrag) {
+			if (s_lLastY - gy >= LISTGEOM_DRAG_PX)  { s_lLastX = gx; s_lLastY = gy; return 1 << GBAKEY_UP; }    // drag up -> +1
+			if (gy - s_lLastY >= LISTGEOM_DRAG_PX)  { s_lLastX = gx; s_lLastY = gy; return 1 << GBAKEY_DOWN; }  // drag down -> -1
+			if (gx - s_lLastX >= LISTGEOM_SWIPE_PX) { s_lLastX = gx; s_lLastY = gy; return 1 << GBAKEY_RIGHT; } // -> +10
+			if (s_lLastX - gx >= LISTGEOM_SWIPE_PX) { s_lLastX = gx; s_lLastY = gy; return 1 << GBAKEY_LEFT; }  // -> -10
+		}
+		return 0;
+	}
+	if (!touching && s_lDown) {
+		s_lDown = false;
+		if (!s_lDrag) { s_lRow = -2; s_lTick = 0; }  // clean tap -> A pulse (s_lRow -2 = key-only)
+	}
+	if (s_lRow == -2) {                              // 2-frame A pulse without any RAM write
+		u16 k = (s_lTick == 1) ? (1 << GBAKEY_A) : 0;
+		if (++s_lTick >= 2) { s_lRow = -1; s_lTick = 0; }
+		return k;
+	}
+	return 0;
+}
+
+// LK_DEX — the EM Pokedex list (tier L-B, L20/L21). The cursor model is bespoke and a raw
+// selectedPokemon write does NOT redraw, so this screen is KEY-INJECTION ONLY: vertical drag /
+// fling scroll (the game's own cursor+scroll), horizontal swipe = the dex's ±page jump, and the
+// two footer chips are native buttons ("START MENU" -> START, "SELECT SEARCH" -> SELECT; sprite
+// anchors (16,120)/(48,120) and (16,144)/(48,144), pokedex.c:2791-2801 — bands grown to the full
+// label, verify-on-emulator). Relative row taps stay DISABLED until the L21 slot formula is
+// derived on emulator (g_touchDbg carries the three fields every LK_DEX frame for exactly that).
+static u16 dex_update(const TouchSmart* sm, bool touching, bool newPress, bool gvalid, int gx, int gy) {
+	(void)sm;
+	if (s_lRow == -2) {                              // pending chip pulse (START or SELECT)
+		u16 k = (s_lTick == 1) ? s_lSeqKey : 0;
+		if (++s_lTick >= 2) { s_lRow = -1; s_lTick = 0; }
+		return k;
+	}
+	if (s_lFling > 0) {
+		if (newPress) { s_lFling = 0; }
+		else { s_lFling--; return s_lFlingKey; }
+		return 0;
+	}
+	if (newPress && gvalid) {
+		s_lDown = true; s_lDrag = false;
+		s_lDownX = s_lLastX = gx; s_lDownY = s_lLastY = gy;
+		s_lVelN = 0;
+		s_lPressTab = -1;
+		if (gx < 72 && gy >= 110 && gy < 130) s_lPressTab = 32;      // START MENU chip
+		if (gx < 72 && gy >= 132 && gy < 154) s_lPressTab = 33;      // SELECT SEARCH chip
+	}
+	if (touching && s_lDown && gvalid) {
+		if (!s_lDrag && (abs(gx - s_lDownX) > LISTGEOM_SLOP_PX || abs(gy - s_lDownY) > LISTGEOM_SLOP_PX))
+			s_lDrag = true;
+		if (s_lDrag) {
+			int dy = gy - s_lLastY;
+			s_lVel[s_lVelN++ & 3] = dy;
+			if (dy >= LISTGEOM_DRAG_PX)  { s_lLastX = gx; s_lLastY = gy; return 1 << GBAKEY_UP; }
+			if (dy <= -LISTGEOM_DRAG_PX) { s_lLastX = gx; s_lLastY = gy; return 1 << GBAKEY_DOWN; }
+			if (gx - s_lLastX >= LISTGEOM_SWIPE_PX) { s_lLastX = gx; s_lLastY = gy; return 1 << GBAKEY_LEFT; }   // page jump
+			if (s_lLastX - gx >= LISTGEOM_SWIPE_PX) { s_lLastX = gx; s_lLastY = gy; return 1 << GBAKEY_RIGHT; }
+		}
+		return 0;
+	}
+	if (!touching && s_lDown) {
+		s_lDown = false;
+		if (s_lDrag) {
+			int n = (s_lVelN < 4) ? s_lVelN : 4, sum = 0;
+			for (int i = 0; i < n; i++) sum += s_lVel[i];
+			int v = n ? sum / n : 0;
+			int f = listgeom_fling_frames(v);
+			if (f > 0) { s_lFling = f; s_lFlingKey = (v > 0) ? (1 << GBAKEY_UP) : (1 << GBAKEY_DOWN); }
+		} else if (s_lPressTab == 32) { s_lRow = -2; s_lTick = 0; s_lSeqKey = 1 << GBAKEY_START; }
+		else if (s_lPressTab == 33)   { s_lRow = -2; s_lTick = 0; s_lSeqKey = 1 << GBAKEY_SELECT; }
+		s_lPressTab = -1;
+	}
+	return 0;
+}
+
+// ===================== SMART: the KEYBOARD family (naming screen) =====================
+// PHASE 22.1 (SPEC-family-keyboard). Character taps use the house write-then-A idiom on the
+// game's OWN cursor sprite (unlike party/bag we can move the real highlight — it is a sprite,
+// not a reprint): tick 0 writes sX/sY/sPrevX/sPrevY + the pixel x/y, tick 1 writes again and
+// pulses A; the game's HandleKeyboardEvent reads the key role at the just-written cursor and
+// AddTextCharacter commits the tapped char. PAGE/BACK/OK use the game's own advertised key
+// shortcuts (SELECT / B / START-then-A) — no RAM write at all (R6-R8). No D-pad key is ever
+// injected here (R12), and NOTHING falls through to the walk residual while the ctx holds (R10).
+static int s_nmCol = -1, s_nmRow = 0, s_nmTick = 0;   // pending char cell (write-then-A)
+static int s_nmPulse = 0; static u16 s_nmKey = 0;     // pending SELECT/B pulse (2 frames)
+static int s_nmOk = -1;                               // OK sequence phase: 0 START / 1 gap / 2 A
+static void naming_reset(void) { s_nmCol = -1; s_nmRow = 0; s_nmTick = 0; s_nmPulse = 0; s_nmKey = 0; s_nmOk = -1; }
+
+// R9 validation gates (b)-(e); returns 0 = pass (with *ptrOut set) or the first failing gate 1..4.
+static int naming_gates(const TouchSmart* sm, uint32_t* ptrOut) {
+	const GameProfile* p = sm->prof;
+	if (!sm->core || !p || !p->namingPtr || !p->sprites) return 1;
+	uint32_t ptr = gbacore_read32(sm->core, p->namingPtr);
+	if (ptr < 0x02000000u || ptr >= 0x02040000u) return 1;           // (b) EWRAM range
+	if (gbacore_read8(sm->core, ptr + 0x1E23) >= 64) return 2;       // (c) cursorSpriteId < 64
+	if (gbacore_read8(sm->core, ptr + 0x1E10) != 2) return 3;        // (d) STATE_HANDLE_INPUT
+	if (gbacore_read8(sm->core, ptr + 0x1E22) >= 3) return 4;        // (e) currentPage < 3
+	*ptrOut = ptr;
+	return 0;
+}
+
+static u16 naming_update(const TouchSmart* sm, bool touching, bool newPress, bool gvalid,
+                         int gx, int gy, int sx, int sy) {
+	uint32_t ptr = 0;
+	int gate = naming_gates(sm, &ptr);
+	if (gate) {
+		// R10: gate (a) holds (the ctx IS the naming screen) but the struct is not actionable
+		// (fade, page-swap anim, OK commit, or a bad read). Drop any pending action and behave
+		// as PAD for the frame — the virtual gamepad zones still let the user type by hand;
+		// the one forbidden outcome is a walk-key leak.
+		naming_reset();
+		return touching ? pad_keys(sx, sy) : 0;
+	}
+	if (s_nmOk >= 0) {                                // R8: START (cursor jumps to OK), gap, A
+		u16 k = (s_nmOk == 0) ? (1 << GBAKEY_START) : (s_nmOk == 2) ? (1 << GBAKEY_A) : 0;
+		if (++s_nmOk > 2) s_nmOk = -1;
+		return k;
+	}
+	if (s_nmCol >= 0) {                               // R5: the write-then-A char select
+		int page = gbacore_read8(sm->core, ptr + 0x1E22);
+		int cx, cy;
+		if (namegeom_cursor_px(page, s_nmCol, s_nmRow, &cx, &cy)) {
+			uint8_t id = gbacore_read8(sm->core, ptr + 0x1E23);
+			uint32_t spr = sm->prof->sprites + 0x44u * (uint32_t)id;
+			gbacore_write16(sm->core, spr + 0x20, (uint16_t)cx);          // x (the visual cursor follows)
+			gbacore_write16(sm->core, spr + 0x22, (uint16_t)cy);          // y
+			gbacore_write16(sm->core, spr + 0x2E, (uint16_t)s_nmCol);     // sX   (data[0])
+			gbacore_write16(sm->core, spr + 0x30, (uint16_t)s_nmRow);     // sY   (data[1])
+			gbacore_write16(sm->core, spr + 0x32, (uint16_t)s_nmCol);     // sPrevX (data[2])
+			gbacore_write16(sm->core, spr + 0x34, (uint16_t)s_nmRow);     // sPrevY (data[3])
+			u16 k = (s_nmTick == 1) ? (1 << GBAKEY_A) : 0;
+			if (++s_nmTick >= 2) { s_nmCol = -1; s_nmTick = 0; }
+			return k;
+		}
+		s_nmCol = -1; s_nmTick = 0;                   // page changed under us -> drop, don't guess
+		return 0;
+	}
+	if (s_nmPulse > 0) { s_nmPulse--; return s_nmKey; }   // R6/R7: SELECT / B, 2-frame pulse
+	if (newPress && gvalid) {                         // act on press (R14 decision: snappier typing;
+		int col, row;                                 //   logged in the BUILDLOG; holds repeat nothing)
+		int page = gbacore_read8(sm->core, ptr + 0x1E22);
+		switch (namegeom_hit(page, gx, gy, &col, &row)) {
+		case NGH_CHAR: s_nmCol = col; s_nmRow = row; s_nmTick = 0; break;
+		case NGH_PAGE: s_nmKey = 1 << GBAKEY_SELECT; s_nmPulse = 2; break;
+		case NGH_BACK: s_nmKey = 1 << GBAKEY_B;      s_nmPulse = 2; break;
+		case NGH_OK:   s_nmOk = 0; break;
+		default: break;                               // dead gutters / padding cells / backdrop (R1/R2/R4)
+		}
 	}
 	return 0;
 }
@@ -627,7 +874,8 @@ static void touch_cursor_addr(const TouchSmart* sm, uint32_t* addr, int* size) {
 	case GCTX_PARTY:         if (p) { *addr = p->partyMenu + 0x09u; *size = 1; } break;
 	case GCTX_FIELDMENU:     if (p) { *addr = p->sMenuBase + 2u;    *size = 1; } break;
 	case GCTX_BAG:           if (sm->bagListTaskBase) { *addr = sm->bagListTaskBase + 26u; *size = 2; } break;
-	default: break;   // OVERWORLD / NONE / BATTLE_OTHER: no cursor -> the injected key tells the story
+	case GCTX_LIST:          if (sm->listBase) { *addr = sm->listBase + 26u; *size = 2; } break;   // 22.1 (LK_QTY/LK_DEX carry none; g_touchDbg covers them)
+	default: break;   // OVERWORLD / NONE / BATTLE_OTHER / NAMING: no single cursor addr -> key mask + g_touchDbg tell the story
 	}
 }
 static uint32_t touch_cursor_read(const TouchSmart* sm, uint32_t addr, int size) {
@@ -658,6 +906,7 @@ static uint32_t s_tLastRet = 0xFFFFFFFFu, s_tLastCurs = 0xFFFFFFFFu, s_tLastBeat
 
 void touch_log_reset(void) {
 	s_tLogN = 0; s_fpLogN = 0; memset(&g_fieldDbg, 0, sizeof g_fieldDbg);
+	memset(&g_touchDbg, 0, sizeof g_touchDbg);
 	s_tWasTouch = false; s_tDrag = false;
 	s_tDownSx = s_tDownSy = 0;
 	s_tLastRet = 0xFFFFFFFFu; s_tLastCurs = 0xFFFFFFFFu; s_tLastBeat = 0;
@@ -771,8 +1020,70 @@ void touch_log_dump(const char* path) {
 	fclose(f);
 }
 
+// --- PHASE 22.1: the keyboard/lists gdb mirror (LOGGING ONLY; touch.h documents offsets) -------
+// Restamped every SMART frame with the same bus reads the handlers use. Non-static: the emutest
+// harness resolves it by name out of 3DGBA.elf (the g_fieldDbg pattern).
+TouchDbg g_touchDbg = { 0 };
+static void touch_dbg_stamp(const TouchSmart* sm, u16 ret) {
+	TouchDbg* d = &g_touchDbg;
+	uint32_t seq = d->seq + 1;
+	memset(d, 0, sizeof *d);
+	d->seq = seq; d->ctx = sm->ctx; d->lastKeys = ret;
+	const GameProfile* p = sm->prof;
+	if (!sm->core || !p) return;
+	if (sm->ctx == GCTX_NAMING && p->namingPtr) {
+		uint32_t ptr = gbacore_read32(sm->core, p->namingPtr);
+		d->nsPtr = ptr;
+		d->nsGate = naming_gates(sm, &ptr);
+		if (d->nsPtr >= 0x02000000u && d->nsPtr < 0x02040000u) {
+			d->nsState    = gbacore_read8(sm->core, d->nsPtr + 0x1E10);
+			d->nsPage     = gbacore_read8(sm->core, d->nsPtr + 0x1E22);
+			d->nsCursorId = gbacore_read8(sm->core, d->nsPtr + 0x1E23);
+			for (int i = 0; i < 16; i++)
+				d->nsText[i] = gbacore_read8(sm->core, d->nsPtr + 0x1800 + (uint32_t)i);   // P1 proof
+		}
+		return;
+	}
+	uint32_t lb = 0;
+	if (sm->ctx == GCTX_BAG)       lb = sm->bagListTaskBase;
+	else if (sm->ctx == GCTX_LIST) { lb = sm->listBase; d->listKind = sm->listKind; }
+	if (lb) {
+		ListGeom g;
+		d->listBase = lb;
+		d->lTotal     = gbacore_read16(sm->core, lb + 12);
+		d->lMaxShowed = gbacore_read16(sm->core, lb + 14);
+		d->lWindowId  = gbacore_read8(sm->core, lb + 16);
+		d->lScroll    = gbacore_read16(sm->core, lb + 24);
+		d->lRow       = gbacore_read16(sm->core, lb + 26);
+		if (list_read_geom(sm, lb, &g)) { d->lX0 = g.x0; d->lY0 = g.y0; d->lW = g.w; d->lH = g.h; }
+	}
+	if (sm->ctx == GCTX_LIST && sm->listKind == LK_DEX && p->dexView) {   // the L21 derivation channel
+		uint32_t dv = gbacore_read32(sm->core, p->dexView);
+		d->dexPtr = dv;
+		if (dv >= 0x02000000u && dv < 0x02040000u) {
+			d->dexCount    = gbacore_read16(sm->core, dv + 0x60C);
+			d->dexSelected = gbacore_read16(sm->core, dv + 0x60E);
+			d->dexInitVOff = gbacore_read8(sm->core, dv + 0x62B);
+			d->dexListVOff = (int16_t)gbacore_read16(sm->core, dv + 0x62E);
+		}
+	}
+	if (sm->ctx == GCTX_FULLUI && p->lmDummyTask) {   // the P-D discovery probe (FR dex + friends)
+		for (int t = 0; t < 16; t++) {
+			uint32_t task = p->gTasksBase + 40u * (uint32_t)t;
+			if (gbacore_read8(sm->core, task + 4) == 0) continue;
+			uint32_t fn = gbacore_read32(sm->core, task + 0) & ~1u;
+			if (fn != p->lmDummyTask && (!p->lmDummyTaskAlt || fn != p->lmDummyTaskAlt)) continue;
+			d->probeListBase  = task + 8u;
+			d->probeTotal     = gbacore_read16(sm->core, task + 8u + 12);
+			d->probeMaxShowed = gbacore_read16(sm->core, task + 8u + 14);
+			d->probeWindowId  = gbacore_read8(sm->core, task + 8u + 16);
+			break;
+		}
+	}
+}
+
 // ================================ dispatch ==================================
-static void all_reset(void) { battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); bag_reset(); }
+static void all_reset(void) { battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); }
 
 u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, bool gvalid,
                  const TouchSmart* sm) {
@@ -793,7 +1104,7 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 	switch (sm->ctx) {
 	case GCTX_BATTLE_ACTION:
 	case GCTX_BATTLE_MOVE: {
-		walk_reset(); party_reset(); target_reset(); fmenu_reset(); bag_reset();
+		walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset();
 		uint32_t base = (sm->ctx == GCTX_BATTLE_ACTION) ? sm->actionAddr : sm->moveAddr;
 		if (newPress && gvalid) {
 			int cell = (sm->ctx == GCTX_BATTLE_ACTION) ? hit_action(gx, gy) : hit_move(gx, gy);
@@ -803,7 +1114,7 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 		break;
 	}
 	case GCTX_BATTLE_TARGET:
-		battle_reset(); walk_reset(); party_reset(); fmenu_reset(); bag_reset();
+		battle_reset(); walk_reset(); party_reset(); fmenu_reset(); list_reset(); naming_reset();
 		if (newPress && gvalid) {
 			int pos = hit_battler(gx, gy);
 			if (pos >= 0) { int idx = battler_index_for_pos(sm, pos); if (idx >= 0) { s_tgt = idx; s_tgtTick = 0; } }
@@ -811,7 +1122,7 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 		ret = select_pulse(sm->core, sm->prof ? sm->prof->multiCursor : 0, &s_tgt, &s_tgtTick);
 		break;
 	case GCTX_PARTY:
-		battle_reset(); walk_reset(); target_reset(); fmenu_reset(); bag_reset();
+		battle_reset(); walk_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset();
 		if (newPress && gvalid) {
 			int slot = hit_party(gx, gy, sm->partyLayout);
 			if (slot == 7 || (slot >= 0 && slot < sm->partyCount)) { s_party = slot; s_partyTick = 0; }
@@ -819,18 +1130,35 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 		ret = select_pulse(sm->core, sm->prof ? sm->prof->partyMenu + 0x09 : 0, &s_party, &s_partyTick);
 		break;
 	case GCTX_OVERWORLD:
-		battle_reset(); party_reset(); target_reset(); fmenu_reset(); bag_reset();
+		battle_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset();
 		ret = walk_update(touching, newPress, gvalid, gx, gy, sm->px, sm->py,
 		                  sm->mapGroup, sm->mapNum, sm->core, sm->prof);
 		break;
 	case GCTX_FIELDMENU:
-		battle_reset(); walk_reset(); party_reset(); target_reset(); bag_reset();
+		battle_reset(); walk_reset(); party_reset(); target_reset(); list_reset(); naming_reset();
 		if (newPress && gvalid && sm->prof) { int i = hit_fieldmenu(sm->core, sm->prof, gx, gy); if (i >= 0) { s_fmenu = i; s_fmenuTick = 0; } }
 		ret = sm->prof ? fmenu_select(sm->core, sm->prof) : 0;
 		break;
 	case GCTX_BAG:
-		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset();
-		ret = bag_update(sm, touching, newPress, gvalid, gx, gy);
+		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); naming_reset();
+		if (s_lPrevKind != -2) { list_reset(); s_lPrevKind = -2; }   // arriving from another ctx/kind
+		ret = list_update(sm, sm->bagListTaskBase, LF_BAG, touching, newPress, gvalid, gx, gy);
+		break;
+	case GCTX_LIST:
+		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); naming_reset();
+		// a kind change (buy -> qty -> buy) mid-context resets the shared gesture state
+		if (s_lPrevKind != (int)sm->listKind) { list_reset(); s_lPrevKind = (int)sm->listKind; }
+		switch (sm->listKind) {
+		case LK_BUY:
+		case LK_PCITEM: ret = list_update(sm, sm->listBase, 0, touching, newPress, gvalid, gx, gy); break;
+		case LK_QTY:    ret = qty_update(sm, touching, newPress, gvalid, gx, gy); break;
+		case LK_DEX:    ret = dex_update(sm, touching, newPress, gvalid, gx, gy); break;
+		default:        ret = 0; break;               // unknown kind: emit nothing (L10)
+		}
+		break;
+	case GCTX_NAMING:
+		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset();
+		ret = naming_update(sm, touching, newPress, gvalid, gx, gy, sx, sy);
 		break;
 	case GCTX_BATTLE_OTHER:
 		all_reset();
@@ -841,6 +1169,8 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 		ret = 0;
 		break;
 	}
+
+	touch_dbg_stamp(sm, ret);   // PHASE 22.1 gdb mirror (LOGGING ONLY)
 
 	// LOGGING ONLY: read the cursor AFTER, then record the event (covers every switch case incl. the
 	// default/undetected fall-through; cursAddr==0 there -> cb2/tasks are the fingerprint).

@@ -347,3 +347,41 @@ uint16_t ctl_rep_tick(CtlRep* r, const CtlIn* in);   // waits for the anchor, th
 int      ctl_rep_status(CtlRep* r, char* line, int cap);
 // Publish this seat's record/replay state into g_ctlStat[seat] (the '# control' netlog mirror).
 void     ctl_publish_rr(int seat, const CtlRec* rec, const CtlRep* rep);
+
+// --------------------------------------------------------------------------------------------
+// D4-T (phase 22.1, lane A): SYNTHETIC TOUCH script — the harness channel that lets the
+// emutest workflow deliver bottom-screen TOUCHES (taps + drags) to the app, the way move_p<N>
+// delivers keys. Same design rules as D4: pure C here (no file I/O, no clock — the glue owns
+// sdmc and feeds ticks), consumed-on-pickup, '!' aborts, DEFAULT-OFF behind the same
+// sdmc:/cias/control opt-in. The synthetic touch merges at the EXISTING touch-input read in
+// main.c (hidTouchRead) and flows through the SAME touch_update path a real stylus uses —
+// nothing downstream can tell the difference, which is exactly what makes an emulator proof of
+// the touch families honest. Timers count RENDER frames (touch sampling is render-side; in the
+// unlinked dual boot the cores step one emulated frame per render frame, so the two clocks
+// agree where it matters).
+//
+// Script grammar (one op per line; '#' comment lines; blank lines skipped; '!' first = abort):
+//   t X Y HOLD [GAP]          tap/hold at bottom-screen (X,Y) for HOLD frames, then GAP
+//                             released frames (default 8). X 0..319, Y 0..239.
+//   d X0 Y0 X1 Y1 FRAMES [GAP]  drag: press at (X0,Y0), move linearly to (X1,Y1) over FRAMES
+//                             frames, release, then GAP (default 8). FRAMES >= 2.
+//   w FRAMES                  wait released.
+#define CTL_TOUCH_MAX 48       // ops per script (a whole name is ~10 taps; 48 is headroom)
+#define CTL_TOUCH_FRAMES_MAX 600
+
+typedef struct { int16_t x0, y0, x1, y1; uint16_t hold, gap; uint8_t isWait; } CtlTouchEv;
+typedef struct {
+	int16_t  n, idx;       // ops loaded / current op (idx >= n = idle)
+	uint8_t  phase;        // 0 = hold (touch down / dragging), 1 = gap (released)
+	uint16_t t;            // frames spent in the current phase
+	CtlTouchEv ev[CTL_TOUCH_MAX];
+} CtlTouch;
+
+void ctl_touch_init(CtlTouch* ts);
+// Parse a script body. Returns op count (>0, queued and RUNNING), 0 = abort file ('!'),
+// -1 = parse error (err filled; nothing queued).
+int  ctl_touch_load(CtlTouch* ts, const char* text, char* err, int errCap);
+bool ctl_touch_active(const CtlTouch* ts);
+void ctl_touch_abort(CtlTouch* ts);
+// Advance one render frame. Returns 1 with (*x,*y) = the synthetic touch DOWN this frame, else 0.
+int  ctl_touch_tick(CtlTouch* ts, int* x, int* y);

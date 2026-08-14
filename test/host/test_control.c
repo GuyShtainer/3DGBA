@@ -1154,6 +1154,78 @@ static void test_rr_mirror_and_seats(void) {
 	}
 }
 
+// ============================================================================================
+// D4-T (phase 22.1) — the synthetic-touch script: grammar, tick timeline, drag interpolation,
+// aborts. The glue's file plumbing is main.c's; everything below is the pure-C core.
+// ============================================================================================
+static void test_touch_grammar(void) {
+	printf("\n-- TOUCH-SCRIPT: grammar + loud errors\n");
+	CtlTouch ts; char err[80];
+	// happy path: tap + drag + wait, defaults applied
+	int n = ctl_touch_load(&ts, "t 160 120 8\nd 100 200 100 100 20 4\nw 30\n", err, sizeof err);
+	CHECK(n == 3, "3 ops parsed (got %d: %s)", n, err);
+	CHECK(ts.ev[0].x0 == 160 && ts.ev[0].y0 == 120 && ts.ev[0].hold == 8 && ts.ev[0].gap == 8,
+	      "tap fields + default gap 8");
+	CHECK(ts.ev[1].x0 == 100 && ts.ev[1].y1 == 100 && ts.ev[1].hold == 20 && ts.ev[1].gap == 4,
+	      "drag fields + explicit gap");
+	CHECK(ts.ev[2].isWait == 1 && ts.ev[2].gap == 30, "wait op");
+	CHECK(ctl_touch_active(&ts), "script active after load");
+	// comments + blank lines + CRLF
+	n = ctl_touch_load(&ts, "# route\r\n\r\n t 0 0 1 0\r\n", err, sizeof err);
+	CHECK(n == 1 && ts.ev[0].hold == 1 && ts.ev[0].gap == 0, "comments/CRLF tolerated");
+	// abort file
+	CHECK(ctl_touch_load(&ts, "  ! stop", err, sizeof err) == 0, "'!' returns 0 (abort)");
+	// loud errors: never a silent partial queue
+	CHECK(ctl_touch_load(&ts, "t 320 0 8\n", err, sizeof err) == -1, "X 320 out of range");
+	CHECK(ctl_touch_load(&ts, "t 0 240 8\n", err, sizeof err) == -1, "Y 240 out of range");
+	CHECK(ctl_touch_load(&ts, "t 10 10 0\n", err, sizeof err) == -1, "HOLD 0 rejected");
+	CHECK(ctl_touch_load(&ts, "t 10 10 601\n", err, sizeof err) == -1, "HOLD 601 rejected");
+	CHECK(ctl_touch_load(&ts, "d 0 0 10 10 1\n", err, sizeof err) == -1, "drag FRAMES 1 rejected");
+	CHECK(ctl_touch_load(&ts, "q 1 2 3\n", err, sizeof err) == -1, "unknown op rejected");
+	CHECK(ctl_touch_load(&ts, "t 10 10 8 9 77\n", err, sizeof err) == -1, "trailing junk rejected");
+	CHECK(ctl_touch_load(&ts, "\n\n#only comments\n", err, sizeof err) == -1, "empty script rejected");
+	CHECK(!ctl_touch_active(&ts), "a failed load queues nothing");
+	// the op cap fails loudly
+	char big[4096]; big[0] = '\0';
+	for (int i = 0; i < CTL_TOUCH_MAX + 1; i++) strcat(big, "t 1 1 1\n");
+	CHECK(ctl_touch_load(&ts, big, err, sizeof err) == -1, "op cap is loud");
+}
+
+static void test_touch_tick(void) {
+	printf("\n-- TOUCH-SCRIPT: tick timeline (tap, drag interpolation, wait, abort)\n");
+	CtlTouch ts; char err[80];
+	int x = -1, y = -1;
+	// tap: 4 down frames at the point, then 2 released, then idle
+	CHECK(ctl_touch_load(&ts, "t 50 60 4 2\n", err, sizeof err) == 1, "load tap");
+	for (int f = 0; f < 4; f++) {
+		CHECK(ctl_touch_tick(&ts, &x, &y) == 1 && x == 50 && y == 60, "tap down frame %d", f);
+	}
+	CHECK(ctl_touch_tick(&ts, &x, &y) == 0, "gap frame 1 released");
+	CHECK(ctl_touch_tick(&ts, &x, &y) == 0, "gap frame 2 released");
+	CHECK(!ctl_touch_active(&ts), "tap script done");
+	CHECK(ctl_touch_tick(&ts, &x, &y) == 0, "idle after done");
+	// drag: 5 frames 0,0 -> 40,80 — endpoints exact, x monotonic
+	CHECK(ctl_touch_load(&ts, "d 0 0 40 80 5 1\n", err, sizeof err) == 1, "load drag");
+	int lastX = -1, mono = 1;
+	for (int f = 0; f < 5; f++) {
+		CHECK(ctl_touch_tick(&ts, &x, &y) == 1, "drag down frame %d", f);
+		if (f == 0) CHECK(x == 0 && y == 0, "drag starts at (0,0)");
+		if (f == 4) CHECK(x == 40 && y == 80, "drag ends at (40,80)");
+		if (x < lastX) mono = 0;
+		lastX = x;
+	}
+	CHECK(mono, "drag x monotonic");
+	CHECK(ctl_touch_tick(&ts, &x, &y) == 0, "drag gap released");
+	CHECK(!ctl_touch_active(&ts), "drag script done");
+	// wait-first script: released for the whole wait, then the tap fires
+	CHECK(ctl_touch_load(&ts, "w 3\nt 5 5 2 1\n", err, sizeof err) == 2, "load wait+tap");
+	for (int f = 0; f < 3; f++) CHECK(ctl_touch_tick(&ts, &x, &y) == 0, "wait frame %d", f);
+	CHECK(ctl_touch_tick(&ts, &x, &y) == 1 && x == 5, "tap after wait");
+	// abort mid-script
+	ctl_touch_abort(&ts);
+	CHECK(!ctl_touch_active(&ts) && ctl_touch_tick(&ts, &x, &y) == 0, "abort clears");
+}
+
 int main(void) {
 	printf("=== control.c (D4 file-driven movement + D5 record/replay) host test ===\n");
 	test_grammar();
@@ -1176,6 +1248,8 @@ int main(void) {
 	test_replay_playback();
 	test_round_trip();
 	test_rr_mirror_and_seats();
+	test_touch_grammar();        // phase 22.1 D4-T
+	test_touch_tick();           // phase 22.1 D4-T
 	printf("\n%d checks, %d failures -> %s\n", g_checks, g_fail, g_fail ? "FAIL" : "PASS");
 	return g_fail ? 1 : 0;
 }

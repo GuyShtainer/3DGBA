@@ -501,6 +501,40 @@ static bool ctl_poll_seat(int seat, bool paused) {
 	}
 	return false;
 }
+
+// --- D4-T (phase 22.1): the synthetic-touch script poll -----------------------------------------
+// sdmc:/cias/control/touch.txt — one file, no seat suffix: touch always drives whatever game is
+// on the BOTTOM screen, exactly like the stylus. Same rules as move_p<N>: consumed on pickup,
+// '!' aborts mid-script, a non-abort file dropped mid-script is left in place, same opt-in dir.
+// Polled on its own stagger slot so no render frame ever does two control stats.
+static CtlTouch s_ctlTouch;   // zero-init = idle
+static void ctl_touch_poll(void) {
+	if (!s_ctlOn) return;
+	if ((g_renderSeq % (2u * CTL_POLL_FRAMES)) != (uint32_t)(CTL_POLL_FRAMES / 2 + 2)) return;
+	const char* path = "sdmc:/cias/control/touch.txt";
+	struct stat st;
+	if (stat(path, &st) != 0) return;
+	static char body[CTL_FILE_MAX + 2];
+	int n = ctl_read_file(path, body, (int)sizeof body);
+	if (n == -1) return;
+	const char* q = body;
+	while (*q == ' ' || *q == '\t' || *q == '\r' || *q == '\n') q++;
+	char msg[CTL_STATUS_LEN];
+	if (*q == '!') {
+		remove(path);
+		ctl_touch_abort(&s_ctlTouch);
+		ctl_log_line("[ctl touch] ABORT by file\n");
+		return;
+	}
+	if (ctl_touch_active(&s_ctlTouch)) return;        // left in place until the script ends (D4.4)
+	remove(path);                                     // consumed on pickup
+	char err[80];
+	int t = (n == -2) ? -1 : ctl_touch_load(&s_ctlTouch, body, err, sizeof err);
+	if (n == -2) snprintf(err, sizeof err, "file larger than %d bytes", CTL_FILE_MAX);
+	if (t < 0) snprintf(msg, sizeof msg, "[ctl touch] parse error: %s\n", err);
+	else       snprintf(msg, sizeof msg, "[ctl touch] picked up %d touch ops\n", t);
+	ctl_log_line(msg);
+}
 #endif   // CTL_D4_ENABLE (the move/go script poll)
 
 // Link callbacks (invoked by mGBA's lockstep). onSleep runs on this core's worker thread
@@ -3225,6 +3259,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		// OR of the two bisect gates — otherwise CTL_D4_ENABLE 0 would silently disable D5 too.
 		struct stat cst;
 		s_ctlOn = (stat("sdmc:/cias/control", &cst) == 0);
+#if CTL_D4_ENABLE
+		ctl_touch_abort(&s_ctlTouch);   // D4-T: a stale touch script never survives a session change
+#endif
 		if (s_ctlOn) {   // D4.14 session-start mapping echo (the control log's first line)
 			char ca[5] = "----", cb[5] = "----";
 			if (emuA.core) gbacore_game_code(emuA.core, ca);
@@ -3489,6 +3526,18 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					bool touching = (kHeld & KEY_TOUCH) != 0;
 					touchPosition tp = { 0, 0 };
 					if (touching) hidTouchRead(&tp);
+#if CTL_D4_ENABLE
+					// D4-T (phase 22.1): the synthetic-touch script merges HERE, upstream of the
+					// SAME touch_update path a real stylus takes — the emulator proof of the touch
+					// families is therefore end-to-end. A real touch wins over the script's.
+					{
+						int stx, sty;
+						ctl_touch_poll();
+						if (ctl_touch_tick(&s_ctlTouch, &stx, &sty) && !touching) {
+							touching = true; tp.px = (u16)stx; tp.py = (u16)sty;
+						}
+					}
+#endif
 					int gx = -1, gy = -1; bool gvalid = false;
 					if (tmEff == TOUCH_SMART) {   // game-aware touch works even during a link (benign EWRAM race)
 						gvalid = touch_to_gba(tp.px, tp.py, scaleMode[1], &gx, &gy);
@@ -3507,6 +3556,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 							sm.battlersCount = gsr.battlersCount; sm.absentMask = gsr.absentMask;
 							for (int i = 0; i < 4; i++) sm.battlerPos[i] = gsr.battlerPos[i];
 							sm.bagListTaskBase = gsr.bagListTaskBase;
+							sm.listBase = gsr.listBase; sm.listKind = gsr.listKind;   // phase 22.1 list family
 							sm.cb2 = gsr.cb2; sm.ctxResolved = gsr.ctxResolved; sm.nTask = gsr.nTask;   // touch-log fingerprint (LOGGING ONLY)
 							for (int i = 0; i < 8; i++) sm.taskFp[i] = gsr.taskFp[i];
 						}

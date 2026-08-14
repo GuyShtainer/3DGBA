@@ -40,6 +40,10 @@ typedef struct {
 	uint8_t  absentMask;     // gAbsentBattlerFlags
 	uint8_t  battlerPos[4];  // gBattlerPositions[0..3]
 	uint32_t bagListTaskBase; // live bag ListMenu task (+24 scroll, +26 row), 0 if N/A
+	// phase 22.1: GCTX_LIST resolution (gamestate.h LK_*). listBase 0 with a positive ctx =>
+	// the driver emits NOTHING (SPEC-family-lists L10 — never fall through to walk keys).
+	uint32_t listBase;
+	uint8_t  listKind;
 	// --- instrumentation passthrough (LOGGING ONLY; never gates touch) — the screen fingerprint the touch
 	// log records so NOT-YET-DETECTED contexts (map/PokeNav/Pokemon PC/move-learn/intro/Battle Frontier)
 	// that fall through to ctx=overworld/none are identifiable by cb2 + active-task pointers. ---
@@ -85,6 +89,46 @@ typedef struct {
 	int32_t walking;                  // +0x68  1 = a route is being followed, 2 = terminal hold
 } FieldDbg;
 extern FieldDbg g_fieldDbg;
+
+// --- PHASE 22.1: the keyboard/lists gdb mirror (LOGGING ONLY) ----------------------------------
+// Same instrument pattern as g_fieldDbg: a screenshot cannot prove "the tap typed the char" — the
+// objective proof is the game's OWN naming textBuffer / ListMenu selectedRow, read over the
+// emutest gdb channel (`run gdbio read g_touchDbg+0x20 16` etc.). Restamped every SMART frame
+// from the SAME bus reads the handlers use; nothing reads it back. Non-static ON PURPOSE: the
+// harness resolves it by name out of 3DGBA.elf. All fields fixed-width at documented offsets.
+typedef struct {
+	uint32_t seq;            // +0x00  bumped every SMART touch_update
+	int32_t  ctx;            // +0x04  GameCtx (this frame)
+	int32_t  listKind;       // +0x08  LK_* when ctx == GCTX_LIST (else 0)
+	// naming-screen mirror (GCTX_NAMING frames; zeroed otherwise)
+	uint32_t nsPtr;          // +0x0C  sNamingScreen deref (the live struct NamingScreenData*)
+	int32_t  nsState;        // +0x10  +0x1E10 (2 = STATE_HANDLE_INPUT — the only actionable state)
+	int32_t  nsPage;         // +0x14  +0x1E22 currentPage (0 SYMBOLS / 1 UPPER / 2 LOWER)
+	int32_t  nsCursorId;     // +0x18  +0x1E23 cursorSpriteId
+	int32_t  nsGate;         // +0x1C  0 = all R9 gates pass; else the FIRST failing gate 1..5
+	uint8_t  nsText[16];     // +0x20  textBuffer copy — THE P1 proof channel (charmap bytes)
+	// list mirror (GCTX_BAG + GCTX_LIST frames; zeroed otherwise)
+	uint32_t listBase;       // +0x30  the live ListMenu struct (gTasks + 40*id + 8)
+	int32_t  lTotal;         // +0x34  totalItems (+12)
+	int32_t  lMaxShowed;     // +0x38  maxShowed (+14)
+	int32_t  lWindowId;      // +0x3C  windowId (+16)
+	int32_t  lX0, lY0, lW, lH;   // +0x40..+0x4C  window rect, px
+	int32_t  lScroll;        // +0x50  scrollOffset (+24) — read-only, never written by touch
+	int32_t  lRow;           // +0x54  selectedRow (+26) — the P-A before/after channel
+	// EM dex mirror (LK_DEX frames) — the L21 slot-formula DERIVATION channel
+	uint32_t dexPtr;         // +0x58  sPokedexView deref
+	int32_t  dexCount;       // +0x5C  pokemonListCount (+0x60C)
+	int32_t  dexSelected;    // +0x60  selectedPokemon (+0x60E)
+	int32_t  dexInitVOff;    // +0x64  initialVOffset (+0x62B, u8)
+	int32_t  dexListVOff;    // +0x68  listVOffset (+0x62E, s16)
+	// P-D discovery probe (GCTX_FULLUI frames): first gTasks entry whose fn == ListMenuDummyTask
+	uint32_t probeListBase;  // +0x6C  0 = no live ListMenu found on this screen
+	int32_t  probeTotal;     // +0x70
+	int32_t  probeMaxShowed; // +0x74
+	int32_t  probeWindowId;  // +0x78
+	uint32_t lastKeys;       // +0x7C  the mask touch_update returned this frame
+} TouchDbg;
+extern TouchDbg g_touchDbg;
 
 // --- Touch-event instrumentation logger (LOGGING ONLY — never changes touch/gameplay) ---------------
 // Self-contained ring in touch.c: touch_update records a row on each touch EVENT (a new press; plus

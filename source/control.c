@@ -850,3 +850,110 @@ void ctl_publish_rr(int seat, const CtlRec* rec, const CtlRep* rep) {
 	g_ctlStat[s].repIdx   = (uint16_t)(rep ? (rep->idx > 65535 ? 65535 : rep->idx) : 0);
 	g_ctlStat[s].repN     = (uint16_t)(rep ? (rep->n   > 65535 ? 65535 : rep->n)   : 0);
 }
+
+// ============================================================================================
+// D4-T (phase 22.1): the synthetic-touch script — see control.h for the grammar + design rules.
+// Pure C, no I/O; host-tested in test/host/test_control.c (TOUCH-SCRIPT tests).
+// ============================================================================================
+void ctl_touch_init(CtlTouch* ts) { ts->n = ts->idx = 0; ts->phase = 0; ts->t = 0; }
+bool ctl_touch_active(const CtlTouch* ts) { return ts->idx < ts->n; }
+void ctl_touch_abort(CtlTouch* ts) { ts->n = ts->idx = 0; ts->phase = 0; ts->t = 0; }
+
+// Whitespace-separated signed-int scanner (the replay loader's style: strict, loud).
+static int ctt_num(const char** pp, int* out) {
+	const char* p = *pp;
+	while (*p == ' ' || *p == '\t') p++;
+	int neg = 0;
+	if (*p == '-') { neg = 1; p++; }
+	if (*p < '0' || *p > '9') return 0;
+	long v = 0;
+	while (*p >= '0' && *p <= '9') { v = v * 10 + (*p - '0'); if (v > 100000) return 0; p++; }
+	*out = neg ? (int)-v : (int)v;
+	*pp = p;
+	return 1;
+}
+static int ctt_eol(const char* p) {   // only whitespace to end-of-line?
+	while (*p == ' ' || *p == '\t' || *p == '\r') p++;
+	return *p == '\0' || *p == '\n';
+}
+
+int ctl_touch_load(CtlTouch* ts, const char* text, char* err, int errCap) {
+	const char* p = text;
+	while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+	if (*p == '!') return 0;                                   // abort file — the glue handles it
+	ctl_touch_init(ts);
+	int line = 0;
+	while (*p) {
+		line++;
+		while (*p == ' ' || *p == '\t') p++;
+		if (*p == '\0') break;
+		if (*p == '\n' || *p == '\r' || *p == '#') {           // blank / comment line
+			while (*p && *p != '\n') p++;
+			if (*p == '\n') p++;
+			continue;
+		}
+		char op = *p++;
+		CtlTouchEv e; e.x0 = e.y0 = e.x1 = e.y1 = 0; e.hold = 0; e.gap = 8; e.isWait = 0;
+		int a, b, c, d, f, g;
+		if (op == 't' || op == 'T') {
+			if (!ctt_num(&p, &a) || !ctt_num(&p, &b) || !ctt_num(&p, &c))
+				{ ctl_seterr(err, errCap, "line %d: t needs X Y HOLD", line); return -1; }
+			g = 8; if (!ctt_eol(p) && !ctt_num(&p, &g))
+				{ ctl_seterr(err, errCap, "line %d: bad GAP", line); return -1; }
+			if (a < 0 || a > 319 || b < 0 || b > 239)
+				{ ctl_seterr(err, errCap, "line %d: X/Y out of 320x240", line); return -1; }
+			if (c < 1 || c > CTL_TOUCH_FRAMES_MAX || g < 0 || g > CTL_TOUCH_FRAMES_MAX)
+				{ ctl_seterr(err, errCap, "line %d: HOLD/GAP out of range", line); return -1; }
+			e.x0 = e.x1 = (int16_t)a; e.y0 = e.y1 = (int16_t)b;
+			e.hold = (uint16_t)c; e.gap = (uint16_t)g;
+		} else if (op == 'd' || op == 'D') {
+			if (!ctt_num(&p, &a) || !ctt_num(&p, &b) || !ctt_num(&p, &c) || !ctt_num(&p, &d) || !ctt_num(&p, &f))
+				{ ctl_seterr(err, errCap, "line %d: d needs X0 Y0 X1 Y1 FRAMES", line); return -1; }
+			g = 8; if (!ctt_eol(p) && !ctt_num(&p, &g))
+				{ ctl_seterr(err, errCap, "line %d: bad GAP", line); return -1; }
+			if (a < 0 || a > 319 || b < 0 || b > 239 || c < 0 || c > 319 || d < 0 || d > 239)
+				{ ctl_seterr(err, errCap, "line %d: X/Y out of 320x240", line); return -1; }
+			if (f < 2 || f > CTL_TOUCH_FRAMES_MAX || g < 0 || g > CTL_TOUCH_FRAMES_MAX)
+				{ ctl_seterr(err, errCap, "line %d: FRAMES/GAP out of range", line); return -1; }
+			e.x0 = (int16_t)a; e.y0 = (int16_t)b; e.x1 = (int16_t)c; e.y1 = (int16_t)d;
+			e.hold = (uint16_t)f; e.gap = (uint16_t)g;
+		} else if (op == 'w' || op == 'W') {
+			if (!ctt_num(&p, &f) || f < 1 || f > CTL_TOUCH_FRAMES_MAX)
+				{ ctl_seterr(err, errCap, "line %d: w needs FRAMES 1..%d", line, CTL_TOUCH_FRAMES_MAX); return -1; }
+			e.isWait = 1; e.hold = 0; e.gap = (uint16_t)f;
+		} else {
+			ctl_seterr(err, errCap, "line %d: unknown op '%c' (t/d/w)", line, op);
+			return -1;
+		}
+		if (!ctt_eol(p)) { ctl_seterr(err, errCap, "line %d: trailing junk", line); return -1; }
+		if (ts->n >= CTL_TOUCH_MAX)
+			{ ctl_seterr(err, errCap, "too many ops (max %d)", CTL_TOUCH_MAX); ctl_touch_init(ts); return -1; }
+		ts->ev[ts->n++] = e;
+		while (*p && *p != '\n') p++;
+		if (*p == '\n') p++;
+	}
+	if (ts->n == 0) { ctl_seterr(err, errCap, "empty touch script"); return -1; }
+	ts->idx = 0; ts->phase = ts->ev[0].isWait ? 1 : 0; ts->t = 0;
+	return ts->n;
+}
+
+int ctl_touch_tick(CtlTouch* ts, int* x, int* y) {
+	if (ts->idx >= ts->n) return 0;
+	const CtlTouchEv* e = &ts->ev[ts->idx];
+	int down = 0;
+	if (ts->phase == 0) {                                       // hold phase (touch down)
+		// Linear interpolation for drags; a tap has x0==x1/y0==y1 so it degenerates for free.
+		int span = (e->hold > 1) ? (e->hold - 1) : 1;
+		int tt = (ts->t < span) ? (int)ts->t : span;
+		if (x) *x = e->x0 + (int)((e->x1 - e->x0) * tt) / span;
+		if (y) *y = e->y0 + (int)((e->y1 - e->y0) * tt) / span;
+		down = 1;
+		if (++ts->t >= e->hold) { ts->phase = 1; ts->t = 0; }
+	} else {                                                    // gap phase (released)
+		if (++ts->t >= e->gap) {
+			ts->idx++; ts->t = 0;
+			ts->phase = (ts->idx < ts->n && ts->ev[ts->idx].isWait) ? 1 : 0;
+		}
+	}
+	return down;
+}

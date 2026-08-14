@@ -65,7 +65,20 @@ static const GameProfile PROFILES[] = {
                CB2_NamingScreen, CB2_PokeStorage, CB2_SlotMachine. */
             { 0x080BA4B0u, 0x080C2710u, 0x081248D4u, 0x080C5438u, 0x081BFAB4u, 0x08177C54u,
               0x080BB774u, 0x081C7400u, 0x0813591Cu, 0x0816631Cu, 0x08179B68u, 0x08170274u,
-              0x08134C9Cu, 0x080E4F58u, 0x080C7D54u, 0x0812A670u } },
+              0x08134C9Cu, 0x080E4F58u, 0x080C7D54u, 0x0812A670u },
+            /* phase 22.1 keyboard+lists anchors (EM, one US revision — all alternates 0). Every
+               value re-read from pokeemerald.sym this session (scratchpad syms/):
+                 080e4f58 CB2_NamingScreen [census live-verified], 02039f94 sNamingScreen,
+                 080e0ac8 Task_BuyMenu, 080e0d88 Task_BuyHowManyDialogueHandleInput,
+                 0816c30c ItemStorage_ProcessInput, 081ae458 ListMenuDummyTask,
+                 0203ce58 gBagPosition (+5 = pocket), 080bb7d4 Task_HandlePokedexInput,
+                 02039b4c sPokedexView. Slots: shop data[7] (shop.c:412), pc data[5]
+                 (player_pc.c:391). All ROM anchors sym-derived / verify-in-emulator except the
+                 census-proven namingCb. */
+            0x080E4F58u, 0x00000000u, 0x02039F94u,
+            0x080E0AC8u, 0x00000000u, 0x080E0D88u, 0x00000000u,
+            0x0816C30Cu, 0x00000000u, 0x081AE458u, 0x00000000u,
+            0x0203CE5Du, 0x080BB7D4u, 0x02039B4Cu, 7, 5 },
   // BPRE ROM anchors: the PRIMARIES below are FR rev0 (correct for a rev0 cart); the REV1 values —
   // the user's cart — live in the phase-22.0 ALTERNATE block at the end of the row. newKeys was
   // 0x0303011E (a digit transposition, RS-REV2-VERIFICATION.md §7): gMain 0x030030F0
@@ -146,7 +159,23 @@ static const GameProfile PROFILES[] = {
                classifying it stops walk-key leaks BETWEEN overworld sessions). */
             { 0x08088370u, 0x08089084u, 0x080C08C8u, 0x08137F60u, 0x0813CE78u, 0x081318DCu,
               0x0811C774u, 0x0810254Cu, 0x0815AC0Cu, 0x0812C40Cu, 0x0808CDD8u, 0x0809FB84u,
-              0x080F1E38u, 0x0809ADF8u, 0x0813F9C4u, 0x08056760u } },
+              0x080F1E38u, 0x0809ADF8u, 0x0813F9C4u, 0x08056760u },
+            /* phase 22.1 keyboard+lists anchors (FR: primaries rev0, alternates rev1 — the BPRE
+               row convention). Re-read from pokefirered.sym / pokefirered_rev1.sym this session:
+                 CB2_NamingScreen  0809fb70 / 0809fb84   (rev1 also census-live in cb2FullUi)
+                 sNamingScreen     0203998c (rev-identical RAM)
+                 Task_BuyMenu      0809bbc0 / 0809bbd4
+                 Task_BuyHowManyDialogueHandleInput 0809bd8c / 0809bda0
+                 Task_ItemPcMain   0810dea0 / 0810df18
+                 ListMenuDummyTask 08106ecc / 08106f44
+               bagPocket 0 (FRLG switches pockets by the on-screen arrow pair — no delta read
+               needed); dexTask/dexView 0 (FR's dex is a different module — the P-D probe decides
+               its tier, SPEC-family-lists L23). Slots: shop data[7] (FR shop.c:35), item_pc
+               data[0] (FR item_pc.c:350). Sym-derived / verify-in-emulator. */
+            0x0809FB70u, 0x0809FB84u, 0x0203998Cu,
+            0x0809BBC0u, 0x0809BBD4u, 0x0809BD8Cu, 0x0809BDA0u,
+            0x0810DEA0u, 0x0810DF18u, 0x08106ECCu, 0x08106F44u,
+            0x00000000u, 0x00000000u, 0x00000000u, 7, 0 },
   // BPGE ROM anchors — REPLACED phase 22.0 (they were FireRed-rev0 values, wrong for EVERY
   // LeafGreen revision; battle/party/bag/menu detection was silently dead on LG). PRIMARIES are
   // now LG **rev1** — the user's cart is rev 1.1 — re-derived field-by-field from
@@ -199,7 +228,22 @@ static const GameProfile PROFILES[] = {
                WRONG here. All-zero lists = the NAMED degradation: LG's undetected screens keep
                the GCTX_OVERWORLD fall-through until the LG delta pass harvests them live. */
             { 0x00000000u },
-            { 0x00000000u } },
+            { 0x00000000u },
+            /* phase 22.1 keyboard+lists anchors (LG: primaries rev1 = the user's 1.1 cart,
+               alternates rev0 — the BPGE row convention since 305242f). Re-read from
+               pokeleafgreen_rev1.sym / pokeleafgreen.sym this session:
+                 CB2_NamingScreen  0809fb58 / 0809fb44
+                 sNamingScreen     0203998c (rev-identical RAM, same as FR)
+                 Task_BuyMenu      0809bba8 / 0809bb94
+                 Task_BuyHowManyDialogueHandleInput 0809bd74 / 0809bd60
+                 Task_ItemPcMain   0810def0 / 0810de78
+                 ListMenuDummyTask 08106f1c / 08106ea4
+               bagPocket/dex = 0 like FR. Slots 7 / 0 (FRLG shop.c + item_pc.c are shared
+               modules). Sym-derived / verify-in-emulator (the LG delta pass proves them live). */
+            0x0809FB58u, 0x0809FB44u, 0x0203998Cu,
+            0x0809BBA8u, 0x0809BB94u, 0x0809BD74u, 0x0809BD60u,
+            0x0810DEF0u, 0x0810DE78u, 0x08106F1Cu, 0x08106EA4u,
+            0x00000000u, 0x00000000u, 0x00000000u, 7, 0 },
 
   // ===================== Ruby / Sapphire (SPEC-coop §P3) =====================================
   // Every RAM value below is VERIFIED-SYM against pret's byte-matched `symbols` branch, all FOUR
@@ -326,7 +370,16 @@ static const GameProfile PROFILES[] = {
                fall-through until the RS delta pass harvests them live (any future RS cb2 must be
                read from pokeruby_rev1/rev2.sym, NOT rev0 — §5's promotion rule). */             \
             { 0x00000000u },                                                                     \
-            { 0x00000000u }
+            { 0x00000000u },                                                                     \
+            /* phase 22.1 keyboard+lists anchors: ALL 0 — the ROM-address ban again (every one of
+               these is a ROM fn or a module-static EWRAM ptr with no RS verification), plus the
+               RS naming screen is an OLDER module the keyboard spec explicitly defers
+               (SPEC-family-keyboard §Scope). Named degradation: GCTX_NAMING/GCTX_LIST never fire
+               on RS; walk/battle touch is unchanged. Explicit zeros, not C zero-fill (P3.5.2). */ \
+            0x00000000u, 0x00000000u, 0x00000000u,                                               \
+            0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,                                  \
+            0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,                                  \
+            0x00000000u, 0x00000000u, 0x00000000u, 0, 0
   { "AXVE", RS_PROFILE_BODY },   // Pokemon Ruby      (US, rev0 and rev1 — the RAM maps are identical)
   { "AXPE", RS_PROFILE_BODY },   // Pokemon Sapphire  (US, rev0 and rev1 — same body, pinned above)
   #undef RS_PROFILE_BODY
@@ -358,20 +411,27 @@ static bool task_active2(GbaCore* c, const GameProfile* p, uint32_t handler, uin
 	return task_active(c, p, handler) || task_active(c, p, handlerAlt);
 }
 
-// Find the live bag ListMenu task: scan gTasks (16 entries, 40-byte stride) for the active bag input
-// handler (either revision's — phase 22.0), then return its list-task base
-// (gTasks + 40*listTaskId + 8); 0 if none.
-static uint32_t find_bag_list_task(GbaCore* c, const GameProfile* p) {
+// Find a live ListMenu behind an anchor task: scan gTasks (16 entries, 40-byte stride) for the
+// active anchor handler (either revision's — phase 22.0), read the u16 listTaskId out of the
+// anchor's data[slot], and return the LIST task's data base (gTasks + 40*listTaskId + 8 — where
+// ListMenuInit stores the struct: template +0, scrollOffset +24, selectedRow +26). 0 if none.
+// Phase 22.1 (SPEC-family-lists L1): the bag's data[0] lookup generalised to a slot argument, so
+// the mart (data[7]) and the PC item list (EM data[5] / FRLG data[0]) reuse the proven path.
+static uint32_t find_list_task(GbaCore* c, const GameProfile* p,
+                               uint32_t handler, uint32_t handlerAlt, int slot) {
 	for (int t = 0; t < 16; t++) {
 		uint32_t task = p->gTasksBase + 40u * (uint32_t)t;
 		if (gbacore_read8(c, task + 4) == 0) continue;                 // isActive
 		uint32_t fn = gbacore_read32(c, task + 0) & ~1u;
-		if (!((p->bagHandler && fn == p->bagHandler) || (p->bagHandlerAlt && fn == p->bagHandlerAlt))) continue;
-		int16_t listId = (int16_t)gbacore_read16(c, task + 8);          // data[0] = listTaskId
+		if (!((handler && fn == handler) || (handlerAlt && fn == handlerAlt))) continue;
+		int16_t listId = (int16_t)gbacore_read16(c, task + 8u + 2u * (uint32_t)slot);
 		if (listId < 0 || listId >= 16) return 0;
 		return p->gTasksBase + 40u * (uint32_t)listId + 8u;
 	}
 	return 0;
+}
+static uint32_t find_bag_list_task(GbaCore* c, const GameProfile* p) {
+	return find_list_task(c, p, p->bagHandler, p->bagHandlerAlt, 0);   // bag: data[0] = tListTaskId
 }
 
 bool game_read(GbaCore* c, const GameProfile* p, GameState* out) {
@@ -459,6 +519,33 @@ bool game_read(GbaCore* c, const GameProfile* p, GameState* out) {
 		// (gMenuCallback==HandleStartMenuInput) false-positived: gMenuCallback isn't cleared on close,
 		// so once you opened START, the overworld read as a menu forever -> walk stuck on A (Emerald).
 		if (task_active2(c, p, p->startMenuTask, p->startMenuTaskAlt)) { out->ctx = GCTX_FIELDMENU; return true; }
+		// --- phase 22.1 (lane A): the KEYBOARD + LISTS families, tested BEFORE the phase-22.0
+		// screen classes because they are MORE SPECIFIC (an interactive driver beats a bare
+		// "full-screen UI, taps dead" classification). All task-detected or cb2-detected =>
+		// fail-safe: a wrong/absent anchor just means the screen keeps its 22.0 behaviour. ---
+		if (p->buyTask || p->buyTaskAlt) {                          // mart buy list (LK_BUY)
+			uint32_t lb = find_list_task(c, p, p->buyTask, p->buyTaskAlt, p->buyListSlot);
+			if (lb || task_active2(c, p, p->buyTask, p->buyTaskAlt)) {
+				out->ctx = GCTX_LIST; out->listKind = LK_BUY; out->listBase = lb; return true;
+			}
+		}
+		if (task_active2(c, p, p->buyQtyTask, p->buyQtyTaskAlt)) {  // "how many?" roller (LK_QTY)
+			out->ctx = GCTX_LIST; out->listKind = LK_QTY; return true;
+		}
+		if (p->pcItemTask || p->pcItemTaskAlt) {                    // PC item storage list (LK_PCITEM)
+			uint32_t lb = find_list_task(c, p, p->pcItemTask, p->pcItemTaskAlt, p->pcItemListSlot);
+			if (lb || task_active2(c, p, p->pcItemTask, p->pcItemTaskAlt)) {
+				out->ctx = GCTX_LIST; out->listKind = LK_PCITEM; out->listBase = lb; return true;
+			}
+		}
+		if ((p->namingCb    && out->cb2 == p->namingCb) ||          // the naming keyboard
+		    (p->namingCbAlt && out->cb2 == p->namingCbAlt)) {
+			out->ctx = GCTX_NAMING; return true;
+		}
+		if (task_active(c, p, p->dexTask)) {                        // EM dex LIST (task is unique
+			out->ctx = GCTX_LIST; out->listKind = LK_DEX;           //   to the list screen)
+			return true;
+		}
 		// Phase 22.0 census promotion — POSITIVELY classify the screens whose cb2 the census
 		// live-harvested ([exact], CB2-HARVEST.md), instead of letting them hide in the
 		// GCTX_OVERWORLD fall-through where taps leak walk/A/START keys and the tilt/presence
@@ -516,7 +603,8 @@ bool game_read(GbaCore* c, const GameProfile* p, GameState* out) {
 
 static const char* const GS_CTXN[] = {   // index = GameCtx; matches main.c's teal-line names
 	"none", "field", "b.act", "b.move", "b.tgt", "party", "fmenu", "bag", "b.oth",
-	"title", "fullui"                    // phase 22.0 census promotion (GCTX_TITLE / GCTX_FULLUI)
+	"title", "fullui",                   // phase 22.0 census promotion (GCTX_TITLE / GCTX_FULLUI)
+	"naming", "list"                     // phase 22.1 keyboard + lists families
 };
 const char* gamestate_ctx_name(int ctx) {
 	return (ctx >= 0 && ctx < (int)(sizeof GS_CTXN / sizeof GS_CTXN[0])) ? GS_CTXN[ctx] : "?";

@@ -716,6 +716,202 @@ static void test_phase22_behaviour(void) {
 	CHECK(!strcmp(gamestate_ctx_name(GCTX_BATTLE_OTHER), "b.oth"), "existing names undisturbed");
 }
 
+// ============================================================================================
+// TEST 13 — PHASE 22.1: the keyboard + lists family anchors, pinned per game against the values
+// re-read from the five pret sym maps this session (lane A; every citation in gamestate.c).
+// ============================================================================================
+typedef struct {
+	const char* code;
+	uint32_t namingCb, namingCbAlt, namingPtr;
+	uint32_t buyTask, buyTaskAlt, buyQtyTask, buyQtyTaskAlt;
+	uint32_t pcItemTask, pcItemTaskAlt, lmDummyTask, lmDummyTaskAlt;
+	uint32_t bagPocket, dexTask, dexView;
+	uint8_t  buyListSlot, pcItemListSlot;
+} Fam22;
+static const Fam22 FAM22[] = {
+	{ "BPEE", 0x080E4F58u, 0, 0x02039F94u,
+	          0x080E0AC8u, 0, 0x080E0D88u, 0,
+	          0x0816C30Cu, 0, 0x081AE458u, 0,
+	          0x0203CE5Du, 0x080BB7D4u, 0x02039B4Cu, 7, 5 },
+	{ "BPRE", 0x0809FB70u, 0x0809FB84u, 0x0203998Cu,          // primaries rev0, alts rev1
+	          0x0809BBC0u, 0x0809BBD4u, 0x0809BD8Cu, 0x0809BDA0u,
+	          0x0810DEA0u, 0x0810DF18u, 0x08106ECCu, 0x08106F44u,
+	          0, 0, 0, 7, 0 },
+	{ "BPGE", 0x0809FB58u, 0x0809FB44u, 0x0203998Cu,          // primaries rev1, alts rev0
+	          0x0809BBA8u, 0x0809BB94u, 0x0809BD74u, 0x0809BD60u,
+	          0x0810DEF0u, 0x0810DE78u, 0x08106F1Cu, 0x08106EA4u,
+	          0, 0, 0, 7, 0 },
+	{ "AXVE", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },   // the ROM ban: all zero
+	{ "AXPE", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+};
+static void test_family22_columns(void) {
+	printf("TEST 13: phase-22.1 keyboard+lists anchors, per game\n");
+	for (unsigned i = 0; i < sizeof FAM22 / sizeof FAM22[0]; i++) {
+		const Fam22* f = &FAM22[i];
+		const GameProfile* p = prof(f->code);
+		CHECK(p != NULL, "%s row exists", f->code);
+		if (!p) continue;
+		EQU(p->namingCb,       f->namingCb,       "%s namingCb", f->code);
+		EQU(p->namingCbAlt,    f->namingCbAlt,    "%s namingCbAlt", f->code);
+		EQU(p->namingPtr,      f->namingPtr,      "%s namingPtr", f->code);
+		EQU(p->buyTask,        f->buyTask,        "%s buyTask", f->code);
+		EQU(p->buyTaskAlt,     f->buyTaskAlt,     "%s buyTaskAlt", f->code);
+		EQU(p->buyQtyTask,     f->buyQtyTask,     "%s buyQtyTask", f->code);
+		EQU(p->buyQtyTaskAlt,  f->buyQtyTaskAlt,  "%s buyQtyTaskAlt", f->code);
+		EQU(p->pcItemTask,     f->pcItemTask,     "%s pcItemTask", f->code);
+		EQU(p->pcItemTaskAlt,  f->pcItemTaskAlt,  "%s pcItemTaskAlt", f->code);
+		EQU(p->lmDummyTask,    f->lmDummyTask,    "%s lmDummyTask", f->code);
+		EQU(p->lmDummyTaskAlt, f->lmDummyTaskAlt, "%s lmDummyTaskAlt", f->code);
+		EQU(p->bagPocket,      f->bagPocket,      "%s bagPocket", f->code);
+		EQU(p->dexTask,        f->dexTask,        "%s dexTask", f->code);
+		EQU(p->dexView,        f->dexView,        "%s dexView", f->code);
+		EQU(p->buyListSlot,    f->buyListSlot,    "%s buyListSlot", f->code);
+		EQU(p->pcItemListSlot, f->pcItemListSlot, "%s pcItemListSlot", f->code);
+		// structural rules: ROM anchors in ROM space; RAM ptrs in EWRAM; alt != primary when set
+		if (p->namingCb)   CHECK(p->namingCb >> 24 == 0x08, "%s namingCb in ROM", f->code);
+		if (p->namingPtr)  CHECK(p->namingPtr >> 24 == 0x02, "%s namingPtr in EWRAM", f->code);
+		if (p->dexView)    CHECK(p->dexView  >> 24 == 0x02, "%s dexView in EWRAM", f->code);
+		if (p->namingCbAlt) CHECK(p->namingCbAlt != p->namingCb, "%s naming alt distinct", f->code);
+		if (p->buyTaskAlt)  CHECK(p->buyTaskAlt  != p->buyTask,  "%s buy alt distinct", f->code);
+	}
+}
+
+// ============================================================================================
+// TEST 14 — PHASE 22.1 BEHAVIOUR through the real game_read: naming + list contexts resolve,
+// the slot plumbing finds the right ListMenu, precedence holds, RS never fires.
+// ============================================================================================
+static void test_family22_behaviour(void) {
+	printf("TEST 14: phase-22.1 behaviour — naming/list detection through game_read\n");
+
+	// --- (a) GCTX_NAMING beats the FULLUI class it also appears in (both FR revisions + EM).
+	{
+		GbaCore c; bus_reset(&c, "BPEE");
+		const GameProfile* p = profile_for(&c);
+		GameState gs;
+		bus_w32(&c, p->mainCb2, p->namingCb | 1u);
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_NAMING, "BPEE: CB2_NamingScreen -> GCTX_NAMING (not FULLUI)");
+		CHECK(gs.ctxResolved, "BPEE: naming is a positive match");
+	}
+	{
+		GbaCore c; bus_reset(&c, "BPRE");
+		const GameProfile* p = profile_for(&c);
+		GameState gs;
+		bus_w32(&c, p->mainCb2, p->namingCbAlt | 1u);        // the user's rev1 cart
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_NAMING, "BPRE rev1: naming alt -> GCTX_NAMING");
+		bus_w32(&c, p->mainCb2, p->namingCb | 1u);           // rev0 primary
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_NAMING, "BPRE rev0: naming primary -> GCTX_NAMING");
+	}
+	// --- (b) mart buy: task + data[7] slot -> listBase; both revisions.
+	{
+		GbaCore c; bus_reset(&c, "BPEE");
+		const GameProfile* p = profile_for(&c);
+		GameState gs;
+		put_task(&c, p, 4, p->buyTask | 1u, 1);
+		bus_w8(&c, p->gTasksBase + 40u * 4u + 8u + 2u * 7u, 9);   // data[7] = listTaskId 9
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_LIST, "BPEE: Task_BuyMenu -> GCTX_LIST");
+		EQU(gs.listKind, LK_BUY, "BPEE: kind LK_BUY");
+		EQU(gs.listBase, p->gTasksBase + 40u * 9u + 8u, "BPEE: buy list resolved via data[7]");
+	}
+	{
+		GbaCore c; bus_reset(&c, "BPRE");
+		const GameProfile* p = profile_for(&c);
+		GameState gs;
+		put_task(&c, p, 2, p->buyTaskAlt | 1u, 1);           // rev1
+		bus_w8(&c, p->gTasksBase + 40u * 2u + 8u + 2u * 7u, 3);
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_LIST, "BPRE rev1: buy alt task -> GCTX_LIST");
+		EQU(gs.listBase, p->gTasksBase + 40u * 3u + 8u, "BPRE rev1: buy list via data[7]");
+	}
+	// --- (c) an INVALID slot value degrades to listBase 0 with the ctx still positive (L10:
+	//     the driver emits nothing; the screen never falls back to walk keys).
+	{
+		GbaCore c; bus_reset(&c, "BPEE");
+		const GameProfile* p = profile_for(&c);
+		GameState gs;
+		put_task(&c, p, 4, p->buyTask | 1u, 1);
+		bus_w8(&c, p->gTasksBase + 40u * 4u + 8u + 2u * 7u, 200);   // listTaskId out of range
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_LIST, "BPEE: bad slot still GCTX_LIST (positive)");
+		EQU(gs.listBase, 0, "BPEE: ...with listBase 0 (driver emits nothing)");
+	}
+	// --- (d) the qty roller task -> LK_QTY (no listBase needed).
+	{
+		GbaCore c; bus_reset(&c, "BPEE");
+		const GameProfile* p = profile_for(&c);
+		GameState gs;
+		put_task(&c, p, 4, p->buyQtyTask | 1u, 1);
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_LIST, "BPEE: qty task -> GCTX_LIST");
+		EQU(gs.listKind, LK_QTY, "BPEE: kind LK_QTY");
+	}
+	// --- (e) PC items: EM data[5], FR data[0] — the per-engine slot difference exercised.
+	{
+		GbaCore c; bus_reset(&c, "BPEE");
+		const GameProfile* p = profile_for(&c);
+		GameState gs;
+		put_task(&c, p, 6, p->pcItemTask | 1u, 1);
+		bus_w8(&c, p->gTasksBase + 40u * 6u + 8u + 2u * 5u, 11);   // EM: data[5]
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_LIST, "BPEE: ItemStorage_ProcessInput -> GCTX_LIST");
+		EQU(gs.listKind, LK_PCITEM, "BPEE: kind LK_PCITEM");
+		EQU(gs.listBase, p->gTasksBase + 40u * 11u + 8u, "BPEE: pc list via data[5]");
+	}
+	{
+		GbaCore c; bus_reset(&c, "BPRE");
+		const GameProfile* p = profile_for(&c);
+		GameState gs;
+		put_task(&c, p, 6, p->pcItemTaskAlt | 1u, 1);        // rev1 Task_ItemPcMain
+		bus_w8(&c, p->gTasksBase + 40u * 6u + 8u + 2u * 0u, 12);   // FR: data[0]
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_LIST, "BPRE rev1: Task_ItemPcMain -> GCTX_LIST");
+		EQU(gs.listBase, p->gTasksBase + 40u * 12u + 8u, "BPRE rev1: pc list via data[0]");
+	}
+	// --- (f) EM dex: the input task alone resolves LK_DEX (key-injection-only adapter).
+	{
+		GbaCore c; bus_reset(&c, "BPEE");
+		const GameProfile* p = profile_for(&c);
+		GameState gs;
+		bus_w32(&c, p->mainCb2, 0x080BB774u | 1u);           // CB2_Pokedex [exact]
+		put_task(&c, p, 5, p->dexTask | 1u, 1);
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_LIST, "BPEE: Task_HandlePokedexInput -> GCTX_LIST");
+		EQU(gs.listKind, LK_DEX, "BPEE: kind LK_DEX");
+		// ...and the dex WITHOUT the list task (entry page etc.) stays FULLUI.
+		put_task(&c, p, 5, p->dexTask | 1u, 0);              // task inactive
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_FULLUI, "BPEE: dex entry page (no list task) stays GCTX_FULLUI");
+	}
+	// --- (g) precedence: the BAG still outranks everything (its check runs first), and a
+	//     yes/no popup over the buy menu resolves FIELDMENU (sub-menus are sMenu — L8/L-C).
+	{
+		GbaCore c; bus_reset(&c, "BPEE");
+		const GameProfile* p = profile_for(&c);
+		GameState gs;
+		put_task(&c, p, 4, p->buyTask | 1u, 1);
+		put_task(&c, p, 7, p->yesNoTask | 1u, 1);
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_FIELDMENU, "BPEE: yes/no popup outranks the buy list");
+	}
+	// --- (h) RS: the whole family is inert by construction (all-zero anchors).
+	{
+		GbaCore c; bus_reset(&c, "AXVE");
+		const GameProfile* p = profile_for(&c);
+		GameState gs;
+		bus_w32(&c, p->mainCb2, 0x0809FB58u | 1u);           // an FRLG naming cb2 on an RS core
+		game_read(&c, p, &gs);
+		CHECK(gs.ctx != GCTX_NAMING && gs.ctx != GCTX_LIST,
+		      "AXVE: family contexts never fire (got %d)", gs.ctx);
+	}
+	// --- (i) the ctx name table kept up.
+	CHECK(!strcmp(gamestate_ctx_name(GCTX_NAMING), "naming"), "GCTX_NAMING prints as 'naming'");
+	CHECK(!strcmp(gamestate_ctx_name(GCTX_LIST),   "list"),   "GCTX_LIST prints as 'list'");
+	CHECK(!strcmp(gamestate_ctx_name(GCTX_FULLUI), "fullui"), "existing names undisturbed");
+}
+
 int main(void) {
 	printf("test_profiles — the per-game RAM map (source/gamestate.c PROFILES[])\n\n");
 	test_lookup();
@@ -730,6 +926,8 @@ int main(void) {
 	test_rev_alternates();       // phase 22.0 (census S2 merge)
 	test_screen_classes();       // phase 22.0
 	test_phase22_behaviour();    // phase 22.0
+	test_family22_columns();     // phase 22.1 (keyboard + lists)
+	test_family22_behaviour();   // phase 22.1
 	printf("\n=== %d checks, %d failures ===\n", g_checks, g_fails);
 	return g_fails ? 1 : 0;
 }

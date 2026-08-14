@@ -25,8 +25,24 @@ typedef enum {
 	// keys into them (touch.c dispatch: default -> 0 keys), and the tilt/presence/field gates —
 	// which all test ctx == GCTX_OVERWORLD — shut on them with ZERO logic change at the gates.
 	GCTX_TITLE,           // pre-game screens: intro / title / main menu / new-game scene (no save ctx)
-	GCTX_FULLUI           // a full-screen UI over a loaded save (dex/summary/card/storage/naming/...)
+	GCTX_FULLUI,          // a full-screen UI over a loaded save (dex/summary/card/storage/naming/...)
+	// --- phase 22.1 (lane A): the first two touch FAMILIES, appended (values stay stable). Both
+	// are matched MORE SPECIFICALLY than the phase-22.0 classes: game_read tests them before the
+	// cb2Title/cb2FullUi loops, so a naming screen stops reading as bare GCTX_FULLUI and becomes
+	// an interactive keyboard, and the ListMenu screens get a live list driver.
+	GCTX_NAMING,          // the Gen-3 naming keyboard (cb2 == CB2_NamingScreen; SPEC-family-keyboard)
+	GCTX_LIST             // a driven ListMenu screen (mart buy / PC items / qty / dex — see ListKind)
 } GameCtx;
+
+// Which list screen GCTX_LIST resolved to (GameState.listKind; SPEC-family-lists §2/§3).
+// GCTX_BAG keeps its own context (shipped, hardware-exercised) but shares the same driver.
+enum {
+	LK_NONE = 0,
+	LK_BUY,      // mart buy menu (Task_BuyMenu live; listBase = its tListTaskId's ListMenu)
+	LK_PCITEM,   // PC item storage list (EM ItemStorage_ProcessInput / FRLG Task_ItemPcMain)
+	LK_QTY,      // "how many?" quantity roller over the buy list (Task_BuyHowManyDialogueHandleInput)
+	LK_DEX       // EM Pokedex list (custom cursor model — key-injection only, L20/L21)
+};
 
 // Capacity of the phase-22.0 cb2 screen-class fingerprint lists (GameProfile.cb2Title/cb2FullUi).
 // Sized to the largest harvested set (FR: 5 title-class, 16 fullui-class cb2s) plus headroom for
@@ -227,6 +243,42 @@ typedef struct {
 	// fall-through behaviour until their own harvest pass runs (LG/RS delta lanes). ---
 	uint32_t cb2Title[GS_N_TITLE];    // GCTX_TITLE class: intro / title / main menu / new-game
 	uint32_t cb2FullUi[GS_N_FULLUI];  // GCTX_FULLUI class: full-screen UIs over a loaded save
+	// --- phase 22.1 (lane A) — KEYBOARD + LISTS family anchors. Every non-zero value below was
+	// RE-READ from the pret byte-matched symbol maps THIS session (2026-08-14 scratchpad syms/,
+	// the same five maps the census used: pokeemerald.sym, pokefirered.sym, pokefirered_rev1.sym,
+	// pokeleafgreen.sym, pokeleafgreen_rev1.sym) — never copied from a spec (house zero-guess
+	// rule; the specs' values agreed on every overlap). ROM anchors follow the phase-22.0
+	// dual-revision convention: primary = the row's primary revision, *Alt = the other, both
+	// compare-only => fail-safe. Every 0 is a NAMED degradation: the feature is absent for that
+	// game and its GCTX never fires (RS: the ROM-address ban, RS-REV2-VERIFICATION.md §2.3).
+	// Appending is the only safe edit: PROFILES[] is POSITIONAL-initialised. ---
+	uint32_t namingCb;        // CB2_NamingScreen (ROM) -> GCTX_NAMING (tested BEFORE cb2FullUi,
+	                          //   which also lists it — more specific wins; the list is untouched)
+	uint32_t namingCbAlt;     //   other revision
+	uint32_t namingPtr;       // sNamingScreen (EWRAM static ptr -> struct NamingScreenData*;
+	                          //   textBuffer +0x1800, state +0x1E10, currentPage +0x1E22,
+	                          //   cursorSpriteId +0x1E23 — offsets VERIFIED-SRC both engines)
+	uint32_t buyTask;         // Task_BuyMenu (ROM task fn) -> LK_BUY
+	uint32_t buyTaskAlt;
+	uint32_t buyQtyTask;      // Task_BuyHowManyDialogueHandleInput -> LK_QTY (without it the qty
+	                          //   roller would fall through to the walk-key residual)
+	uint32_t buyQtyTaskAlt;
+	uint32_t pcItemTask;      // EM ItemStorage_ProcessInput / FRLG Task_ItemPcMain -> LK_PCITEM
+	uint32_t pcItemTaskAlt;
+	uint32_t lmDummyTask;     // ListMenuDummyTask (ROM) — the P-D DISCOVERY PROBE anchor: any live
+	                          //   ListMenu owns a dummy task with this fn. LOGGING ONLY (mirrored
+	                          //   to g_touchDbg on GCTX_FULLUI screens); never drives touch.
+	uint32_t lmDummyTaskAlt;
+	uint32_t bagPocket;       // EM gBagPosition.pocket = 0x0203CE58+5 (MainCallback 4B + location
+	                          //   u8; VERIFIED-SRC include/item_menu.h:49-57 + sym). Read-only,
+	                          //   for the pocket-dot tab delta. 0 = arrow-tap game (FRLG) or none.
+	uint32_t dexTask;         // EM Task_HandlePokedexInput -> LK_DEX (key-injection only). 0 = none.
+	uint32_t dexView;         // EM sPokedexView (EWRAM ptr; selectedPokemon +0x60E, count +0x60C,
+	                          //   initialVOffset +0x62B u8, listVOffset +0x62E s16 — the L21
+	                          //   derivation channel, LOGGING ONLY). 0 = none.
+	uint8_t  buyListSlot;     // tListTaskId slot in the buy task's data[] (BOTH engines: data[7] —
+	                          //   pokeemerald src/shop.c:412, pokefirered src/shop.c:35)
+	uint8_t  pcItemListSlot;  // EM data[5] (player_pc.c:391) / FRLG data[0] (item_pc.c:350)
 } GameProfile;
 
 // One-pass snapshot of the live game.
@@ -246,6 +298,11 @@ typedef struct {
 	uint8_t battlerPos[4];   // gBattlerPositions[0..3]
 	// bag (live list-task base, computed in game_read; 0 if N/A)
 	uint32_t bagListTaskBase; // gTasks + 40*listTaskId + 8 (+24 scroll, +26 row)
+	// phase 22.1: GCTX_LIST resolution (LK_*). listBase = the live ListMenu struct (same shape as
+	// bagListTaskBase; 0 when the kind carries none — LK_QTY/LK_DEX, or a failed slot resolve,
+	// in which case the touch driver emits NOTHING while the ctx is positive: the L10 safety rule).
+	uint32_t listBase;
+	uint8_t  listKind;
 	bool     textDlg;         // overworld: a field textbox is up (sFieldMessageBoxMode != 0)
 	bool     textBanner;      // overworld: the map-name banner task is live
 	// --- instrumentation (LOGGING ONLY; never gate touch/3D/gameplay on these) ---
