@@ -911,6 +911,16 @@ static u16 prog_update(const TouchSmart* sm, bool touching, bool newPress,
 	case TPH_DLG:
 		// "The script is talking" = our A landed on the object we aimed at.
 		if (sm->textDlg || sm->ctx == GCTX_FIELDMENU) { s_progPhase = TPH_YESNO; s_progFrames = 0; return 0; }
+		// PHASE 24, second edge-vs-level defect, found on the Route 117 cut tree: ONE A here is
+		// not enough either. TPH_FACE holds the direction into the obstacle, and when the avatar
+		// ALREADY faces it that hold is not a turn but a blocked step — pokeemerald
+		// src/field_player_avatar.c PlayerNotOnBikeCollide plays a walk-in-place ("bump") animation,
+		// and the field controller does not read A while the avatar is animating. So the pulse fired
+		// straight into the bump and vanished (aKeys said we pressed; nothing opened). Water hid
+		// this: there the player arrives facing along the shore, so FACE is a real turn and the A
+		// lands after it. Keep tapping, like a player would, until the script answers or the budget
+		// runs out — A at a tree/rock/water we chose and vetted is the whole point of the phase.
+		if ((s_progFrames % TP_ADVANCE_EVERY) == 0) s_progAPulse = 3;
 		if (s_progFrames > TP_DLG_BUDGET) { prog_end(TPE_TIMEOUT, "STOPPED"); return 0; }
 		return 0;
 	case TPH_YESNO:
