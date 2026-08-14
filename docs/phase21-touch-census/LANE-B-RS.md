@@ -76,6 +76,73 @@ user's-cart values).
 Captures: `evidence/ruby/` (A1 intro, A2 title, A3 main menu, B1/B1b/B1c overworlds,
 B2 start menu, E2 party, E3 bag, C1 battle intro, C2 action, C3 move select).
 
-## 2. RS CO-OP (ruby + sapphire, same console) — see §below
+## 2. RS CO-OP (ruby + sapphire, one console) — the phase-18 universe-gate answer
 
-(appended after the co-op boot)
+Boot: `--stage-roms ruby,sapphire` (pair mode), presence enabled by pre-seeding
+`sdmc:/3DGBA/settings.bin` word 24 = 1 BEFORE the boot (the 25-word ladder,
+main.c:2350-2378 — patching the existing file preserves every other pref; `--stage-roms`
+does not touch settings.bin). Control header: `p1=AXVE p2=AXPE` — **the AXPE row matched
+live too** (both RS profiles now executed).
+
+### The universe-gate question (SPEC-coop P3.1, phase 18): AXVE vs AXPE — EMPIRICALLY ANSWERED
+
+`g_presDiag` (magic 'PRS1' verified), both games in their overworlds:
+
+```
+enabled=1  pairReason=0  artOk=1
+game0 (Ruby):     reason=map  live=active  gameId=3  pairGame=3  selfMap=13,6  peerMap=0,7   dTile=(33,30)
+game1 (Sapphire): reason=map  live=active  gameId=3  pairGame=3  selfMap=0,7   peerMap=13,6  dTile=(-33,-30)
+```
+
+- **`presence_game_id` maps BOTH titles to PRES_GAME_HOENN_RS (3) and the pair gate
+  PASSES (`pairReason=0`)** — the code's shared-universe claim (presence.c:122-129) is
+  now live-proven, and the **CO-OP chip renders in the HUD**
+  (`evidence/rs-coop/coop-chip-ruby-top.png`).
+- Record exchange works both directions: each game's peerMap/dTile mirrors the other
+  (symmetric ±(33,30)), liveness `active` both sides.
+- The ONLY blocker is the honest one: `reason=map` (PRES_OFF_MAP) — Ruby resumes in the
+  Lilycove Center (13,6), Sapphire in the Sootopolis Center (15,2 → city 0,7).
+  **Same-map was NOT cheap and was not forced:** Sootopolis is the dive-locked city —
+  reaching Lilycove needs Surf+Dive across routes 124-126 (an HM-traversal job, exactly
+  the SPEC-family-traversal territory). Recorded honestly per the lane brief.
+- Bonus finding: during the pre-CONTINUE menu phase both SaveBlocks briefly read equal
+  garbage/defaults → `blitN=546` avatar quads were submitted before the saves loaded and
+  diverged. Harmless (logging shows drawn=0 once real records exist) but worth knowing
+  when reading blitN in future diags.
+
+### HEADLINE for the RS promotion pipeline: Ruby and Sapphire ROM addresses DRIFT
+
+The maps `pokeruby_rev2.sym` vs `pokesapphire_rev2.sym` are DIFFERENT files (md5
+acb6be37… vs 3c95f804…, both 50,963 lines) and the LIVE reads confirm real per-title
+ROM drift — the phase-18 "727 RAM symbols identical across all six maps" proof was
+**RAM-only** and does NOT extend to ROM:
+
+| screen | Ruby (live [exact]) | Sapphire (live [exact]) | drift |
+|---|---|---|---|
+| GF intro `MainCB2_Intro` | 0x0813B7B8 | 0x0813B7B8 | same |
+| Title `MainCB2` | 0x0807C474 | 0x0807C478 | **+4** |
+| `CB2_MainMenu` | 0x080096C4 | 0x080096C4 | same |
+| `CB2_Overworld` | 0x080543C4 | 0x080543C8 | **+4** |
+| `BattleMainCB2` (shipped anchor) | 0x0800F808 | 0x0800F808 (map-verified [exact]; battle not re-entered on Sapphire) | same — the 6/6 desk proof holds |
+| Party `CB2_PartyMenuMain` | 0x0806AEFC | differs (ruby's value resolves inside `Task_ResetRtcScreen` on the sapphire map) | **drifts** |
+| Bag run loop | 0x080A3138 | 0x080A3138 (`sub_80A3118`[exact] both maps) | same |
+
+Sapphire's own extra harvest (live, [exact] on pokesapphire_rev2.sym):
+`CB2_GoToMainMenu` 0x0807C798, `CB2_InitMainMenu` 0x080096F0, `CB2_ContinueSavedGame`
+0x08054758, `CB2_ReturnToFieldLocal` 0x08054634.
+
+**Rule this establishes: any future RS cb2Title/cb2FullUi promotion must carry PER-TITLE
+values (AXVE row ≠ AXPE row for ROM pointers) — the shared `RS_PROFILE_BODY` macro is
+still correct today only because its ONE ROM value (`BattleMainCB2`) happens to sit
+below the drift point.** A shared-body promotion would silently break one title's
+detection — the exact BPGE failure mode all over again.
+
+### Ops notes
+
+- Dual-RS on instance b: 16-21 fps per game (Lane A was idle; budget less when both
+  lanes run).
+- Sapphire save resumes facing its Center PC like Ruby — same blind-A hazard.
+- Sootopolis Center exit mat is at local (7,9); the D5-then-down-the-middle route dead-ends
+  at (8,8) — go L to x=7 first.
+
+Captures: `evidence/rs-coop/` (both-screen pairs + the CO-OP chip frame).

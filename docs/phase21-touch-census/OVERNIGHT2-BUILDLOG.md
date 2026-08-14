@@ -298,3 +298,62 @@ CB2_Overworld, party 0x0806AEFC CB2_PartyMenuMain (+task HandleDefaultPartyMenu
 0x08089CF4), bag 0x080A3138 (+task 0x080A50E8). Full verdict table + ops routes:
 LANE-B-RS.md §1. 12 captures -> evidence/ruby/. Next: ruby+sapphire co-op boot (the
 AXVE-vs-AXPE universe-gate empirical answer).
+
+## Lane A Entry 1 — keyboard + lists families IMPLEMENTED (code complete, suites pending)
+
+Session 2026-08-14 (lane A subagent, instance a). Code landed per SPEC-family-keyboard +
+SPEC-family-lists (both read in full; deviations named below):
+
+1. **source/touchgeom.{c,h}** (NEW, pure C, host-testable): naming-screen hit geometry (page
+   column tables re-verified against the LOCAL pret pokeemerald clone this session —
+   sPageColumnXPos :306-310, sPageToKeyboardId :598-603, sKeyboardChars :280-299, WIN_COUNT=5
+   => struct offsets 0x1800/0x1E10/0x1E22/0x1E23 re-derived by field-size walk, spec confirmed);
+   generic ListGeom valid/tap-row-clamp/arrow-band/fling math; EM pocket-dot rects from
+   DrawPocketIndicatorSquare (item_menu.c:1407-1414: tile (pocket+5,3) => x 40+8i, y 24..32);
+   FR arrow rects from sPocketSwitchArrowPairTemplate (FR item_menu.c:287-299: L(8,72) R(72,72)).
+2. **gamestate.{h,c}**: GCTX_NAMING + GCTX_LIST appended (+ LK_* kinds); GameProfile grew 14
+   ROM/RAM anchors + 2 slot bytes (ALL re-read from the 5 sym maps this session, banked in the
+   session scratchpad syms/; FR primaries rev0 + rev1 alts, LG primaries rev1 + rev0 alts —
+   the row conventions kept; RS all-zero = the ROM ban, named); find_bag_list_task generalised
+   to find_list_task(handler, alt, slot) (EM shop data[7]/pc data[5]; FR shop data[7]/item_pc
+   data[0] — each verified in that engine's shop.c/player_pc.c/item_pc.c); detection order:
+   buy -> qty -> pcItem -> namingCb -> EM dexTask, all BEFORE the 22.0 title/fullui loops
+   (more specific wins), AFTER every existing task menu check.
+3. **touch.c**: bespoke bag handler replaced by ONE generic list driver (live template+window
+   read every frame; blank-row clamp = the L3 wart fix; drag 14px/edge; fling = capped held key
+   avg-of-4 velocity; scroll-arrow bands; EM pocket-dot delta seq / FR arrow taps); qty roller
+   (drag ±1/±10, tap=A); EM dex adapter (key-injection only: drag/fling/swipe page-jump +
+   START/SELECT footer chips at pokedex.c:2791-2801 anchors; relative taps DISABLED until the
+   L21 formula is derived — g_touchDbg carries count/selected/initialVOffset/listVOffset for
+   that); the NAMING handler (write-then-A on the cursor SPRITE incl. x/y so the visual cursor
+   follows; SELECT/B/START-gap-A for PAGE/BACK/OK; R9 gates 1-4 + R10 PAD-fallback frame;
+   act-on-press chosen for R14 — logged here as the decision); g_touchDbg gdb mirror exported
+   (touch.h documents every offset; nsText[16] = the P1 charmap proof channel; P-D
+   ListMenuDummyTask probe stamped on GCTX_FULLUI frames).
+4. **control.{h,c} + main.c**: D4-T synthetic-touch script channel — sdmc:/cias/control/touch.txt
+   (t/d/w grammar, pure-C parser+scheduler in control.c, consumed-on-pickup + '!' abort + the
+   same opt-in dir), merged in main.c UPSTREAM of the real touch_update path (a synthetic tap is
+   indistinguishable from a stylus downstream => end-to-end proofs). Real touch wins over synth.
+5. DEVIATIONS from the specs, reasoned: (a) L8 qty window-band taps replaced by the rect-free
+   drag roller + tap-confirm (no qty rect in task data, no banked capture rects; drags cannot
+   mis-hit); (b) the spec's "gSpritesBase profile addition" NOT added — GameProfile.sprites
+   (phase 20, VERIFIED-SYM) already carries gSprites; (c) naming cb2 values stay in cb2FullUi
+   (pinned by TEST 11) — GCTX_NAMING simply tests first.
+
+`make -j8` clean (3DGBA.3dsx 4 377 368 B, 0 new warnings); test_profiles 1295/1295 still green
+with the appended columns; host suites for the new geometry + grammar are NEXT (then the
+emulator proof plans P1-P7 / P-A..P-F).
+
+## Entry 10 — LANE B: RS co-op — universe gate ANSWERED + a per-title ROM-drift headline
+
+ruby+sapphire pair boot (presence pre-seeded via settings.bin word24=1): `p1=AXVE p2=AXPE`
+both matched; g_presDiag: gameId 3/3, pairReason=0, live=active both, peer records crossing
+both directions, CO-OP chip RENDERS on the HUD -> **AXVE+AXPE = same universe id, empirically
+proven** (phase-18 P3.1 closed). Only blocker = honest `reason=map`: Ruby wakes in Lilycove,
+Sapphire in SOOTOPOLIS (dive-locked; same-map = a Surf+Dive traversal job -> recorded, not
+forced). **HEADLINE: Ruby-vs-Sapphire ROM addresses DRIFT (+4 at title MainCB2 and
+CB2_Overworld, party cb2 drifts too; intro/mainmenu/battle/bag identical)** — the 727-symbol
+six-map identity was RAM-ONLY; future RS promotions must be PER-TITLE (a shared-body ROM
+promotion = the BPGE failure mode again). BattleMainCB2 0x0800F808 verified same on both
+maps (why the shipped shared anchor is safe). Full table: LANE-B-RS.md §2; captures ->
+evidence/rs-coop/. Next: LeafGreen 13-anchor live verification.
