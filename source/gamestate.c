@@ -67,9 +67,13 @@ static const GameProfile PROFILES[] = {
               0x080BB774u, 0x081C7400u, 0x0813591Cu, 0x0816631Cu, 0x08179B68u, 0x08170274u,
               0x08134C9Cu, 0x080E4F58u, 0x080C7D54u, 0x0812A670u } },
   // BPRE ROM anchors: the PRIMARIES below are FR rev0 (correct for a rev0 cart); the REV1 values —
-  // the user's cart — live in the phase-22.0 ALTERNATE block at the end of the row.
+  // the user's cart — live in the phase-22.0 ALTERNATE block at the end of the row. newKeys was
+  // 0x0303011E (a digit transposition, RS-REV2-VERIFICATION.md §7): gMain 0x030030F0
+  // (pokefirered.sym:745, rev0 AND rev1) + 0x2E = 0x0300311E. Confirmed unused by any code
+  // (gamestate.h documents it as "unused — we inject via the returned key mask"); fixed WITH its
+  // own citation + suite pin (test_profiles TEST 10), never silently.
   { "BPRE", 0x03005008u, 0x02022B4Cu, 0x02023FF8u, 0x02023FFCu, 0x02023BE4u, 0x02022976u,
-            0x0203B0A0u, 0x02024029u, 0x030030F4u, 0x0811EBA0u, 0x0811EBD0u, 0x0303011Eu,
+            0x0203B0A0u, 0x02024029u, 0x030030F4u, 0x0811EBA0u, 0x0811EBD0u, 0x0300311Eu,
             0x03004FE0u, 0x0802E674u, 0x03004FF4u, 0x02023BD6u, 0x02023BCCu, 0x02023D70u, 0x02023BC4u, 0x03005040u,
             0x020370F0u, 0x0806F280u, 0x0203ADE4u, 0x020204B4u, 0x020370F4u, 0x03005090u, 0x08107EE0u, 0x08108F0Cu, 0x0203AD01u,
             0x0811FB28u, 0x0809CE54u, 0x0809CC98u, 0x08122C5Cu, 0x0806F1F0u, 0x00000000u,
@@ -143,13 +147,22 @@ static const GameProfile PROFILES[] = {
             { 0x08088370u, 0x08089084u, 0x080C08C8u, 0x08137F60u, 0x0813CE78u, 0x081318DCu,
               0x0811C774u, 0x0810254Cu, 0x0815AC0Cu, 0x0812C40Cu, 0x0808CDD8u, 0x0809FB84u,
               0x080F1E38u, 0x0809ADF8u, 0x0813F9C4u, 0x08056760u } },
+  // BPGE ROM anchors — REPLACED phase 22.0 (they were FireRed-rev0 values, wrong for EVERY
+  // LeafGreen revision; battle/party/bag/menu detection was silently dead on LG). PRIMARIES are
+  // now LG **rev1** — the user's cart is rev 1.1 — re-derived field-by-field from
+  // pokeleafgreen_rev1.sym (RS-REV2-VERIFICATION.md §6, per-symbol line citations there);
+  // sym-derived / VERIFY-IN-EMULATOR (the LG delta pass proves them live). The LG **rev0** values
+  // sit in the ALTERNATE block at the end of the row, so both LG revisions detect. RAM columns
+  // were already correct (LG rev1 == LG rev0 == FR for every RAM field — §6a). newKeys also
+  // carries the §7 transposition fix (0x0303011E -> gMain 0x030030F0 + 0x2E = 0x0300311E;
+  // unused field, fixed with citation + suite pin, never silently).
   { "BPGE", 0x03005008u, 0x02022B4Cu, 0x02023FF8u, 0x02023FFCu, 0x02023BE4u, 0x02022976u,
-            0x0203B0A0u, 0x02024029u, 0x030030F4u, 0x0811EBA0u, 0x0811EBD0u, 0x0303011Eu,
-            0x03004FE0u, 0x0802E674u, 0x03004FF4u, 0x02023BD6u, 0x02023BCCu, 0x02023D70u, 0x02023BC4u, 0x03005040u,
-            0x020370F0u, 0x0806F280u, 0x0203ADE4u, 0x020204B4u, 0x020370F4u, 0x03005090u, 0x08107EE0u, 0x08108F0Cu, 0x0203AD01u,
-            0x0811FB28u, 0x0809CE54u, 0x0809CC98u, 0x08122C5Cu, 0x0806F1F0u, 0x00000000u,
-            0x08011100u, 0x02036E38u,
-            0x0203709Cu, 0x080981ACu, 0x03005050u,
+            0x0203B0A0u, 0x02024029u, 0x030030F4u, 0x0811EBF0u, 0x0811EC20u, 0x0300311Eu,
+            0x03004FE0u, 0x0802E688u, 0x03004FF4u, 0x02023BD6u, 0x02023BCCu, 0x02023D70u, 0x02023BC4u, 0x03005040u,
+            0x020370F0u, 0x0806F294u, 0x0203ADE4u, 0x020204B4u, 0x020370F4u, 0x03005090u, 0x08107F30u, 0x08108F5Cu, 0x0203AD01u,
+            0x0811FB78u, 0x0809CE3Cu, 0x0809CC80u, 0x08122CACu, 0x0806F204u, 0x00000000u,
+            0x08011114u, 0x02036E38u,
+            0x0203709Cu, 0x08098194u, 0x03005050u,
             /* link diag (FRLG): gLinkStatus gLinkErrorOccurred sLinkErrorBuffer gRemoteLinkPlayersNotReceived */
             0x03003F20u, 0x03003EACu, 0x02022854u, 0x03003EB8u,
             /* D2 vblankCtr (LG): FR-derived per the house rule (BPGE addrs unverified; HANDOFF Gotchas).
@@ -172,12 +185,15 @@ static const GameProfile PROFILES[] = {
                branch; both agree). VERIFIED-SYM, NOT FR-derived.
                  0202063c gSprites / 020371f8 gPlttBufferUnfaded / 02037078 gPlayerAvatar */
             0x0202063Cu, 0x020371F8u, 0x02037078u,
-            /* phase 22.0 rev-alternate ROM anchors: none wired yet for LG (the primaries above
-               are FR-rev0-derived and LG-UNVERIFIED — the declared risk; the reconciliation
-               against RS-REV2-VERIFICATION.md §6 lands as its own change with its own pins). */
-            0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
-            0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
-            0x00000000u,
+            /* phase 22.0 LG REV0 ALTERNATES (the primaries above are LG rev1 = the user's cart).
+               All from pokeleafgreen.sym via RS-REV2-VERIFICATION.md §6's "LG rev0" column —
+               sym-derived / verify-in-emulator, same order as the BPRE block:
+               battleMainCbAlt, cb2UpdPartyAlt, cb2InitPartyAlt, chooseTargetAlt, startCbInputAlt,
+               cb2BagRunAlt, bagHandlerAlt, partyTaskAlt, yesNoTaskAlt, multiTaskAlt,
+               selMenuTaskAlt, startMenuTaskAlt, mapNameTaskAlt. */
+            0x08011100u, 0x0811EB78u, 0x0811EBA8u, 0x0802E674u, 0x0806F280u,
+            0x08107EB8u, 0x08108EE4u, 0x0811FB00u, 0x0809CE28u, 0x0809CC6Cu,
+            0x08122C34u, 0x0806F1F0u, 0x08098180u,
             /* phase 22.0 cb2 screen classes: NONE — no LeafGreen census visit has run (no LG ROM
                boot yet), and FRLG cb2 ROM addresses differ per build, so FR's values would be
                WRONG here. All-zero lists = the NAMED degradation: LG's undetected screens keep

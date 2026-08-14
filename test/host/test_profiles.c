@@ -463,6 +463,110 @@ static void test_peersprite_columns(void) {
 }
 
 // ============================================================================================
+// TEST 10 — PHASE 22.0: the rev-alternate ROM anchors + the newKeys transposition fix
+// (docs/phase21-touch-census/: VISITED-firered.md headline, CB2-HARVEST.md:97-100,
+//  RS-REV2-VERIFICATION.md §6/§7.)
+// The census proved FRLG rev1 MOVED every ROM function while RAM stayed identical, and the
+// profile cannot see the cart's revision byte — so each rev-sensitive anchor now ships a
+// PRIMARY and an ALTERNATE and gamestate.c tests both. The numbers themselves are pinned here,
+// per game, exactly like TEST 6 pins RS: a typo in the positional initialiser must fail here,
+// not silently dead-en detection on someone's cart (which is precisely the bug this fixes).
+// ============================================================================================
+static void test_rev_alternates(void) {
+	printf("TEST 10: phase-22.0 rev-alternate ROM anchors + the newKeys fix, per game\n");
+	// Per-row expectation: 13 primaries then 13 alternates, in the struct's field order.
+	// BPRE: primary = FR rev0 (unchanged); alt = FR rev1 — the USER'S cart. Six of the alts are
+	// live-verified [exact] census 2026-08-14 (BattleMainCB2, CB2_UpdatePartyMenu, CB2_BagMenuRun,
+	// Task_HandleChooseMonInput, Task_StartMenuHandleInput, Task_HandleSelectionMenuInput); the
+	// other seven are rev1 sym-derived (pokefirered_rev1.sym), verify-in-emulator.
+	// BPGE: primary = LG rev1 (user's cart is rev 1.1); alt = LG rev0. Both columns sym-derived
+	// from pokeleafgreen{,_rev1}.sym (RS-REV2-VERIFICATION.md §6), verify-in-emulator. The old
+	// primaries were FR-rev0 values — wrong for EVERY LeafGreen revision.
+	// BPEE: one revision in play, primaries live-verified by the census -> all alternates 0.
+	// AXVE/AXPE: the RS ROM-address ban covers alternates too -> all 0.
+	struct { const char* code;
+	         uint32_t battleMain, cb2Upd, cb2Init, chooseTgt, startCbIn, bagRun, bagH,
+	                  party, yesNo, multi, selMenu, startMenu, mapName;              // primaries
+	         uint32_t aBattleMain, aCb2Upd, aCb2Init, aChooseTgt, aStartCbIn, aBagRun, aBagH,
+	                  aParty, aYesNo, aMulti, aSelMenu, aStartMenu, aMapName;        // alternates
+	         uint32_t newKeys; } W[] = {
+		{ "BPEE",
+		  0x08038420u, 0x081B01B0u, 0x081B01E0u, 0x08057824u, 0x0809FAC4u, 0x081AAD5Cu, 0x081ABD28u,
+		  0x081B1370u, 0x080E215Cu, 0x080E2058u, 0x081B3730u, 0x0809FA34u, 0x080D487Cu,
+		  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		  0x030022EEu },                                    // gMain 0x030022C0 + 0x2E (unchanged)
+		{ "BPRE",
+		  0x08011100u, 0x0811EBA0u, 0x0811EBD0u, 0x0802E674u, 0x0806F280u, 0x08107EE0u, 0x08108F0Cu,
+		  0x0811FB28u, 0x0809CE54u, 0x0809CC98u, 0x08122C5Cu, 0x0806F1F0u, 0x080981ACu,
+		  0x08011114u, 0x0811EC18u, 0x0811EC48u, 0x0802E688u, 0x0806F294u, 0x08107F58u, 0x08108F84u,
+		  0x0811FBA0u, 0x0809CE68u, 0x0809CCACu, 0x08122CD4u, 0x0806F204u, 0x080981C0u,
+		  0x0300311Eu },                                    // §7 fix: gMain 0x030030F0 + 0x2E
+		{ "BPGE",
+		  0x08011114u, 0x0811EBF0u, 0x0811EC20u, 0x0802E688u, 0x0806F294u, 0x08107F30u, 0x08108F5Cu,
+		  0x0811FB78u, 0x0809CE3Cu, 0x0809CC80u, 0x08122CACu, 0x0806F204u, 0x08098194u,
+		  0x08011100u, 0x0811EB78u, 0x0811EBA8u, 0x0802E674u, 0x0806F280u, 0x08107EB8u, 0x08108EE4u,
+		  0x0811FB00u, 0x0809CE28u, 0x0809CC6Cu, 0x08122C34u, 0x0806F1F0u, 0x08098180u,
+		  0x0300311Eu },                                    // §7 fix (same gMain as FR)
+		{ "AXVE",
+		  0x0800F808u, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		  0x0300179Eu },                                    // gMain 0x03001770 + 0x2E (unchanged)
+		{ "AXPE",
+		  0x0800F808u, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		  0x0300179Eu },
+	};
+	for (unsigned i = 0; i < sizeof W / sizeof W[0]; i++) {
+		const GameProfile* p = prof(W[i].code);
+		if (!p) { CHECK(0, "%s row missing", W[i].code); continue; }
+		EQU(p->battleMainCb,  W[i].battleMain, "%s battleMainCb",  W[i].code);
+		EQU(p->cb2UpdParty,   W[i].cb2Upd,     "%s cb2UpdParty",   W[i].code);
+		EQU(p->cb2InitParty,  W[i].cb2Init,    "%s cb2InitParty",  W[i].code);
+		EQU(p->chooseTarget,  W[i].chooseTgt,  "%s chooseTarget",  W[i].code);
+		EQU(p->startCbInput,  W[i].startCbIn,  "%s startCbInput",  W[i].code);
+		EQU(p->cb2BagRun,     W[i].bagRun,     "%s cb2BagRun",     W[i].code);
+		EQU(p->bagHandler,    W[i].bagH,       "%s bagHandler",    W[i].code);
+		EQU(p->partyTask,     W[i].party,      "%s partyTask",     W[i].code);
+		EQU(p->yesNoTask,     W[i].yesNo,      "%s yesNoTask",     W[i].code);
+		EQU(p->multiTask,     W[i].multi,      "%s multiTask",     W[i].code);
+		EQU(p->selMenuTask,   W[i].selMenu,    "%s selMenuTask",   W[i].code);
+		EQU(p->startMenuTask, W[i].startMenu,  "%s startMenuTask", W[i].code);
+		EQU(p->mapNameTask,   W[i].mapName,    "%s mapNameTask",   W[i].code);
+		EQU(p->battleMainCbAlt,  W[i].aBattleMain, "%s battleMainCbAlt",  W[i].code);
+		EQU(p->cb2UpdPartyAlt,   W[i].aCb2Upd,     "%s cb2UpdPartyAlt",   W[i].code);
+		EQU(p->cb2InitPartyAlt,  W[i].aCb2Init,    "%s cb2InitPartyAlt",  W[i].code);
+		EQU(p->chooseTargetAlt,  W[i].aChooseTgt,  "%s chooseTargetAlt",  W[i].code);
+		EQU(p->startCbInputAlt,  W[i].aStartCbIn,  "%s startCbInputAlt",  W[i].code);
+		EQU(p->cb2BagRunAlt,     W[i].aBagRun,     "%s cb2BagRunAlt",     W[i].code);
+		EQU(p->bagHandlerAlt,    W[i].aBagH,       "%s bagHandlerAlt",    W[i].code);
+		EQU(p->partyTaskAlt,     W[i].aParty,      "%s partyTaskAlt",     W[i].code);
+		EQU(p->yesNoTaskAlt,     W[i].aYesNo,      "%s yesNoTaskAlt",     W[i].code);
+		EQU(p->multiTaskAlt,     W[i].aMulti,      "%s multiTaskAlt",     W[i].code);
+		EQU(p->selMenuTaskAlt,   W[i].aSelMenu,    "%s selMenuTaskAlt",   W[i].code);
+		EQU(p->startMenuTaskAlt, W[i].aStartMenu,  "%s startMenuTaskAlt", W[i].code);
+		EQU(p->mapNameTaskAlt,   W[i].aMapName,    "%s mapNameTaskAlt",   W[i].code);
+		// The newKeys pin — the field is UNUSED at runtime (gamestate.h documents it; keys are
+		// injected via the returned mask), but a transposed gMain-relative address is a loaded
+		// gun for any future edit, which is why the fix ships WITH this pin (never silently).
+		EQU(p->newKeys, W[i].newKeys, "%s newKeys = gMain + 0x2E (RS-REV2-VERIFICATION.md §7)", W[i].code);
+		// Structural sanity: an alternate is ROM-space when set, and never EQUAL to its primary
+		// (a same-value pair is the copy-paste bug this table would otherwise hide).
+		const uint32_t pri[13] = { p->battleMainCb, p->cb2UpdParty, p->cb2InitParty, p->chooseTarget,
+			p->startCbInput, p->cb2BagRun, p->bagHandler, p->partyTask, p->yesNoTask, p->multiTask,
+			p->selMenuTask, p->startMenuTask, p->mapNameTask };
+		const uint32_t alt[13] = { p->battleMainCbAlt, p->cb2UpdPartyAlt, p->cb2InitPartyAlt,
+			p->chooseTargetAlt, p->startCbInputAlt, p->cb2BagRunAlt, p->bagHandlerAlt, p->partyTaskAlt,
+			p->yesNoTaskAlt, p->multiTaskAlt, p->selMenuTaskAlt, p->startMenuTaskAlt, p->mapNameTaskAlt };
+		for (int k = 0; k < 13; k++) {
+			if (alt[k]) {
+				CHECK((alt[k] >> 24) == 0x08u, "%s alt[%d] is ROM-space", W[i].code, k);
+				CHECK(alt[k] != pri[k], "%s alt[%d] differs from its primary", W[i].code, k);
+			}
+		}
+	}
+}
+
+// ============================================================================================
 // TEST 11 — PHASE 22.0: the census cb2 screen-class fingerprint lists, per game
 // (docs/phase21-touch-census/CB2-HARVEST.md — every EM/FR value below was read [exact] from the
 //  LIVE game; the lists' whole job is to stop those 40 screens hiding in GCTX_OVERWORLD.)
@@ -623,6 +727,7 @@ int main(void) {
 	test_rs_ident();
 	test_address_sanity();
 	test_peersprite_columns();   // phase 20
+	test_rev_alternates();       // phase 22.0 (census S2 merge)
 	test_screen_classes();       // phase 22.0
 	test_phase22_behaviour();    // phase 22.0
 	printf("\n=== %d checks, %d failures ===\n", g_checks, g_fails);
