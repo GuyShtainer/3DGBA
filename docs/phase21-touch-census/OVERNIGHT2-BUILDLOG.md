@@ -682,3 +682,57 @@ D2 tap-to-walk RUNS when the routed path is >= ~4 tiles, WALKS when shorter — 
 Mechanism precedent: control.c:151's sprint mode already holds KEY_B in the direction mask; the
 touch route follower simply never does. Implement in the overworld handler + the route-PROGRAM
 layer. Not yet scheduled — pick this up in the next slice after the phase-23 lanes land.
+
+## Lane A Entry 6 (phase 23) — TRAVERSAL emulator-proof RECON: what the user's save can actually prove
+
+Desk work before any boot (2026-08-14 ~09:40), because the SPEC's P1-P3 spots assume a
+save that this project does not have. Method: parse the fixture `.sav` on the HOST and read
+the pret map data — no emulator, no guessing. Two scratchpad tools (kept, they are the
+recon rail for every future traversal arc):
+
+- `savepeek.py <sav> EM|FR` — walks the Gen-3 save-slot footer (`sig 0x08012025`, highest
+  `saveIndex` wins), concatenates sections 1..4 into the SaveBlock1 image, then reads
+  `pos`/`location` (+0x00/+0x04), the badge flags (`flags` @0x1270 EM / @0x0EE0 FR, bit
+  `f&7` of byte `f>>3`), `playerPartyCount` @0x234 and the party @0x238 — decrypting each
+  mon exactly as `fieldtrav.c` does on hardware (substruct order = `personality % 24`, u32
+  XOR `personality ^ otId`, **the 24-u16 checksum verified before a move id is believed**).
+- `mapdump.py` / `reach.py` — the pret `layouts.json` -> `map.bin` -> tileset
+  `metatile_attributes.bin` chain (behaviour = `attr & 0xFF`), rendered as a walk/surf grid,
+  plus a fieldpath-rule BFS (collision 0 + elevation equal-or-either-0/15) that reports
+  every land tile reachable on foot that TOUCHES surfable water = a legal SURF mount.
+
+**Verdict on `roms/emerald.sav` (the fixture the harness stages):**
+
+| Gate | Reading |
+|---|---|
+| Position | **(7,8) on map (26,28) = `BattleFrontier_BattleArenaLobby`** — not Littleroot, not Route 103 |
+| Badges | **all 8 set** (flags 0x867..0x86E all 1) — every HM badge gate passes |
+| Party | 6 mons, all checksum-OK, none an egg |
+| HM moves present | **SURF only** (mon 5, species 329). No CUT, no ROCK SMASH, no STRENGTH, **no FLY** |
+
+Consequences, stated honestly rather than worked around:
+
+1. **P1 (Surf) is provable; P2 (Cut) and P3 (Rock Smash) are NOT** on this save as positive
+   proofs — `fieldtrav`'s eligibility will (correctly) refuse to plan them, which makes them
+   this arc's **negative controls** instead. A positive Cut/Smash proof needs an HM taught
+   first (the bag TM/HM pocket + the party teach flow — its own arc), or a different save.
+2. **No FLY ⇒ the Hoenn mainland is unreachable from the Battle Frontier island.** SPEC T6's
+   Route 103 / Route 116 / Rusturf / **Lavaridge** spots are all off-limits from this save
+   without a save edit. Slice 2's Lavaridge scenario therefore cannot be run as written; the
+   excursion machinery has to be proven on a map pair that IS reachable.
+3. The proof spot that IS reachable: **`BattleFrontier_OutsideEast` (26,14)**, out of the
+   arena lobby's single warp (lobby (7,12) -> OutsideEast warp 1 at (39,29), +1 auto-step
+   out = **(39,30)**). `reach.py` from there: 1688 dry-reachable tiles, and the **nearest
+   land-adjacent surfable water is 28 tiles away** — the south beach at y=58.
+4. The crossing chosen, read off the real layout: at y=58 land runs x=30..47 (elev 3),
+   **ocean water `MB_OCEAN_WATER` 0x15 runs x=48..56 (elev 1)**, land resumes at x=57
+   (elev 3). Standing on **(47,58)** the mount tile is due EAST — a 9-tile channel with a
+   far shore, i.e. the live twin of the host suite's Route 117 crossing.
+5. Tap geometry, pinned: settings have `scaleMode[1] = SCALE_1X`, so `touch_to_gba` is a
+   pure translate — **gba = screen - (40,40)** — and the tapped tile is
+   `(player + (gx/16 - 7, gy/16 - 5))` (touch.c:432). So a tile offset (ddx,ddy) is the
+   screen point `(40 + (7+ddx)*16 + 8, 40 + (5+ddy)*16 + 8)`. Reachable offsets are
+   **ddx -7..+7, ddy -5..+4** — a tap can never name a tile further than that, which is why
+   a 28-tile approach has to be walked by D4 first.
+6. Route to the shore, BFS'd around the map's 26 object events:
+   `d4 r1 d7 r6 d7 r1 d1 r1 d1 r3 d2 r1 d2 l1 d1 l4 d3` = 46 steps, (39,30) -> (47,58).
