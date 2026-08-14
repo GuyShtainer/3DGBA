@@ -401,13 +401,14 @@ static const char* s_excChip = 0;
 // the follower plans it as soon as the world answers.
 static int  s_excPend = 0, s_excPendG = -1, s_excPendN = -1, s_excPendX = 0, s_excPendY = 0;
 static int  s_excPendFrames = 0;
+static int  s_excLastW = -1, s_excLastH = -1;   // last backup-layout dims seen while waiting
 #define EXC_SETTLE_EVERY  8      // re-try cadence (a BFS per frame on the render thread is not free)
 #define EXC_SETTLE_BUDGET 240    // ~4 s at 60 fps: a fade + map load, generously
 
 static void exc_reset(void) {
 	s_excOn = false; s_excLeg = 0; s_excMapG = s_excMapN = -1; s_excChip = 0;
 	s_excCurG = s_excCurN = -1;
-	s_excPend = 0; s_excPendFrames = 0;
+	s_excPend = 0; s_excPendFrames = 0; s_excLastW = s_excLastH = -1;
 }
 // "VIA DOOR - LEG n/3" (T4.2). The leg counter is the honest v1: map NAMES would need the ROM
 // region-map strings, which is its own slice.
@@ -549,7 +550,17 @@ static u16 walk_update_inner(bool touching, bool newPress, bool gvalid, int gx, 
 	// (see exc_leg_boundary). Retried on a cadence rather than every frame — each attempt is a BFS
 	// on the render thread — and given up on loudly instead of leaving the player parked.
 	if (s_excOn && s_excPend && !s_walking && core && p) {
-		bool settled = (mapG == s_excPendG && mapN == s_excPendN && px >= 0);
+		// "Settled" is NOT just the location matching. SaveBlock1.location flips when the warp
+		// starts; gBackupMapLayout is rebuilt later, and a plan made in between is drawn on the
+		// PREVIOUS map's grid — it can even succeed, and then the follow loop's own layout check
+		// kills it as a MAPCHANGE one frame later (observed: leg 2 planned on the Pokemon Center's
+		// 14x9 grid the moment the town's 20x20 was still loading). So require the DIMENSIONS to
+		// be stable across two checks as well; the layout stops moving exactly when the load ends.
+		int mw = 0, mh = 0; uint32_t mp = 0;
+		bool haveMap = map_read(core, p, &mw, &mh, &mp);
+		bool stable = haveMap && mw == s_excLastW && mh == s_excLastH;
+		s_excLastW = haveMap ? mw : -1; s_excLastH = haveMap ? mh : -1;
+		bool settled = (mapG == s_excPendG && mapN == s_excPendN && px >= 0 && stable);
 		if (settled && (s_excPendFrames % EXC_SETTLE_EVERY) == 0 &&
 		    walk_plan(core, p, px, py, s_excPendX, s_excPendY, mapG, mapN)) {
 			s_walking = true; s_lpx = px; s_lpy = py; s_stall = 0; s_replans = 0;
@@ -578,7 +589,13 @@ static u16 walk_update_inner(bool touching, bool newPress, bool gvalid, int gx, 
 		return 0;
 	}
 	if (!map_read(core, p, &w, &h, &ptr) || ptr != s_mapPtr || w != s_mapW || h != s_mapH) {
-		s_walking = false; s_termActive = false; route_end(core, FDBG_END_MAPCHANGE); return 0;
+		s_walking = false; s_termActive = false; route_end(core, FDBG_END_MAPCHANGE);
+		// PHASE 24: for an excursion this is recoverable — the LAYOUT changed under a leg that was
+		// planned a moment too early. Re-arm the same leg (its target is still in s_excPend*) and
+		// let the settle rule above plan it again on the finished map, instead of throwing away a
+		// route that is two doors along.
+		if (s_excOn) { s_excPend = 1; s_excPendFrames = 0; }
+		return 0;
 	}
 
 	if (s_termActive) {
