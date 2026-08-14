@@ -747,3 +747,31 @@ frame for "on a non-pager screen every px is A"; TEST 12 pins dlggeom's enum aga
 touch.c's `s_keyDir` table), profiles 1480 -> **1622** (TEST 16 pins the whitelist and
 proves every pager entry is a SUBSET of `cb2FullUi`, so a pager value can never become
 back-door detection). `make -j8` clean.
+
+## PHASE 23 / LANE B — Entry 2: the SUMMARY SCREEN pages by touch (FAM-PAGE flagship)
+
+Same boot, continued as a closed loop (each tap coordinate read off the previous
+capture — the landmine-#2 correction in Entry 1 is what makes that possible).
+
+Route, all by touch, no D4 keys after the START press: START menu -> **POKéMON** row
+(fmenu) -> party (ctx 5) -> tap **TYRANITAR** slot 0 (party family) -> the
+SUMMARY/SWITCH/ITEM/CANCEL popup (ctx 6) -> tap **SUMMARY** (fmenu) -> the summary
+screen, **ctx 10 FULLUI with `dlgPager` 1** = BPEE cb2Pager 0x081BFAB4 matched LIVE.
+
+| # | Act | gdb | Screen |
+|---|---|---|---|
+| P10 | reach the summary | dlgPager **0 -> 1** | page 1 **POKéMON INFO**, dot 1 |
+| P11 | one RIGHT edge-zone tap | dlgPages **1 -> 2** | page 2 **POKéMON SKILLS**, dot 2 |
+| P12 | two more RIGHT edge taps | dlgPages **2 -> 4** | page 4 **CONTEST MOVES**, dot 4 |
+
+`dlgTaps` never moved off 2 across all three steps: on a pager the edge zone is LEFT/RIGHT
+and never additionally an A — which matters here because A on the summary opens the
+move-detail sub-mode, i.e. a leak would have been visible AND wrong.
+
+That is TOUCH-PLAN row **E1 (the FAM-PAGE flagship)** delivered on the cheapest possible
+mechanism: no summary-internal addresses were harvested at all, because LEFT/RIGHT is the
+engine's own page verb (`ChangePage`, pokemon_summary_screen.c:1544-1550) and the edge
+zones are pure geometry. The same code gives row **A5 (options)** for free (Entry 1 P5)
+and will give any future pager the moment its cb2 joins the whitelist.
+
+Captures: `evidence/impl/EM-page-P10|P11|P12-*.bottom.png`.
