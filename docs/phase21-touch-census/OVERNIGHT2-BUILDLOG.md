@@ -988,3 +988,22 @@ touch script before judging it.
 the START menu -> SAVE -> confirm and let the game write `gameB.sav`. Boot WITHOUT
 `--stage-roms` afterwards and every proof arc — P1 surf, the dismount, the negative
 controls, and (after an HM teach) Cut and Rock Smash — starts one tap away.
+
+## Lane A Entry 16 (phase 23) — full host gate, re-run at session end
+
+Every suite re-built and re-run from the working tree after the slice-2 work (the celiolink
+line lives at `test/test_celiolink.c`, not `test/host/`):
+
+| suite | checks | | suite | checks |
+|---|---|---|---|---|
+| celiolink | 1 259 | | profiles | 1 526 |
+| control | 6 940 | | theme | 83 444 |
+| diag | 376 | | tilt | 1 756 |
+| **fieldpath** | **1 808 (UNMODIFIED)** | | touchgeom | 119 659 |
+| **fieldtrav** | **1 066 (was 1 032)** | | trace_replay | PASS |
+| netlink | PASS | | typography | 1 419 |
+| peersprite | 62 078 | | uigeom | 18 332 |
+| presence | 61 376 | | uihit | 1 834 |
+
+**0 failures.** `fieldpath` unmodified at 1808 is the load-bearing number: slice 2 reads ROM
+maps through a bus ADAPTER precisely so the shipped walkability rule stays one implementation.
