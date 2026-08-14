@@ -198,3 +198,32 @@ game understands how to reach it") works, from one tap, with every leg boundary 
 | 2 | `e1c6041` | The next leg was planned on the frame `SaveBlock1.location` changed. A Gen-3 warp writes the location when it STARTS, so the plan read a half-built world, failed, and killed the excursion one door short. Boundaries now ARM a leg; the follower plans it when the world answers. |
 | 3 | `a1cbdca` | The boundary detector sat inside the path-follow block. The last leg's terminal is a STEP warp — the walker finishes (`s_walking = false`) BEFORE the warp fires — so the second boundary was never seen. The watcher now runs unconditionally against the map the current leg is walked on. |
 | 4 | `2fa4976` | Matching the location is not the world being loaded: leg 2 got planned on the Pokemon Center's 14x9 grid while the town's 20x20 was still loading, and died as MAPCHANGE one frame later. The settle rule now also requires the layout DIMENSIONS to be stable, and a layout-killed leg re-arms instead of ending the trip. |
+
+---
+
+## P3 — ROCK SMASH, tap past the rock: **PROVEN**
+
+Same boot as P4 (`runs/20260814-160325`), reached by Fly (Lavaridge → Mauville, by touch through
+the party menu + the region-map cursor) and a 57-step D4 walk north out of Mauville onto Route 111.
+
+**Why this rock.** `gate.py`: removing `OBJ_EVENT_GFX_BREAKABLE_ROCK (18,101)` opens **1973 tiles**
+— it is the rock that seals the whole north of Route 111 — while its neighbour (19,100) opens
+nothing (there is a walk-around). The goal **(18,99)** is on the far side of the gate.
+
+**The act:** `t 160 80 6 30` — ddx 0 / ddy −3 from (18,102) → world (18,99).
+
+| read | pos | prog |
+|---|---|---|
+| before | (18,102) | seq=0 |
+| +6 s | (18,102) | seq=1 **PLANNED** moves=3 inter=1 hm=**SMASH** **edges=2** phase=5 (ANSWER) aKeys=11 answers=1 |
+| +12 s | (18,102) | phase=6 (DONE) aKeys=25 **answers=2** |
+| +18 s | **(18,99)** | end=**HANDOFF**, **edges=1** |
+
+Two independent confirmations in one trace: the player is standing north of a gate that only Rock
+Smash opens, and the live conditional-edge count fell **2 → 1** — the game's own object slot for
+that rock went inactive, which is what `prog_obj_active` waits on.
+
+Capture: `EM-P24-P3c-past-the-rock.bottom.png` (through the gap; the second, walk-around rock is
+still there beside the player).
+
+**Verdict: PROVEN.**
