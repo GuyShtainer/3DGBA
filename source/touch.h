@@ -73,6 +73,11 @@ typedef struct {
 	                          //   for the WHOLE sequence (dialog, cutscene, forced walk). This is
 	                          //   the signal that routes a field dialog to FAM-DLG; textDlg above
 	                          //   only covers the frames the text is still PRINTING.
+	// --- phase 24 (lane B2), FAM-MAP. Appended; 0 = the wall-map (cursor-only) reading, which is
+	// the SAFE half — a driver that never confirms can only move a cursor.
+	bool     mapFly;          // GCTX_MAP: 1 = the FLY map, where an arrival A is a fly confirm;
+	                          //   0 = the field/wall map, where A CLOSES the screen (touchgeom.h
+	                          //   FAM-MAP rule M2), so the driver emits none there.
 } TouchSmart;
 
 // --- PHASE 18 / SPEC-door T4.11: the gdb-readable route mirror (LOGGING ONLY) ------------------
@@ -216,6 +221,25 @@ typedef struct {
 	int32_t  textDlg;        // +0xC8  GameState.textDlg as the dispatcher saw it this frame
 	int32_t  fieldLock;      // +0xCC  GameState.fieldLock (sLockFieldControls) — the real signal
 	int32_t  dlgOwns;        // +0xD0  dlggeom_route verdict: 1 = FAM-DLG claimed an OVERWORLD frame
+	// --- PHASE 24 / lane B2: the FAM-MAP (region map / tap-to-fly) channel. APPENDED, so every
+	// offset above is unchanged. Same proof pattern as the storage grid: the counters say what the
+	// DRIVER did and the four live reads say what the GAME did, so "the cursor did not move" and
+	// "we never pressed" are one gdb read apart. `mapSecId` is the destination the game itself
+	// resolved for the cell under the finger — the before/after channel TOUCH-PLAN 22.4 asks for
+	// ("tap Littleroot, read the cursor mapsec before/after, confirm the warp via
+	// SaveBlock1.location", which g_fieldDbg.curMapGroup/curMapNum already carries). LOGGING ONLY.
+	int32_t  mapTaps;        // +0xD4  clean taps that armed a destination cell
+	int32_t  mapSteps;       // +0xD8  single-frame cursor presses emitted (one per cell)
+	int32_t  mapArrive;      // +0xDC  targets the live cursor actually reached
+	int32_t  mapFlies;       // +0xE0  arrivals that became a FLY CONFIRM (A on a flyable mapsec)
+	int32_t  mapHolds;       // +0xE4  holds that became a B (close the map)
+	int32_t  mapCurX;        // +0xE8  live cursorPosX (+0x054), -1 = the struct read failed
+	int32_t  mapCurY;        // +0xEC  live cursorPosY (+0x056)
+	int32_t  mapSecId;       // +0xF0  live mapSecId (+0x000) — the game's own name for the cell
+	int32_t  mapSecType;     // +0xF4  live mapSecType (+0x002): 2 = CITY_CANFLY, 4 = FRONTIER
+	int32_t  mapTgtX;        // +0xF8  the armed target cell (-1 = idle)
+	int32_t  mapTgtY;        // +0xFC
+	int32_t  mapIsFly;       // +0x100 TouchSmart.mapFly as the dispatcher saw it (1 = fly map)
 } TouchDbg;
 extern TouchDbg g_touchDbg;
 

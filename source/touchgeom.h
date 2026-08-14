@@ -224,3 +224,63 @@ enum { DLGROUTE_WALK = 0,   // the shipped tap-to-walk / steer machinery
 // the frames a player touches (measured, phase 24 lane B1), and fieldLock alone would miss any
 // game whose profile has no sLockFieldControls address yet. Pure: no state, no bus, no clock.
 int dlggeom_route(int ctx, int textDlg, int fieldLock);
+
+// ============== FAM-MAP — the REGION MAP / TAP-TO-FLY family (phase 24, lane B2) ===============
+// TOUCH-PLAN.md rows B7 (field/wall region map) and B8 (fly map) — "the single most obviously
+// touch-shaped screen in the game". Ground truth = pret pokeemerald src/region_map.c +
+// include/region_map.h, read from the LOCAL clone this session (the same clone the keyboard and
+// grid families were derived from), cross-checked against the local pokeemerald.sym:
+//
+//   struct RegionMap (include/region_map.h:28-83, byte-identical to vanilla — the fork only
+//   typedefs mapSecId's u16):
+//     +0x000 u16 mapSecId · +0x002 u8 mapSecType · +0x054 u16 cursorPosX · +0x056 u16 cursorPosY
+//     +0x078 bool8 zoomed
+//   sRegionMap (0x0203A144, `l 00000004` = a POINTER) is set by InitRegionMapData(regionMap,…)
+//   for EVERY instance — the wall map, the fly map's embedded `sFlyMap->regionMap`, PokeNav — so
+//   ONE address covers them all and it is always the live one while a map cb2 is up.
+//
+//   Cursor bounds (src/region_map.c:41-46): MAP_WIDTH 28 / MAP_HEIGHT 15 / MAPCURSOR_X_MIN 1 /
+//   MAPCURSOR_Y_MIN 2  =>  cursorPosX 1..28, cursorPosY 2..16.
+//   Cell -> pixel (CreateRegionMapCursor, :1418-1419): cursorSprite->x = 8*cursorPosX + 4,
+//   y = 8*cursorPosY + 4. The sprite is 16x16 with centerToCorner -8, so that px pair is the
+//   CENTRE of the 8x8 cell => cell (cx,cy) owns exactly [8cx, 8cx+8) x [8cy, 8cy+8), and the
+//   inverse a tap needs is a plain shift. Deriving the hit from the game's own cursor formula is
+//   what makes this exact rather than a fitted rectangle.
+//
+//   Movement model (ProcessRegionMapInput_Full, :653-690): JOY_**HELD**, one cell per input frame,
+//   X and Y are read INDEPENDENTLY (both deltas can be set on the same frame => a diagonal step is
+//   one frame, not two), and a move sets cursorMovementFrameCounter = 4 and swaps inputCallback to
+//   MoveRegionMapCursor_Full for the 4-frame slide. cursorPosX/Y are only written when that slide
+//   ENDS (:700-730), and the input callback is not polled during it.
+//   ==> the driver presses ONE FRAME per cell and then waits: a single-frame press is guaranteed
+//   to move exactly one cell no matter what happens next, so the closed loop can never overshoot,
+//   which a held key absolutely can (our read lags the emulated frame by one).
+//
+// A-BUTTON semantics DIFFER between the two screens, which is why the family carries a `fly` bit:
+//   fly map   (CB_HandleFlyMapInput, :1746-1775): A on a MAPSECTYPE_CITY_CANFLY (2) or
+//             MAPSECTYPE_BATTLE_FRONTIER (4) sets choseFlyLocation and exits -> the warp. A on
+//             anything else does NOTHING.
+//   wall map  (field_region_map.c CB_HandleInput): A **and** B both EXIT the map.
+// So an arrival A is emitted on the fly map only, and only when the live mapSecType says the game
+// will accept it — tapping a route moves the cursor and reads its name, exactly like the D-pad.
+#define MAPGEOM_X_MIN   1   // MAPCURSOR_X_MIN
+#define MAPGEOM_X_MAX  28   // MAPCURSOR_X_MIN + MAP_WIDTH  - 1
+#define MAPGEOM_Y_MIN   2   // MAPCURSOR_Y_MIN
+#define MAPGEOM_Y_MAX  16   // MAPCURSOR_Y_MIN + MAP_HEIGHT - 1
+// mapSecType values the fly map accepts (region_map.h:19-26).
+#define MAPSECTYPE_CITY_CANFLY     2
+#define MAPSECTYPE_BATTLE_FRONTIER 4
+
+// Tap -> region-map cell. Returns 1 and fills *cx/*cy (the game's own cursorPosX/cursorPosY
+// coords) when (gx,gy) is inside the map body; 0 = DEAD. The body is exactly the cursor's legal
+// range in pixels — x [8,232), y [16,136) — so the bottom name window, the top border and the
+// side margins are dead rather than clamped: a tap on the "PETALBURG CITY" label must not fly you
+// to the nearest map square (M1).
+int mapgeom_hit(int gx, int gy, int* cx, int* cy);
+
+// One frame of closed-loop navigation: which D-pad keys move the LIVE cursor (curX,curY) toward
+// (tgtX,tgtY)? A BITMASK, because the engine reads X and Y independently and a diagonal step
+// costs one frame instead of two (this is the opposite of stornav_step, whose engine handles one
+// axis per frame). 0 = arrived, or either coordinate out of the legal range (never guess).
+enum { MN_RIGHT = 1, MN_LEFT = 2, MN_DOWN = 4, MN_UP = 8 };
+int mapnav_step(int curX, int curY, int tgtX, int tgtY);

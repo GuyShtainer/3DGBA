@@ -1214,6 +1214,88 @@ static void test_field_lock(void) {
 	}
 }
 
+
+// ============================================================================================
+// TEST 18 — PHASE 24 (lane B2): the FAM-MAP columns (rmPtr / rmFlyCb / rmWallCb) — the region
+// map, and with it tap-to-fly. Three properties, and the third is the one that keeps this slice
+// from being able to break anything:
+//   (a) the EM values are exactly the three symbols the driver was derived against;
+//   (b) rmPtr is the ONLY dereferenced value in the family, so it must be EWRAM, and the two cb2s
+//       must be ROM — a swapped pair would read a callback as a struct;
+//   (c) both cb2s are ALREADY in this row's cb2FullUi list, i.e. the screens detected BEFORE this
+//       slice and only their tap semantics change. That is what makes the family unable to
+//       "un-detect" anything, and it is pinned rather than asserted in a comment.
+// Plus the behaviour through the REAL game_read: the fly map resolves GCTX_MAP with mapFly = 1,
+// the wall map GCTX_MAP with mapFly = 0 (A EXITS there — the driver must never fire one), and a
+// game with no anchors still lands in GCTX_FULLUI exactly as it does today.
+static void test_family24_map(void) {
+	printf("TEST 18: phase-24 FAM-MAP columns (region map / tap-to-fly)\n");
+	const GameProfile* em = prof("BPEE");
+	if (!em) { CHECK(0, "BPEE row missing"); return; }
+	EQU(em->rmPtr,    0x0203A144u, "BPEE rmPtr = sRegionMap (pokeemerald.sym `0203a144 l 00000004`)");
+	EQU(em->rmFlyCb,  0x081248D4u, "BPEE rmFlyCb = CB2_FlyMap");
+	EQU(em->rmWallCb, 0x08170274u, "BPEE rmWallCb = MCB2_FieldUpdateRegionMap (the RUN loop — the "
+	    "census correction; CB2_FieldShowRegionMap 0x08138C84 is only the setup)");
+	CHECK((em->rmPtr >> 24) == 0x02u, "rmPtr is EWRAM — it is the one value here that gets "
+	      "DEREFERENCED, so a ROM value would read a function as a struct");
+	CHECK((em->rmFlyCb >> 24) == 0x08u && (em->rmWallCb >> 24) == 0x08u,
+	      "both map cb2s are ROM addresses (compare-only, hence fail-safe)");
+	CHECK(em->rmFlyCb != em->rmWallCb, "the two screens are distinguishable — which is exactly "
+	      "what FR/LG could NOT do (one shared cb2), and why their columns are 0");
+	// (c) the two cb2s must still be in cb2FullUi: GCTX_MAP is tested FIRST, so the fullui entry
+	// is the fallback a profile without map anchors uses. TEST 11 pins that list exactly.
+	int fly = 0, wall = 0;
+	for (int i = 0; i < GS_N_FULLUI; i++) {
+		if (em->cb2FullUi[i] == em->rmFlyCb)  fly = 1;
+		if (em->cb2FullUi[i] == em->rmWallCb) wall = 1;
+	}
+	CHECK(fly && wall, "both map cb2s remain in BPEE's cb2FullUi list — this slice re-CLASSIFIES "
+	      "two already-detected screens, it never makes one start or stop detecting");
+	// The named degradations, pinned so a later edit has to argue with the suite.
+	const char* zero[] = { "BPRE", "BPGE", "AXVE", "AXPE" };
+	for (unsigned i = 0; i < 4; i++) {
+		const GameProfile* q = prof(zero[i]);
+		if (!q) { CHECK(0, "%s row missing", zero[i]); continue; }
+		CHECK(q->rmPtr == 0 && q->rmFlyCb == 0 && q->rmWallCb == 0,
+		      "%s FAM-MAP columns are 0 — FR/LG: ONE cb2 serves both map screens (fly-vs-wall is "
+		      "not decidable from the callback) and no FRLG region-map struct pointer was "
+		      "resolved; RS: the ROM/statics ban. Named degradation: FAM-DLG keeps those screens",
+		      zero[i]);
+	}
+
+	// --- behaviour through the real game_read ---------------------------------------------
+	{
+		GbaCore c; bus_reset(&c, "BPEE");
+		const GameProfile* p = profile_for(&c);
+		GameState gs;
+		bus_w32(&c, p->sb1ptr, 0x02025734u);                  // a loaded save (not a title screen)
+		bus_w32(&c, p->mainCb2, p->rmFlyCb | 1u);             // the live cb2 carries the Thumb bit
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_MAP, "CB2_FlyMap -> GCTX_MAP (not the bare GCTX_FULLUI it was)");
+		CHECK(gs.mapFly, "…with mapFly = 1: on the fly map an arrival A is the fly confirm");
+		bus_w32(&c, p->mainCb2, p->rmWallCb | 1u);
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_MAP, "MCB2_FieldUpdateRegionMap -> GCTX_MAP");
+		CHECK(!gs.mapFly, "…with mapFly = 0: on the WALL map A exits, so the driver emits none "
+		      "(touchgeom.h rule M2)");
+		// a different FULLUI screen is untouched by the new arm
+		bus_w32(&c, p->mainCb2, 0x081BFAB4u | 1u);            // summary MainCB2
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_FULLUI, "a non-map FULLUI screen still classifies as GCTX_FULLUI");
+		CHECK(!gs.mapFly, "…and mapFly is 0 outside GCTX_MAP");
+	}
+	{   // FR: the same callback that would be a map elsewhere must NOT become GCTX_MAP here
+		GbaCore c; bus_reset(&c, "BPRE");
+		const GameProfile* p = profile_for(&c);
+		GameState gs;
+		bus_w32(&c, p->sb1ptr, 0x02025734u);
+		bus_w32(&c, p->mainCb2, 0x080C08C8u | 1u);            // FR CB2_RegionMap (census [exact])
+		game_read(&c, p, &gs);
+		CHECK(gs.ctx != GCTX_MAP, "BPRE's region map does NOT reach GCTX_MAP — with no anchors the "
+		      "zero columns can never match, which is the fail-safe the family is built on");
+	}
+}
+
 int main(void) {
 	printf("test_profiles — the per-game RAM map (source/gamestate.c PROFILES[])\n\n");
 	test_lookup();
@@ -1233,6 +1315,7 @@ int main(void) {
 	test_family22_2_storage();   // phase 22.2 (grid)
 	test_family23_pager();       // phase 23 (FAM-DLG pager whitelist)
 	test_field_lock();           // phase 24 (lane B1) sLockFieldControls
+	test_family24_map();         // phase 24 (lane B2) FAM-MAP region map / tap-to-fly
 	printf("\n=== %d checks, %d failures ===\n", g_checks, g_fails);
 	return g_fails ? 1 : 0;
 }

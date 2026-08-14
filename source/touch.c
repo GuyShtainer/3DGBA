@@ -1547,6 +1547,132 @@ static u16 dlg_update(const TouchSmart* sm, bool touching, bool newPress, bool g
 	return 0;
 }
 
+// ============== FAM-MAP: the REGION MAP / TAP-TO-FLY family (phase 24, lane B2) ===============
+// TOUCH-PLAN rows B7 (wall map) + B8 (fly map). The pret derivation, the cell<->pixel inverse and
+// the "one-frame press per cell" argument are all in touchgeom.h; this is the state machine.
+//
+// It is the STORAGE family's shape, not the dialog family's: a tap arms a TARGET CELL and the
+// driver walks the game's OWN cursor there with single-frame D-pad presses chosen each frame from
+// the LIVE cursorPosX/cursorPosY read, then — on the fly map only, and only when the live
+// mapSecType says the game will accept it — presses A. Nothing is ever written to the game's RAM:
+// writing cursorPosX/Y directly would desync the cursor SPRITE, which the engine slides
+// incrementally (SpriteCB_CursorMapFull) instead of deriving from the logical position.
+//
+// Gestures (M3): clean tap = go there (+ fly confirm) · drag = the target FOLLOWS the finger,
+// cursor only, no A (this is how you read map names) · hold = B, which cancels any armed target
+// and closes the map, matching the FAM-DLG hold verb the screen had before this slice.
+static int s_mpTgtX = -1, s_mpTgtY = 0;    // armed target cell (-1 = idle)
+static int s_mpAct = 0;                    // 1 = press A on arrival (fly map + flyable mapsec)
+static int s_mpArm = 0;                    // arrival settle countdown
+static int s_mpATick = 0;                  // remaining A-pulse frames
+static int s_mpGap = 0;                    // idle frames between cursor presses
+static int s_mpTotal = 0;                  // frames since the target was armed (timeout)
+static int s_mpTick = 0; static bool s_mpDown = false, s_mpDrag = false, s_mpHeld = false;
+static int s_mpDownX = 0, s_mpDownY = 0;
+static int s_mpTaps = 0, s_mpSteps = 0, s_mpArrive = 0, s_mpFly = 0, s_mpHolds = 0;  // PROOF counters
+static void map_reset(void) {
+	s_mpTgtX = -1; s_mpTgtY = 0; s_mpAct = 0; s_mpArm = 0; s_mpATick = 0; s_mpGap = 0; s_mpTotal = 0;
+	s_mpTick = 0; s_mpDown = false; s_mpDrag = false; s_mpHeld = false;
+	// the five counters survive on purpose: they are the gdb proof channel (g_touchDbg +0xD4..).
+}
+#define MAPNAV_GAP      5   // idle frames after a cursor press. The engine's own slide is 4 frames
+                            // (cursorMovementFrameCounter = 4) and it does not poll input during
+                            // it, so this is "one press per slide" with a frame of margin.
+#define MAPNAV_A_DELAY  6   // arrival -> A. cursorPosX/Y and mapSecType are written by the same
+                            // function at slide end, so they agree the moment we see the arrival;
+                            // the delay only lets the destination window draw before the confirm.
+#define MAPNAV_TIMEOUT 420  // drop an unreached target (~7 s: the widest legal route is 27 cells
+                            // x 6 frames = 162, so this only ever fires on a screen that stopped
+                            // accepting input — a fade, a zoom, a sub-menu)
+
+typedef struct { int curX, curY, secId, secType; } MapState;
+static int map_read(const TouchSmart* sm, MapState* ms) {
+	const GameProfile* p = sm->prof;
+	if (!sm->core || !p || !p->rmPtr) return 0;
+	uint32_t base = gbacore_read32(sm->core, p->rmPtr);      // sRegionMap: a POINTER, always deref
+	if ((base >> 24) != 0x02) return 0;                      // not an EWRAM struct: no map is live
+	if (gbacore_read8(sm->core, base + 0x78) != 0) return 0;  // zoomed: a DIFFERENT cursor model
+	ms->curX    = gbacore_read16(sm->core, base + 0x54);
+	ms->curY    = gbacore_read16(sm->core, base + 0x56);
+	ms->secId   = gbacore_read16(sm->core, base + 0x00);
+	ms->secType = gbacore_read8 (sm->core, base + 0x02);
+	// The same range test mapnav_step makes, applied here too so a mid-init struct never even
+	// reaches the navigator (and so the g_touchDbg mirror shows the raw read that failed).
+	if (ms->curX < MAPGEOM_X_MIN || ms->curX > MAPGEOM_X_MAX) return 0;
+	if (ms->curY < MAPGEOM_Y_MIN || ms->curY > MAPGEOM_Y_MAX) return 0;
+	return 1;
+}
+
+static void map_arm(int cx, int cy, int act) {
+	s_mpTgtX = cx; s_mpTgtY = cy; s_mpAct = act;
+	s_mpArm = 0; s_mpGap = 0; s_mpTotal = 0;
+}
+
+static u16 map_update(const TouchSmart* sm, bool touching, bool newPress, bool gvalid,
+                      int gx, int gy) {
+	MapState ms;
+	if (!map_read(sm, &ms)) { map_reset(); return 0; }        // no anchors / not a live full map
+	if (s_mpATick > 0) { s_mpATick--; return 1 << GBAKEY_A; } // finish the 2-frame confirm pulse
+
+	if (newPress && gvalid) {
+		s_mpDown = true; s_mpDrag = false; s_mpHeld = false; s_mpTick = 0;
+		s_mpDownX = gx; s_mpDownY = gy;
+	}
+	if (touching && s_mpDown) {
+		s_mpTick++;
+		if (gvalid && !s_mpDrag &&
+		    (abs(gx - s_mpDownX) > DLGGEOM_SLOP_PX || abs(gy - s_mpDownY) > DLGGEOM_SLOP_PX))
+			s_mpDrag = true;
+		if (s_mpDrag) {
+			int cx, cy;                                       // the target follows the finger…
+			if (gvalid && mapgeom_hit(gx, gy, &cx, &cy) && (cx != s_mpTgtX || cy != s_mpTgtY))
+				map_arm(cx, cy, 0);                           // …with NO arrival A (M3)
+		} else if (s_mpTick >= DLGGEOM_HOLD_FRAMES) {
+			if (!s_mpHeld) { s_mpHeld = true; s_mpHolds++; }
+			map_reset(); s_mpDown = true; s_mpHeld = true;    // a hold cancels the route it armed
+			return 1 << GBAKEY_B;
+		}
+	}
+	if (!touching && s_mpDown) {
+		s_mpDown = false;
+		int wasDrag = s_mpDrag, wasHeld = s_mpHeld;
+		s_mpDrag = false; s_mpHeld = false; s_mpTick = 0;
+		if (!wasDrag && !wasHeld) {                            // a CLEAN tap = go there
+			int cx, cy;
+			if (mapgeom_hit(s_mpDownX, s_mpDownY, &cx, &cy)) {
+				map_arm(cx, cy, sm->mapFly ? 1 : 0);          // A only where A means "fly" (M2)
+				s_mpTaps++;
+			}
+		}
+	}
+
+	if (s_mpTgtX < 0) return 0;
+	if (++s_mpTotal > MAPNAV_TIMEOUT) { map_reset(); return 0; }
+	if (ms.curX == s_mpTgtX && ms.curY == s_mpTgtY) {         // live cursor == target
+		if (s_mpArm == 0) s_mpArm = MAPNAV_A_DELAY;
+		if (--s_mpArm > 0) return 0;
+		int act = s_mpAct;
+		s_mpTgtX = -1; s_mpAct = 0; s_mpArm = 0; s_mpArrive++;
+		// The game's OWN acceptance test (CB_HandleFlyMapInput): A on anything else is ignored by
+		// the engine, so emitting it would be noise we could not distinguish from a bug.
+		if (act && (ms.secType == MAPSECTYPE_CITY_CANFLY || ms.secType == MAPSECTYPE_BATTLE_FRONTIER)) {
+			s_mpFly++; s_mpATick = 1; return 1 << GBAKEY_A;
+		}
+		return 0;
+	}
+	s_mpArm = 0;                                              // moved off target mid-settle
+	if (s_mpGap > 0) { s_mpGap--; return 0; }
+	int mn = mapnav_step(ms.curX, ms.curY, s_mpTgtX, s_mpTgtY);
+	if (!mn) { map_reset(); return 0; }
+	s_mpGap = MAPNAV_GAP; s_mpSteps++;
+	u16 k = 0;                                                // X and Y are read independently by
+	if (mn & MN_RIGHT) k |= 1 << GBAKEY_RIGHT;                // ProcessRegionMapInput_Full, so a
+	if (mn & MN_LEFT)  k |= 1 << GBAKEY_LEFT;                 // diagonal step costs ONE frame
+	if (mn & MN_DOWN)  k |= 1 << GBAKEY_DOWN;
+	if (mn & MN_UP)    k |= 1 << GBAKEY_UP;
+	return k;
+}
+
 // ===================== touch-event instrumentation log =======================
 // Decode a GBA key mask to a short string (bit order A0 B1 Sel2 St3 Right4 Left5 Up6 Down7 R8 L9).
 static void touch_keystr(uint16_t k, char* out, int cap) {
@@ -1744,8 +1870,23 @@ static void touch_dbg_stamp(const TouchSmart* sm, u16 ret) {
 	d->fieldLock = sm->fieldLock ? 1 : 0;
 	d->dlgOwns = (dlggeom_route(sm->ctx, d->textDlg, d->fieldLock) == DLGROUTE_DLG);
 	d->msgMode = -1;
+	// PHASE 24 / lane B2 — FAM-MAP, stamped beside the FAM-DLG block for the same survive-every-
+	// early-return reason. The counters are app-side and always valid; the four live reads are -1
+	// until map_read succeeds, which is itself the diagnosis when a tap "does nothing".
+	d->mapTaps = s_mpTaps; d->mapSteps = s_mpSteps; d->mapArrive = s_mpArrive;
+	d->mapFlies = s_mpFly; d->mapHolds = s_mpHolds;
+	d->mapTgtX = s_mpTgtX; d->mapTgtY = (s_mpTgtX < 0) ? -1 : s_mpTgtY;
+	d->mapIsFly = sm->mapFly ? 1 : 0;
+	d->mapCurX = d->mapCurY = d->mapSecId = d->mapSecType = -1;
 	const GameProfile* p = sm->prof;
 	if (!sm->core || !p) return;
+	if (sm->ctx == GCTX_MAP) {
+		MapState ms;
+		if (map_read(sm, &ms)) {
+			d->mapCurX = ms.curX; d->mapCurY = ms.curY;
+			d->mapSecId = ms.secId; d->mapSecType = ms.secType;
+		}
+	}
 	if (p->fieldMsgMode) d->msgMode = (int32_t)gbacore_read8(sm->core, p->fieldMsgMode);
 	if (sm->ctx == GCTX_NAMING && p->namingPtr) {
 		uint32_t ptr = gbacore_read32(sm->core, p->namingPtr);
@@ -1852,7 +1993,7 @@ static void mon_census_stamp(const TouchSmart* sm) {
 }
 
 // ================================ dispatch ==================================
-static void all_reset(void) { battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset(); dlg_reset(); prog_reset(); }
+static void all_reset(void) { battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset(); dlg_reset(); prog_reset(); map_reset(); }
 
 u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, bool gvalid,
                  const TouchSmart* sm) {
@@ -1918,7 +2059,7 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 		break;
 	}
 	case GCTX_BATTLE_TARGET:
-		battle_reset(); walk_reset(); party_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset();
+		battle_reset(); walk_reset(); party_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset(); map_reset();
 		if (newPress && gvalid) {
 			int pos = hit_battler(gx, gy);
 			if (pos >= 0) { int idx = battler_index_for_pos(sm, pos); if (idx >= 0) { s_tgt = idx; s_tgtTick = 0; } }
@@ -1926,7 +2067,7 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 		ret = select_pulse(sm->core, sm->prof ? sm->prof->multiCursor : 0, &s_tgt, &s_tgtTick);
 		break;
 	case GCTX_PARTY:
-		battle_reset(); walk_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset();
+		battle_reset(); walk_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset(); map_reset();
 		if (newPress && gvalid) {
 			int slot = hit_party(gx, gy, sm->partyLayout);
 			if (slot == 7 || (slot >= 0 && slot < sm->partyCount)) { s_party = slot; s_partyTick = 0; }
@@ -1934,7 +2075,7 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 		ret = select_pulse(sm->core, sm->prof ? sm->prof->partyMenu + 0x09 : 0, &s_party, &s_partyTick);
 		break;
 	case GCTX_OVERWORLD:
-		battle_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset();
+		battle_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset(); map_reset();
 		if (dlgOwns) {
 			// A script is talking (sFieldMessageBoxMode != 0). FAM-DLG owns the frame: tap = A
 			// (the box advances from ANYWHERE, not only from the player's own tile), hold = B,
@@ -1957,17 +2098,17 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 		                  sm->mapGroup, sm->mapNum, sm->core, sm->prof, sm->traverse);
 		break;
 	case GCTX_FIELDMENU:
-		battle_reset(); walk_reset(); party_reset(); target_reset(); list_reset(); naming_reset(); storage_reset();
+		battle_reset(); walk_reset(); party_reset(); target_reset(); list_reset(); naming_reset(); storage_reset(); map_reset();
 		if (newPress && gvalid && sm->prof) { int i = hit_fieldmenu(sm->core, sm->prof, gx, gy); if (i >= 0) { s_fmenu = i; s_fmenuTick = 0; } }
 		ret = sm->prof ? fmenu_select(sm->core, sm->prof) : 0;
 		break;
 	case GCTX_BAG:
-		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); naming_reset(); storage_reset();
+		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); naming_reset(); storage_reset(); map_reset();
 		if (s_lPrevKind != -2) { list_reset(); s_lPrevKind = -2; }   // arriving from another ctx/kind
 		ret = list_update(sm, sm->bagListTaskBase, LF_BAG, touching, newPress, gvalid, gx, gy);
 		break;
 	case GCTX_LIST:
-		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); naming_reset(); storage_reset();
+		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); naming_reset(); storage_reset(); map_reset();
 		// a kind change (buy -> qty -> buy) mid-context resets the shared gesture state
 		if (s_lPrevKind != (int)sm->listKind) { list_reset(); s_lPrevKind = (int)sm->listKind; }
 		switch (sm->listKind) {
@@ -1979,14 +2120,21 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 		}
 		break;
 	case GCTX_NAMING:
-		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); storage_reset();
+		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); storage_reset(); map_reset();
 		ret = naming_update(sm, touching, newPress, gvalid, gx, gy, sx, sy);
 		break;
 	case GCTX_STORAGE:
 		// fmenu state is deliberately NOT reset here: the storage popups delegate to the fmenu
 		// machinery (SPEC-family-grid G6) — storage_update owns its lifecycle.
-		battle_reset(); walk_reset(); party_reset(); target_reset(); list_reset(); naming_reset();
+		battle_reset(); walk_reset(); party_reset(); target_reset(); list_reset(); naming_reset(); map_reset();
 		ret = storage_update(sm, touching, newPress, gvalid, gx, gy);
+		break;
+	// PHASE 24 (lane B2): FAM-MAP — the region map, and with it TAP-TO-FLY. Placed before the
+	// GCTX_FULLUI arm it was promoted out of: both map cb2s remain in cb2FullUi, so a game whose
+	// profile has no map anchors (FR/LG/RS today) still lands there and keeps tap=A/hold=B/drag.
+	case GCTX_MAP:
+		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset();
+		ret = map_update(sm, touching, newPress, gvalid, gx, gy);
 		break;
 	case GCTX_BATTLE_OTHER:
 		all_reset();
@@ -1998,11 +2146,11 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 	// here. FAM-DLG is what makes them usable: tap = A, hold = B, drag = D-pad (TITLE gets tap=A
 	// only — see dlg_update's allowB note).
 	case GCTX_FULLUI:
-		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset();
+		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset(); map_reset();
 		ret = dlg_update(sm, touching, newPress, gvalid, gx, gy, 1);
 		break;
 	case GCTX_TITLE:
-		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset();
+		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset(); map_reset();
 		ret = dlg_update(sm, touching, newPress, gvalid, gx, gy, 0);
 		break;
 	default:

@@ -35,7 +35,12 @@ typedef enum {
 	// --- phase 22.2 (overnight lane): the GRID family — the PC storage boxes UI. Appended (values
 	// stay stable); matched by cb2 == CB2_PokeStorage (GameProfile.storageCb) BEFORE the cb2FullUi
 	// loop, exactly like GCTX_NAMING (more specific wins; the fullui list keeps the value).
-	GCTX_STORAGE          // PC storage boxes (SPEC-family-grid; EM only in v1 — see storageCb)
+	GCTX_STORAGE,         // PC storage boxes (SPEC-family-grid; EM only in v1 — see storageCb)
+	// --- phase 24 (lane B2): the MAP family — the region map, and with it TAP-TO-FLY. Appended
+	// (every value above stays stable); matched by cb2 == GameProfile.rmFlyCb / rmWallCb BEFORE
+	// the cb2FullUi loop, exactly like GCTX_NAMING and GCTX_STORAGE (more specific wins; both
+	// values stay in cb2FullUi so a game without the map anchors keeps today's FAM-DLG default).
+	GCTX_MAP              // region map: fly map (A confirms) or wall map (cursor only) — see mapFly
 } GameCtx;
 
 // Which list screen GCTX_LIST resolved to (GameState.listKind; SPEC-family-lists §2/§3).
@@ -392,6 +397,33 @@ typedef struct {
 	// FAM-DLG therefore cannot take working behaviour away — it can only replace a route that was
 	// going to stall with the A the player actually wanted.
 	uint32_t fieldLock;
+	// --- phase 24 (lane B2) — FAM-MAP: the region map / TAP-TO-FLY anchors -----------------------
+	// TOUCH-PLAN rows B7/B8. Three columns carry the whole family because the engine keeps ONE
+	// module-static pointer for every region-map instance:
+	//   rmPtr    sRegionMap — a POINTER to the live `struct RegionMap` (pokeemerald.sym
+	//            `0203a144 l 00000004 sRegionMap`; InitRegionMapData does `sRegionMap = regionMap`
+	//            for the wall map, the fly map's embedded sFlyMap->regionMap and PokeNav alike).
+	//            DEREFERENCED, so it is the one value here that must be right — every read is
+	//            guarded (EWRAM bank + cursor in range + zoomed == 0) and a failed guard emits
+	//            NOTHING, which is the shipped FULLUI behaviour, never a wrong key.
+	//   rmFlyCb  the FLY map's run-loop cb2 (EM CB2_FlyMap 0x081248D4). On this screen an arrival
+	//            A is emitted, but only when the live mapSecType is CITY_CANFLY/BATTLE_FRONTIER —
+	//            the same test the game's own CB_HandleFlyMapInput makes.
+	//   rmWallCb the FIELD/WALL map's RUN loop (EM MCB2_FieldUpdateRegionMap 0x08170274 — the
+	//            census correction: CB2_FieldShowRegionMap is only the setup). Cursor-only: on
+	//            this screen A **exits**, so a tap that fired one would close the map (M2).
+	// Both cb2s are ALREADY in this row's cb2FullUi list, so this slice cannot make a screen start
+	// detecting that did not detect before — it only upgrades two already-classified screens from
+	// the FAM-DLG default (tap = A, drag = one D-pad edge per 14 px) to one-tap targeting.
+	//
+	// FR/LG: 0 — and the reason is specific, not laziness. The census harvested ONE cb2 for BOTH
+	// FR screens (CB2_RegionMap 0x080C08C8, "town map AND fly map, mode internal"), so `fly` is
+	// not decidable from the callback, and no pokefirered symbol map was available this session to
+	// resolve FR's region-map struct pointer. Named degradation: FR keeps FAM-DLG on the map.
+	// RS: 0 (the ROM/statics ban). Appending is the only safe edit: PROFILES[] is POSITIONAL.
+	uint32_t rmPtr;
+	uint32_t rmFlyCb;
+	uint32_t rmWallCb;
 } GameProfile;
 
 // One-pass snapshot of the live game.
@@ -422,6 +454,9 @@ typedef struct {
 	bool     fieldLock;       // sLockFieldControls != 0 — a script owns the field: the player cannot
 	                          // move, for the WHOLE sequence (dialog, cutscene, forced walk)
 	bool     textBanner;      // overworld: the map-name banner task is live
+	bool     mapFly;          // GCTX_MAP only: 1 = the FLY map (an arrival A is a fly confirm),
+	                          // 0 = the wall/field map, where A EXITS — so the driver never fires
+	                          // one there (touchgeom.h FAM-MAP, rule M2)
 	// --- instrumentation (LOGGING ONLY; never gate touch/3D/gameplay on these) ---
 	uint32_t cb1, cb2;        // raw gMain.callback1/callback2 (Thumb bit stripped) = the screen fingerprint.
 	                          // cb2 is THE value an undetected screen (pokedex/townmap/summary/card/keyboard/

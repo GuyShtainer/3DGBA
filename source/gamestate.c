@@ -107,7 +107,17 @@ static const GameProfile PROFILES[] = {
                LIVE-VERIFIED this session (g_touchDbg +0xD0): 1 for the whole BLACK_BELT
                conversation incl. every frame the box waited for A, 0 the moment control
                returned. See gamestate.h for why fieldMsgMode could not do this job. */
-            0x03000F2Cu },
+            0x03000F2Cu,
+            /* phase 24 (lane B2) FAM-MAP — the region map / tap-to-fly anchors. All three read
+               from the local pokeemerald.sym copy this session; the two cb2s are ALREADY in this
+               row's cb2FullUi list above (census [exact]), so nothing new starts detecting:
+                 0203a144 l 00000004 sRegionMap  (a POINTER — deref; the ONE dereferenced value)
+                 081248d4 l 00000020 CB2_FlyMap
+                 08170274 l 0000001a MCB2_FieldUpdateRegionMap   (the RUN loop, not the setup)
+               Struct offsets used by the driver (VERIFIED-SRC, include/region_map.h:28-83):
+               mapSecId +0x000 u16, mapSecType +0x002 u8, cursorPosX +0x054 u16, cursorPosY
+               +0x056 u16, zoomed +0x078 bool8. */
+            0x0203A144u, 0x081248D4u, 0x08170274u },
   // BPRE ROM anchors: the PRIMARIES below are FR rev0 (correct for a rev0 cart); the REV1 values —
   // the user's cart — live in the phase-22.0 ALTERNATE block at the end of the row. newKeys was
   // 0x0303011E (a digit transposition, RS-REV2-VERIFICATION.md §7): gMain 0x030030F0
@@ -244,7 +254,17 @@ static const GameProfile PROFILES[] = {
                phase-22.0 finding), so no alternate is needed. VERIFIED-SYM; the EM twin is
                live-verified and the read is compare-only, so a wrong value could only ever
                DISABLE the field-dialog re-route, never mis-fire it. */
-            0x03000F9Cu },
+            0x03000F9Cu,
+            /* phase 24 (lane B2) FAM-MAP rmPtr/rmFlyCb/rmWallCb = 0, for a MEASURED reason rather
+               than an unfinished one: the census harvested ONE cb2 for BOTH FR map screens
+               (CB2_RegionMap 0x080C08C8 — "town map AND fly map, one loop, mode internal",
+               CB2-HARVEST.md), so `fly` — i.e. whether an arrival A confirms a destination or
+               CLOSES the map — is not decidable from the callback, and no pokefirered symbol map
+               was available this session to resolve FR's region-map struct pointer. Explicit
+               zeros (P3.5.2). Named degradation: the FR map keeps the shipped FAM-DLG default
+               (tap = A, hold = B, drag = one D-pad edge per 14 px), which already moves its
+               cursor. Owed: FR's region-map struct pointer + a fly-vs-wall discriminator. */
+            0x00000000u, 0x00000000u, 0x00000000u },
   // BPGE ROM anchors — REPLACED phase 22.0 (they were FireRed-rev0 values, wrong for EVERY
   // LeafGreen revision; battle/party/bag/menu detection was silently dead on LG). PRIMARIES are
   // now LG **rev1** — the user's cart is rev 1.1 — re-derived field-by-field from
@@ -359,7 +379,11 @@ static const GameProfile PROFILES[] = {
                IWRAM map, the phase-22.0 finding). Compare-only + fail-safe, so unlike the ROM
                anchors this row got wrong for two phases, a bad value here can only disable the
                field-dialog re-route. VERIFIED-SYM, verify-in-emulator on the LG delta pass. */
-            0x03000F9Cu },
+            0x03000F9Cu,
+            /* phase 24 (lane B2) FAM-MAP: 0, as for FireRed above (one shared cb2 for both map
+               screens, no LG symbol map read this session) — and LG's whole cb2FullUi list is
+               still empty, so the map screen does not even classify here yet. Explicit zeros. */
+            0x00000000u, 0x00000000u, 0x00000000u },
 
   // ===================== Ruby / Sapphire (SPEC-coop §P3) =====================================
   // Every RAM value below is VERIFIED-SYM against pret's byte-matched `symbols` branch, all FOUR
@@ -552,7 +576,11 @@ static const GameProfile PROFILES[] = {
                It is what gives Ruby/Sapphire the field-dialog tap-advance for free — RS has no
                fieldMsgMode-equivalent shipped, so before this column their dialogs were pure
                walk-key leak. */
-            0x030006A4u },
+            0x030006A4u,
+            /* phase 24 (lane B2) FAM-MAP: 0 — the RS ROM/statics ban (the region-map module is a
+               different, older one and neither its cb2 nor its struct pointer was verified for
+               RS). Explicit zeros, not C zero-fill (P3.5.2). */
+            0x00000000u, 0x00000000u, 0x00000000u },
   // Pokemon Sapphire (US; same promotion rule — every value below was measured on SAPPHIRE
   // itself, live [exact] on pokesapphire_rev2.sym; LANE-B-RS.md §2 drift table + §3 solo smoke).
   { "AXPE", RS_PROFILE_BODY_RAM,
@@ -580,7 +608,11 @@ static const GameProfile PROFILES[] = {
                It is what gives Ruby/Sapphire the field-dialog tap-advance for free — RS has no
                fieldMsgMode-equivalent shipped, so before this column their dialogs were pure
                walk-key leak. */
-            0x030006A4u },
+            0x030006A4u,
+            /* phase 24 (lane B2) FAM-MAP: 0 — the RS ROM/statics ban (the region-map module is a
+               different, older one and neither its cb2 nor its struct pointer was verified for
+               RS). Explicit zeros, not C zero-fill (P3.5.2). */
+            0x00000000u, 0x00000000u, 0x00000000u },
   #undef RS_PROFILE_BODY_RAM
   #undef RS_PROFILE_BODY_TAIL
 };
@@ -749,6 +781,13 @@ bool game_read(GbaCore* c, const GameProfile* p, GameState* out) {
 		    (p->storageCbAlt && out->cb2 == p->storageCbAlt)) {
 			out->ctx = GCTX_STORAGE; return true;
 		}
+		// Phase 24 (lane B2): the REGION MAP — cb2-matched like storage, and for the same reason
+		// (both values also sit in cb2FullUi; testing here first upgrades the screen from the
+		// FAM-DLG default to one-tap targeting). `mapFly` says which A-semantics apply: on the fly
+		// map A confirms a destination, on the wall map A EXITS. A game with no anchors (0) never
+		// matches and keeps the shipped behaviour.
+		if (p->rmFlyCb && out->cb2 == p->rmFlyCb)  { out->ctx = GCTX_MAP; out->mapFly = true;  return true; }
+		if (p->rmWallCb && out->cb2 == p->rmWallCb) { out->ctx = GCTX_MAP; out->mapFly = false; return true; }
 		if (task_active(c, p, p->dexTask)) {                        // EM dex LIST (task is unique
 			out->ctx = GCTX_LIST; out->listKind = LK_DEX;           //   to the list screen)
 			return true;
