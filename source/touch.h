@@ -88,7 +88,11 @@ typedef struct {
 // increments once per planning ATTEMPT and `endSeq` once per route end, so a poll can latch on
 // either. All int32_t so every field is one aligned gdb word at a known offset.
 enum { FDBG_END_NONE = 0, FDBG_END_ARRIVED, FDBG_END_MOVED, FDBG_END_TIMEOUT,
-       FDBG_END_STALLED, FDBG_END_REPLANNED, FDBG_END_MAPCHANGE };
+       FDBG_END_STALLED, FDBG_END_REPLANNED, FDBG_END_MAPCHANGE,
+       // PHASE 24 / lane A2: a route killed by the player's OWN-TILE gesture (decision D1 — a tap
+       // on yourself opens START, and opening START while the avatar is mid-route means stop).
+       // APPENDED, so every value above keeps its number and A1's traces still read the same.
+       FDBG_END_CANCELLED };
 typedef struct {
 	int32_t planSeq;        // +0x00  bumped on every planning attempt
 	int32_t px, py;         // +0x04  player tile the plan started from
@@ -147,6 +151,18 @@ typedef struct {
 	                        //   correctly-planned Cut can still do nothing: an A is aimed by the
 	                        //   avatar's facing, and a fixed-length direction hold does not
 	                        //   guarantee it (touch.c TPH_FACE).
+	// --- PHASE 24 / lane A2 — the two BANKED GESTURE DECISIONS (DECISIONS-overworld-gestures.md).
+	// APPENDED, so every offset above is unchanged and A1's harness scripts keep working verbatim.
+	// D1 needs an app-side channel because the own-tile verbs write no game RAM of their own (the
+	// GAME-side proof is what the injected key then does: ctx -> GCTX_FIELDMENU for START, the
+	// registered item firing for SELECT). D2's three fields are the difference between "it didn't
+	// run" and knowing WHICH gate said no. LOGGING ONLY — nothing reads them back. ---
+	int32_t ownStarts;      // +0xAC  own-tile TAPS resolved to START (cumulative, per boot)
+	int32_t ownSelects;     // +0xB0  own-tile HOLDS resolved to SELECT (cumulative)
+	int32_t runLeg;         // +0xB4  1 = the leg being followed decided to RUN (latched at plan time)
+	int32_t runElig;        // +0xB8  the RUNG_* eligibility mask, restamped on every live re-test
+	                        //   (0x1F = all five gates open; any clear bit names the veto)
+	int32_t runFrames;      // +0xBC  frames on which B was actually injected (cumulative)
 } FieldDbg;
 extern FieldDbg g_fieldDbg;
 

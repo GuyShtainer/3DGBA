@@ -571,6 +571,221 @@ static void test_map_nav(void) {
 	      "the game's OWN test before it emits a confirm A");
 }
 
+// ================== PHASE 24 / lane A2 — the OWN-TILE GESTURE (decision D1) ====================
+// A gesture is a TIMELINE, so the oracle is a timeline driver: it replays a synthetic touch as the
+// app sees it (one call per frame, `touching` / `newPress` / the caller's slop latch) and records
+// every event the resolver emitted. The properties D1 actually asks for are then assertions about
+// the RECORDED SEQUENCE, not about a single call: "the release after a hold is silent" cannot be
+// stated any other way.
+typedef struct { int start, select, first; } OwnRun;   // counts + the first event seen
+
+// frames = how long the finger is down; onSelf = press-time tile is the player's; moveAt = the
+// frame index the slop latch flips (<0 = never). One extra frame is played with the finger up so
+// the release is always delivered.
+static OwnRun own_drive(int frames, int onSelf, int moveAt) {
+	OwnGest g; memset(&g, 0, sizeof g);
+	OwnRun r = { 0, 0, OWNG_NONE };
+	int moved = 0;
+	for (int f = 0; f < frames; f++) {
+		if (moveAt >= 0 && f >= moveAt) moved = 1;
+		int ev = owngest_step(&g, 1, f == 0, onSelf, moved);
+		if (ev == OWNG_START)  { r.start++;  if (r.first == OWNG_NONE) r.first = ev; }
+		if (ev == OWNG_SELECT) { r.select++; if (r.first == OWNG_NONE) r.first = ev; }
+	}
+	int ev = owngest_step(&g, 0, 0, onSelf, moved);
+	if (ev == OWNG_START)  { r.start++;  if (r.first == OWNG_NONE) r.first = ev; }
+	if (ev == OWNG_SELECT) { r.select++; if (r.first == OWNG_NONE) r.first = ev; }
+	return r;
+}
+
+static void test_own_gesture(void) {
+	puts("TEST 16: the own-tile gesture — tap = START on release, hold = SELECT on the threshold");
+
+	// The two verbs exist, they are distinct, and neither is the idle value.
+	CHECK(OWNG_NONE == 0 && OWNG_START != OWNG_SELECT && OWNG_START != OWNG_NONE,
+	      "OWNG_NONE/START/SELECT are three distinct values with NONE == 0");
+	CHECK(OWNGEOM_HOLD_FRAMES == DLGGEOM_HOLD_FRAMES,
+	      "D1: the hold threshold is REUSED from FAM-DLG (%d frames), not a third invention",
+	      OWNGEOM_HOLD_FRAMES);
+
+	// --- the whole duration axis, exhaustively: every press length from 1 frame to 4x the hold.
+	int tapLo = 0, tapHi = 0, holdLo = 0;
+	for (int n = 1; n <= OWNGEOM_HOLD_FRAMES * 4; n++) {
+		OwnRun r = own_drive(n, 1, -1);
+		CHECK(r.start + r.select == 1,
+		      "a %d-frame clean press on the player's own tile resolves to EXACTLY ONE event "
+		      "(got start=%d select=%d) — never both, never none", n, r.start, r.select);
+		if (n < OWNGEOM_HOLD_FRAMES) {
+			if (r.start == 1 && r.select == 0) tapLo++; else tapHi++;
+		} else {
+			// D1: the hold fires the MOMENT the threshold is crossed, and the release that ends it
+			// must stay silent. Both halves are in this one assertion.
+			if (r.select == 1 && r.start == 0) holdLo++;
+			CHECK(r.first == OWNG_SELECT,
+			      "a %d-frame press (>= the %d-frame hold) resolves as SELECT, and the release "
+			      "that follows it fires NOTHING (start=%d)", n, OWNGEOM_HOLD_FRAMES, r.start);
+		}
+	}
+	CHECK(tapLo == OWNGEOM_HOLD_FRAMES - 1 && tapHi == 0,
+	      "every press shorter than the hold (%d of them) is a START on release", tapLo);
+	CHECK(holdLo == OWNGEOM_HOLD_FRAMES * 3 + 1,
+	      "every press at or past the hold is a SELECT (%d of them)", holdLo);
+
+	// --- the boundary, stated on its own so a threshold change shows up here first.
+	CHECK(own_drive(OWNGEOM_HOLD_FRAMES - 1, 1, -1).start == 1,  "hold-1 frames = TAP -> START");
+	CHECK(own_drive(OWNGEOM_HOLD_FRAMES,     1, -1).select == 1, "hold frames exactly = SELECT");
+	CHECK(own_drive(OWNGEOM_HOLD_FRAMES,     1, -1).start == 0,  "...and NOT also a START");
+
+	// --- a press that did not start on the player's own tile is not this family's business at all
+	//     (it is a tap-to-walk route or a steer, both of which touch.c resolves elsewhere).
+	for (int n = 1; n <= OWNGEOM_HOLD_FRAMES * 2; n++) {
+		OwnRun r = own_drive(n, 0, -1);
+		CHECK(r.start == 0 && r.select == 0,
+		      "a %d-frame press that started OFF the player's tile emits nothing here", n);
+	}
+
+	// --- D1: "a finger that MOVES past the slop is a drag/steer, not a tap or a hold".
+	for (int mv = 0; mv < OWNGEOM_HOLD_FRAMES * 2; mv++) {
+		OwnRun r = own_drive(OWNGEOM_HOLD_FRAMES * 2, 1, mv);
+		if (mv < OWNGEOM_HOLD_FRAMES) {
+			CHECK(r.start == 0 && r.select == 0,
+			      "slop crossed on frame %d (before the hold) kills BOTH verbs", mv);
+		} else {
+			// The SELECT had already fired before the finger moved. It is not retroactively
+			// cancelled — the button was pressed — but the release still stays silent.
+			CHECK(r.select == 1 && r.start == 0,
+			      "slop crossed on frame %d (after SELECT already fired) leaves the fired SELECT "
+			      "alone and still suppresses the release", mv);
+		}
+	}
+
+	// --- a finger already down when the resolver starts looking (mode switch, ctx change) must
+	//     never resolve: we did not see the press, so we do not know what tile it began on.
+	{
+		OwnGest g; memset(&g, 0, sizeof g);
+		int fired = 0;
+		for (int f = 0; f < OWNGEOM_HOLD_FRAMES * 3; f++)
+			if (owngest_step(&g, 1, 0, 1, 0) != OWNG_NONE) fired++;
+		if (owngest_step(&g, 0, 0, 1, 0) != OWNG_NONE) fired++;
+		CHECK(fired == 0, "a touch that was ALREADY down when the machine started is inert");
+	}
+
+	// --- an idle machine is silent forever, and a release with no press is not a tap.
+	{
+		OwnGest g; memset(&g, 0, sizeof g);
+		int fired = 0;
+		for (int f = 0; f < 100; f++) if (owngest_step(&g, 0, 0, 1, 0) != OWNG_NONE) fired++;
+		CHECK(fired == 0, "no touch at all -> no events (100 frames)");
+	}
+
+	// --- back-to-back gestures: state from gesture N never leaks into N+1.
+	{
+		OwnGest g; memset(&g, 0, sizeof g);
+		int sel = 0, st = 0;
+		for (int rep = 0; rep < 4; rep++) {
+			for (int f = 0; f < OWNGEOM_HOLD_FRAMES + 5; f++) {
+				int ev = owngest_step(&g, 1, f == 0, 1, 0);
+				if (ev == OWNG_SELECT) sel++;
+				if (ev == OWNG_START) st++;
+			}
+			owngest_step(&g, 0, 0, 1, 0);
+			for (int f = 0; f < 3; f++) {           // a short tap between the holds
+				int ev = owngest_step(&g, 1, f == 0, 1, 0);
+				if (ev == OWNG_SELECT) sel++;
+				if (ev == OWNG_START) st++;
+			}
+			if (owngest_step(&g, 0, 0, 1, 0) == OWNG_START) st++;
+		}
+		CHECK(sel == 4 && st == 4, "four hold+tap pairs -> exactly 4 SELECTs and 4 STARTs "
+		      "(got %d/%d): the `fired` latch is per gesture, not sticky", sel, st);
+	}
+}
+
+// ================== PHASE 24 / lane A2 — WALK vs RUN (decision D2) =============================
+// The oracle is the engine's own predicate, restated from pret and kept deliberately separate from
+// the implementation (a copy of the code under test proves nothing): run is allowed iff the
+// behaviour is not in that engine's disallowed set.
+static int oracle_tile_ok(int eng, int b, int elev) {
+	if (b == 0x0A) return 0;                                   // both engines
+	if (eng == RUNGEOM_ENG_FRLG) return 1;                     // FR/LG: the rest are FALSE stubs
+	if (b == 0x03 || b == 0x28) return 0;                      // MB_LONG_GRASS / MB_HOT_SPRINGS
+	if (b >= 0x74 && b <= 0x77) return 0;                      // IsPacifidlogLog
+	if (b == 0x78) return (elev >= 0) && (elev & 1);           // MB_FORTREE_BRIDGE, odd elevation
+	return 1;
+}
+
+static void test_run_tile(void) {
+	puts("TEST 17: rungeom_tile_ok — the engine's own IsRunningDisallowed metatile half, exhaustive");
+	int rseNo = 0, frNo = 0;
+	for (int b = 0; b < 256; b++) {
+		for (int e = -1; e <= 15; e++) {
+			CHECK(rungeom_tile_ok(RUNGEOM_ENG_RSE, b, e) == oracle_tile_ok(RUNGEOM_ENG_RSE, b, e),
+			      "RSE behaviour 0x%02X elev %d", b, e);
+			CHECK(rungeom_tile_ok(RUNGEOM_ENG_FRLG, b, e) == oracle_tile_ok(RUNGEOM_ENG_FRLG, b, e),
+			      "FRLG behaviour 0x%02X elev %d", b, e);
+		}
+		if (!rungeom_tile_ok(RUNGEOM_ENG_RSE, b, 1)) rseNo++;
+		if (!rungeom_tile_ok(RUNGEOM_ENG_FRLG, b, 1)) frNo++;
+	}
+	// The named tiles, called out individually so a wrong constant reads as itself in the log.
+	CHECK(!rungeom_tile_ok(RUNGEOM_ENG_RSE, 0x0A, 3), "MB_NO_RUNNING 0x0A blocks a dash (RSE)");
+	CHECK(!rungeom_tile_ok(RUNGEOM_ENG_FRLG, 0x0A, 3), "MB_RUNNING_DISALLOWED 0x0A blocks it (FRLG)");
+	CHECK(!rungeom_tile_ok(RUNGEOM_ENG_RSE, 0x03, 3), "MB_LONG_GRASS 0x03 blocks it (RSE only)");
+	CHECK(rungeom_tile_ok(RUNGEOM_ENG_FRLG, 0x03, 3), "...and does NOT in FRLG (0x03 is not its list)");
+	CHECK(!rungeom_tile_ok(RUNGEOM_ENG_RSE, 0x28, 3),
+	      "MB_HOT_SPRINGS 0x28 blocks it — the same behaviour byte lane A1's P4 proof read at "
+	      "Lavaridge (`beh=0x28`), so the spring excursion's last leg can never hold B");
+	CHECK(!rungeom_tile_ok(RUNGEOM_ENG_RSE, 0x74, 3) && !rungeom_tile_ok(RUNGEOM_ENG_RSE, 0x77, 3),
+	      "the four Pacifidlog logs 0x74..0x77 block it");
+	CHECK(rungeom_tile_ok(RUNGEOM_ENG_RSE, 0x73, 3) == 1,
+	      "0x73 is NOT one of the four logs (the set is exactly 0x74..0x77) and runs fine");
+	CHECK(rungeom_tile_ok(RUNGEOM_ENG_RSE, 0x78, 3) == 1, "Fortree bridge, ODD elevation -> allowed");
+	CHECK(rungeom_tile_ok(RUNGEOM_ENG_RSE, 0x78, 2) == 0, "Fortree bridge, EVEN elevation -> blocked");
+	CHECK(rungeom_tile_ok(RUNGEOM_ENG_RSE, 0x78, -1) == 0,
+	      "unknown elevation on the bridge -> blocked (the conservative half: never guess a dash)");
+	CHECK(rungeom_tile_ok(RUNGEOM_ENG_RSE, -1, 3) == 0 && rungeom_tile_ok(RUNGEOM_ENG_RSE, 256, 3) == 0,
+	      "an unreadable behaviour walks rather than guesses");
+	CHECK(rseNo == 7 && frNo == 1,
+	      "RSE blocks 7 behaviours at odd elevation and FRLG blocks 1 (got %d/%d) — the two "
+	      "engines genuinely disagree and the tables must never merge", rseNo, frNo);
+}
+
+static void test_run_decide(void) {
+	puts("TEST 18: rungeom_decide — distance decides, and every gate is a veto");
+
+	CHECK(RUNGEOM_MIN_TILES == 4, "D2's starting threshold is 4 PATH tiles");
+	CHECK(RUNG_ALL == (RUNG_SHOES | RUNG_MAP | RUNG_ONFOOT | RUNG_FREE | RUNG_TERRAIN),
+	      "RUNG_ALL is exactly the five gates");
+
+	// The distance axis, over every path length a window BFS can produce, fully eligible.
+	for (int n = 0; n <= 64; n++)
+		CHECK(rungeom_decide(n, RUNG_ALL) == (n >= RUNGEOM_MIN_TILES),
+		      "path length %d -> %s", n, n >= RUNGEOM_MIN_TILES ? "RUN" : "walk");
+	CHECK(rungeom_decide(RUNGEOM_MIN_TILES - 1, RUNG_ALL) == 0, "3 tiles walks (close = walk)");
+	CHECK(rungeom_decide(RUNGEOM_MIN_TILES, RUNG_ALL) == 1, "4 tiles runs (far = run)");
+	CHECK(rungeom_decide(-3, RUNG_ALL) == 0, "a negative path length can never run");
+
+	// The eligibility axis, exhaustively: 32 masks x a long path. EVERY missing gate must veto —
+	// this is the "degrade SILENTLY to walking" half of D2, and it is the half a partial read
+	// (a game with no gMapHeader address, a save not yet loaded) actually exercises.
+	int ran = 0;
+	for (unsigned m = 0; m <= RUNG_ALL; m++) {
+		int d = rungeom_decide(32, m);
+		CHECK(d == (m == RUNG_ALL), "mask 0x%02X with a 32-tile path -> %s", m, d ? "RUN" : "walk");
+		CHECK(rungeom_eligible(m) == (m == RUNG_ALL), "rungeom_eligible agrees for mask 0x%02X", m);
+		if (d) ran++;
+	}
+	CHECK(ran == 1, "exactly ONE of the 32 eligibility masks runs (got %d): the gates conjoin", ran);
+
+	// The four named single-gate failures, spelled out so a regression names its own cause.
+	CHECK(rungeom_decide(20, RUNG_ALL & ~RUNG_SHOES) == 0,   "no Running Shoes -> walk");
+	CHECK(rungeom_decide(20, RUNG_ALL & ~RUNG_MAP) == 0,     "gMapHeader.allowRunning clear -> walk");
+	CHECK(rungeom_decide(20, RUNG_ALL & ~RUNG_ONFOOT) == 0,  "surfing / underwater / on a bike -> walk");
+	CHECK(rungeom_decide(20, RUNG_ALL & ~RUNG_FREE) == 0,    "a forced move owns the avatar -> walk");
+	CHECK(rungeom_decide(20, RUNG_ALL & ~RUNG_TERRAIN) == 0, "the tile cancels a dash -> walk");
+	CHECK(rungeom_decide(20, 0) == 0, "nothing readable at all -> walk (never a stall, never a B)");
+}
+
 int main(void) {
 	test_colcount();
 	test_validity();
@@ -587,6 +802,9 @@ int main(void) {
 	test_dlg_route();
 	test_map_hit();
 	test_map_nav();
+	test_own_gesture();
+	test_run_tile();
+	test_run_decide();
 	printf("\n=== %d checks, %d failures ===\n", g_checks, g_fails);
 	return g_fails ? 1 : 0;
 }

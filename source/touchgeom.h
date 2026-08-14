@@ -284,3 +284,120 @@ int mapgeom_hit(int gx, int gy, int* cx, int* cy);
 // axis per frame). 0 = arrived, or either coordinate out of the legal range (never guess).
 enum { MN_RIGHT = 1, MN_LEFT = 2, MN_DOWN = 4, MN_UP = 8 };
 int mapnav_step(int curX, int curY, int tgtX, int tgtY);
+
+// ========== PHASE 24 / lane A2 — the OVERWORLD OWN-TILE GESTURE (user decision D1) =============
+// docs/phase21-touch-census/DECISIONS-overworld-gestures.md §D1, verbatim: a TAP on the player's
+// own tile is START (the field menu) and fires on RELEASE; a HOLD on the player's own tile is
+// SELECT (the registered item) and fires the MOMENT the hold threshold is crossed, while the
+// finger is still down — and the release that follows must NOT also fire the tap. This REPLACES
+// the shipped `tap-self = A` / `double-tap-self = START` pair (COVERAGE.md §1).
+//
+// WHY NOT DOUBLE-TAP (the user's own reasoning, recorded because it is the load-bearing part):
+// a double-tap binding forces EVERY single tap to sit out the double-tap window before it can
+// fire, so the most-used action becomes the laggiest. Tap-vs-hold costs nothing — the tap
+// resolves on release, the hold resolves on its own timer, and neither waits for the other.
+//
+// WHERE THE `A` WENT. Nowhere: a tap on the THING you want still routes to it and interacts
+// (the phase-18 door/NPC terminals end with A), and every dialog is a FAM-DLG tap-advance screen.
+// D1 explicitly forbids re-adding a third self-gesture without a live gap being demonstrated.
+//
+// THRESHOLDS ARE REUSED, NEVER INVENTED (D1's own instruction): the hold is the FAM-DLG hold, and
+// "did not move" is the walker's existing press-vs-drag latch (touch.c owns the px comparison —
+// this module never sees pixels, only the boolean the caller already computes for the tap test).
+#define OWNGEOM_HOLD_FRAMES DLGGEOM_HOLD_FRAMES   /* 30 ~ 0.5 s at 60 fps — ONE hold in the app */
+
+enum { OWNG_NONE = 0,   // nothing resolved this frame
+       OWNG_START,      // release of a clean tap on the player's own tile -> START
+       OWNG_SELECT };   // the hold threshold was crossed on the player's own tile -> SELECT
+
+// Caller-owned, one per seat. Zero-initialise; touch.c's walk_reset() clears it.
+typedef struct {
+	uint8_t active;   // a gesture is in flight (the finger is down)
+	uint8_t armed;    // that gesture STARTED on the player's own tile
+	uint8_t moved;    // the press-vs-drag slop was crossed at some point (one-way latch)
+	uint8_t fired;    // SELECT already fired for this gesture -> the release must stay silent
+	int16_t frames;   // frames the finger has been down
+} OwnGest;
+
+// One frame of the own-tile gesture. `touching` = the finger is down THIS frame; `newPress` = it
+// went down THIS frame; `onSelf` = the PRESS-TIME tile was the player's own (screen offset 0,0 —
+// press-time, not live, so a hold that drifts a pixel is still the same gesture); `movedNow` = the
+// caller's slop latch. Returns OWNG_* — at most one event per gesture, and a gesture that fired
+// SELECT can never also fire START.
+int owngest_step(OwnGest* g, int touching, int newPress, int onSelf, int movedNow);
+
+// ========== PHASE 24 / lane A2 — WALK vs RUN, decided by distance (user decision D2) ===========
+// DECISIONS-overworld-gestures.md §D2: "a tap-to-walk route RUNS when the routed path length is at
+// or beyond a threshold and WALKS below it — close = walk, far = run", decided PER LEG.
+//
+// THE MECHANISM ALREADY EXISTS AND IS PROVEN: the D4 control grammar's sprint tokens hold KEY_B in
+// the same mask as the direction (control.c:151). The touch route follower simply never pressed B.
+//
+// THE GAME'S OWN RULE, mirrored (this is the whole safety story — we press B only where the engine
+// would have accepted a human's B, so a route can never fight the game):
+//
+//   pokeemerald src/field_player_avatar.c:658-663  (PlayerNotOnBikeMoving)
+//       if (!(gPlayerAvatar.flags & PLAYER_AVATAR_FLAG_UNDERWATER) && (heldKeys & B_BUTTON)
+//        && FlagGet(FLAG_SYS_B_DASH)
+//        && IsRunningDisallowed(gObjectEvents[gPlayerAvatar.objectEventId].currentMetatileBehavior) == 0)
+//            PlayerRun(direction);
+//   pokefirered src/field_player_avatar.c:516-523 — the same three conjuncts (FR adds only a
+//       rock-stairs slow-run variant, which is a speed, not a gate).
+//   ...and the branch ABOVE it, in both engines: `if (flags & PLAYER_AVATAR_FLAG_SURFING)
+//       { PlayerWalkFast(direction); return; }` — surfing is already run speed and B is never
+//       even read, so a surf leg must not hold B (D2's "the surf leg has its own speed").
+//   A BIKE never reaches this function at all (MovePlayerOnBike owns those frames) and there B is
+//       the ACRO WHEELIE / hop — which is why biking is a hard NO rather than a no-op.
+//
+//   IsRunningDisallowed — pokeemerald src/bike.c:1056-1062, pokefirered src/bike.c:253-261:
+//       !gMapHeader.allowRunning  ||  MetatileBehaviorForbidsBiking(behaviour)
+//   MetatileBehaviorForbidsBiking = MetatileBehavior_IsRunningDisallowed(b)
+//                                   || (MetatileBehavior_IsFortreeBridge(b) && !(elevation & 1))
+//   MetatileBehavior_IsRunningDisallowed:
+//       RSE (pokeemerald src/metatile_behavior.c:1258-1266): MB_NO_RUNNING 0x0A, MB_LONG_GRASS
+//           0x03, MB_HOT_SPRINGS 0x28, or IsPacifidlogLog = 0x74..0x77.
+//       FRLG (pokefirered src/metatile_behavior.c:695-701): MB_RUNNING_DISALLOWED 0x0A only —
+//           FR's IsFortreeBridge and IsPacifidlogLog are literal `return FALSE` stubs (:602-607).
+//   gMapHeader.allowRunning is a BITFIELD and the two engines lay it out differently
+//   (global.fieldmap.h): RSE byte 0x1A = {allowCycling:1, allowEscaping:1, allowRunning:1,
+//   showMapName:5} -> bit 2; FRLG byte 0x18 = bikingAllowed (a whole byte), byte 0x19 =
+//   {allowEscaping:1, allowRunning:1, showMapName:6} -> bit 1. touch.c owns those two reads.
+//
+// EVERY GATE DEGRADES SILENTLY TO WALKING (D2: "never stall, never spam B"). An address this game
+// does not have, a save not yet loaded, a behaviour we could not read — all of them clear their
+// bit, the leg walks, and nothing else about the route changes.
+#define RUNGEOM_MIN_TILES 4   /* D2's starting threshold: >= this many PATH tiles -> run.
+                               * Path length, not straight-line distance, so a short hop around a
+                               * corner still walks. Named so a hardware feel-test can retune it
+                               * without hunting for a literal (VERIFY-ON-HW-PENDING, exactly like
+                               * TERM_FRAMES and the FAM-DLG timings). */
+
+// Eligibility bits. ALL of them must be set for a leg to run — this is a conjunction in the game
+// too, and every clause here is one of the engine's own.
+enum {
+	RUNG_SHOES   = 1u << 0,   // FlagGet(FLAG_SYS_B_DASH) — the Running Shoes were received
+	RUNG_MAP     = 1u << 1,   // gMapHeader.allowRunning
+	RUNG_ONFOOT  = 1u << 2,   // not SURFING, not UNDERWATER, not MACH/ACRO bike
+	RUNG_FREE    = 1u << 3,   // not PLAYER_AVATAR_FLAG_FORCED_MOVE (a script owns the avatar)
+	RUNG_TERRAIN = 1u << 4,   // the tile under the player does not cancel a dash
+	RUNG_ALL     = 0x1Fu
+};
+
+// FpEngine mirrored the way DLGGEOM_CTX_FIELD mirrors GameCtx — this file must stay includable by
+// a host test with nothing but <stdint.h>. touch.c carries the _Static_assert that pins them.
+#define RUNGEOM_ENG_RSE  0
+#define RUNGEOM_ENG_FRLG 1
+
+// The engine's own metatile half of IsRunningDisallowed, inverted to "may I dash here": 1 = the
+// tile permits a dash. `elevation` is the player's current elevation and only matters for the RSE
+// Fortree bridge clause; pass -1 when it is unknown, which makes the bridge tile answer NO (the
+// conservative half — a dash the game refuses is never worth guessing at).
+int rungeom_tile_ok(int eng, int behaviour, int elevation);
+
+// Are all five gates satisfied? Split out from the decision so the follower can re-ask the cheap
+// live half every frame without re-deciding the distance.
+int rungeom_eligible(unsigned elig);
+
+// THE DECISION, as a pure function of (routed path length, eligibility mask): 1 = hold B for this
+// leg, 0 = walk it. Decided per LEG, never once for a whole multi-leg program.
+int rungeom_decide(int pathLen, unsigned elig);

@@ -357,6 +357,14 @@ int main(void) {
 		CHECK(r->badgeSmash != f->badgeSmash, "Rock Smash badge differs between engines");
 		CHECK(r->badgeWaterfall != f->badgeWaterfall, "Waterfall badge differs between engines");
 		CHECK(r->gfxCutTree != f->gfxCutTree, "cut-tree gfx id differs between engines");
+		// PHASE 24 / lane A2 (decision D2 — walk vs run). FLAG_SYS_B_DASH, the ONE save bit the
+		// run decision reads: pokeemerald include/constants/flags.h:1462 (SYSTEM_FLAGS 0x860 +
+		// 0x60) and pokefirered include/constants/flags.h:1381 (SYS_FLAGS 0x800 + 0x2F). The FR
+		// value was fetched from pret master, NOT derived from Emerald's — which the inequality
+		// below is here to keep honest, since 0x8C0 in an FR save is a completely unrelated flag.
+		CHECK(r->runShoes == 0x8C0, "EM FLAG_SYS_B_DASH (Running Shoes received)");
+		CHECK(f->runShoes == 0x82F, "FR FLAG_SYS_B_DASH");
+		CHECK(r->runShoes != f->runShoes, "the Running-Shoes flag id differs between engines");
 		CHECK(fieldtrav_cfg((FpEngine)99) == r, "an unknown engine falls back to RSE, never NULL");
 	}
 

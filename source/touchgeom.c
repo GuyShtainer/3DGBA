@@ -268,3 +268,65 @@ int mapnav_step(int curX, int curY, int tgtX, int tgtY) {
 	else if (tgtY < curY) k |= MN_UP;
 	return k;
 }
+
+// ========== PHASE 24 / lane A2 — the OWN-TILE GESTURE (D1) and WALK-vs-RUN (D2) ================
+// See touchgeom.h for the decision text and the pret citations. Stateless except for the caller-
+// owned OwnGest, which exists only because a gesture is a TIMELINE and a pure function of one
+// frame cannot express "the release after a hold stays silent".
+
+int owngest_step(OwnGest* g, int touching, int newPress, int onSelf, int movedNow) {
+	if (!g) return OWNG_NONE;
+
+	if (newPress) {   // a fresh gesture: everything about the previous one is gone
+		g->active = 1;
+		g->armed  = onSelf ? 1 : 0;
+		g->moved  = 0;
+		g->fired  = 0;
+		g->frames = 0;
+	}
+
+	if (touching) {
+		if (!g->active) {              // finger already down when we started looking: never guess
+			g->active = 1; g->armed = 0; g->moved = 0; g->fired = 0; g->frames = 0;
+			return OWNG_NONE;
+		}
+		if (g->frames < 0x7FFF) g->frames++;
+		if (movedNow) g->moved = 1;    // one-way latch: a finger that DRAGGED is a steer, not a tap
+		// The hold fires WHILE STILL HELD, the moment the threshold is crossed (D1) — not on the
+		// release, which is what makes it feel like a button rather than a delayed tap.
+		if (g->armed && !g->moved && !g->fired && g->frames >= OWNGEOM_HOLD_FRAMES) {
+			g->fired = 1;
+			return OWNG_SELECT;
+		}
+		return OWNG_NONE;
+	}
+
+	// released (or never down)
+	if (!g->active) return OWNG_NONE;
+	int armed = g->armed, moved = g->moved, fired = g->fired, frames = g->frames;
+	g->active = 0; g->armed = 0; g->moved = 0; g->fired = 0; g->frames = 0;
+	// `fired` is the whole point of the second half of D1: the release that ends a HOLD must not
+	// also fire the tap. `frames >= 1` keeps a phantom release (a frame with neither press nor
+	// hold recorded) from resolving to a START.
+	if (armed && !moved && !fired && frames >= 1) return OWNG_START;
+	return OWNG_NONE;
+}
+
+int rungeom_tile_ok(int eng, int behaviour, int elevation) {
+	if (behaviour < 0 || behaviour > 0xFF) return 0;   // unreadable tile -> walk (never guess)
+	if (behaviour == 0x0A) return 0;                   // MB_NO_RUNNING / MB_RUNNING_DISALLOWED, both engines
+	if (eng == RUNGEOM_ENG_FRLG) return 1;             // FR/LG stop there: the rest are FALSE stubs
+	// RSE (pokeemerald metatile_behavior.c:1258-1266 + bike.c:901-907)
+	if (behaviour == 0x03) return 0;                   // MB_LONG_GRASS
+	if (behaviour == 0x28) return 0;                   // MB_HOT_SPRINGS
+	if (behaviour >= 0x74 && behaviour <= 0x77) return 0;   // MB_PACIFIDLOG_*_LOG_* (IsPacifidlogLog)
+	if (behaviour == 0x78) return (elevation >= 0) && (elevation & 1);   // MB_FORTREE_BRIDGE
+	return 1;
+}
+
+int rungeom_eligible(unsigned elig) { return (elig & RUNG_ALL) == RUNG_ALL; }
+
+int rungeom_decide(int pathLen, unsigned elig) {
+	if (pathLen < RUNGEOM_MIN_TILES) return 0;   // "close = walk" — the user's rule, first
+	return rungeom_eligible(elig);
+}

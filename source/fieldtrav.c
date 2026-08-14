@@ -32,6 +32,9 @@ static const FtEngCfg s_cfgRse = {
 	/* gfxCutTree    */ 82,      // OBJ_EVENT_GFX_CUTTABLE_TREE
 	/* gfxRock       */ 86,      // OBJ_EVENT_GFX_BREAKABLE_ROCK
 	/* gfxBoulder    */ 87,      // OBJ_EVENT_GFX_PUSHABLE_BOULDER
+	/* runShoes      */ 0x8C0,   // FLAG_SYS_B_DASH = SYSTEM_FLAGS 0x860 + 0x60
+	                             //   (pokeemerald include/constants/flags.h:1462, re-read this
+	                             //   session; used by PlayerNotOnBikeMoving's dash test)
 };
 
 // FRLG (FireRed / LeafGreen). SaveBlock1.flags: pokefirered include/global.h:790 `/*0x0EE0*/`.
@@ -55,6 +58,9 @@ static const FtEngCfg s_cfgFrlg = {
 	/* gfxCutTree    */ 95,      // OBJ_EVENT_GFX_CUT_TREE
 	/* gfxRock       */ 96,      // OBJ_EVENT_GFX_ROCK_SMASH_ROCK
 	/* gfxBoulder    */ 97,      // OBJ_EVENT_GFX_PUSHABLE_BOULDER
+	/* runShoes      */ 0x82F,   // FLAG_SYS_B_DASH = SYS_FLAGS 0x800 + 0x2F
+	                             //   (pokefirered include/constants/flags.h:1381, fetched from
+	                             //   pret master this session — NOT derived from Emerald's 0x8C0)
 };
 
 const FtEngCfg* fieldtrav_cfg(FpEngine eng) {

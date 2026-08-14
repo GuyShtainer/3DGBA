@@ -65,6 +65,12 @@ typedef struct {
 	uint16_t badgeCut, badgeSmash, badgeSurf, badgeWaterfall, badgeStrength;
 	uint16_t strengthLatch;   // FLAG_SYS_USE_STRENGTH (per-map-load latch; read, never assumed)
 	uint8_t  gfxCutTree, gfxRock, gfxBoulder;
+	// PHASE 24 / lane A2 (decision D2, walk vs run). APPENDED — the two tables in fieldtrav.c are
+	// positionally initialised, so a new field may only go at the END. This is a FLAG ID and flag
+	// ids are exactly what this struct is for; the run decision itself is pure geometry and lives
+	// in touchgeom.c (rungeom_*), while the ONE thing it needs from the save is
+	// FlagGet(FLAG_SYS_B_DASH) — "have the Running Shoes been received".
+	uint16_t runShoes;        // FLAG_SYS_B_DASH
 } FtEngCfg;
 
 // Never NULL: an unknown engine returns the RSE table (fieldpath's own fallback convention).

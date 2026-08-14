@@ -22,6 +22,11 @@ const char* const TOUCH_NAMES[3] = { "Off", "Gamepad", "Smart" };
 // time instead of silently routing field dialogs back into the walker.
 _Static_assert(GCTX_OVERWORLD == DLGGEOM_CTX_FIELD,
                "touchgeom.h DLGGEOM_CTX_FIELD drifted from GameCtx GCTX_OVERWORLD");
+// PHASE 24 / lane A2: the same mirror, for the same reason, for the walk-vs-run engine split.
+// touchgeom.c cannot include fieldpath.h's FpEngine without dragging the router into a geometry
+// unit test, so it carries its own two names — and this pins them.
+_Static_assert((int)FP_ENG_RSE == RUNGEOM_ENG_RSE && (int)FP_ENG_FRLG == RUNGEOM_ENG_FRLG,
+               "touchgeom.h RUNGEOM_ENG_* drifted from fieldpath.h FpEngine");
 
 // Pad tint comes from g_prefs.padColor (5 options, theme.h); idle zones draw at alpha 0x40,
 // pressed at 0xB0 — the same alphas the old fixed-gold overlay used.
@@ -233,8 +238,10 @@ static int battler_index_for_pos(const TouchSmart* sm, int pos) {
 
 // ===================== SMART: hybrid tap-to-walk + steer =====================
 // HOLD / SLIDE the screen -> steer toward the touch (dominant of the 4 axes), at any speed incl. bike.
-// QUICK TAP a tile -> route there over the live grid. Tap your own tile = A. The camera centers the
-// player at screen tile (7,5).
+// QUICK TAP a tile -> route there over the live grid. The camera centers the player at screen
+// tile (7,5).
+// PHASE 24 / lane A2 — the OWN TILE now has its own two verbs (DECISIONS-overworld-gestures.md D1):
+// TAP yourself = START, HOLD yourself = SELECT. It used to be tap = A / double-tap = START.
 //
 // PHASE 18 / SPEC-door. The classification, the walkability rule and the search now live in
 // fieldpath.c (pure C, host-tested against the user's real ROM maps); this file keeps the gesture
@@ -249,7 +256,11 @@ static int battler_index_for_pos(const TouchSmart* sm, int pos) {
 //   * the route dies the moment SaveBlock1.location changes, so the warp it just triggered cannot
 //     leave a stale route driving the player around the arrival map.
 #define TAP_FRAMES 12     // released within this many frames AND barely moved => a "tap" -> route
-#define DOUBLE_FRAMES 16  // second tap-on-self within this many frames => START
+// PHASE 24 / lane A2: the double-tap survives ONLY on the no-map screens (px < 0 — title, intro,
+// main menu), where there is no player tile and decision D1 therefore does not apply. On the
+// overworld it is GONE, replaced by tap = START / hold = SELECT (touchgeom.h owngest_step), for
+// the reason D1 records: a double-tap binding makes EVERY single tap wait out its window.
+#define DOUBLE_FRAMES 16  // (no-map screens only) second tap within this many frames => START
 // How long to HOLD the terminal direction. The game needs heldDirection2 AND
 // dpadDirection == playerDirection (pokeemerald FieldGetPlayerInput / ProcessPlayerFieldInput), and
 // the first frames are spent turning the avatar to face the door — so this is a sustained press,
@@ -271,10 +282,20 @@ static int  s_termDir = FP_NODIR, s_termFrames = 0; static bool s_termActive = f
 static FpKind s_kind = FP_WK_NONE; static int s_replans = 0;
 static int  s_touchFrames = 0, s_downGx, s_downGy, s_downPx, s_downPy; static bool s_moved;
 static int  s_downMapG = -1, s_downMapN = -1;                    // map at press time (tap staleness)
-static int  s_tick = 0, s_lastSelfTap = -999, s_startPulse = 0;   // double-tap-self -> START
+static int  s_tick = 0, s_lastSelfTap = -999, s_startPulse = 0;   // (px<0 screens only) double-tap -> START
 static int  s_npcN = 0; static short s_npcG[16][2];              // active object-event grid coords (+7 space)
+// PHASE 24 / lane A2, decision D1: the OWN-TILE gesture. tap = START (on release), hold = SELECT
+// (the moment the threshold is crossed). The resolver is pure and host-graded (touchgeom.c
+// owngest_step); this is only its state plus the two pulses it queues.
+static OwnGest s_own;
+static int  s_selPulse = 0;
+// PHASE 24 / lane A2, decision D2: does THIS leg run? Latched by walk_plan (distance +
+// eligibility) and re-tested against the live gates on every frame B would actually be held.
+static bool s_runLeg = false;
 static void walk_reset(void) {
-	s_aPulse = 0; s_startPulse = 0; s_walking = false; s_pathLen = s_pathPos = 0; s_touchFrames = 0; s_moved = false;
+	s_aPulse = 0; s_startPulse = 0; s_selPulse = 0; s_walking = false; s_pathLen = s_pathPos = 0;
+	s_touchFrames = 0; s_moved = false;
+	memset(&s_own, 0, sizeof s_own); s_runLeg = false;
 	s_termActive = false; s_termDir = FP_NODIR; s_termFrames = 0; s_kind = FP_WK_NONE; s_replans = 0;
 }
 
@@ -364,6 +385,11 @@ static uint32_t fp_r32(void* c, uint32_t a) { return gbacore_read32((GbaCore*)c,
 static FpEngine fp_engine(const GameProfile* p) {
 	return (p->code[2] == 'R' || p->code[2] == 'G') ? FP_ENG_FRLG : FP_ENG_RSE;
 }
+
+// PHASE 24 / lane A2 (decision D2). Defined with the other live game reads further down (they all
+// share prog_sb1 / fp_r8), but CALLED from walk_plan and walk_update_inner, which come first.
+static unsigned run_elig(GbaCore* core, const GameProfile* p);          // the five run gates
+static u16 run_key(GbaCore* core, const GameProfile* p, bool runLeg);   // ...and the B they earn
 
 // Plan a route to the tapped tile. Returns true and arms the follow loop; false means NOTHING is
 // injected — which for a door with no reachable approach is the whole point (a documented no-op
@@ -457,6 +483,16 @@ static bool walk_plan(GbaCore* core, const GameProfile* p, int px, int py, int g
 	s_pathLen = pl.pathLen; s_pathPos = 0;
 	for (int i = 0; i < pl.pathLen; i++) s_pathDir[i] = pl.path[i];
 	s_termActive = false; s_termFrames = 0;
+	// PHASE 24 / lane A2 (decision D2): "close = walk, far = run", decided HERE — i.e. once per
+	// LEG, because every leg of every route in this app is planned through this one function
+	// (a tap, a re-plan, an excursion leg, a traversal program's hand-off). Deciding it anywhere
+	// else would be deciding it per ROUTE, which D2 explicitly rules out.
+	{
+		unsigned elig = run_elig(core, p);
+		s_runLeg = rungeom_decide(pl.pathLen, elig) != 0;
+		g_fieldDbg.runElig = (int32_t)elig;
+		g_fieldDbg.runLeg  = s_runLeg ? 1 : 0;
+	}
 	return true;
 }
 
@@ -470,14 +506,19 @@ static u16 walk_update_inner(bool touching, bool newPress, bool gvalid, int gx, 
                              int traverse) {
 	s_tick++;
 	if (s_startPulse > 0) { s_startPulse--; return 1 << GBAKEY_START; }
+	if (s_selPulse > 0)   { s_selPulse--;   return 1 << GBAKEY_SELECT; }
 	if (s_aPulse > 0)     { s_aPulse--;     return 1 << GBAKEY_A; }
 
 	if (newPress && gvalid) { s_downGx = gx; s_downGy = gy; s_downPx = px; s_downPy = py; s_touchFrames = 0; s_moved = false;
 	                          s_downMapG = mapG; s_downMapN = mapN; }
 	if (touching && gvalid) { s_touchFrames++; if (abs(gx - s_downGx) > 8 || abs(gy - s_downGy) > 8) s_moved = true; }
 
-	// No loaded overworld map (title / intro / main menu): a tap = A, a double-tap = START. No walking.
+	// No loaded overworld map (title / intro / main menu): a tap = A, a double-tap = START. No
+	// walking — and NOT decision D1 either: D1 is about the player's own TILE, and on a screen with
+	// no player there is no such tile. A gesture must never straddle the boundary, so the own-tile
+	// machine is cleared here rather than left half-armed for the frame the map finishes loading.
 	if (px < 0) {
+		memset(&s_own, 0, sizeof s_own);
 		if (!touching && s_touchFrames > 0) {
 			bool tap = s_touchFrames <= TAP_FRAMES && !s_moved; s_touchFrames = 0;
 			if (tap) { if (s_tick - s_lastSelfTap < DOUBLE_FRAMES) s_startPulse = 3; else s_aPulse = 3; s_lastSelfTap = s_tick; }
@@ -486,6 +527,32 @@ static u16 walk_update_inner(bool touching, bool newPress, bool gvalid, int gx, 
 		if (s_aPulse > 0)     { s_aPulse--;     return 1 << GBAKEY_A; }
 		return 0;
 	}
+
+	// ---- PHASE 24 / lane A2, decision D1: the OWN-TILE gesture --------------------------------
+	// TAP your own tile -> START (the field menu), on RELEASE. HOLD your own tile -> SELECT (the
+	// registered item), the moment the threshold is crossed, and the release that ends it stays
+	// silent. This REPLACES `tap-self = A` and `double-tap-self = START`.
+	//
+	// Resolved from the PRESS-TIME tile (s_downGx/s_downGy), for the same reason the tap-to-walk
+	// arm below uses it: the camera is anchored on the player when the finger goes down, so that
+	// is the anchor the user pointed with — and a hold that drifts a pixel is still the same
+	// gesture. It runs BEFORE the steer and the tap-to-walk arms so exactly one of the three can
+	// claim a gesture, and it cancels any route in flight: pressing START while the avatar is
+	// walking somewhere you no longer want is the normal way to say "stop".
+	{
+		int onSelf = (s_downGx / 16 - 7) == 0 && (s_downGy / 16 - 5) == 0;
+		int ev = owngest_step(&s_own, touching ? 1 : 0, (newPress && gvalid) ? 1 : 0,
+		                      onSelf, s_moved ? 1 : 0);
+		if (ev == OWNG_SELECT)     { s_selPulse = 3;   g_fieldDbg.ownSelects++; }
+		else if (ev == OWNG_START) { s_startPulse = 3; g_fieldDbg.ownStarts++; }
+		if (ev != OWNG_NONE) {
+			s_touchFrames = 0;                       // spent: it must not ALSO arm a route below
+			if (s_walking) route_end(core, FDBG_END_CANCELLED);
+			s_walking = false; s_termActive = false;
+		}
+	}
+	if (s_startPulse > 0) { s_startPulse--; return 1 << GBAKEY_START; }
+	if (s_selPulse > 0)   { s_selPulse--;   return 1 << GBAKEY_SELECT; }
 
 	if (touching && gvalid) {                            // HOLD -> steer toward the touch (cancels a route)
 		s_walking = false;
@@ -500,10 +567,13 @@ static u16 walk_update_inner(bool touching, bool newPress, bool gvalid, int gx, 
 		int ddx = s_downGx / 16 - 7, ddy = s_downGy / 16 - 5;
 		s_touchFrames = 0;
 		if (tap && core && p) {
-			if (ddx == 0 && ddy == 0) {                  // tapped self
-				if (s_tick - s_lastSelfTap < DOUBLE_FRAMES) s_startPulse = 3;   // double-tap self -> START
-				else s_aPulse = 3;                                              // single -> A (interact/advance)
-				s_lastSelfTap = s_tick;
+			// PHASE 24 / lane A2: the OWN tile is decision D1's, resolved above and never here.
+			// The guard is belt-and-braces — an own-tile gesture zeroes s_touchFrames when it
+			// fires, so this branch cannot be reached with (0,0) — but it says out loud that
+			// exactly one handler owns a self-tap, which is the property that broke when the old
+			// double-tap window and the route arm both looked at the same release.
+			if (ddx == 0 && ddy == 0) {
+				/* nothing: START / SELECT already resolved it */
 			} else if (mapG == s_downMapG && mapN == s_downMapN &&
 			           abs(px - s_downPx) <= 1 && abs(py - s_downPy) <= 1) {
 				// SPEC-door T5.12, tightened (see the BUILDLOG deviation note). The tapped WORLD
@@ -644,7 +714,12 @@ static u16 walk_update_inner(bool touching, bool newPress, bool gvalid, int gx, 
 	}
 	int d = s_pathDir[s_pathPos];
 	if (d < 0 || d > 3) { s_walking = false; route_end(core, FDBG_END_ARRIVED); return 0; }
-	return s_keyDir[d];
+	// PHASE 24 / lane A2 (decision D2) — THE ONE PLACE THE ROUTE FOLLOWER PRESSES B. Only on a
+	// plain path step, never on the TERMINAL HOLD above (a door/warp hold is one tile: there is no
+	// speed to win, and B at a door is a keypress with a meaning of its own), and never anywhere
+	// the sequencer is talking to a script. run_key re-asks the live gates every frame, exactly as
+	// the engine does, so this degrades to a plain walk the moment any of them closes.
+	return s_keyDir[d] | run_key(core, p, s_runLeg);
 }
 
 // LOGGING ONLY. Everything latched in g_fieldDbg above is from PLAN time; this stamps the LIVE
@@ -763,6 +838,74 @@ static int prog_facing(GbaCore* core, const GameProfile* p) {
 }
 // dir (0 R / 1 L / 2 D / 3 U — s_keyDir order) -> the game's facing code.
 static const uint8_t s_faceOfDir[4] = { 4, 3, 1, 2 };
+
+// PHASE 24 / lane A2 (decision D2) — the five gates of "may this leg RUN", each read off the
+// game's own state, each defaulting to CLEAR. The rule being mirrored is quoted with its pret
+// lines in touchgeom.h; this function is only the reads.
+//
+// EVERY MISSING ADDRESS CLEARS ITS BIT AND THE LEG WALKS. That is the whole degradation story
+// D2 asks for ("degrade SILENTLY to walking when any gate fails; never stall, never spam B") and
+// it is why the gates are a MASK rather than a bool: `runElig` in g_fieldDbg names which one
+// failed, so "why didn't it run" is one gdb read instead of a rebuild.
+//
+// Ruby/Sapphire (`sbDirect`) deliberately never sets RUNG_MAP: RS has no `allowRunning` bit at
+// all — its rule is `gMapHeader.mapType == MAP_TYPE_INDOOR` (the RS_IsRunningDisallowed that
+// pokeemerald src/bike.c:893-899 preserves) — and no RS ROM exists on this machine to verify the
+// header layout against. Reading Emerald's bit out of an RS header would be a guess, so RS keeps
+// today's walk-only behaviour: a NAMED degradation, exactly like every other RS row in gamestate.h.
+static unsigned run_elig(GbaCore* core, const GameProfile* p) {
+	if (!core || !p) return 0;
+	unsigned e = 0;
+	FpEngine eng = fp_engine(p);
+	const FtEngCfg* c = fieldtrav_cfg(eng);
+
+	// 1. RUNG_SHOES — FlagGet(FLAG_SYS_B_DASH). Same flag rail the HM badges use.
+	{
+		FpBus bus = { fp_r8, fp_r16, fp_r32, core };
+		uint32_t sb1 = prog_sb1(core, p);
+		if (sb1 && fieldtrav_flag_get(&bus, eng, sb1, c->runShoes)) e |= RUNG_SHOES;
+	}
+	// 2. RUNG_MAP — gMapHeader.allowRunning. A BITFIELD, and the two engines lay it out
+	//    differently (global.fieldmap.h): RSE byte 0x1A bit 2, FRLG byte 0x19 bit 1.
+	if (p->mapHeaderPath && !p->sbDirect) {
+		uint32_t off = (eng == FP_ENG_FRLG) ? 0x19u : 0x1Au;
+		unsigned bit = (eng == FP_ENG_FRLG) ? 1u : 2u;
+		if ((gbacore_read8(core, p->mapHeaderPath + off) >> bit) & 1u) e |= RUNG_MAP;
+	}
+	// 3/4. RUNG_ONFOOT + RUNG_FREE — gPlayerAvatar.flags (+0x00), bit values identical in both
+	//    engines (PLAYER_AVATAR_FLAG_*: MACH_BIKE 1<<1, ACRO_BIKE 1<<2, SURFING 1<<3,
+	//    UNDERWATER 1<<4, FORCED_MOVE 1<<6). Surfing is ALREADY run speed and never reads B;
+	//    a bike never reaches the dash branch at all and there B is the acro WHEELIE, which is
+	//    why biking is a hard veto rather than a harmless no-op.
+	if (p->playerAvatar) {
+		uint8_t f = gbacore_read8(core, p->playerAvatar);
+		if (!(f & (0x02u | 0x04u | 0x08u | 0x10u))) e |= RUNG_ONFOOT;
+		if (!(f & 0x40u)) e |= RUNG_FREE;
+	}
+	// 5. RUNG_TERRAIN — the game's own IsRunningDisallowed metatile half, asked about the tile the
+	//    player is standing on RIGHT NOW (gObjectEvents[0].currentMetatileBehavior +0x1E, and
+	//    currentElevation = the low nibble of +0x0B for the Fortree-bridge clause). Re-read every
+	//    frame B would be held, because the engine re-reads it on every step: a route that walks
+	//    into long grass simply stops holding B instead of fighting the game.
+	if (p->mapObjects) {
+		int beh  = (int)gbacore_read8(core, p->mapObjects + 0x1Eu);
+		int elev = (int)(gbacore_read8(core, p->mapObjects + 0x0Bu) & 0x0Fu);
+		if (rungeom_tile_ok((int)eng, beh, elev)) e |= RUNG_TERRAIN;
+	}
+	return e;
+}
+
+// The B half of a walking frame's key mask. `s_runLeg` is the per-LEG distance decision (latched
+// at plan time); the live re-test is the engine's own — it re-evaluates eligibility on every step,
+// so we do too, and a leg that becomes ineligible mid-route just stops holding B.
+static u16 run_key(GbaCore* core, const GameProfile* p, bool runLeg) {
+	if (!runLeg) return 0;
+	unsigned elig = run_elig(core, p);
+	g_fieldDbg.runElig = (int32_t)elig;
+	if (!rungeom_eligible(elig)) return 0;
+	g_fieldDbg.runFrames++;
+	return 1u << GBAKEY_B;
+}
 
 static bool prog_obj_active(GbaCore* core, const GameProfile* p, int slot) {
 	if (!core || !p || !p->mapObjects || slot < 0 || slot >= 16) return false;
@@ -965,7 +1108,19 @@ static u16 prog_update(const TouchSmart* sm, bool touching, bool newPress,
 		}
 		if (mv.hm != FT_HM_NONE) { s_progPhase = TPH_FACE; s_progFrames = 0; return 0; }
 		if (mv.dir < 0 || mv.dir > 3) { prog_end(TPE_STALL, "STOPPED"); return 0; }
-		return s_keyDir[mv.dir];
+		// PHASE 24 / lane A2 (decision D2): "decide per LEG, not once for the whole program". A
+		// traversal program's leg is the contiguous run of plain walk moves before the next HM
+		// interact, so the span is counted from HERE and shrinks as the obstacle approaches —
+		// which means B is always released at least RUNGEOM_MIN_TILES-1 tiles before any A, and
+		// can never be held into a FACE / A / DLG / YESNO / ANSWER phase. That matters more here
+		// than the speed does: in a yes/no, B is NO.
+		{
+			int span = 0;
+			for (int i = s_progStep; i < s_prog.nMoves && s_prog.mv[i].hm == FT_HM_NONE; i++) span++;
+			bool legRuns = rungeom_decide(span, run_elig(core, p)) != 0;
+			g_fieldDbg.runLeg = legRuns ? 1 : 0;
+			return s_keyDir[mv.dir] | run_key(core, p, legRuns);
+		}
 	}
 
 	// ---------- the INTERACT sequence ----------
