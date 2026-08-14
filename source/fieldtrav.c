@@ -744,7 +744,14 @@ bool fieldtrav_excursion(const FpBus* bus, const FpMap* m, uint32_t mapGroupsRom
 	out->outcome = FT_OUT_BADMAP;
 	out->wi = out->wj = -1;
 	if (!bus || !m || !out) return false;
-	if (!ft_rom_ptr(mapGroupsRom) || !ft_rom_ptr(m->mapHeader)) return false;
+	// PHASE 24 (lane A, live-proven): `mapHeader` is gMapHeader — the STRUCT the engine keeps in
+	// EWRAM (0x02...), not a ROM pointer. Requiring ft_rom_ptr here was a category error that made
+	// EVERY excursion attempt on real hardware return BADMAP before it read a single warp; the host
+	// suite could not see it because its fixture handed the planner the ROM header directly. The
+	// rule is fieldpath's own (fieldpath.c:104/160): a non-zero header is enough, and what actually
+	// has to be ROM — the events pointer read OUT of it, the group table, every layout pointer — is
+	// still checked at each read (fieldtrav_warps / fieldtrav_rom_map).
+	if (!ft_rom_ptr(mapGroupsRom) || !m->mapHeader) return false;
 	if (m->backupW <= 0 || m->backupW > 512 || m->backupH <= 0 || m->backupH > 512) return false;
 	if (abs(gx - sx) > FP_WHALF || abs(gy - sy) > FP_WHALF) { out->outcome = FT_OUT_WINDOW; return false; }
 

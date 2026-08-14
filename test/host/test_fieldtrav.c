@@ -146,11 +146,20 @@ static uint32_t rom_r32(void* c, uint32_t a) { return (uint32_t)rom_r16(c, a) | 
 #define LIVE_BASE 0x02900000u
 static uint8_t g_live[2 * 300 * 300];
 static uint32_t g_liveLen = 0;
+// PHASE 24: gMapHeader is an EWRAM STRUCT on hardware (BPEE 0x02037318, gamestate.c mapHeaderPath),
+// not a ROM pointer — and handing the planner the ROM header instead, as this fixture used to, hid
+// a guard that rejected every real excursion (fieldtrav.c FT_OUT_BADMAP). So the live bus now
+// serves a COPY of the header at the EWRAM address the console uses, and TEST 16 runs the planner
+// exactly as touch.c calls it.
+#define HDR_BASE 0x02037318u
+static uint8_t g_hdr[0x20];
+static bool g_hdrOn = false;
 // The live bus: the RAM grid overlay first, then the ROM. The map HEADER and both tilesets are
 // still ROM reads even for the current map (that is true on hardware too), so a bus that only
 // answered the grid would make fieldpath_classify silently blind.
 static uint8_t live_r8(void* c, uint32_t a) {
 	if (a >= LIVE_BASE && a < LIVE_BASE + g_liveLen) return g_live[a - LIVE_BASE];
+	if (g_hdrOn && a >= HDR_BASE && a < HDR_BASE + sizeof g_hdr) return g_hdr[a - HDR_BASE];
 	return rom_r8(c, a);
 }
 static uint16_t live_r16(void* c, uint32_t a) { return (uint16_t)(live_r8(c, a) | (live_r8(c, a + 1) << 8)); }
@@ -171,7 +180,12 @@ static void live_from_rom(const FpBus* rb, const FtRomMap* rm, FpBus* busOut, Fp
 	busOut->ctx = (void*)0;
 	memset(mapOut, 0, sizeof *mapOut);
 	mapOut->engine = FP_ENG_RSE;
-	mapOut->mapHeader = rm->header;                    // behaviour reads still go to ROM
+	// The header the console reads is the EWRAM COPY the map loader made, so mirror that: copy the
+	// ROM MapHeader into the live overlay and point the planner at the EWRAM address. Its INTERNAL
+	// pointers (layout, events, connections) still point into ROM, exactly as on hardware.
+	for (unsigned i = 0; i < sizeof g_hdr; i++) g_hdr[i] = rb->read8(rb->ctx, rm->header + i);
+	g_hdrOn = true;
+	mapOut->mapHeader = HDR_BASE;                      // gMapHeader lives in EWRAM (phase 24)
 	mapOut->mapObjects = 0;                            // no live objects in this harness
 	mapOut->gridPtr = LIVE_BASE;
 	mapOut->backupW = bw; mapOut->backupH = bh;
