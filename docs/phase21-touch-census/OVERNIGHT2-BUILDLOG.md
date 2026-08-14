@@ -61,6 +61,20 @@ checks, 0 failures** (14 suites). emutest harness host tests **149, OK**. `make 
 3DGBA.3dsx 4 366 904 B; `make cia` -> 3DGBA.cia 2 009 024 B (both clean, 2026-08-14 03:45).
 The only build warnings are the pre-existing mgba/celiolink ones (frozen files untouched).
 
+## S2 Entry 2 — COMMITTED (all three pieces, each independently green)
+
+- **6fcda63** `docs(phase21)` — the census bank (545 files: catalog/visited/harvest/coverage/
+  plan/specs/RS-rev2 verification/evidence PNGs + logs) + the HANDOFF census update.
+- **a51c50d** `feat(phase22.0)` — the promotion re-implementation: GCTX_TITLE/GCTX_FULLUI +
+  the 40 [exact] EM/FR fingerprints + the 13 rev-alternate columns with the FR rev1 set
+  (test_profiles 546 -> 1108 at this commit; verified green before committing).
+- **305242f** `fix(profiles)` — BPGE re-pointed to LG rev1 (LG rev0 as alternates) + the
+  BPRE/BPGE newKeys transposition fix + TEST 10 (test_profiles -> 1295; verified green).
+
+Final state rebuilt after the last commit: `make -j8` + `make cia` clean. The split was done
+by temporarily reverting the (iii) hunks, verifying, committing (ii), then restoring — so BOTH
+source commits were compile+suite verified at their own tree state, not just the tip.
+
 Session 2026-08-14 (subagent, S1b of OVERNIGHT2.md). Constraint honored: no emutest edits, no
 main-tree rebuild, no emulator boot, no main-tree source writes. Deliverables = two spec files
 in this directory. Suites: N/A (nothing built — spec-only lane).
