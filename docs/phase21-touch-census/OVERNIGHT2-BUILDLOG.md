@@ -1557,3 +1557,58 @@ peersprite 62078 · presence 61376 · theme 83444 · tilt 1756 · touchgeom 3718
 Hygiene: both boots stopped via `azctl stop` (profile CLEAN, qt-config byte-identical),
 `clean-fixtures` run, ROM originals re-hashed untouched, `settings.bin` never written
 (sha256 identical before/after), no Azahar left running, instance **b** never touched.
+
+## PHASE 25 / LANE C2 — the O2 gap closed: `touch.c`'s decisions extracted, graded, and re-proven
+
+Main tree, instance **a**. Lane log: `docs/phase21-touch-census/LANE-C-HARVEST.md` entries 7-9.
+Commits `063286d → 43486e4` (5).
+
+**The brief was the audit's O2**: "no host suite compiles `source/touch.c`", so six of lane A's
+seven phase-24 fixes shipped with ZERO regression cover — each one having cost a full emulator run
+to find. The instruction was explicit that a token test would not do.
+
+1. **Two extractions, in the house shape** (`fieldpath` / `fieldtrav` / `touchgeom` / `uihit` are
+   the precedent). `source/progseq.{c,h}` — the INTERACT SEQUENCER: the abort ladder,
+   WALK/FACE/A/DLG/YESNO/ANSWER/DONE, every budget and cadence, carrying `2dde03e` (the
+   level-triggered YES), `b0ae8d9` (the field-A cadence) and `70f963d` (closed-loop FACE + settle).
+   `source/excseq.{c,h}` — the EXCURSION LEG MACHINE: the boundary watcher, arm-don't-plan, the
+   layout-stability rule, the cadence/give-up/re-arm, carrying `e1c6041`, `a1cbdca` and `2fa4976`.
+   `touch.c` keeps every read, every write and every BFS; the expensive reads (eligibility, the run
+   gates, a re-plan) come back as REQUESTS in the action struct. **There is no second copy** — the
+   shipped executor IS those two files, which is what makes the suites a barrier.
+2. **The transcription is line-for-line**, including the parts that look like accidents: the abort
+   ladder runs before the frame clock ticks; an A-pulse in flight always finishes before a phase
+   can time out (so a DLG timeout lands at budget+4, not budget+1); the per-frame mirror reports
+   the state the frame STARTED in while an end stamp reports where it finished.
+3. **The suites judge the machine against the GAME, not against itself.** `test_progseq` TEST 4
+   drives the real sequencer at a transcription of pokeemerald's own `Task_HandleYesNoInput` (the
+   five-frame arming window) and asserts YES is really pressed — then runs the SAME oracle against
+   the pre-`2dde03e` single-edge rule and shows it never presses. `test_excseq` TEST 2 replays the
+   STEP-warp trace against the pre-`a1cbdca` "only while walking" watcher as an anti-test.
+4. **The suite found something nobody had seen**: the excursion's layout-dims history is NOT
+   cleared at a leg boundary, so leg 2's first frame compares the old map's dims with themselves,
+   calls that settled, and spends one BFS planning on the wrong grid. PINNED, not fixed (this lane
+   is behaviour-preserving) — the layout-kill re-arm already recovers it, and the live P4 run below
+   shows exactly that recovery (`planSeq 4` → `routeEnd 6` → `planSeq 5`).
+5. **Both extractions re-proven LIVE, one target each.** **P1 SURF** on `emerald-shore`: plan goal
+   (53,58) beh 0x15, program PLANNED moves=6 hm=SURF, **`progAnswers 2`**, `progSurf` 0→1, end
+   `TPE_HANDOFF`, finishing afloat on the tapped tile — every figure identical to lane A's
+   pre-refactor P1. **P4 LAVARIDGE** on `emerald-lavaridge` (`traverse` 2 for the run, restored
+   after): front door → interior leg planned on the ARRIVAL map (`progMapSeq 1`) → back door
+   reached with the route already finished → the STEP-warp watcher arming leg 2 anyway
+   (`progMapSeq 2`) → the layout kill and the re-armed leg arriving at **(5,5)**, behaviour 0x28.
+6. **Honest anomaly, flagged not tidied**: in the P4 boot the bottom game returned to its own main
+   menu between CONTINUE and the first tap (the top game stayed at its title, so nothing app-wide
+   restarted). Cause not established; cost one extra `a`. Recorded in the lane log.
+
+Suites at close, **18** re-run from this tree (the gate grew by two): celiolink 1259 · control
+6940 · diag 376 · **fieldpath 1808 (UNMODIFIED)** · fieldtrav 1210 · netlink 66 · peersprite
+62078 · presence 61376 · profiles 2546 · theme 83444 · tilt 1756 · touchgeom 371892 · trace_replay
+58 (4 skips) · typography 1419 · uigeom 18332 · uihit 1834 · **progseq 877** · **excseq 677** =
+**617 948 checks, 0 failures**. Every pre-existing count is unchanged, which is the signal that the
+extraction moved nothing else. `make -j8` + `make cia` clean (3DGBA.3dsx 4 404 336 B, 3DGBA.cia
+2 033 088 B — both current with the source, so a hardware test installs THIS build).
+Hygiene: two boots, both stopped via `azctl stop` (profile CLEAN, qt-config byte-identical),
+`clean-fixtures` run with ROM originals re-hashed untouched, `settings.bin` restored to sha256
+`85dd487e…` after a one-word `traverse` edit, `recent.bin` `72c100ad…` unchanged, no Azahar left
+running, instance **b** never touched, three captures — all hashed, all distinct.
