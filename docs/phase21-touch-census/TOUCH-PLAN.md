@@ -93,8 +93,8 @@ Column key:
 | B4 | Yes/No + multichoice | fmenu ✓ (EM) | done; FR rev1 | DONE | POPUP | — | rev1 | emu |
 | B5 | Save dialog | fmenu ✓ (EM) | done | DONE | POPUP | — | rev1 | emu |
 | B6 | Trainer card | leak | tap=flip (A), second tap=exit; page dots optional | TAP | PAGE | S | promo | emu · **B1:UNREACH** |
-| B7 | Region map (field/wall) | leak | tap = move the map cursor to that map square (write cursor, no key mash); drag = pan | FULL | MAP | M | promo+substate (cursor addr) | emu |
-| B8 | Fly map | leak | **tap-to-fly**: tap a city = write cursor + A, confirm popup = fmenu | FULL | MAP | M | promo+substate | emu |
+| B7 | Region map (field/wall) | **FAM-MAP, cursor-only ✓ (shipped)** | tap a square = the game's own cursor is WALKED there (no RAM write — see B8); drag = the target follows the finger; hold = B. **A is deliberately never emitted here**: on the wall map A EXITS (field_region_map.c `CB_HandleInput`) | DONE→FULL | MAP | M | promo+substate (cursor addr) | emu · **B2:VER-mech** (same driver/struct/geometry as B8, `mapFly = 0`; graded through the real `game_read` by test_profiles TEST 18, but the screen itself was not visited — no `MB_REGION_MAP` tile was located this session) |
+| B8 | Fly map | **TAP-TO-FLY ✓ (shipped)** | tap a city → the game's own cursor is WALKED to that cell with one-frame presses (closed-loop on the live `cursorPosX/Y`; **never a cursor WRITE** — the sprite is slid incrementally by the engine and a write desyncs it) → A, but **only** when the live `mapSecType` is CITY_CANFLY/BATTLE_FRONTIER, which is the game's own test. Drag = read the map; hold = B | **DONE** | MAP | M | promo+substate | emu · **B2:VERIFIED** — Battle Frontier → **LITTLEROOT TOWN** in one tap, `SaveBlock1.location` 26.14 (39,30) → 0.9 (14,9); `mapSteps` matched the Chebyshev prediction exactly on both taps (LANE-B2-FAMMAP.md Entries 2-3) |
 | B9 | Wall clock | leak | view: tap=exit. set: defer (new-game only; drag-the-hands is a gimmick) | TAP | DLG | S | promo | emu · **B1:UNREACH** |
 | B10 | Itemfinder sweep | leak (dialog blocks walking!) | tap=A dismiss; the FULLUI default covers it | TAP | DLG | S | - | emu (FR) · **B1:VER-mech** |
 | B11 | Fishing | tap=A works by accident | tap=A on the "!" — already the right verb; keep | DONE | MINI | — | - | emu (FR) |
@@ -153,8 +153,8 @@ Column key:
 | E2b | Party context popup | fmenu ✓ (EM) | done | DONE | POPUP | — | rev1 | emu |
 | E3 | Bag (top level) | **bag ✓ (EM)**: tap/drag/swipe pockets | add: tap pocket ICONS directly (known-missing #3), blank-row clamp | DONE (polish) | LIST | S | rev1 | emu |
 | E3b | Bag item sub-menu | **leak — GCTX_BAG drops out in sub-menus** (census finding) | fmenu instance (it IS an sMenu window) — detection-order fix | FULL | POPUP | S | promo | emu |
-| E4 | Berry Pouch (FR) | leak | FAM-LIST free instantiation | FULL | LIST | S | rev1+substate | emu |
-| E5 | TM Case (FR) | leak | FAM-LIST (cb2 = `CB2_Idle` — harvested, catalog corrected) | FULL | LIST | S | rev1+substate | emu |
+| E4 | Berry Pouch (FR) | **FAM-LIST, DISCOVERED list ✓ (shipped)** | free instantiation delivered with **no new addresses**: `GameProfile.cb2List` whitelists the screen's census-[exact] cb2 and the list is found by the `ListMenuDummyTask` scan the P-D probe already carried → `GCTX_LIST`/`LK_FULLUI` → the shipped `list_update` | **DONE** | LIST | S | **none** (the anchor need is gone) | emu · **B2:** see E5 |
+| E5 | TM Case (FR) | **FAM-LIST, DISCOVERED list ✓ (shipped)** | = E4 (cb2 = `CB2_Idle` 0x081318DC — the census's catalog correction) | **DONE** | LIST | S | **none** | emu · **B2:** desk-proven (test_profiles TEST 19 drives it through the real `game_read`: listed cb2 + a live ListMenu → `GCTX_LIST`/`LK_FULLUI` with the discovered base; listed cb2 + NO live list → `GCTX_FULLUI`, i.e. today's behaviour; an UNLISTED screen with the same live list is never claimed). Live sign-off owed |
 | E6 | Berry tag (RSE) | leak | tap=exit, L/R flip taps | TAP | PAGE | S | promo | emu · **B1:UNREACH** |
 | E7 | PSA anim (FR) | leak | tap=A (cutscene) | TAP | DLG | S | promo | emu · **B1:UNREACH** |
 | E8 | Mail read | leak | tap=advance/exit | TAP | DLG | S | - | — · **B1:BROKEN** |
@@ -326,6 +326,21 @@ remains the universal manual fallback.
   finger until |Δ|<threshold (closed loop on the live cursor read), then A on tap.
   Drag = pan where the game supports it (zoomed region map).
 - **Fly map confirm** ("Fly to PETALBURG?") is fmenu — already shipped.
+- **STATUS 2026-08-14 (phase 24, lane B2): SHIPPED and LIVE-PROVEN on the fly map.** Two things
+  in the design above turned out to be wrong in a way only the engine source could show, and both
+  are worth carrying forward to the other MAP instances:
+  1. **Not "write the cursor" — WALK it.** Emerald slides the region-map cursor SPRITE
+     incrementally (`SpriteCB_CursorMapFull` adds 2px/frame) instead of deriving it from
+     `cursorPosX/Y`, so writing the logical cursor desyncs what the player sees. The driver
+     therefore drives the game's own D-pad, closed-loop on the live cursor.
+  2. **One-frame presses, not a held key.** `ProcessRegionMapInput_Full` reads JOY_HELD but then
+     ignores input for a 4-frame slide, so a single-frame press moves exactly one cell — which
+     makes overshoot impossible, where a held key overshoots because our read lags a frame.
+     X and Y are read independently, so a diagonal costs ONE frame: every route is
+     `max(|dx|,|dy|)` presses, verified live on two taps.
+  3. **A is per-screen, not per-family** (fly map confirms, wall map exits) — `GameState.mapFly`.
+  The Frontier Pass (D1) free-pixel cursor is a different model again and stays on the FAM-DLG
+  drag it already has (proven in lane B1, S2).
 
 ### FAM-DLG — cursorless dialogs & cutscenes (the safe default)
 - **Instances:** every `TAP` row above — script dialogs, TV, cutscenes, rides, HoF, PSA,
