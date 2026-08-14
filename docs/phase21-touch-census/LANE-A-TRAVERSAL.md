@@ -100,3 +100,54 @@ spent inside the dead window. The retry that should have covered it was gated on
 `sFieldMessageBoxMode` returns to HIDDEN as soon as the text finishes printing — false for the
 whole "box up, waiting for A" window. Fix: level-triggered ANSWER (cursor held on YES, a fresh
 edge every 8 frames, capped at 8) + textDlg-free advances in YESNO/DONE.
+
+---
+
+## P2 — CUT, tap past the tree: **PROVEN**
+
+Boot `runs/20260814-152731`, from `roms/emerald-r117.sav` (saved in game, by touch, standing at
+Route 117 **(15,3)** with the cuttable tree at (15,2) still up).
+
+**Why this tree.** A tap-past-a-tree proof is worthless if the router can walk around: tier 0 wins
+by design and no HM is ever planned. `gate.py` (host recon, this session) answers it per obstacle —
+removing Route 117's `OBJ_EVENT_GFX_CUTTABLE_TREE (15,2)` opens exactly **11 tiles**
+(x 8..15, y 1..2), and the goal **(11,2)** is one of them. So the tree is the only way in.
+
+**The act:** `t 96 112 6 30` — ddx −4 / ddy −1 from (15,3) → world (11,2).
+
+| read | ctx | pos | prog |
+|---|---|---|---|
+| before | OVERWORLD | (15,3) | seq=0, face=3 (L) |
+| +6 s | OVERWORLD | (15,3) | seq=1 **PLANNED** moves=5 inter=1 hm=**CUT** **edges=1** phase=4 (YESNO) aKeys=12 |
+| +12 s | OVERWORLD | (15,3) | phase=6 (DONE) aKeys=25 **answers=2** |
+| +18 s | OVERWORLD | **(11,2)** | end=**HANDOFF** — the tree gone, the rest of the route walked by the shipped walker |
+
+`edges=1` is fieldtrav finding the tree as a conditional edge by its graphicsId; `answers=2` is the
+level-triggered YES again; and **(11,2) is the proof**: with the tree standing that tile is
+unreachable under the shipped walkability rule, so standing on it means the Cut really happened and
+the route really continued through the opened tile — which is exactly what the target asked for.
+
+Captures: `EM-P24-P2a-tree-standing.bottom.png` (the saved state this boot loaded, tree up),
+`EM-P24-P2c-through-the-gap.bottom.png` (in the pocket, the tree tile now empty).
+
+**Verdict: PROVEN.**
+
+### Two defects this target found (both fixed)
+
+1. `b0ae8d9` — one A at the object is not enough either; TPH_DLG now retries on a cadence.
+2. `70f963d` — **the real one**: TPH_FACE held the direction for a fixed 8 frames, and Gen 3 only
+   reads field input while the avatar is idle, so a hold that starts during the last walk step is
+   swallowed whole and the avatar keeps facing the way it walked. Every A after that is aimed one
+   tile off. FACE is now closed-loop on the game's own `gObjectEvents[0].facingDirection`, and
+   TPH_A settles 10 released frames before pressing. New instrument: `progFacing` (+0xA8).
+
+### Two operational facts worth keeping (they cost this lane ~40 minutes)
+
+- **A cut tree does NOT come back when you reload a save made on the same map.** The obstacle's
+  `FLAG_TEMP_11` is only cleared by a map LOAD (`ClearTempFieldEventData`, overworld.c:798/848), and
+  continuing a save on the same map does not do one. Walk out of the map and back in — then the
+  tree is up again (proven both ways this session).
+- **Route 117 (15,4) is a static Lass** (`MOVEMENT_TYPE_FACE_RIGHT`), permanently blocking the
+  column below the tree. A hand-written `d6` down that column times out forever; the planner has to
+  route around her. Every walk script here should come out of `plan24.py` (which reads the map's own
+  object events), not out of a mental picture of the map.
