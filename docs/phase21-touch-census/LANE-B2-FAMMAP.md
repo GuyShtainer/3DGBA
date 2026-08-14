@@ -186,3 +186,56 @@ and the game drew its own map-name banner: **`LITTLEROOT TOWN`**
 That is TOUCH-PLAN slice 22.4's acceptance test executed verbatim — *"tap Littleroot on the fly
 map, read the cursor mapsec before/after, confirm the warp via SaveBlock1.location"* — with the
 before/after on both channels. **Row B8 = VERIFIED.**
+
+---
+
+## Entry 3 — the other two verbs, on a second opening of the same screen
+
+The fly map was re-opened from Littleroot (D4: `b b b` out of a mis-navigated bag, `s`, `U`, `a`
+→ party, `D D D D`, `a` → the popup, then **TOUCH** on the FLY row again). Note the START menu
+remembers its cursor (`sStartMenuCursorPos`), which is what sent the first retry into the BAG —
+worth knowing for any scripted arc.
+
+On opening: `mapCurX = 5, mapCurY = 13, mapSecId = 0 (MAPSEC_LITTLEROOT_TOWN), mapSecType = 2
+(CITY_CANFLY)`. **The cursor again started on the player's own location** — which is now
+Littleroot, because we flew there. The address chain re-validated itself against a *different*
+answer than last time, which is the strongest cheap check there is.
+
+### Drag — the target follows the finger, and it does **not** fly
+
+`d 59 157 144 40 90 20` — press on Littleroot, drag over 90 frames to **FORTREE CITY**
+(cell (13,2) from the same pret table), release.
+
+```
+mapTaps   2 -> 2    <- a drag is NOT a tap
+mapSteps 18 -> 38   <- 20 presses, emitted WHILE the finger moved (the cursor chases)
+mapArrive 2 -> 3
+mapFlies  1 -> 1    <- NO fly, and the finger ended on a FLYABLE CITY
+mapCurX -> 13  mapCurY -> 2   mapSecId -> 11 (MAPSEC_FORTREE_CITY)  mapSecType -> 2 (CITY_CANFLY)
+ctx = 14 (still on the map)
+```
+
+`EM-B8-drag-to-fortree-no-fly.png`: the cursor sits on Fortree, the game's own window reads
+**FORTREE CITY**, the player icon is down in Littleroot, and the map is still open. That is rule
+M3 exactly — **drag is how you READ the map** (every name under the finger, live), tap is how you
+commit to it. A design that flew on drag-release would have been indistinguishable in the host
+suite and infuriating in the hand.
+
+### Hold — B, and it cancels the armed target
+
+`t 144 40 45 20` (45 frames unmoved, past `DLGGEOM_HOLD_FRAMES` 30):
+
+```
+mapHolds 0 -> 1     mapTaps 2 -> 2 (a hold never ALSO fires the tap verb — third family this
+                                    property has now been shown on)
+mapFlies 1 -> 1     <- the hold cancelled the target instead of confirming it
+every live map read -> -1, mapIsFly -> 0    (the struct is gone: the screen closed)
+ctx 14 -> 5 (GCTX_PARTY)                    <- B backed out to the menu that opened the map
+```
+
+### Verdicts
+
+| row | verdict | evidence |
+|---|---|---|
+| **B8 fly map** | ✅ **VERIFIED** | tap → cursor → fly → `SaveBlock1.location` changed (Entry 2); drag → cursor only; hold → B |
+| **B7 wall map** | **VERIFIED-mech** (B1's vocabulary) | it is the *same* `sRegionMap`, the same driver and the same geometry, differing only in `mapFly = 0` → the arrival A is never armed. `game_read` resolving `MCB2_FieldUpdateRegionMap` → `GCTX_MAP` with `mapFly = 0` is graded by test_profiles TEST 18 through the REAL `game_read`, and the "no A" half is additionally proven live by the ocean tap (Entry 2), where the driver declined to press A on its own. **Not visited**: an `MB_REGION_MAP` wall tile was not located in this session's reachable maps, and the honest cost of finding one (a ROM metatile scan + a walk) was judged worse value than the FR harvest below. |
