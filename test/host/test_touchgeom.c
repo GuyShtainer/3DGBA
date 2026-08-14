@@ -397,6 +397,54 @@ static void test_dlg_drag(void) {
 	CHECK(leaks == 0, "both axes sub-threshold -> NONE, always (%d leaks)", leaks);
 }
 
+// TEST 13 — PHASE 24 / lane B1: WHO OWNS AN OVERWORLD FRAME. This is the rule that ends the
+// field-dialog walk-key leak (LANE-B-TAPVERIFY.md Entry 1: one tap under a Gen-3 message box
+// planned three routes and held a direction key at a frozen game for 20+ emulated frames). The
+// properties worth grading are BOTH halves — the new behaviour AND the guarantee that nothing
+// else moved:
+//   (a) ctx == GCTX_OVERWORLD && textDlg  -> FAM-DLG owns it
+//   (b) ctx == GCTX_OVERWORLD && !textDlg -> the walker still owns it (tap-to-walk is untouched)
+//   (c) EVERY other ctx keeps its own handler REGARDLESS of textDlg — the fall-through context is
+//       the only one this rule may ever claim, so a stale sFieldMessageBoxMode can never steal a
+//       battle / party / bag / storage frame.
+//   (d) the mirrored ctx constant still equals the enum value the app pins with a _Static_assert.
+static void test_dlg_route(void) {
+	puts("TEST 13: FAM-DLG vs the walker — which handler owns an overworld frame");
+	CHECK(DLGGEOM_CTX_FIELD == 1, "DLGGEOM_CTX_FIELD mirrors GCTX_OVERWORLD == 1 "
+	      "(touch.c carries the _Static_assert; fieldgate.h FIELD_CTX_OVERWORLD agrees)");
+	CHECK(DLGROUTE_WALK == 0 && DLGROUTE_DLG == 1, "route enum values are stable");
+	CHECK(dlggeom_route(DLGGEOM_CTX_FIELD, 1, 0) == DLGROUTE_DLG,
+	      "overworld + text PRINTING -> FAM-DLG (tap=A anywhere, hold=B, NO route armed)");
+	CHECK(dlggeom_route(DLGGEOM_CTX_FIELD, 0, 1) == DLGROUTE_DLG,
+	      "overworld + sLockFieldControls -> FAM-DLG. THE load-bearing case: textDlg reads 0 for "
+	      "every frame the box sits waiting for A (measured live, phase 24 lane B1), so a rule "
+	      "keyed on textDlg alone would miss exactly the frames a player touches");
+	CHECK(dlggeom_route(DLGGEOM_CTX_FIELD, 1, 1) == DLGROUTE_DLG, "both set -> FAM-DLG");
+	CHECK(dlggeom_route(DLGGEOM_CTX_FIELD, 0, 0) == DLGROUTE_WALK,
+	      "overworld, no textbox, controls NOT locked -> the walker, unchanged "
+	      "(tap-to-walk is not regressed)");
+	// (c) exhaustive over every context value the enum can hold today, plus headroom for the
+	// appends this project keeps making, and over both textDlg states.
+	int stolen = 0;
+	for (int ctx = 0; ctx < 32; ctx++) {
+		if (ctx == DLGGEOM_CTX_FIELD) continue;
+		for (int td = 0; td <= 1; td++) {
+			for (int fl = 0; fl <= 1; fl++) {
+				if (dlggeom_route(ctx, td, fl) != DLGROUTE_WALK) stolen++;
+				else g_checks++;   // counted, silent
+			}
+		}
+	}
+	CHECK(stolen == 0, "no other context is ever claimed, at ANY (textDlg, fieldLock) (%d thefts)", stolen);
+	// Both are read as truthy ints, not bool8 — a profile read that returns 2 or 0xFF must still
+	// mean "a script owns the field" (Emerald's sFieldMessageBoxMode really does read 2).
+	CHECK(dlggeom_route(DLGGEOM_CTX_FIELD, 2, 0)   == DLGROUTE_DLG, "textDlg=2 counts");
+	CHECK(dlggeom_route(DLGGEOM_CTX_FIELD, 255, 0) == DLGROUTE_DLG, "textDlg=255 counts");
+	CHECK(dlggeom_route(DLGGEOM_CTX_FIELD, -1, 0)  == DLGROUTE_DLG, "textDlg=-1 counts");
+	CHECK(dlggeom_route(DLGGEOM_CTX_FIELD, 0, 2)   == DLGROUTE_DLG, "fieldLock=2 counts");
+	CHECK(dlggeom_route(DLGGEOM_CTX_FIELD, 0, 255) == DLGROUTE_DLG, "fieldLock=255 counts");
+}
+
 int main(void) {
 	test_colcount();
 	test_validity();
@@ -410,6 +458,7 @@ int main(void) {
 	test_storage_nav();
 	test_dlg_tap();
 	test_dlg_drag();
+	test_dlg_route();
 	printf("\n=== %d checks, %d failures ===\n", g_checks, g_fails);
 	return g_fails ? 1 : 0;
 }

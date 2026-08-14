@@ -368,6 +368,30 @@ typedef struct {
 	// 0 = unused slot and never matches (a cb2 is never 0). Appending is the only safe edit:
 	// PROFILES[] is POSITIONAL-initialised.
 	uint32_t cb2Pager[GS_N_PAGER];
+	// --- phase 24 (lane B1) — sLockFieldControls: THE "a script owns the field" byte -------------
+	// Why a new column when `fieldMsgMode` already exists: this lane MEASURED `fieldMsgMode` live
+	// for the first time (g_touchDbg +0xC4) and it is NOT what its name and every consumer assume.
+	// `sFieldMessageBoxMode` is set while the text is being PRINTED and returns to 0 the instant
+	// printing finishes — i.e. it reads **0 for the whole time the box sits waiting for A**, which
+	// is precisely when a player touches the screen. Evidence: 20 consecutive emulated frames of
+	// `msgMode = 0` with the box visibly up and the ▼ prompt drawn
+	// (LANE-B-TAPVERIFY.md Entry 3 + evidence/impl/EM-msgmode-zero-while-box-waits.png).
+	//
+	// `sLockFieldControls` (pokeemerald renamed `ScriptContext2_Enable/Disable` to
+	// `LockPlayerFieldControls`/`UnlockPlayerFieldControls`) is the canonical flag instead: set for
+	// the WHOLE script-driven sequence — dialog, cutscene, forced movement — and cleared when the
+	// player gets control back. It is IWRAM, so it is revision-INSENSITIVE (the rev0 and rev1 sym
+	// maps agree exactly for both FRLG titles).
+	//   BPEE 0x03000F2C  pokeemerald.sym  `03000f2c l 00000001 sLockFieldControls`
+	//   BPRE / BPGE 0x03000F9C  pokefirered.sym AND pokefirered_rev1.sym AND both LG maps agree
+	//   AXVE / AXPE 0x030006A4  pokeruby_rev2.sym / pokesapphire_rev2.sym (identical)
+	// 0 = named degradation: that game keeps the old textDlg-only behaviour, never a wrong read.
+	//
+	// SAFETY ARGUMENT for letting it re-route touch: when field controls are locked the player
+	// CANNOT MOVE, so a tap-to-walk route is doomed by construction. Handing those frames to
+	// FAM-DLG therefore cannot take working behaviour away — it can only replace a route that was
+	// going to stall with the A the player actually wanted.
+	uint32_t fieldLock;
 } GameProfile;
 
 // One-pass snapshot of the live game.
@@ -392,7 +416,11 @@ typedef struct {
 	// in which case the touch driver emits NOTHING while the ctx is positive: the L10 safety rule).
 	uint32_t listBase;
 	uint8_t  listKind;
-	bool     textDlg;         // overworld: a field textbox is up (sFieldMessageBoxMode != 0)
+	bool     textDlg;         // overworld: a field textbox is PRINTING (sFieldMessageBoxMode != 0 — NOT
+	                          // "a box is up": it returns to 0 while the box waits for A, measured live
+	                          // phase 24 lane B1. Use fieldLock for "a script owns the field".)
+	bool     fieldLock;       // sLockFieldControls != 0 — a script owns the field: the player cannot
+	                          // move, for the WHOLE sequence (dialog, cutscene, forced walk)
 	bool     textBanner;      // overworld: the map-name banner task is live
 	// --- instrumentation (LOGGING ONLY; never gate touch/3D/gameplay on these) ---
 	uint32_t cb1, cb2;        // raw gMain.callback1/callback2 (Thumb bit stripped) = the screen fingerprint.

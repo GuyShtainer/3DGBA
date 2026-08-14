@@ -67,6 +67,12 @@ typedef struct {
 	                          //   edge cancels the program (SPEC H0.2). 0 = nothing held.
 	int      traverse;        // g_prefs.smartTraverse (0 Off / 1 HM / 2 HM+Via), passed rather
 	                          //   than read so touch.c stays free of the settings module.
+	// --- phase 24 (lane B1). Appended; 0 = the pre-phase-24 behaviour, so an un-updated filler is
+	// inert rather than wrong. ---
+	bool     fieldLock;       // GameState.fieldLock — sLockFieldControls: a script owns the field
+	                          //   for the WHOLE sequence (dialog, cutscene, forced walk). This is
+	                          //   the signal that routes a field dialog to FAM-DLG; textDlg above
+	                          //   only covers the frames the text is still PRINTING.
 } TouchSmart;
 
 // --- PHASE 18 / SPEC-door T4.11: the gdb-readable route mirror (LOGGING ONLY) ------------------
@@ -199,6 +205,17 @@ typedef struct {
 	int32_t  dlgPages;       // +0xB8  edge-zone taps that became LEFT/RIGHT (pager screens only)
 	int32_t  dlgSteps;       // +0xBC  drag notches that became a D-pad edge
 	int32_t  dlgPager;       // +0xC0  1 = the live cb2 is in this game's cb2Pager whitelist
+	// --- PHASE 24 / lane B1: the FIELD-DIALOG routing channel. APPENDED (every offset above is
+	// unchanged). The B3 fix hangs entirely on one game byte being right, and that byte had never
+	// been read on this project — GameState.textDlg feeds the tilt G8 gate and the DoF band split
+	// and NOTHING ever verified it live. So publish all three layers of the decision: the raw byte
+	// the profile address points at, the boolean gamestate made of it, and the route the
+	// dispatcher took. A tap that "did nothing" is then one gdb read from a diagnosis instead of a
+	// theory. LOGGING ONLY.
+	int32_t  msgMode;        // +0xC4  RAW gbacore_read8(prof->fieldMsgMode), -1 = no address for this game
+	int32_t  textDlg;        // +0xC8  GameState.textDlg as the dispatcher saw it this frame
+	int32_t  fieldLock;      // +0xCC  GameState.fieldLock (sLockFieldControls) — the real signal
+	int32_t  dlgOwns;        // +0xD0  dlggeom_route verdict: 1 = FAM-DLG claimed an OVERWORLD frame
 } TouchDbg;
 extern TouchDbg g_touchDbg;
 

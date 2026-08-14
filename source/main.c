@@ -3588,6 +3588,10 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 							// pad uses, so "the player touched the controls" is one comparison and
 							// the additive seam yields to them; traverse is the persisted pref.
 							sm.textDlg = gsr.textDlg;
+							// phase 24 (lane B1): sLockFieldControls — the signal that hands a FIELD
+							// DIALOG to FAM-DLG instead of the walker (touchgeom.h dlggeom_route).
+							// textDlg above only covers the frames the text is still PRINTING.
+							sm.fieldLock = gsr.fieldLock;
 							sm.padKeys = to_gba_keys(kHeld);
 							sm.traverse = g_prefs.smartTraverse;
 							// cb2 is the touch-log fingerprint AND (phase 23) the FAM-DLG pager gate —
