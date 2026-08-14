@@ -362,3 +362,51 @@ The run and the baseline cross **the same tiles (10,7)..(13,7)**: 16 emulated fr
 same row keeps all 16s and never adds a single frame to `runFrames`. The first tile of every route
 costs ~18 frames whichever way it goes; that is the plan plus the turn, and it is why the means
 (9.4 vs 16.7) understate a difference the steady state states exactly.
+
+### The threshold boundary, live on both sides
+
+Same row, same boot: a **4-tile** tap (exactly `RUNGEOM_MIN_TILES`) ran — `runLeg=1`, mask `0x012`,
+deltas `[20, 8, 8, 8]` — and the **3-tile** tap on that row walked. The constant is where the
+constant says it is.
+
+### Gate 2, RUNG_MAP: proven INDOORS
+
+`LavaridgeTown_PokemonCenter_1F` has `allow_running: false` in its own pret map.json. Walked in
+through the front door (one tap) and tapped a **4-tile** route north — the same length that had
+just run outside:
+
+```
+(8,8) -> (8,7) -> (8,6) -> (8,5) -> (8,4)   deltas [12, 16, 16, 16]   keys 0x040 (UP, no B)
+runLeg=0   runElig=0x1D   runFrames 180 -> 180 (not one frame)
+```
+
+`0x1D` is `RUNG_MAP` clear and everything else open — the mask NAMES the gate that said no, which
+is the whole reason the eligibility instrument is a mask and not a bool.
+
+### Gate 5, RUNG_TERRAIN — and the defect it found
+
+Lavaridge has two `MB_NO_RUNNING` (0x0A) sand baths reachable on foot, at (3,8) and (5,8); the
+map's own object events put an OLD_MAN on (5,8), so **(3,8) is the one a player can stand on**.
+Standing there, `runElig` read **0x0F** — `RUNG_TERRAIN` clear, off the game's own
+`gObjectEvents[0].currentMetatileBehavior`.
+
+And that read the defect out loud. On the first build the terrain bit was part of the LEG
+decision, so a 5-tile tap from the bath walked **every** step (`runLeg=0`, deltas `[8, 16, 16]`)
+— seven tiles thrown away because of the one tile the plan happened to be made on. The engine does
+not do that: `PlayerNotOnBikeMoving` re-reads the behaviour **inside every step**. Fixed in
+`755faf2` (`RUNG_LATCHED` = the four save/avatar gates decide the leg; the tile is asked live,
+every frame B would be held), and re-run on the rebuilt app from the same tile:
+
+```
+(3,8)->(4,8)  +14f  keys 0x082   runFrames 81 -> 82     <- the bath itself: B withheld
+(4,8)->(4,9)  +16f  keys 0x082   runFrames 82 -> 98     <- one lagged step (see below)
+(4,9)->(4,10) + 8f  keys 0x012   ...and RUNNING from here on, 8 frames a tile, to (10,9)
+runLeg=1 throughout
+```
+
+**One honest artefact, measured rather than assumed:** the veto costs one extra walked step beyond
+the tile itself. The engine fixes a step's speed on the frame it *starts* it, and our behaviour
+read lags that by a frame, so the step leaving the bath's neighbour is committed as a walk before
+our B comes up. It errs on the safe side (we never press B where the game would refuse, we
+occasionally miss one step) and it is one step on a rare tile class. Noted, not chased —
+VERIFY-ON-HW along with the timing constants.
