@@ -372,8 +372,8 @@ int owngest_step(OwnGest* g, int touching, int newPress, int onSelf, int movedNo
                                * without hunting for a literal (VERIFY-ON-HW-PENDING, exactly like
                                * TERM_FRAMES and the FAM-DLG timings). */
 
-// Eligibility bits. ALL of them must be set for a leg to run — this is a conjunction in the game
-// too, and every clause here is one of the engine's own.
+// Eligibility bits. All five must hold for B to be pressed on a given frame — that is a
+// conjunction in the game too, and every clause here is one of the engine's own.
 enum {
 	RUNG_SHOES   = 1u << 0,   // FlagGet(FLAG_SYS_B_DASH) — the Running Shoes were received
 	RUNG_MAP     = 1u << 1,   // gMapHeader.allowRunning
@@ -382,6 +382,17 @@ enum {
 	RUNG_TERRAIN = 1u << 4,   // the tile under the player does not cancel a dash
 	RUNG_ALL     = 0x1Fu
 };
+// THE ONE ASYMMETRY, and it is the engine's: four of those gates describe the SAVE and the
+// AVATAR and are properties of the whole leg, but RUNG_TERRAIN is a property of ONE TILE and the
+// engine re-reads it on every single step (`IsRunningDisallowed(gObjectEvents[...]
+// .currentMetatileBehavior)` is inside PlayerNotOnBikeMoving, which runs per move). So the LEG
+// decision is made on the four, and the tile is asked live, every frame B would be held.
+//
+// Folding terrain into the leg decision instead looks tidier and is wrong in a way a live run
+// showed immediately: standing on a sand bath (MB_NO_RUNNING) and tapping seven tiles away, the
+// whole route would walk because of the ONE tile the player is standing on when the plan is made.
+// The engine would have walked that first step and run the other six. So does this.
+#define RUNG_LATCHED (RUNG_SHOES | RUNG_MAP | RUNG_ONFOOT | RUNG_FREE)
 
 // FpEngine mirrored the way DLGGEOM_CTX_FIELD mirrors GameCtx — this file must stay includable by
 // a host test with nothing but <stdint.h>. touch.c carries the _Static_assert that pins them.
@@ -394,10 +405,12 @@ enum {
 // conservative half — a dash the game refuses is never worth guessing at).
 int rungeom_tile_ok(int eng, int behaviour, int elevation);
 
-// Are all five gates satisfied? Split out from the decision so the follower can re-ask the cheap
-// live half every frame without re-deciding the distance.
+// THE LIVE TEST — all five gates, i.e. the engine's own conjunction, asked on the frame the key
+// mask is built. This is what actually emits B.
 int rungeom_eligible(unsigned elig);
 
-// THE DECISION, as a pure function of (routed path length, eligibility mask): 1 = hold B for this
-// leg, 0 = walk it. Decided per LEG, never once for a whole multi-leg program.
+// THE LEG DECISION, as a pure function of (routed path length, eligibility mask): 1 = this leg
+// intends to run, 0 = it walks. Distance plus the FOUR latched gates (see RUNG_LATCHED above);
+// the tile is not consulted here because it is not a property of the leg. Decided per LEG, never
+// once for a whole multi-leg program.
 int rungeom_decide(int pathLen, unsigned elig);

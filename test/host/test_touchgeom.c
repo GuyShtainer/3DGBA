@@ -765,25 +765,41 @@ static void test_run_decide(void) {
 	CHECK(rungeom_decide(RUNGEOM_MIN_TILES, RUNG_ALL) == 1, "4 tiles runs (far = run)");
 	CHECK(rungeom_decide(-3, RUNG_ALL) == 0, "a negative path length can never run");
 
-	// The eligibility axis, exhaustively: 32 masks x a long path. EVERY missing gate must veto —
-	// this is the "degrade SILENTLY to walking" half of D2, and it is the half a partial read
-	// (a game with no gMapHeader address, a save not yet loaded) actually exercises.
-	int ran = 0;
+	// The eligibility axis, exhaustively: 32 masks x a long path, against BOTH predicates. Every
+	// missing LATCHED gate vetoes the leg decision and every missing gate at all withholds the
+	// live B — the "degrade SILENTLY to walking" half of D2, and the half a partial read (a game
+	// with no gMapHeader address, a save not yet loaded) actually exercises.
+	int ran = 0, live = 0;
 	for (unsigned m = 0; m <= RUNG_ALL; m++) {
 		int d = rungeom_decide(32, m);
-		CHECK(d == (m == RUNG_ALL), "mask 0x%02X with a 32-tile path -> %s", m, d ? "RUN" : "walk");
-		CHECK(rungeom_eligible(m) == (m == RUNG_ALL), "rungeom_eligible agrees for mask 0x%02X", m);
+		int want = ((m & RUNG_LATCHED) == RUNG_LATCHED);
+		CHECK(d == want, "mask 0x%02X with a 32-tile path -> %s", m, d ? "RUN" : "walk");
+		CHECK(rungeom_eligible(m) == (m == RUNG_ALL),
+		      "the LIVE test needs all five for mask 0x%02X", m);
 		if (d) ran++;
+		if (rungeom_eligible(m)) live++;
 	}
-	CHECK(ran == 1, "exactly ONE of the 32 eligibility masks runs (got %d): the gates conjoin", ran);
+	CHECK(ran == 2, "exactly TWO of the 32 masks decide to run (got %d) — all four latched gates, "
+	      "with the tile either way, because the tile is not a property of the leg", ran);
+	CHECK(live == 1, "...and exactly ONE emits B (got %d): the live test is the full conjunction", live);
 
-	// The four named single-gate failures, spelled out so a regression names its own cause.
+	// The five named single-gate failures, spelled out so a regression names its own cause.
 	CHECK(rungeom_decide(20, RUNG_ALL & ~RUNG_SHOES) == 0,   "no Running Shoes -> walk");
 	CHECK(rungeom_decide(20, RUNG_ALL & ~RUNG_MAP) == 0,     "gMapHeader.allowRunning clear -> walk");
 	CHECK(rungeom_decide(20, RUNG_ALL & ~RUNG_ONFOOT) == 0,  "surfing / underwater / on a bike -> walk");
 	CHECK(rungeom_decide(20, RUNG_ALL & ~RUNG_FREE) == 0,    "a forced move owns the avatar -> walk");
-	CHECK(rungeom_decide(20, RUNG_ALL & ~RUNG_TERRAIN) == 0, "the tile cancels a dash -> walk");
 	CHECK(rungeom_decide(20, 0) == 0, "nothing readable at all -> walk (never a stall, never a B)");
+
+	// THE TILE IS DIFFERENT, and this is the assertion that says why. Standing on a dash-cancelling
+	// tile (a sand bath, long grass, the hot spring) does NOT throw away the rest of the route: the
+	// leg still decides to run, and the LIVE test withholds B for exactly as long as the player is
+	// on that tile — which is precisely what the engine does, since it re-reads
+	// currentMetatileBehavior inside every step (field_player_avatar.c PlayerNotOnBikeMoving).
+	CHECK(rungeom_decide(20, RUNG_ALL & ~RUNG_TERRAIN) == 1,
+	      "a leg that STARTS on a dash-cancelling tile still decides to run");
+	CHECK(rungeom_eligible(RUNG_ALL & ~RUNG_TERRAIN) == 0,
+	      "...and emits no B while the player is still standing on it");
+	CHECK(rungeom_eligible(RUNG_ALL) == 1, "...and emits one again on the very next tile");
 }
 
 int main(void) {

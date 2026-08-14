@@ -328,5 +328,8 @@ int rungeom_eligible(unsigned elig) { return (elig & RUNG_ALL) == RUNG_ALL; }
 
 int rungeom_decide(int pathLen, unsigned elig) {
 	if (pathLen < RUNGEOM_MIN_TILES) return 0;   // "close = walk" — the user's rule, first
-	return rungeom_eligible(elig);
+	// The four LATCHED gates only. A leg that decides to run and then crosses a tile the engine
+	// refuses to dash on simply does not get its B on those frames (rungeom_eligible does that);
+	// it never fights the game, and it never throws away the other six tiles of the route.
+	return (elig & RUNG_LATCHED) == RUNG_LATCHED;
 }
