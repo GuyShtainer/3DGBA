@@ -1328,3 +1328,44 @@ instance hosts BOTH games simultaneously — testing does not need one instance 
   2 instances = 4 games in flight. Prefer PAIRS over solo boots from now on; a solo boot is only
   right when a proof needs the game unambiguously alone (e.g. the phase-21 S3 port-isolation gate,
   where libmgba's romBuffer points at the last-loaded core).
+
+## PHASE 24 / LANE B1 — the TAP class verified for real: B3 was broken, and the signal was wrong
+
+Worktree `.claude/worktrees/lane-b1-ph24` (branch `lane-b1-tapverify`), instance **b** only,
+merged to main as `7ad4504`. Full log + evidence: `LANE-B-TAPVERIFY.md`. Headlines:
+
+1. **A `TAP` row is FOUR mechanisms, not one** — and ~19 of the 48 are FIELD DIALOGS running
+   under `CB2_Overworld`, so they never reached FAM-DLG at all. Witnessed live on the Battle
+   Arena BLACK_BELT: with the box up, one tap gave `planSeq` +3 and `curKeys = 0x10` (RIGHT)
+   held for 20+ consecutive emulated frames at a frozen game; a hold gave `curKeys = 0x20`
+   (LEFT) — steering, where TOUCH-PLAN B3 specifies B. `dlgTaps/dlgHolds` stayed 0.
+2. **THE MEASUREMENT THAT MATTERS: `sFieldMessageBoxMode` is a "text is PRINTING" flag.** It is
+   read by the tilt G8 gate and the DoF band split as "a field textbox is up" and had **never
+   been read** by anyone. `g_touchDbg` now publishes it (+0xC4): it reads **0 for every frame the
+   box sits waiting for A** — captured on camera with the ▼ prompt drawn. Any touch rule keyed on
+   it misses exactly the frames a human touches.
+   → new `GameProfile.fieldLock` = **`sLockFieldControls`** (EM 0x03000F2C, FR/LG 0x03000F9C,
+   RS 0x030006A4). IWRAM, so revision-insensitive, and every game gets one — RS's first
+   field-dialog touch ever. Safety argument: when field controls are locked the player cannot
+   move, so a tap-to-walk route is doomed by construction.
+3. **Re-proof, controlled before/after on the same NPC:** `dlgTaps 2 → 11` across a whole
+   multi-page speech with **`planSeq` staying 0** (baseline: two taps → `planSeq 6`), and the
+   regression check passes — with no script owning the field a tap still plans, follows and
+   ARRIVES (`routeEnd = FDBG_END_ARRIVED`, avatar (12,9) → (10,9)).
+4. **Verdicts on all 48 rows: 6 VERIFIED · 19 VERIFIED-mech · 10 BROKEN · 13 UNREACHABLE.**
+   Nine of the ten BROKEN share ONE diagnosis the plan did not anticipate: **the screen has no
+   cb2 fingerprint**, so the "safe default" `TAP` assumes never runs there (evolution, mail,
+   credits, EM's Hall of Fame, the Berry Blender, contest results…). Census gap, not a code gap —
+   the per-screen harvest plan is written out rather than half-done.
+5. **K4 measured, and the cheap fix ruled out:** during FireRed's quest-log playback
+   `sLockFieldControls` is 1 only while a segment scripts the avatar and 0 for the rest, so three
+   taps armed routes (`planSeq 5`) at a game the player does not control. K4 really does need the
+   quest-log state address.
+6. **Technique note:** the whole lane ran as ONE PAIR (`--stage-roms emerald,firered`) with the
+   touch target moved between titles by flipping `settings.bin swapped` — Emerald owned touch for
+   Entries 1-5, FireRed for Entry 6, with the other game live on the top screen throughout.
+
+Suites: touchgeom 158835 → **158971** (TEST 13 grades the route rule), profiles 1622 → **1660**
+(TEST 17 pins all five `fieldLock` addresses + behaviour through the real `game_read`); 15 suites,
+0 failures, re-run from the MERGED main tree. `make -j8` clean in the lane worktree; the merged
+main tree was deliberately NOT rebuilt (landmine 7 — instance `a` was live).
