@@ -498,3 +498,35 @@ Attempt #2 restaged with +900 frames of tap delay + an idempotent stairs re-tap 
 as this entry is written). FR spawn recon banked: map (13,1) = Indigo Plateau Center 2F,
 player (3,4); 1F mart clerk at (0,7), stairs warp (1,6)->1F(1,14) (pret map jsons, this
 session's scratchpad frmaps/).
+
+## Lane A Entry 7 — FR mart verdict + session close (instance a CLEAN)
+
+FR mart attempt #2: SAME end position as #1 — and the recon boot (NO touch script at all)
+also ends there. **Root cause: the QUEST-LOG REPLAY WALKS THE AVATAR.** The FR save's
+post-continue truth is NOT the wake position the first field read shows — the grayscale
+replay drives the player from (3,4) to **(14,2) on map (13,1)** before control returns,
+so every route staged against the early-read position aims from the wrong square. Both
+attempts' taps then walked benignly around the club lobby (no misfires into menus — the
+ctx gates held). LK_BUY/LK_QTY live proof therefore moves to the morning list with the
+exact re-plan banked: stage against (14,2), the 1F clerk sits at (0,7) with stairs
+(1,6)->1F(1,14) (frmaps/ jsons); OR simpler, use a Viridian-side save. The FR-side family
+code needs no change for this: the census already live-verified the FR rev1 naming cb2
+[exact] and six rev1 anchors; the buy/qty/naming FR rows are sym-derived + host-pinned
+(TEST 13/14) with the driver EM-proven.
+
+Instance a returned CLEAN: azctl stop + clean-fixtures (originals re-hashed untouched,
+user's recent.bin restored), settings.bin restored byte-identical from the .laneA.bak
+(touchMode back to the user's PAD), control dir emptied, no azahar left running.
+
+### Lane A scoreboard (for the morning report)
+- KEYBOARD family: code + 115k-check host suite + **EMULATOR-PROVEN on EM end-to-end**
+  (types PIKA -> charmap bytes CA C3 C5 BB read from the game's own buffer; page-swap,
+  back, OK-commit "So it's PIK?"). FR: detection anchors census-live; geometry
+  source-identical; live parity pass = morning item.
+- LISTS family: generic driver + host suites; **EM bag live** (drag scroll + live template
+  read + tap-select -> submenu), **EM dex live** (LK_DEX + chip -> SELECT + L21 samples);
+  qty + pcitem detection host-proven via game_read (TEST 14), live pass = morning item
+  (FR mart re-plan above; EM PC needs a Center route).
+- 2 defects found live + 1 fixed in-code (pocket-tab pacing committed; dex drag pacing
+  banked as follow-up), 3 harness landmines documented (movie tail, sdmc spawn snapshot,
+  quest-log walk).
