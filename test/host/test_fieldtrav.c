@@ -37,6 +37,7 @@
 //   TEST 14 a tap taken while already surfing never plans a second mount ...... H1.5
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "../../source/fieldpath.h"
 #include "../../source/fieldtrav.h"
@@ -67,6 +68,7 @@ static uint8_t ov_r8(void* ctx, uint32_t a) {
 		if (g_ov[i].p && a >= g_ov[i].addr && a < g_ov[i].addr + g_ov[i].len)
 			return g_ov[i].p[a - g_ov[i].addr];
 	const FxMap* f = (const FxMap*)ctx;
+	if (!f) return 0;
 	for (int i = 0; i < f->nreg; i++)
 		if (a >= f->reg[i].addr && a < f->reg[i].addr + f->reg[i].len)
 			return f->reg[i].p[a - f->reg[i].addr];
@@ -99,6 +101,70 @@ static void bind(const char* name, FpBus* bus, FpMap* m, int pElev) {
 	bus->read8 = ov_r8; bus->read16 = ov_r16; bus->read32 = ov_r32; bus->ctx = (void*)f;
 	m->engine = (FpEngine)f->engine; m->mapHeader = f->mapHeader; m->mapObjects = f->mapObjects;
 	m->gridPtr = f->gridPtr; m->backupW = f->bw; m->backupH = f->bh;
+}
+
+// ---------------- SLICE 2: a bus onto the USER'S OWN ROM ----------------
+// TEST 15/16 walk a chain no compiled-in fixture carries (gMapGroups -> MapHeader ->
+// MapEvents/MapLayout -> warp table + raw grid), so they read `roms/emerald.gba` at run time and
+// SKIP LOUDLY when it is absent. Nothing is written; the ROM is opened read-only.
+#define EM_MAPGROUPS 0x08486578u        // BPEE gMapGroups — the shipped profile value (gamestate.c:94)
+static uint8_t* g_rom = 0;
+static long g_romLen = 0;
+static void rom_load(void) {
+	if (g_rom) return;
+	FILE* f = fopen("roms/emerald.gba", "rb");
+	if (!f) return;
+	fseek(f, 0, SEEK_END); g_romLen = ftell(f); fseek(f, 0, SEEK_SET);
+	if (g_romLen <= 0 || g_romLen > 32 * 1024 * 1024) { fclose(f); return; }
+	g_rom = (uint8_t*)malloc((size_t)g_romLen);
+	if (g_rom && fread(g_rom, 1, (size_t)g_romLen, f) != (size_t)g_romLen) { free(g_rom); g_rom = 0; }
+	fclose(f);
+}
+static uint8_t rom_r8(void* ctx, uint32_t a) {
+	(void)ctx;
+	if ((a >> 24) != 0x08u && (a >> 24) != 0x09u) return 0;
+	uint32_t off = a & 0x01FFFFFFu;
+	return (g_rom && (long)off < g_romLen) ? g_rom[off] : 0;
+}
+static uint16_t rom_r16(void* c, uint32_t a) { return (uint16_t)(rom_r8(c, a) | (rom_r8(c, a + 1) << 8)); }
+static uint32_t rom_r32(void* c, uint32_t a) { return (uint32_t)rom_r16(c, a) | ((uint32_t)rom_r16(c, a + 2) << 16); }
+
+// Build the LIVE gBackupMapLayout the console builds on a map load: the ROM grid copied into the
+// border-padded buffer with MAPGRID_UNDEFINED outside. The CURRENT map is always RAM on hardware
+// and only the INTERIOR is read from ROM, so TEST 16 must reproduce that split rather than run
+// both sides through the ROM adapter (which would also collide two adapters on one address window).
+#define LIVE_BASE 0x02900000u
+static uint8_t g_live[2 * 300 * 300];
+static uint32_t g_liveLen = 0;
+// The live bus: the RAM grid overlay first, then the ROM. The map HEADER and both tilesets are
+// still ROM reads even for the current map (that is true on hardware too), so a bus that only
+// answered the grid would make fieldpath_classify silently blind.
+static uint8_t live_r8(void* c, uint32_t a) {
+	if (a >= LIVE_BASE && a < LIVE_BASE + g_liveLen) return g_live[a - LIVE_BASE];
+	return rom_r8(c, a);
+}
+static uint16_t live_r16(void* c, uint32_t a) { return (uint16_t)(live_r8(c, a) | (live_r8(c, a + 1) << 8)); }
+static uint32_t live_r32(void* c, uint32_t a) { return (uint32_t)live_r16(c, a) | ((uint32_t)live_r16(c, a + 2) << 16); }
+static void live_from_rom(const FpBus* rb, const FtRomMap* rm, FpBus* busOut, FpMap* mapOut) {
+	int bw = rm->w + 15, bh = rm->h + 14;              // MAP_OFFSET_W / MAP_OFFSET_H
+	for (int gy = 0; gy < bh; gy++)
+		for (int gx = 0; gx < bw; gx++) {
+			int x = gx - 7, y = gy - 7;                // MAP_OFFSET
+			uint16_t v = 0x03FFu;                      // MAPGRID_UNDEFINED
+			if (x >= 0 && x < rm->w && y >= 0 && y < rm->h)
+				v = rb->read16(rb->ctx, rm->grid + 2u * (uint32_t)(x + rm->w * y));
+			uint32_t o = 2u * (uint32_t)(gx + bw * gy);
+			g_live[o] = (uint8_t)v; g_live[o + 1] = (uint8_t)(v >> 8);
+		}
+	g_liveLen = (uint32_t)(2 * bw * bh);
+	busOut->read8 = live_r8; busOut->read16 = live_r16; busOut->read32 = live_r32;
+	busOut->ctx = (void*)0;
+	memset(mapOut, 0, sizeof *mapOut);
+	mapOut->engine = FP_ENG_RSE;
+	mapOut->mapHeader = rm->header;                    // behaviour reads still go to ROM
+	mapOut->mapObjects = 0;                            // no live objects in this harness
+	mapOut->gridPtr = LIVE_BASE;
+	mapOut->backupW = bw; mapOut->backupH = bh;
 }
 
 // FlagSet, the writer half of fieldtrav_flag_get (pokeemerald src/event_data.c FlagSet).
@@ -696,6 +762,141 @@ int main(void) {
 			// layer's). Either answer is correct; what must never happen is a second mount.
 			CHECK(g_pr.outcome == FT_OUT_TIER0, "or it declines to tier 0 (got %s)", OUTN(g_pr.outcome));
 		}
+	}
+
+	// ================================================================ TEST 15 / 16
+	// SLICE 2 — the cross-map excursion, graded against the USER'S OWN Emerald ROM.
+	//
+	// Everything above this line runs off the compiled-in fixture image. Slice 2 walks a chain
+	// no fixture carries — gMapGroups -> MapHeader -> MapEvents/MapLayout -> the warp table and
+	// the raw ROM grid — so these two tests read `roms/emerald.gba` directly. If it is not there
+	// the tests SKIP LOUDLY (the trace_replay precedent) rather than quietly pass.
+	rom_load();
+	if (!g_rom) {
+		printf("TEST 15/16 — SKIPPED: roms/emerald.gba not readable from the CWD "
+		       "(run the suite from the project root to exercise the excursion planner)\n");
+	} else {
+	// ---------------------------------------------------------------- TEST 15
+	printf("TEST 15 — the real gMapGroups -> MapHeader -> warp-table chain (user's BPEE ROM)\n");
+	{
+		FpBus rb; rb.read8 = rom_r8; rb.read16 = rom_r16; rb.read32 = rom_r32; rb.ctx = 0;
+		FtRomMap rm;
+		// gMapGroups for BPEE, the value the shipped profile carries (gamestate.c:94).
+		CHECK(fieldtrav_rom_map(&rb, EM_MAPGROUPS, 26, 14, &rm),
+		      "BattleFrontier_OutsideEast (26,14) resolves through gMapGroups");
+		CHECK(rm.w == 72 && rm.h == 72, "and its layout is 72x72 (got %dx%d)", rm.w, rm.h);
+		FtWarp w[FT_MAX_WARPS];
+		int n = fieldtrav_warps(&rb, rm.events, w, FT_MAX_WARPS);
+		CHECK(n == 14, "OutsideEast has 14 warps (pret map.json), got %d", n);
+		// Warp 1 is the Battle Arena lobby door — the one this session's live arc actually used,
+		// and the emulator confirmed the arrival tile (39,29)+auto-step. Graded exactly.
+		if (n > 1) {
+			CHECK(w[1].x == 39 && w[1].y == 29, "warp 1 sits at (39,29), got (%d,%d)", w[1].x, w[1].y);
+			CHECK(w[1].mapGroup == 26 && w[1].mapNum == 28,
+			      "and leads to BattleFrontier_BattleArenaLobby (26,28), got (%d,%d)",
+			      w[1].mapGroup, w[1].mapNum);
+		}
+		// The reverse leg: the lobby's single warp comes back to OutsideEast warp 1.
+		FtRomMap lob;
+		CHECK(fieldtrav_rom_map(&rb, EM_MAPGROUPS, 26, 28, &lob), "the lobby (26,28) resolves too");
+		FtWarp lw[FT_MAX_WARPS];
+		int ln = fieldtrav_warps(&rb, lob.events, lw, FT_MAX_WARPS);
+		CHECK(ln == 1, "the lobby has exactly 1 warp, got %d", ln);
+		if (ln == 1) {
+			CHECK(lw[0].x == 7 && lw[0].y == 12, "at (7,12) — the SOUTH_ARROW_WARP the live arc "
+			      "needed two tokens for, got (%d,%d)", lw[0].x, lw[0].y);
+			CHECK(lw[0].warpId == 1, "and it targets OutsideEast warp 1, got %d", lw[0].warpId);
+		}
+		// Every guard rail: garbage in, "no map" out — never a wander.
+		FtRomMap bad;
+		CHECK(!fieldtrav_rom_map(&rb, 0x02000000u, 26, 14, &bad), "a RAM gMapGroups is refused");
+		CHECK(!fieldtrav_rom_map(&rb, EM_MAPGROUPS, 99, 0, &bad),  "an out-of-range group is refused");
+		CHECK(!fieldtrav_rom_map(&rb, EM_MAPGROUPS, 26, 250, &bad), "an out-of-range map is refused");
+		CHECK(fieldtrav_warps(&rb, 0x02000000u, w, FT_MAX_WARPS) == 0, "a RAM MapEvents reads 0 warps");
+		// The ROM-grid bus adapter: fieldpath's OWN behaviour read, run against a ROM map.
+		FtRomBus rbus; FpBus dbus; FpMap dmap;
+		fieldtrav_rom_bus(&rbus, &rb, &rm, FP_ENG_RSE, &dbus, &dmap);
+		CHECK(fieldpath_behaviour_at(&dbus, &dmap, 39, 29) == 0x69,
+		      "(39,29) reads MB_ANIMATED_DOOR 0x69 through the adapter, got 0x%02X",
+		      fieldpath_behaviour_at(&dbus, &dmap, 39, 29));
+		CHECK(fieldpath_behaviour_at(&dbus, &dmap, 50, 58) == 0x15,
+		      "(50,58) reads MB_OCEAN_WATER 0x15 — the south-beach channel the surf arc crossed");
+		CHECK(!fieldpath_enterable(&dbus, &dmap, 39, 29, 3), "the door tile is not walkable");
+		CHECK(fieldpath_enterable(&dbus, &dmap, 39, 30, 3), "the tile below it is");
+		CHECK(fieldpath_behaviour_at(&dbus, &dmap, -1, 5) == -1, "off-map reads refuse, not guess");
+		CHECK(fieldpath_behaviour_at(&dbus, &dmap, 72, 5) == -1, "…on the far edge too");
+	}
+
+	// ---------------------------------------------------------------- TEST 16
+	printf("TEST 16 — the Lavaridge-class excursion, on the map this save can actually reach\n");
+	{
+		// SPEC §3.4's canonical scenario is Lavaridge Town: a terrace you can SEE from the town
+		// floor but can only ENTER through the Pokemon Center's back door. The fixture save cannot
+		// reach Lavaridge (no FLY in the party — see the phase-23 recon entry), but Emerald has
+		// exactly one other instance of the same topology that IS reachable from it:
+		// BattleFrontier_OutsideWest's RECEPTION GATE. Two door tiles on the outside map, (26,61)
+		// north of the gate and (26,65) south of it, with the gate BUILDING between them — the
+		// frontier's own entrance. Walking between them is impossible; passing through is the
+		// only way. Same shape, real ROM, reachable save.
+		FpBus rb; rb.read8 = rom_r8; rb.read16 = rom_r16; rb.read32 = rom_r32; rb.ctx = 0;
+		FtRomMap west;
+		CHECK(fieldtrav_rom_map(&rb, EM_MAPGROUPS, 26, 4, &west), "OutsideWest (26,4) resolves");
+		CHECK(west.w == 56 && west.h == 72, "56x72 layout, got %dx%d", west.w, west.h);
+
+		// Build the LIVE gBackupMapLayout the way the console does — the ROM grid copied into the
+		// padded buffer, border tiles MAPGRID_UNDEFINED — so the current map is a RAM grid exactly
+		// as it is on hardware, and only the INTERIOR is read from ROM (which is the real split).
+		FpBus lbus; FpMap lm;
+		live_from_rom(&rb, &west, &lbus, &lm);
+
+		int gateN_x = 26, gateN_y = 61;      // the north door tile (pret map.json)
+		int gateS_x = 26, gateS_y = 65;      // the south door tile
+		// Ground truth first: standing north of the gate, the south side is NOT walkable to.
+		int startX = 26, startY = 60, goalX = 26, goalY = 66;
+		FpPlan fp;
+		bool dry = fieldpath_plan(&lbus, &lm, startX, startY, goalX, goalY, 0, 0, &fp);
+		CHECK(!dry, "the dry router cannot reach the far side of the gate (that is the premise)");
+
+		FtExcursion ex;
+		bool ok = fieldtrav_excursion(&lbus, &lm, EM_MAPGROUPS, 26, 4,
+		                              startX, startY, goalX, goalY, 0, 0, &ex);
+		CHECK(ok, "an out-and-back excursion IS found (outcome %d)", ex.outcome);
+		if (ok) {
+			CHECK(ex.dGroup == 26 && ex.dNum == 50,
+			      "through BattleFrontier_ReceptionGate (26,50), got (%d,%d)", ex.dGroup, ex.dNum);
+			CHECK((ex.wiX == gateN_x && ex.wiY == gateN_y),
+			      "leaving by the NORTH door (26,61), got (%d,%d)", ex.wiX, ex.wiY);
+			CHECK((ex.backX == gateS_x && ex.backY == gateS_y) ||
+			      (ex.backX == gateS_x && ex.backY == gateS_y + 1),
+			      "and returning at the SOUTH door (26,65)+step, got (%d,%d)", ex.backX, ex.backY);
+			CHECK(ex.wjX != ex.arrX || ex.wjY != ex.arrY,
+			      "the return warp is a DIFFERENT tile from the arrival one");
+			CHECK(ex.stepsOut >= 0 && ex.stepsMid >= 0 && ex.stepsBack >= 0,
+			      "all three legs carry real step counts (%d/%d/%d)",
+			      ex.stepsOut, ex.stepsMid, ex.stepsBack);
+		}
+
+		// The mirror image: from the SOUTH side, the same gate gets you north.
+		FtExcursion ex2;
+		bool ok2 = fieldtrav_excursion(&lbus, &lm, EM_MAPGROUPS, 26, 4, 26, 66, 26, 60, 0, 0, &ex2);
+		CHECK(ok2, "and the excursion is symmetric (south -> north)");
+		if (ok2) CHECK(ex2.wiY == gateS_y, "leaving by the south door this time, got y=%d", ex2.wiY);
+
+		// H3.5 honesty: a goal that no return warp can reach plans NOTHING. (0,0) is the map's
+		// top-left corner, solid border on this layout.
+		FtExcursion ex3;
+		// (26,63) is INSIDE the gate building's wall — enterable by nobody, on either side.
+		bool ok3 = fieldtrav_excursion(&lbus, &lm, EM_MAPGROUPS, 26, 4, startX, startY, 26, 63, 0, 0, &ex3);
+		CHECK(!ok3 && ex3.outcome == FT_OUT_NOEXC,
+		      "an unreachable goal reports excursion-none and plans nothing (outcome %d)", ex3.outcome);
+		// And the guard rails again, this time on the excursion entry point.
+		FtExcursion ex4;
+		CHECK(!fieldtrav_excursion(&lbus, &lm, 0x02000000u, 26, 4, startX, startY, goalX, goalY, 0, 0, &ex4),
+		      "a RAM gMapGroups plans nothing");
+		CHECK(!fieldtrav_excursion(&lbus, &lm, EM_MAPGROUPS, 26, 4, startX, startY, startX + 40, startY, 0, 0, &ex4),
+		      "a goal outside the search window plans nothing");
+		CHECK(ex4.outcome == FT_OUT_WINDOW, "…and says so (outcome %d)", ex4.outcome);
+	}
 	}
 
 	printf("\n%d checks, %d failures\n", g_checks, g_fail);
