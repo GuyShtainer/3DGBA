@@ -441,3 +441,58 @@ in-app Smart-mode explainer said "Double-tap = START" — it now says "Tap yours
 SELECT", and it is SHORTER than the copy it replaced, which is the only thing the 3-line wrap
 budget cares about (`test_typography` T14 re-run green). `TOUCH-PLAN.md`'s FAM-DLG line that
 promised a double-tap is corrected in place rather than quietly left standing.
+
+### ...and the traversal PROGRAM, which D2 also touched
+
+`roms/emerald-r117.sav`, `smartTraverse = 1`, **one tap on (11,2)** past the cuttable tree — A1's
+P2 arc, re-run on the D2 build:
+
+```
+prog seq=1 ... aKeys=40 answers=2 end=HANDOFF          <- the CUT sequence, unchanged
+(15,3) --320f-->  (15,2)   runFrames 0 -> 2            <- face, A, dialog, the game's own YES, the cut
+(15,2) -> (14,2) -> (13,2) -> (12,2) -> (11,2)         <- the handed-off leg: 8f a tile, mask 0x022 (LEFT+B)
+runLeg=1  runFrames 2 -> 33   final pos (11,2) beh=0x2
+```
+
+Two things at once. The program is **unregressed** — `answers=2` is A1's level-triggered YES still
+landing, and (11,2) is one of the exactly 11 tiles `gate.py` proves that tree gates. And the safety
+property is **measured, not argued**: across the whole 320-frame interact sequence — FACE, A, the
+textbox, the yes/no, the ANSWER — `runFrames` moved by **2**, and those two frames are the start of
+the handed-off walk. B never went anywhere near the yes/no, where B is NO.
+
+Capture: `evidence/impl/EM-P24-D2-cut-then-the-handed-off-leg-ran.bottom.png`.
+
+## Lane A2 close-out
+
+### Verdicts
+
+| decision | verdict | the state read that proves it |
+|---|---|---|
+| **D1 tap self = START** | **PROVEN** | `ctx` OVERWORLD -> **GCTX_FIELDMENU**, `ownStarts` 0 -> 1, the field menu on screen |
+| **D1 hold self = SELECT** | **PROVEN** | `ownSelects` 0 -> 1 and **`runElig` 0x1F -> 0x1B** — `RUNG_ONFOOT` clear, i.e. the game's own `gPlayerAvatar` says the registered Bicycle was mounted. A second hold put it back to 0x1F. |
+| **D1 the release after a hold is silent** | **PROVEN** | `ownStarts` stayed at **1** across both holds |
+| **D2 far = run** | **PROVEN** | 7 tiles: `runLeg=1`, mask `0x012`, **8 frames a tile** — against **16** for the same four tiles under the hold-steer baseline |
+| **D2 close = walk** | **PROVEN** | 3 tiles on that same row: `runLeg=0`, mask `0x020`, 16 frames a tile, `runFrames` unmoved |
+| **D2 every gate degrades to walking** | **PROVEN for 3 of 5 live** | `RUNG_MAP` (indoors, `runElig=0x1D`), `RUNG_ONFOOT` (on the bike, `0x1B`), `RUNG_TERRAIN` (the sand bath and the hot spring, `0x0F`). `RUNG_SHOES` and `RUNG_FREE` are host-graded only — this save has the shoes and no script grabbed the avatar. |
+| **D2 decided per LEG** | **PROVEN** | the one-tap excursion: interior legs walked, the terrace leg ran, all in one route |
+
+### What is NOT proven, stated plainly
+
+1. **`RUNG_SHOES` and `RUNG_FREE` were never observed CLEARING on a live game** — an 8-badge save
+   always has the Running Shoes, and no forced-move script ran during the arc. Both are graded
+   exhaustively host-side (all 32 masks) and both read one byte each through code paths the other
+   three gates exercised, but neither has been watched saying no.
+2. **The traversal program's OWN span-gated B never ran** — the P2 route had zero plain walk moves
+   before its interact, so the `prog_run_span` path is host-graded and structurally argued (span is
+   0 at the interact and 1..3 below the threshold, so B is released at least three tiles out) but
+   not exercised. A program with a long approach walk would exercise it.
+3. **The one-step lag** described above (a terrain veto costs one extra walked step) is measured but
+   not fixed; it errs safe.
+4. **Emulator-proven only.** CLAUDE.md rule 6 still wants a real New 3DS pass: `OWNGEOM_HOLD_FRAMES`
+   and `RUNGEOM_MIN_TILES` are feel constants, and every frame count here is an EMULATED frame.
+
+### Host gate at close (fresh runs, this tree)
+
+celiolink 1259 · control 6940 · diag 376 · **fieldpath 1808 (frozen, unchanged)** · fieldtrav
+**1102** · netlink 66 · peersprite 62078 · presence 61376 · profiles 1697 · theme 83444 · tilt 1756
+· touchgeom **371892** · trace 58 · typography 1419 · uigeom 18332 · uihit 1834 — **0 failures**.
