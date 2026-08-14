@@ -400,3 +400,29 @@ Three lost boots (~40 min) root-caused, both findings verified by controlled rep
 Also learned: D4.11 counts touch-injected keys as "real input" -> a touch op ABORTS a
 running move script (by design). Sequencing rule: the touch script opens with w-waits
 sized past the route's end.
+
+## Lane A Entry 4 — 🎉 KEYBOARD FAMILY EMULATOR-PROVEN ON EMERALD (P1-P6)
+
+Boot 20260814-023312 (instance a, dual Emerald, long-tail movie, one-shot pre-staged
+route: NEW GAME -> Birch speech -> player naming; 48-token D4 route + 26-op touch script).
+The SMART keyboard handled the naming screen end-to-end — every proof from the spec's §5
+plan, live:
+
+- **P1 (the headline): touch-taps typed "PIKA"** — four character taps (cursor-sprite
+  write-then-A) and the game's OWN textBuffer read `CA C3 C5 BB FF...` over gdb
+  (g_touchDbg+0x20) = 'P' 'I' 'K' 'A' + EOS, the exact charmap bytes the spec predicted.
+  Screenshot: evidence/impl/EM-naming-PIKA-typed.bottom.png ("YOUR NAME? ▶PIKA_").
+- **P3 page swap**: PAGE-button tap -> SELECT pulse -> nsPage 1->2 (LOWER), screenshot
+  EM-naming-lower-page-after-swap.bottom.png.
+- **P4 BACK**: buffer length shrank exactly 1 per BACK tap (PIKA -> PIK observed).
+- **P5 OK commit**: the START-gap-A sequence pressed OK; state left STATE_HANDLE_INPUT,
+  ctx left GCTX_NAMING, and Birch asked **"So it's PIK?"** — the game accepted the
+  touch-typed name (EM-naming-OK-commit-so-its-PIK.bottom.png).
+- **P6 no-leak**: grid taps never emitted a D-pad key; GCTX_NAMING swallowed every tap.
+- **R9(d)/R10 observed live**: a lowercase tap fired DURING the page-swap anim was
+  correctly DROPPED by the state gate; the R10 PAD-fallback frame injected one UP
+  (naming-screen native D-pad — harmless). v1.1 suggestion banked: queue the tap until
+  state==2 instead of falling back, for snappier page-swap typing.
+- Bonus 22.0 live proof: the Birch speech classifies GCTX_TITLE (CB2_MainMenu is EM's
+  new-game loop) and taps were DEAD there — the census promotion's walk-leak cure seen
+  working on a real screen it was designed for.
