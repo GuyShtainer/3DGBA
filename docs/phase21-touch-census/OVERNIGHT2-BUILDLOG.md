@@ -572,6 +572,64 @@ uihit); `make -j8` -> 3DGBA.3dsx 4 380 680 B, `make cia` -> 3DGBA.cia 2 017 216 
 warnings. Emulator proofs (P-G1 recon + P-G2 the real move) = next, after the lane-A
 deferred proofs.
 
+## Grid Entry 2 — two NEW harness landmines banked (single-stage kills SMART; warps eat a walk token)
+
+Live phase, 2026-08-14 ~04:05-04:15. Two lost boot pairs, both root-caused from logs:
+
+1. **`--stage-roms NAME` (single) boots the app in SINGLE-GAME mode and SMART touch is
+   FORCED TO PAD there** (control header `p2=----`; main.c:3343 `tmEff = single && SMART ?
+   PAD : mode`, and D4's move_p2 seat does not exist). Every touch-proof boot MUST stage
+   `NAME,NAME` (dual same-ROM — what lane A's `p1=BPEE p2=BPEE` headers actually were).
+   Symptom to watch: g_touchDbg.seq frozen at 0.
+2. **A warp consumes the WHOLE in-flight walk token** (`tok 9 d14 warp-complete
+   26.28->26.14` — the d14 meant for the arrival map was spent crossing the door), and a
+   door exit adds an auto forward-step that shows as `cross-drift`. Route grammar that
+   works: give every door/stair crossing its OWN 1-tile token (`d1` through the door),
+   `W300` for the load + auto-step, then plan the next leg from the warp coord ±1
+   forward-step (doors drift, stairs don't).
+   Empirical drift table from tonight's runs (all from control-log start coords):
+   building EXIT door -> outside: arrival = warp coord, then ONE auto step out (drift +1
+   in the exit direction, seen as `cross-drift` mid-token); outside -> INTERIOR door:
+   arrival = the warp tile EXACTLY, NO auto-step (v2's u2 started at (7,8) = the mat);
+   stairs/escalator: no drift either side. FR quest-log replay end measured live:
+   (9,4) on map (13,1) (Indigo 2F) — NOT the (14,2) lane A recorded (their read was
+   likely mid-replay); the replay is ~800-2600 EMULATED frames, so W3600+W1500 after
+   CONTINUE covers it at any fps.
+
+## Grid Entry 3 — 🎉 FR MART LK_BUY + LK_QTY LIVE-PROVEN (deferred proof #1 closed)
+
+Boot runs-b/20260814-042757 (instance b, dual FR rev1, movie + pre-staged D4+touch).
+Route that finally worked (replay-end anchor (9,4) on Indigo 2F, measured live): d2 l8
+(the l8's last step lands ON the stairs (1,6) -> warp-complete) -> 1F arrival (2,14)
+(stairs drift +1 x) -> u2 r1 u5 l1 L a -> the clerk ACROSS the counter -> a = BUY ->
+**ctx flipped to GCTX_LIST live (gdb monitor, value 12) = LK_BUY detected on the user's
+FR rev1** (find_list_task via Task_BuyMenu rev1 0x0809BBD4 + data[7]). The pre-staged
+touch ops then ran the whole §P-E chain BLIND and the capture proves the outcome:
+**evidence/impl/FR-mart-qty13-confirm.bottom.png — "FULL RESTORE, and you want 13.
+That will be ₽39000. Okay?" with the YES/NO up.** 13 = EXACTLY the gesture arithmetic
+(qty roller: vertical drag = +3 ones, horizontal drag = +10, then the clean tap = A
+confirm) — LK_QTY's drag/±10/tap-A semantics live-proven in one number. No purchase
+made (the run stopped at the unanswered confirm; fixture save unmutated).
+
+Bonus harvest, live [exact] on the CONFIRM stage (gs-ring rows read over gdb):
+- FR rev1 `Task_CallYesOrNoCallback` = **0x080BF574** (the LG bypass finding's FR
+  sibling) is the ONLY input task on the confirm screen (+ ListMenuDummyTask
+  0x08106F44 = the shipped lmDummyTaskAlt, still resident). NOT promoted into
+  yesNoTaskAlt: on the buy screen the same task may be resident during the LIST phase
+  too, and the fieldmenu test runs before the buy test — promotion would risk stealing
+  the whole buy screen into GCTX_FIELDMENU. Flagged for a dedicated slice with a
+  list-phase task snapshot.
+- The P-D DISCOVERY PROBE fired live on the confirm screen (g_touchDbg+0x6C):
+  probeListBase 0x030050E8 (gTasks slot 2), totalItems 8, maxShowed 6, windowId 4 —
+  the SPEC-family-lists P-D proof, delivered by the FR mart for free.
+
+TWO more landmines banked: (1) `azctl stop` KILLS the app before the SD ring dumps
+flush -> the touch/gs logs of a stopped session are LOST; live gdb reads + captures are
+the only reliable evidence channel unless the session ends via the app's own Quit.
+(2) A mid-run mirror read samples ONE moment — the ctx flap I chased (12 -> 10) was
+just the confirm stage; read the gs RING (s_gsLog over gdb) for history, not the
+instantaneous mirror.
+
 ## Promotion Entry 1 — lane-B verdicts FOLDED into the profiles, all suites green
 
 Serial code slice (subagent, 2026-08-14 ~06:20). Sources: LANE-B-RS.md + LANE-B-LG.md.
