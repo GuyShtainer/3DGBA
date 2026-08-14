@@ -283,3 +283,20 @@ uihit 1834 — **0 failures**; emutest harness `run_host_tests.sh` **169 tests, 
    every gdb read silently returns the wrong address, and the app looks dead.
 4. The main menu classifies as `GCTX_TITLE` **while SaveBlock1 already holds the save's position** —
    so a live `pos` read is NOT proof the overworld is up. Check `ctx` too.
+
+---
+
+# LANE A2 (phase 24) — the two BANKED gesture decisions, D1 and D2
+
+Continues directly from A1 in the same tree, same instance (**a**, gdb 24689, `runs/`).
+
+**Entry state, verified on disk before the first edit:** all four A1 targets read **PROVEN**
+(P1 SURF · P2 CUT · P3 ROCK SMASH · P4 LAVARIDGE) with a state read behind each, so nothing from
+A1 is owed. `git log` ends at `df06524`. Host gate re-run fresh from this tree at A2 open —
+**16 suites, 0 failures**, numbers identical to A1's close-out (celiolink 1259 · control 6940 ·
+diag 376 · fieldpath 1808 · fieldtrav 1099 · netlink 66 · peersprite 62078 · presence 61376 ·
+profiles 1697 · theme 83444 · tilt 1756 · touchgeom 362691 · trace 58 · typography 1419 ·
+uigeom 18332 · uihit 1834).
+
+Scope: `DECISIONS-overworld-gestures.md` **D1** (tap self = START, hold self = SELECT) and **D2**
+(distance decides walk vs run), each proven host-side as a pure function first and then live.
