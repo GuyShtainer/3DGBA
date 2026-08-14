@@ -394,3 +394,47 @@ every read, every write and every BFS. The one thing that must not happen is a t
 bar this lane sets itself: **the extracted machines must be the SHIPPED ones** (touch.c calls
 them; there is no second copy), and the suites must drive them frame by frame through the exact
 sequences the live phase-24 runs produced.
+
+---
+
+## Entry 8 — 🎉 the extraction re-proved LIVE: P1 SURF, end to end, on the refactored build
+
+Boot `runs/20260814-200125`, instance **a**, `--stage-roms emerald-shore,emerald-shore` (the pair —
+both screens the same fixture; touch drives the BOTTOM game, `swapped = 0`). Build: the tree with
+`progseq.c` + `excseq.c` in and `prog_update` reduced to a shell. Settings untouched and read, not
+set: `touchMode 2 (Smart)`, `traverse 1`, `swapped 0` — i.e. exactly the configuration lane A's P1
+ran at, and (audit **O1**) NOT the shipped default, which is `traverse 0 = Off`.
+
+**One tap**: `t 256 128 6 30` written to `sdmc:/cias/control/touch.txt` — the same synthetic-touch
+op lane A used, six tiles east of the player onto `MB_OCEAN_WATER`.
+
+| read | plan | program | the game's own state |
+|---|---|---|---|
+| before the tap | `planSeq 0` | `progSeq 0` | map 26.14, pos **(47,58)**, `progSurf` **0**, facing 3 (L) |
+| +8 s | `planSeq 1` goal **(53,58)** beh **21 = 0x15** | `progSeq 1` outcome **1 = PLANNED**, moves **6**, interacts **1**, hm **3 = SURF**, phase **6 = DONE**, `progAKeys 16`, **`progAnswers 2`** | pos (47,58), **`progSurf 1`**, facing **4 (R)** |
+| +13 s | `planSeq 2` (the hand-off route) pathLen **5**, `routeEnd 1 = ARRIVED` | `progEnd` **2 = TPE_HANDOFF**, `progEndSeq 1` | pos **(53,58)** — the tapped tile — `progSurf` **1** |
+
+Every one of those numbers is the one lane A recorded for P1 on the pre-refactor build
+(LANE-A-TRAVERSAL.md §P1): the same plan, the same six moves, the same **`answers = 2`** — the
+load-bearing number, because it says the LEVEL-triggered ANSWER aimed at the YES twice (the first
+press falls inside `Task_HandleYesNoInput`'s five dead frames, the second lands) — the same
+HANDOFF, and the same finish standing afloat on (53,58), which a walking player cannot occupy.
+
+Captures (hashed, both unique in `evidence/impl/`):
+`EM-P25-C2-p1-before-the-tap.bottom.png` (the shore, before) and
+`EM-P25-C2-p1-afloat-after-extraction.bottom.png` (the avatar on its surf mount, out on the water,
+the Frontier building now up-screen — the camera moved because the player did).
+
+**Two things this boot also showed, neither of them a regression:**
+
+1. **The first tap of the boot did nothing, and that was lane B1's arm working.** `dlgTaps` went
+   0→1 while `planSeq` stayed **0**: a field script still owned the frame after the CONTINUE, so
+   FAM-DLG claimed the tap (tap = A) and `walk_update` was never called — precisely the "no route
+   can be planned at a game that cannot move" rule. One `b` cleared it and the next tap planned.
+   Worth writing down because it is the difference between "the feature is broken" and "the
+   feature refused, for a reason it can name".
+2. `runElig 27 = 0x1B` on the hand-off leg — `RUNG_TERRAIN` clear, because the player is on water.
+   The leg still decided by the four latched gates (`755faf2`) and simply emitted no B.
+
+**Verdict: the interact sequencer's extraction is behaviour-preserving on the live target.** The
+excursion machine is NOT covered by this run (P1 never leaves the map) — Entry 9.
