@@ -16,6 +16,13 @@
 
 const char* const TOUCH_NAMES[3] = { "Off", "Gamepad", "Smart" };
 
+// PHASE 24 / lane B1: touchgeom.c must host-compile without gamestate.h (which pulls gbacore.h and
+// with it libctru), so DLGGEOM_CTX_FIELD mirrors the enum value. Pin the two together HERE, the
+// same way main.c:1220 pins TILT_CTX_FIELD — if GameCtx is ever re-ordered this fires at compile
+// time instead of silently routing field dialogs back into the walker.
+_Static_assert(GCTX_OVERWORLD == DLGGEOM_CTX_FIELD,
+               "touchgeom.h DLGGEOM_CTX_FIELD drifted from GameCtx GCTX_OVERWORLD");
+
 // Pad tint comes from g_prefs.padColor (5 options, theme.h); idle zones draw at alpha 0x40,
 // pressed at 0xB0 — the same alphas the old fixed-gold overlay used.
 static u32 pad_tint(u8 alpha) {
@@ -1834,10 +1841,14 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 	}
 
 	u16 ret = 0;
+	// PHASE 24 / lane B1: a FIELD DIALOG is a FAM-DLG screen. Resolved ONCE here so the reset line
+	// below and the OVERWORLD arm cannot disagree about who owns the frame (touchgeom.h documents
+	// the rule and the live evidence; test_touchgeom TEST 18 grades it).
+	int dlgOwns = (dlggeom_route(sm->ctx, sm->textDlg ? 1 : 0) == DLGROUTE_DLG);
 	// PHASE 23 / FAM-DLG: one line instead of adding dlg_reset() to nine per-case reset lists — the
 	// tap-advance state must die the moment the screen stops being a FAM-DLG screen (a half-finished
 	// hold must never leak a B into the battle menu the dialog just opened).
-	if (sm->ctx != GCTX_FULLUI && sm->ctx != GCTX_TITLE) dlg_reset();
+	if (sm->ctx != GCTX_FULLUI && sm->ctx != GCTX_TITLE && !dlgOwns) dlg_reset();
 	switch (sm->ctx) {
 	case GCTX_BATTLE_ACTION:
 	case GCTX_BATTLE_MOVE: {
@@ -1868,6 +1879,24 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 		break;
 	case GCTX_OVERWORLD:
 		battle_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset();
+		if (dlgOwns) {
+			// A script is talking (sFieldMessageBoxMode != 0). FAM-DLG owns the frame: tap = A
+			// (the box advances from ANYWHERE, not only from the player's own tile), hold = B,
+			// drag = D-pad. Critically it also means walk_update is NOT CALLED, so no route can
+			// be planned at a game that cannot move — the leak this arm exists to end.
+			//
+			// The walker's state is deliberately FROZEN, not reset: a textbox that opens MID-ROUTE
+			// (the Match Call the traversal lane lost two boots to) now pauses the route instead of
+			// stalling it out, and the route resumes on the frame the box closes. s_stall is not
+			// advanced while we are away, so the resume is clean.
+			ret = dlg_update(sm, touching, newPress, gvalid, gx, gy, 1);
+			// Keep the field mirror honest — it is the proof channel this defect was found with.
+			g_fieldDbg.curKeys = ret;
+			g_fieldDbg.curMapGroup = sm->mapGroup; g_fieldDbg.curMapNum = sm->mapNum;
+			g_fieldDbg.curPx = sm->px; g_fieldDbg.curPy = sm->py;
+			g_fieldDbg.curFrame = sm->core ? (int32_t)gbacore_frame_counter(sm->core) : 0;
+			break;
+		}
 		ret = walk_update(touching, newPress, gvalid, gx, gy, sm->px, sm->py,
 		                  sm->mapGroup, sm->mapNum, sm->core, sm->prof, sm->traverse);
 		break;

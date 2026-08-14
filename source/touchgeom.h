@@ -188,3 +188,35 @@ int dlggeom_tap(int gx, int gy, int pager);
 // screens that read both axes). Direct manipulation: +dx -> RIGHT, +dy -> DOWN.
 enum { DLGD_NONE = -1, DLGD_RIGHT = 0, DLGD_LEFT = 1, DLGD_DOWN = 2, DLGD_UP = 3 };
 int dlggeom_drag_dir(int dx, int dy);
+
+// --- PHASE 24 / lane B1: WHICH HANDLER OWNS AN OVERWORLD FRAME -------------------------------
+// The TAP-class verification (docs/phase21-touch-census/LANE-B-TAPVERIFY.md) found that ~19 of the
+// 48 `TAP` rows are FIELD DIALOGS — a script textbox, a TV, an NPC trade, a cutscene, the Hall of
+// Fame — which run under `CB2_Overworld` and therefore never reached FAM-DLG at all. They landed
+// in `walk_update`, whose verbs on a frozen game are exactly wrong:
+//
+//   tap off-self -> a BFS route is planned and a HELD direction key is delivered to a game that
+//                   cannot move (witnessed live: curKeys 0x10 for 20+ consecutive emulated frames,
+//                   planSeq 3->6 from ONE tap, routeEnd = STALLED, avatar never moved)
+//   hold         -> a HELD steering key (curKeys 0x20), where TOUCH-PLAN B3 specifies B
+//   tap on self  -> the only correct verb, and the accidental stall-out A ~1.2 s late
+//
+// The rule below is the whole fix, kept as a pure predicate so it is graded by the host suite
+// rather than only by an emulator arc: **an overworld frame with a field textbox up belongs to
+// FAM-DLG.** Everything else routes exactly as before — this can never take a frame away from a
+// context that has its own handler, because `ctx` has already been resolved by `game_read` and
+// only the OVERWORLD fall-through is touched.
+//
+// `textDlg` is `GameState.textDlg` = `sFieldMessageBoxMode`(EM) / `sMessageBoxType`(FRLG) != 0
+// (gamestate.c:737). It is not a new signal: the tilt gate G8 has consumed the same bit since
+// phase 17 (fieldgate.h:45) and the traversal sequencer waits on it (touch.c:901/914/945).
+// Games whose profile leaves `fieldMsgMode` at 0 (RS today) read textDlg = 0 forever and keep the
+// old behaviour — a named degradation, not a silent one.
+enum { DLGROUTE_WALK = 0,   // the shipped tap-to-walk / steer machinery
+       DLGROUTE_DLG  = 1 }; // FAM-DLG: tap = A, hold = B, drag = D-pad, and NO route is armed
+// The GameCtx value this rule keys on, mirrored the way tilt.h/fieldgate.h already mirror it
+// (touchgeom.c must stay libctru-free so `clang -I source touchgeom.c` host-compiles); touch.c
+// carries the _Static_assert that pins it to the real enum, exactly as main.c:1220 does for tilt.
+#define DLGGEOM_CTX_FIELD 1   /* == GCTX_OVERWORLD == FIELD_CTX_OVERWORLD == TILT_CTX_FIELD */
+// `ctx` is a GameCtx; `textDlg` is 0/1. Pure: no state, no bus, no clock.
+int dlggeom_route(int ctx, int textDlg);
