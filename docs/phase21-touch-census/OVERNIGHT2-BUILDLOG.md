@@ -444,3 +444,22 @@ plan, live:
   BERRIES. Fix: LIST_SEQ_FRAMES=24 pacing (committed; re-proof rides the next bag touch).
 - Fling: exercised in-run (no isolated read window this boot — re-proven on FR next).
 - Blank-row clamp: host-proven (115k-check sweep); live negative probe deferred.
+
+## Entry 11 — LANE B: LeafGreen 13-anchor live verification COMPLETE (10/13 [exact])
+
+The 305242f BPGE fix is REAL on the user's rev-1.1 save: ctx=fmenu/party/bag/b.oth/b.act/
+b.move ALL fired on LG for the first time ever, each keyed on the exact shipped LG-rev1
+value (startMenuTask 0x0806F204, partyTask 0x0811FB78 + cb2Upd/Init 0x0811EBF0/0x0811EC20,
+bagHandler 0x08108F5C + cb2BagRun 0x08107F30, selMenu 0x08122CAC, multiTask 0x0809CC80,
+BattleMainCB2 0x08011114 via a Route-8 trainer-sight battle, Task_MapNamePopup 0x08098194
+caught in a 2s heartbeat window). Honest non-verdicts: chooseTarget (needs a double
+battle), startCbInput (dead column — task-only detection since the callback-compare
+retirement), and **yesNoTask = map-correct but BYPASSED by all four common yes/no flows**
+(save→start-menu chain, nurse→multichoice task, bag-toss AND mart-buy→
+`Task_CallYesOrNoCallback` 0x080BF548 [exact] ×2) → promotion rec: add 0x080BF548 as the
+FRLG yes/no alternate. FULLUI harvest banked (intro/title/menu/options/dex/card/shop/buy
++ bag-list internals — the LK_BUY anchors Lane A's lists family needs). Logger caveat
+discovered: FRLG quest-log playback leaks HISTORICAL map/pos rows into the gs ring.
+Full table + ops routes: LANE-B-LG.md; 16 captures -> evidence/leafgreen/.
+Mid-leg incident: a Lane-A rebuild coincided with the gdb stub dying ("emulator closed
+the RSP socket") — one reboot lost; the snapshot-ELF hermetic rule kept all reads valid.
