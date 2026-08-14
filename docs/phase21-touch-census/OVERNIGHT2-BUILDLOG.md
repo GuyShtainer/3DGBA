@@ -670,3 +670,15 @@ touchgeom 115396 · trace_replay 58 (4 loud SKIPs) · typography 1419 · uigeom 
 `make cia` → 3DGBA.cia 2 015 168 B (both clean 06:23; only the pre-existing frozen-mgba
 warnings). Note: test_profiles' link line now needs source/peersprite.c (presence_read
 references pspr_capture since phase 20; the header comment's 4-file line no longer links).
+
+## 2026-08-14 — USER DESIGN CALLS (binding): overworld gestures
+
+See DECISIONS-overworld-gestures.md. Two calls, both from the user this morning:
+D1 tap-self = START, HOLD-self = SELECT (replaces tap=A / double-tap=START; double-tap was
+   offered and rejected because it taxes every single tap with the double-tap window).
+D2 tap-to-walk RUNS when the routed path is >= ~4 tiles, WALKS when shorter — with silent
+   degradation to walking whenever running is not permitted (shoes flag / map type / surf /
+   bike / dash-cancelling terrain), decided PER LEG for traversal routes.
+Mechanism precedent: control.c:151's sprint mode already holds KEY_B in the direction mask; the
+touch route follower simply never does. Implement in the overworld handler + the route-PROGRAM
+layer. Not yet scheduled — pick this up in the next slice after the phase-23 lanes land.
