@@ -123,3 +123,85 @@ int baggeom_fr_pocket_arrow(int gx, int gy) {
 	if (gx >= 64 && gx < 96) return 1;                     // RIGHT arrow at x=72
 	return -1;
 }
+
+// ------------------------------------------------------------------- storage GRID (phase 22.2) --
+// SPEC-family-grid §1.4. Cell math from CreateBoxMonIconAtPos (icon centers 100+24c / 44+24r):
+// cell (c,r) rect = x [88+24c, 112+24c) x y [32+24r, 56+24r); grid body x 88..232, y 32..152.
+int storgeom_hit(int gx, int gy, int inParty, int* pos) {
+	// Party panel FIRST while sInPartyMenu: it slides OVER the grid/title area (capture E12e), so
+	// its rects take priority; grid cols 0..3 (x < 184) go DEAD under it, cols 4..5 stay tappable.
+	// Rects are cursor-anchor derived (spec §1.4: pos0 (104,52), pos1-5 (152,(p-1)*24+4),
+	// pos6 (152,132)) — capture-derived bands, verify-in-emulator.
+	if (inParty) {
+		if (gx >= 88 && gx < 120 && gy >= 44 && gy < 76) { if (pos) *pos = 0; return SGH_PARTY; }
+		if (gx >= 136 && gx < 168 && gy >= 8 && gy < 128) {
+			int p = 1 + (gy - 8) / 24;
+			if (p >= 1 && p <= 5) { if (pos) *pos = p; return SGH_PARTY; }
+			return SGH_NONE;
+		}
+		if (gx >= 128 && gx < 176 && gy >= 124 && gy < 148) { if (pos) *pos = 6; return SGH_PARTY; }
+		if (gx >= 184 && gx < 232 && gy >= 32 && gy < 152) {
+			int c = (gx - 88) / 24, r = (gy - 32) / 24;
+			if (pos) *pos = r * 6 + c;
+			return SGH_SLOT;
+		}
+		return SGH_NONE;
+	}
+	// Top buttons row (cursor anchors x = pos*88 + 120, GetCursorCoordsByPos :5849-5851; widths
+	// capture-derived from E12-storage-boxes.top.png, verify-in-emulator).
+	if (gy >= 0 && gy < 18) {
+		if (gx >= 96  && gx < 176) return SGH_BTN_PARTY;
+		if (gx >= 180 && gx < 236) return SGH_BTN_CLOSE;
+		return SGH_NONE;
+	}
+	// Title bar band: scroll arrows at (92,28)/(228,28) (CreateBoxScrollArrows :5644), the box
+	// name between them.
+	if (gy >= 20 && gy < 36) {
+		if (gx >= 84  && gx < 100) return SGH_ARROW_L;
+		if (gx >= 220 && gx < 236) return SGH_ARROW_R;
+		if (gx >= 100 && gx < 220) return SGH_TITLE;
+		return SGH_NONE;
+	}
+	// The 6x5 grid.
+	if (gx >= 88 && gx < 232 && gy >= 32 && gy < 152) {
+		int c = (gx - 88) / 24, r = (gy - 32) / 24;
+		if (pos) *pos = r * 6 + c;
+		return SGH_SLOT;
+	}
+	return SGH_NONE;
+}
+
+// SPEC-family-grid G2/G3 + §1.2 (the engine's own transition table, cited per case).
+int stornav_step(int curArea, int curPos, int tgtArea, int tgtPos) {
+	if (curArea == tgtArea && curPos == tgtPos) return SN_NONE;   // arrived
+	switch (curArea) {
+	case 0:   // IN_BOX (InBoxInput_Normal)
+		if (tgtArea == 2) return SN_START;                        // START jumps to the title
+		if (tgtArea == 3) return SN_DOWN;                         // repeated DOWN exits the grid bottom
+		if (tgtArea == 0) {
+			int c = curPos % 6, r = curPos / 6, tc = tgtPos % 6, tr = tgtPos / 6;
+			if (r < tr) return SN_DOWN;                           // r<tr<=4 -> stays inside (G3)
+			if (r > tr) return SN_UP;                             // r>tr>=0 -> stays inside
+			int d = (tc - c + 6) % 6;                             // LEFT/RIGHT wrap within the row
+			return (d <= 3) ? SN_RIGHT : SN_LEFT;
+		}
+		return SN_NONE;                                           // party: unroutable from the box
+	case 2:   // BOX_TITLE (HandleInput_OnBox): pos is always 0
+		if (tgtArea == 0) return SN_DOWN;                         // -> IN_BOX pos 2, grid nav follows
+		if (tgtArea == 3) return SN_UP;                           // -> BUTTONS 0
+		return SN_NONE;
+	case 3:   // BUTTONS (HandleInput_OnButtons)
+		if (tgtArea == 3) return (tgtPos > curPos) ? SN_RIGHT : SN_LEFT;
+		if (tgtArea == 2) return SN_DOWN;
+		if (tgtArea == 0) return SN_UP;                           // -> box pos 24/29, grid nav follows
+		return SN_NONE;
+	case 1:   // IN_PARTY (HandleInput_InParty): UP/DOWN cycle 0..6
+		if (tgtArea == 1) {
+			int d = (tgtPos - curPos + 7) % 7;
+			return (d <= 3) ? SN_DOWN : SN_UP;
+		}
+		return SN_RIGHT;                                          // RIGHT leaves the party -> box
+	default:
+		return SN_NONE;
+	}
+}

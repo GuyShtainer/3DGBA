@@ -849,6 +849,139 @@ static u16 naming_update(const TouchSmart* sm, bool touching, bool newPress, boo
 	return 0;
 }
 
+// ===================== SMART: the GRID family (PC storage boxes) =====================
+// PHASE 22.2 (SPEC-family-grid). Tap-tap-move honesty: a tap arms a TARGET (cursor area+pos) and
+// the driver walks the game's OWN cursor there with single d-pad edges chosen per frame from the
+// LIVE sCursorArea/sCursorPosition read (stornav_step = the engine's own transition table), then
+// presses the game's own A. Nothing writes storage state, ever; a target the cursor cannot reach
+// is dropped silently (G2: A is NEVER emitted while live != target). The storage popups (mon
+// MOVE/…, held PLACE/…, box JUMP/WALLPAPER/NAME/CANCEL) are standard sMenu menus
+// (HandleMenuInput -> Menu_GetCursorPos, pokemon_storage_system.c:8024-8059), so while one is up
+// taps delegate to the SHIPPED fieldmenu write-then-A path (G6).
+static int s_stTgtA = -1, s_stTgtP = 0;   // armed navigation target (-1 = idle)
+static int s_stAct = 0;                   // on arrival: 0 none / 1 A / 2 scroll LEFT / 3 scroll RIGHT
+static int s_stArm = 0;                   // frames left before the arrival action fires (anim settle)
+static int s_stATick = 0;                 // remaining A-pulse frames
+static int s_stHold = 0; static u16 s_stHoldKey = 0;   // held-key frames (title-area box scroll)
+static int s_stGap = 0;                   // idle frames between nav edges (edges need releases)
+static int s_stTotal = 0;                 // frames since the target was armed (timeout)
+static void storage_reset(void) {
+	s_stTgtA = -1; s_stTgtP = 0; s_stAct = 0; s_stArm = 0; s_stATick = 0;
+	s_stHold = 0; s_stHoldKey = 0; s_stGap = 0; s_stTotal = 0;
+}
+#define STOR_EDGE_GAP  8    // release frames between nav edges (the cursor slide swallows edges —
+                            // the closed loop just re-emits; census bag-pacing lesson applied)
+#define STOR_A_DELAY   20   // arrival -> action delay: SetCursorPosition updates the statics at the
+                            // START of the slide (~12f, UpdateCursorPos), and HandleInput is not
+                            // polled mid-slide — an instant A would be swallowed
+#define STOR_TIMEOUT   360  // drop an unreached target (frames since armed)
+#define STOR_HOLD_FRAMES 3  // held frames for the title-area scroll (HandleInput_OnBox JOY_HELD)
+
+typedef struct {
+	int area, pos, held, origBox, origPos, inParty, boxOption, boxId, menuOpen;
+	uint32_t occ;
+} StorState;
+static int storage_read(const TouchSmart* sm, StorState* st) {
+	const GameProfile* p = sm->prof;
+	if (!sm->core || !p || !p->stCursor || !p->stStorage) return 0;
+	st->area    = gbacore_read8(sm->core, p->stCursor);
+	st->pos     = gbacore_read8(sm->core, p->stCursor + 1);
+	st->held    = gbacore_read8(sm->core, p->stCursor + 2);
+	st->origBox = gbacore_read8(sm->core, p->stCursor + 3);
+	st->origPos = gbacore_read8(sm->core, p->stCursor + 4);
+	st->inParty   = gbacore_read8(sm->core, p->stStorage + 4);
+	st->boxOption = gbacore_read8(sm->core, p->stStorage + 5);
+	st->boxId = -1; st->occ = 0;
+	if (p->pcStoragePtr) {
+		uint32_t ps = gbacore_read32(sm->core, p->pcStoragePtr);
+		if ((ps >> 24) == 0x02) {
+			int box = gbacore_read8(sm->core, ps);
+			if (box < 14) {
+				st->boxId = box;
+				uint32_t b = ps + 4u + 2400u * (uint32_t)box;   // boxes[box][0]; BoxPokemon = 80 B
+				for (int i = 0; i < 30; i++)                    // hasSpecies: flags byte +19 bit 1
+					if (gbacore_read8(sm->core, b + 80u * (uint32_t)i + 19u) & 0x02) st->occ |= 1u << i;
+			}
+		}
+	}
+	// G6 gate: a LIVE storage popup. sMenu.windowId is never cleared on RemoveMenu (stale-window
+	// trap, spec §1.3), so require the gWindows slot to be allocated (bg != 0xFF) AND the window
+	// to have the storage popup's exact bottom-right anchor (AddMenu: tilemapLeft = 29 - width,
+	// tilemapTop = 15 - height) — a fingerprint no stale overworld window matches.
+	st->menuOpen = 0;
+	if (p->sMenuBase && p->gWindowsBase) {
+		uint8_t wid = gbacore_read8(sm->core, p->sMenuBase + 5);
+		if (wid < 32) {
+			uint32_t win = p->gWindowsBase + 12u * (uint32_t)wid;
+			uint8_t bg = gbacore_read8(sm->core, win + 0);
+			int wl = gbacore_read8(sm->core, win + 1), wt = gbacore_read8(sm->core, win + 2);
+			int ww = gbacore_read8(sm->core, win + 3), wh = gbacore_read8(sm->core, win + 4);
+			if (bg != 0xFF && ww > 0 && wh >= 2 && wl + ww == 29 && wt + wh == 15) st->menuOpen = 1;
+		}
+	}
+	if (st->area > 3 || st->pos > 29) return 0;   // not in a state the model covers (transitions)
+	return 1;
+}
+
+static u16 storage_update(const TouchSmart* sm, bool touching, bool newPress, bool gvalid,
+                          int gx, int gy) {
+	(void)touching;
+	StorState st;
+	if (!storage_read(sm, &st)) { storage_reset(); return 0; }   // no anchors / mid-anim junk: dead
+	if (st.boxOption == 3)      { storage_reset(); return 0; }   // MOVE ITEMS: named v1 limit (G7)
+	if (st.menuOpen) {                                           // G6: popup -> the fmenu path
+		storage_reset();
+		if (newPress && gvalid && sm->prof) {
+			int i = hit_fieldmenu(sm->core, sm->prof, gx, gy);
+			if (i >= 0) { s_fmenu = i; s_fmenuTick = 0; }
+		}
+		return sm->prof ? fmenu_select(sm->core, sm->prof) : 0;
+	}
+	fmenu_reset();                                               // popup gone: never a stale write
+	if (s_stATick > 0) { s_stATick--; return 1 << GBAKEY_A; }
+	if (s_stHold  > 0) { s_stHold--;  return s_stHoldKey; }
+	if (newPress && gvalid) {                                    // a fresh tap (re)arms the target
+		int pos = 0;
+		int k = storgeom_hit(gx, gy, st.inParty ? 1 : 0, &pos);
+		if (k != SGH_NONE) { s_stTotal = 0; s_stGap = 0; s_stArm = 0; }
+		switch (k) {
+		case SGH_SLOT:      s_stTgtA = 0; s_stTgtP = pos; s_stAct = 1; break;
+		case SGH_TITLE:     s_stTgtA = 2; s_stTgtP = 0;   s_stAct = 1; break;
+		case SGH_ARROW_L:   s_stTgtA = 2; s_stTgtP = 0;   s_stAct = 2; break;
+		case SGH_ARROW_R:   s_stTgtA = 2; s_stTgtP = 0;   s_stAct = 3; break;
+		case SGH_BTN_PARTY: s_stTgtA = 3; s_stTgtP = 0;   s_stAct = 1; break;
+		case SGH_BTN_CLOSE: s_stTgtA = 3; s_stTgtP = 1;   s_stAct = 1; break;
+		case SGH_PARTY:     s_stTgtA = 1; s_stTgtP = pos; s_stAct = 1; break;
+		default: break;                                          // dead gutter: target unchanged
+		}
+	}
+	if (s_stTgtA < 0) return 0;
+	if (++s_stTotal > STOR_TIMEOUT) { storage_reset(); return 0; }   // G2: drop, never mis-act
+	if (st.area == s_stTgtA && st.pos == s_stTgtP) {             // live == target
+		if (s_stArm == 0) s_stArm = STOR_A_DELAY;                // let the cursor slide finish
+		if (--s_stArm > 0) return 0;
+		int act = s_stAct;
+		s_stTgtA = -1; s_stAct = 0; s_stArm = 0;
+		if (act == 1) { s_stATick = 1; return 1 << GBAKEY_A; }   // 2-frame A pulse
+		if (act == 2) { s_stHold = STOR_HOLD_FRAMES - 1; s_stHoldKey = 1 << GBAKEY_LEFT;  return s_stHoldKey; }
+		if (act == 3) { s_stHold = STOR_HOLD_FRAMES - 1; s_stHoldKey = 1 << GBAKEY_RIGHT; return s_stHoldKey; }
+		return 0;
+	}
+	s_stArm = 0;                                                 // moved off target mid-settle
+	if (s_stGap > 0) { s_stGap--; return 0; }                    // releases between edges
+	int sn = stornav_step(st.area, st.pos, s_stTgtA, s_stTgtP);
+	if (sn == SN_NONE) { storage_reset(); return 0; }            // unroutable (e.g. party from box)
+	s_stGap = STOR_EDGE_GAP;
+	switch (sn) {
+	case SN_UP:    return 1 << GBAKEY_UP;
+	case SN_DOWN:  return 1 << GBAKEY_DOWN;
+	case SN_LEFT:  return 1 << GBAKEY_LEFT;
+	case SN_RIGHT: return 1 << GBAKEY_RIGHT;
+	case SN_START: return 1 << GBAKEY_START;
+	default:       return 0;
+	}
+}
+
 // ===================== touch-event instrumentation log =======================
 // Decode a GBA key mask to a short string (bit order A0 B1 Sel2 St3 Right4 Left5 Up6 Down7 R8 L9).
 static void touch_keystr(uint16_t k, char* out, int cap) {
@@ -880,6 +1013,7 @@ static void touch_cursor_addr(const TouchSmart* sm, uint32_t* addr, int* size) {
 	case GCTX_FIELDMENU:     if (p) { *addr = p->sMenuBase + 2u;    *size = 1; } break;
 	case GCTX_BAG:           if (sm->bagListTaskBase) { *addr = sm->bagListTaskBase + 26u; *size = 2; } break;
 	case GCTX_LIST:          if (sm->listBase) { *addr = sm->listBase + 26u; *size = 2; } break;   // 22.1 (LK_QTY/LK_DEX carry none; g_touchDbg covers them)
+	case GCTX_STORAGE:       if (p && p->stCursor) { *addr = p->stCursor + 1u; *size = 1; } break;   // 22.2 sCursorPosition
 	default: break;   // OVERWORLD / NONE / BATTLE_OTHER / NAMING: no single cursor addr -> key mask + g_touchDbg tell the story
 	}
 }
@@ -1072,6 +1206,18 @@ static void touch_dbg_stamp(const TouchSmart* sm, u16 ret) {
 			d->dexListVOff = (int16_t)gbacore_read16(sm->core, dv + 0x62E);
 		}
 	}
+	if (sm->ctx == GCTX_STORAGE) {                    // phase 22.2: the storage GRID mirror (G8)
+		StorState st;
+		if (storage_read(sm, &st)) {
+			d->stArea = st.area; d->stPos = st.pos; d->stHeld = st.held;
+			d->stOrigBox = st.origBox; d->stOrigPos = st.origPos;
+			d->stBoxId = st.boxId; d->stBoxOption = st.boxOption;
+			d->stInParty = st.inParty; d->stMenuOpen = st.menuOpen;
+			d->stOccupancy = st.occ;
+		}
+		d->stTgtArea = s_stTgtA; d->stTgtPos = s_stTgtP;
+		return;
+	}
 	if (sm->ctx == GCTX_FULLUI && p->lmDummyTask) {   // the P-D discovery probe (FR dex + friends)
 		for (int t = 0; t < 16; t++) {
 			uint32_t task = p->gTasksBase + 40u * (uint32_t)t;
@@ -1088,7 +1234,7 @@ static void touch_dbg_stamp(const TouchSmart* sm, u16 ret) {
 }
 
 // ================================ dispatch ==================================
-static void all_reset(void) { battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); }
+static void all_reset(void) { battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset(); }
 
 u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, bool gvalid,
                  const TouchSmart* sm) {
@@ -1109,7 +1255,7 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 	switch (sm->ctx) {
 	case GCTX_BATTLE_ACTION:
 	case GCTX_BATTLE_MOVE: {
-		walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset();
+		walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset();
 		uint32_t base = (sm->ctx == GCTX_BATTLE_ACTION) ? sm->actionAddr : sm->moveAddr;
 		if (newPress && gvalid) {
 			int cell = (sm->ctx == GCTX_BATTLE_ACTION) ? hit_action(gx, gy) : hit_move(gx, gy);
@@ -1119,7 +1265,7 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 		break;
 	}
 	case GCTX_BATTLE_TARGET:
-		battle_reset(); walk_reset(); party_reset(); fmenu_reset(); list_reset(); naming_reset();
+		battle_reset(); walk_reset(); party_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset();
 		if (newPress && gvalid) {
 			int pos = hit_battler(gx, gy);
 			if (pos >= 0) { int idx = battler_index_for_pos(sm, pos); if (idx >= 0) { s_tgt = idx; s_tgtTick = 0; } }
@@ -1127,7 +1273,7 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 		ret = select_pulse(sm->core, sm->prof ? sm->prof->multiCursor : 0, &s_tgt, &s_tgtTick);
 		break;
 	case GCTX_PARTY:
-		battle_reset(); walk_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset();
+		battle_reset(); walk_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset();
 		if (newPress && gvalid) {
 			int slot = hit_party(gx, gy, sm->partyLayout);
 			if (slot == 7 || (slot >= 0 && slot < sm->partyCount)) { s_party = slot; s_partyTick = 0; }
@@ -1135,22 +1281,22 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 		ret = select_pulse(sm->core, sm->prof ? sm->prof->partyMenu + 0x09 : 0, &s_party, &s_partyTick);
 		break;
 	case GCTX_OVERWORLD:
-		battle_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset();
+		battle_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset();
 		ret = walk_update(touching, newPress, gvalid, gx, gy, sm->px, sm->py,
 		                  sm->mapGroup, sm->mapNum, sm->core, sm->prof);
 		break;
 	case GCTX_FIELDMENU:
-		battle_reset(); walk_reset(); party_reset(); target_reset(); list_reset(); naming_reset();
+		battle_reset(); walk_reset(); party_reset(); target_reset(); list_reset(); naming_reset(); storage_reset();
 		if (newPress && gvalid && sm->prof) { int i = hit_fieldmenu(sm->core, sm->prof, gx, gy); if (i >= 0) { s_fmenu = i; s_fmenuTick = 0; } }
 		ret = sm->prof ? fmenu_select(sm->core, sm->prof) : 0;
 		break;
 	case GCTX_BAG:
-		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); naming_reset();
+		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); naming_reset(); storage_reset();
 		if (s_lPrevKind != -2) { list_reset(); s_lPrevKind = -2; }   // arriving from another ctx/kind
 		ret = list_update(sm, sm->bagListTaskBase, LF_BAG, touching, newPress, gvalid, gx, gy);
 		break;
 	case GCTX_LIST:
-		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); naming_reset();
+		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); naming_reset(); storage_reset();
 		// a kind change (buy -> qty -> buy) mid-context resets the shared gesture state
 		if (s_lPrevKind != (int)sm->listKind) { list_reset(); s_lPrevKind = (int)sm->listKind; }
 		switch (sm->listKind) {
@@ -1162,8 +1308,14 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 		}
 		break;
 	case GCTX_NAMING:
-		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset();
+		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); storage_reset();
 		ret = naming_update(sm, touching, newPress, gvalid, gx, gy, sx, sy);
+		break;
+	case GCTX_STORAGE:
+		// fmenu state is deliberately NOT reset here: the storage popups delegate to the fmenu
+		// machinery (SPEC-family-grid G6) — storage_update owns its lifecycle.
+		battle_reset(); walk_reset(); party_reset(); target_reset(); list_reset(); naming_reset();
+		ret = storage_update(sm, touching, newPress, gvalid, gx, gy);
 		break;
 	case GCTX_BATTLE_OTHER:
 		all_reset();

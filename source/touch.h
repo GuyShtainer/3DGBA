@@ -127,6 +127,21 @@ typedef struct {
 	int32_t  probeMaxShowed; // +0x74
 	int32_t  probeWindowId;  // +0x78
 	uint32_t lastKeys;       // +0x7C  the mask touch_update returned this frame
+	// storage GRID mirror (GCTX_STORAGE frames; zeroed otherwise) — SPEC-family-grid G8. THE
+	// move-proof channel: a mon move shows as stOccupancy bit(src) clearing and bit(dst) setting,
+	// with stHeld/stOrigPos tracking the hand in between — all read from the game's own statics.
+	int32_t  stArea;         // +0x80  sCursorArea (0 box / 1 party / 2 title / 3 buttons)
+	int32_t  stPos;          // +0x84  sCursorPosition
+	int32_t  stHeld;         // +0x88  sIsMonBeingMoved
+	int32_t  stOrigBox;      // +0x8C  sMovingMonOrigBoxId (14 = party)
+	int32_t  stOrigPos;      // +0x90  sMovingMonOrigBoxPos
+	int32_t  stBoxId;        // +0x94  gPokemonStoragePtr->currentBox
+	int32_t  stBoxOption;    // +0x98  sCurrentBoxOption (0 W / 1 D / 2 MOVE / 3 ITEMS)
+	int32_t  stInParty;      // +0x9C  sInPartyMenu (the party panel is up)
+	int32_t  stMenuOpen;     // +0xA0  1 = a LIVE sMenu popup is up (the G6 delegation gate)
+	int32_t  stTgtArea;      // +0xA4  the armed navigation target (-1 = idle)
+	int32_t  stTgtPos;       // +0xA8
+	uint32_t stOccupancy;    // +0xAC  30-bit hasSpecies mask of the current box (bit = slot)
 } TouchDbg;
 extern TouchDbg g_touchDbg;
 

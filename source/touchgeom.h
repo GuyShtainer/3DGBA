@@ -105,3 +105,31 @@ int baggeom_em_pocket_dot(int gx, int gy);
 // (pret pokefirered src/item_menu.c:287-299): LEFT at (8,72), RIGHT at (72,72). Bands are grown
 // to 24x32 px around each sprite anchor (verify-on-emulator). Returns -1 none / 0 LEFT / 1 RIGHT.
 int baggeom_fr_pocket_arrow(int gx, int gy);
+
+// ------------------------------------------------------------------- storage GRID (phase 22.2) --
+// SPEC-family-grid.md. Ground truth = pret pokeemerald src/pokemon_storage_system.c (line cites in
+// the spec §1.4): mon icon centers x=100+24c / y=44+24r (CreateBoxMonIconAtPos :4484-4485) => 24x24
+// cell rects; box scroll arrows at (92,28)/(228,28) (:5644); top buttons cursor anchors x=pos*88+120
+// (:5849-5851); party panel anchors pos0 (104,52), pos1-5 (152,(p-1)*24+4), pos6 (152,132)
+// (:5828-5843, capture-derived bands, verify-in-emulator).
+enum {
+	SGH_NONE = 0,
+	SGH_SLOT,        // *pos = box slot 0..29 (col = pos%6, row = pos/6)
+	SGH_TITLE,       // box title band -> cursor to TITLE + A (box options menu)
+	SGH_ARROW_L,     // left box-scroll arrow -> cursor to TITLE + held LEFT (scroll box -1)
+	SGH_ARROW_R,     // right arrow -> +1
+	SGH_BTN_PARTY,   // "PARTY POKEMON" button -> (BUTTONS,0) + A
+	SGH_BTN_CLOSE,   // "CLOSE BOX" button -> (BUTTONS,1) + A
+	SGH_PARTY        // *pos = party slot 0..6 (6 = the back/CANCEL slot); only when the panel is up
+};
+// Classify a tap. `inParty` = the live sInPartyMenu read: the party panel occludes grid cols 0..3
+// (spec §1.4) — those cells go DEAD and the party rects go live. Exactly one class per px.
+int storgeom_hit(int gx, int gy, int inParty, int* pos);
+
+// The closed-loop navigator's single step (SPEC-family-grid G2/G3): which key edge moves the
+// LIVE cursor (curArea,curPos) one step toward (tgtArea,tgtPos)? Returns SN_NONE when arrived
+// OR when the target is unroutable from here (the caller drops it on timeout). Transition table
+// = the engine's own input handlers (spec §1.2, cited): never SELECT, never B, vertical-first
+// inside the box so a step can never exit the grid except via the modeled TITLE/BUTTONS edges.
+enum { SN_NONE = 0, SN_UP, SN_DOWN, SN_LEFT, SN_RIGHT, SN_START };
+int stornav_step(int curArea, int curPos, int tgtArea, int tgtPos);

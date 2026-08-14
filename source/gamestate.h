@@ -31,7 +31,11 @@ typedef enum {
 	// cb2Title/cb2FullUi loops, so a naming screen stops reading as bare GCTX_FULLUI and becomes
 	// an interactive keyboard, and the ListMenu screens get a live list driver.
 	GCTX_NAMING,          // the Gen-3 naming keyboard (cb2 == CB2_NamingScreen; SPEC-family-keyboard)
-	GCTX_LIST             // a driven ListMenu screen (mart buy / PC items / qty / dex — see ListKind)
+	GCTX_LIST,            // a driven ListMenu screen (mart buy / PC items / qty / dex — see ListKind)
+	// --- phase 22.2 (overnight lane): the GRID family — the PC storage boxes UI. Appended (values
+	// stay stable); matched by cb2 == CB2_PokeStorage (GameProfile.storageCb) BEFORE the cb2FullUi
+	// loop, exactly like GCTX_NAMING (more specific wins; the fullui list keeps the value).
+	GCTX_STORAGE          // PC storage boxes (SPEC-family-grid; EM only in v1 — see storageCb)
 } GameCtx;
 
 // Which list screen GCTX_LIST resolved to (GameState.listKind; SPEC-family-lists §2/§3).
@@ -285,6 +289,24 @@ typedef struct {
 	uint8_t  buyListSlot;     // tListTaskId slot in the buy task's data[] (BOTH engines: data[7] —
 	                          //   pokeemerald src/shop.c:412, pokefirered src/shop.c:35)
 	uint8_t  pcItemListSlot;  // EM data[5] (player_pc.c:391) / FRLG data[0] (item_pc.c:350)
+	// --- phase 22.2 (overnight lane) — the GRID family (PC storage boxes; SPEC-family-grid §1.1).
+	// EM values re-read from the LOCAL pokeemerald.sym copy this session (gba-toolkit/projects/
+	// rec2mp4/local/pokeemerald.sym — the same byte-matched pret map the census used); the five
+	// statics are CONTIGUOUS there, so two bases + documented offsets carry all seven fields.
+	// storageCb is the census live-harvest [exact] (CB2_PokeStorage, CB2-HARVEST.md; it stays in
+	// cb2FullUi too — TEST 11 pins that list; GCTX_STORAGE simply tests first). All sym-derived /
+	// verify-in-emulator except storageCb. FR/LG: storage is a DIFFERENT module whose statics were
+	// not re-derived this slice -> all 0 = named degradation (boxes stay GCTX_FULLUI there). RS:
+	// the ROM/statics ban -> 0. Appending is the only safe edit: PROFILES[] is POSITIONAL. ---
+	uint32_t storageCb;       // CB2_PokeStorage (ROM) -> GCTX_STORAGE
+	uint32_t storageCbAlt;    //   other revision
+	uint32_t stStorage;       // sStorage (EWRAM static ptr; +4 sInPartyMenu u8, +5 sCurrentBoxOption
+	                          //   u8 0=WITHDRAW 1=DEPOSIT 2=MOVE_MONS 3=MOVE_ITEMS)
+	uint32_t stCursor;        // sCursorArea (u8; +1 sCursorPosition, +2 sIsMonBeingMoved,
+	                          //   +3 sMovingMonOrigBoxId, +4 sMovingMonOrigBoxPos — contiguous)
+	uint32_t pcStoragePtr;    // gPokemonStoragePtr (deref -> +0 currentBox u8, +4 boxes[14][30]
+	                          //   of 80-byte BoxPokemon; flags byte +19 bit1 = hasSpecies).
+	                          //   LOGGING/proof only (the g_touchDbg occupancy mask).
 } GameProfile;
 
 // One-pass snapshot of the live game.

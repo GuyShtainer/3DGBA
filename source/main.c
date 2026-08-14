@@ -5120,7 +5120,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			}
 #if TOUCH_DIAG_HUD
 			if (tmEff == TOUCH_SMART && sm.valid) {   // developer readout, off by default (L6.2)
-				static const char* const CTXN[] = { "none", "field", "b.act", "b.move", "b.tgt", "party", "fmenu", "bag", "b.oth" };
+				// Phase 22.2: gamestate_ctx_name replaces a local 9-entry table that had silently
+				// fallen behind the enum (GCTX_TITLE..GCTX_STORAGE would have indexed past its
+				// end). Latent-only — this block is compiled out unless TOUCH_DIAG_HUD=1.
 				char kb[8]; int ki = 0;   // decode the key touch is injecting this frame (on-device diagnostic)
 				if (tk & (1 << GBAKEY_UP))    kb[ki++] = 'U';
 				if (tk & (1 << GBAKEY_DOWN))  kb[ki++] = 'D';
@@ -5130,7 +5132,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 				if (tk & (1 << GBAKEY_B))     kb[ki++] = 'B';
 				if (!ki) kb[ki++] = '-';
 				kb[ki] = '\0';
-				char gs[64]; snprintf(gs, sizeof gs, "%s p=%d,%d key=%s", CTXN[sm.ctx], sm.px, sm.py, kb);
+				char gs[64]; snprintf(gs, sizeof gs, "%s p=%d,%d key=%s", gamestate_ctx_name(sm.ctx), sm.px, sm.py, kb);
 				C2D_Text tg; C2D_TextParse(&tg, txtBuf, gs); C2D_TextOptimize(&tg);
 				// L6.2: moved OFF the footer baseline (was y=224, sharing a line with the centred
 				// hint) so an enabled diagnostic never overlaps user-facing chrome.

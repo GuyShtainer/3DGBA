@@ -531,6 +531,47 @@ user's recent.bin restored), settings.bin restored byte-identical from the .lane
   banked as follow-up), 3 harness landmines documented (movie tail, sdmc spawn snapshot,
   quest-log walk).
 
+## Grid Entry 1 — the GRID family (PC storage boxes): spec + code + host proofs, all green
+
+Session 2026-08-14 (overnight continuation subagent). SPEC-family-grid.md written first
+(30-min mini-design from the pret pokemon_storage_system.c read — 10 059 lines, local clone —
++ the census E12 captures + the LOCAL pokeemerald.sym copy at
+gba-toolkit/projects/rec2mp4/local/pokeemerald.sym). Headline design facts, all cited in the
+spec: the five storage statics are CONTIGUOUS EWRAM (sCursorArea 0x02039D78 … origBoxPos
+0x02039D7C; sStorage 0x02039D08 +4 inParty +5 boxOption); **the storage popups are the GLOBAL
+sMenu** (HandleMenuInput -> Menu_GetCursorPos, :8024-8059) so the shipped fieldmenu
+write-then-A driver drives them for free — gated by the AddMenu bottom-right fingerprint
+(wl+ww==29 && wt+wh==15 + allocated window) because menu.c never clears sMenu.windowId (the
+stale-window trap, spec §1.3); grid cells 24x24 from the icon-center math (100+24c, 44+24r).
+
+Implementation (tap-tap-move, NO drag-and-drop):
+1. touchgeom.{h,c}: storgeom_hit (grid/title/arrows/buttons/party rects, party-panel
+   occlusion) + stornav_step (the engine's own per-area transition table, §1.2 cites).
+2. gamestate.{h,c}: GCTX_STORAGE (appended, "stor") + 5 profile columns (EM sym-derived /
+   verify-in-emulator except the census-[exact] storageCb 0x080C7D54; FR/LG/RS all-0 named
+   degradations); detection = cb2 match BEFORE the cb2FullUi loop (the value STAYS in that
+   list — TEST 11 untouched, TEST 15 pins the precedence).
+3. touch.c: storage_update — closed-loop navigator (read live area/pos every frame, ONE
+   d-pad edge per step with release gaps, arrival-settle delay 20f because SetCursorPosition
+   updates the statics at slide START and HandleInput is not polled mid-slide, A only when
+   live==target, 360f drop timeout = never a mis-slot A); popup delegation to the fmenu
+   machinery; MOVE_ITEMS mode = emit nothing (named v1 limit); SELECT never emitted.
+4. touch.h: TouchDbg storage mirror +0x80..+0xAC incl. the 30-bit current-box OCCUPANCY mask
+   (hasSpecies bit) — the complete gdb move-proof channel (src bit clears, dst bit sets).
+5. main.c: the TOUCH_DIAG_HUD ctx-name table (latent 9-entry OOB since 22.0) ->
+   gamestate_ctx_name.
+
+Suites: touchgeom 115 396 -> **119 659** (TEST 9 exhaustive 240x160x2 rect sweep vs a
+restated oracle + engine-coordinate anchors; TEST 10 navigator convergence from EVERY start
+to EVERY target over a pure-C model of the engine's handlers, incl. the never-leaves-the-box
+G3 property + party cycling + the box->party unroutable drop), profiles 1480 -> **1519**
+(TEST 15 columns + contiguity relation + storage-beats-fullui + FR named-degradation
+behaviour). All 15 suites re-run green this session (celiolink/control/diag/fieldpath/
+netlink/peersprite/presence/profiles/theme/tilt/touchgeom/trace_replay/typography/uigeom/
+uihit); `make -j8` -> 3DGBA.3dsx 4 380 680 B, `make cia` -> 3DGBA.cia 2 017 216 B, no new
+warnings. Emulator proofs (P-G1 recon + P-G2 the real move) = next, after the lane-A
+deferred proofs.
+
 ## Promotion Entry 1 — lane-B verdicts FOLDED into the profiles, all suites green
 
 Serial code slice (subagent, 2026-08-14 ~06:20). Sources: LANE-B-RS.md + LANE-B-LG.md.

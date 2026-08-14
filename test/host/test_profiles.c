@@ -996,6 +996,73 @@ static void test_family22_behaviour(void) {
 	CHECK(!strcmp(gamestate_ctx_name(GCTX_FULLUI), "fullui"), "existing names undisturbed");
 }
 
+// ============================================================================================
+// TEST 15 — PHASE 22.2: the storage GRID columns, pinned per game, + behaviour through the
+// real game_read (SPEC-family-grid G1). EM values = the local pokeemerald.sym re-read
+// (2026-08-14, gamestate.c row comment carries the per-symbol addresses); every other game 0 =
+// the named degradation (FRLG different module unmapped; RS ban).
+// ============================================================================================
+static void test_family22_2_storage(void) {
+	printf("TEST 15: phase-22.2 storage grid columns + behaviour\n");
+	static const struct {
+		const char* code;
+		uint32_t storageCb, storageCbAlt, stStorage, stCursor, pcStoragePtr;
+	} T[] = {
+		{ "BPEE", 0x080C7D54u, 0, 0x02039D08u, 0x02039D78u, 0x03005D94u },
+		{ "BPRE", 0, 0, 0, 0, 0 },
+		{ "BPGE", 0, 0, 0, 0, 0 },
+		{ "AXVE", 0, 0, 0, 0, 0 },
+		{ "AXPE", 0, 0, 0, 0, 0 },
+	};
+	for (unsigned i = 0; i < sizeof T / sizeof T[0]; i++) {
+		const GameProfile* p = prof(T[i].code);
+		CHECK(p != NULL, "%s row exists", T[i].code);
+		if (!p) continue;
+		EQU(p->storageCb,    T[i].storageCb,    "%s storageCb", T[i].code);
+		EQU(p->storageCbAlt, T[i].storageCbAlt, "%s storageCbAlt", T[i].code);
+		EQU(p->stStorage,    T[i].stStorage,    "%s stStorage", T[i].code);
+		EQU(p->stCursor,     T[i].stCursor,     "%s stCursor", T[i].code);
+		EQU(p->pcStoragePtr, T[i].pcStoragePtr, "%s pcStoragePtr", T[i].code);
+	}
+	// structure: the contiguity the driver relies on (spec §1.1 — one base, doc'd offsets) is a
+	// property of the SHIPPED addresses, so pin the relation, not just the raw values.
+	{
+		const GameProfile* p = prof("BPEE");
+		if (p) {
+			EQU(p->stStorage + 0x70u, p->stCursor, "BPEE: sCursorArea = sStorage + 0x70 (map fact)");
+			CHECK((p->stCursor >> 24) == 0x02 && (p->stStorage >> 24) == 0x02,
+			      "BPEE: storage statics are EWRAM");
+			CHECK((p->storageCb >> 24) == 0x08, "BPEE: storageCb is ROM");
+			CHECK((p->pcStoragePtr >> 24) == 0x03, "BPEE: gPokemonStoragePtr is IWRAM");
+		}
+	}
+	// behaviour (a): EM CB2_PokeStorage -> GCTX_STORAGE, a POSITIVE match, and it beats the
+	// cb2FullUi row that also lists the same value (the G1 precedence).
+	{
+		GbaCore c; bus_reset(&c, "BPEE");
+		const GameProfile* p = profile_for(&c);
+		GameState gs;
+		bus_w32(&c, p->mainCb2, p->storageCb | 1u);
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_STORAGE, "BPEE: CB2_PokeStorage -> GCTX_STORAGE (not FULLUI)");
+		CHECK(gs.ctxResolved, "BPEE: storage is a positive match");
+		CHECK(strcmp(gamestate_ctx_name(GCTX_STORAGE), "stor") == 0, "ctx name is 'stor'");
+		int found = 0;   // the value must STAY in the fullui list (TEST 11 pins the list exact)
+		for (int i = 0; i < GS_N_FULLUI; i++) if (p->cb2FullUi[i] == p->storageCb) found = 1;
+		CHECK(found, "BPEE: CB2_PokeStorage remains in cb2FullUi (storage merely tests first)");
+	}
+	// behaviour (b): FR's OWN CB2_PokeStorage (0x0808CDD8, census-harvested) stays GCTX_FULLUI —
+	// the named degradation, not a leak into the walk fall-through.
+	{
+		GbaCore c; bus_reset(&c, "BPRE");
+		const GameProfile* p = profile_for(&c);
+		GameState gs;
+		bus_w32(&c, p->mainCb2, 0x0808CDD8u | 1u);
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_FULLUI, "BPRE: FR storage cb2 -> GCTX_FULLUI (named degradation)");
+	}
+}
+
 int main(void) {
 	printf("test_profiles — the per-game RAM map (source/gamestate.c PROFILES[])\n\n");
 	test_lookup();
@@ -1012,6 +1079,7 @@ int main(void) {
 	test_phase22_behaviour();    // phase 22.0
 	test_family22_columns();     // phase 22.1 (keyboard + lists)
 	test_family22_behaviour();   // phase 22.1
+	test_family22_2_storage();   // phase 22.2 (grid)
 	printf("\n=== %d checks, %d failures ===\n", g_checks, g_fails);
 	return g_fails ? 1 : 0;
 }

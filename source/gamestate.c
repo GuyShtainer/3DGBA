@@ -78,7 +78,15 @@ static const GameProfile PROFILES[] = {
             0x080E4F58u, 0x00000000u, 0x02039F94u,
             0x080E0AC8u, 0x00000000u, 0x080E0D88u, 0x00000000u,
             0x0816C30Cu, 0x00000000u, 0x081AE458u, 0x00000000u,
-            0x0203CE5Du, 0x080BB7D4u, 0x02039B4Cu, 7, 5 },
+            0x0203CE5Du, 0x080BB7D4u, 0x02039B4Cu, 7, 5,
+            /* phase 22.2 GRID family (SPEC-family-grid §1.1) — all re-read from the local
+               pokeemerald.sym copy this session:
+                 080c7d54 CB2_PokeStorage [census live-harvested exact],
+                 02039d08 sStorage (+4 sInPartyMenu 02039d0c, +5 sCurrentBoxOption 02039d0d),
+                 02039d78 sCursorArea (+1 sCursorPosition 02039d79, +2 sIsMonBeingMoved 02039d7a,
+                 +3 sMovingMonOrigBoxId 02039d7b, +4 sMovingMonOrigBoxPos 02039d7c),
+                 03005d94 gPokemonStoragePtr. Sym-derived / verify-in-emulator except storageCb. */
+            0x080C7D54u, 0x00000000u, 0x02039D08u, 0x02039D78u, 0x03005D94u },
   // BPRE ROM anchors: the PRIMARIES below are FR rev0 (correct for a rev0 cart); the REV1 values —
   // the user's cart — live in the phase-22.0 ALTERNATE block at the end of the row. newKeys was
   // 0x0303011E (a digit transposition, RS-REV2-VERIFICATION.md §7): gMain 0x030030F0
@@ -175,7 +183,11 @@ static const GameProfile PROFILES[] = {
             0x0809FB70u, 0x0809FB84u, 0x0203998Cu,
             0x0809BBC0u, 0x0809BBD4u, 0x0809BD8Cu, 0x0809BDA0u,
             0x0810DEA0u, 0x0810DF18u, 0x08106ECCu, 0x08106F44u,
-            0x00000000u, 0x00000000u, 0x00000000u, 7, 0 },
+            0x00000000u, 0x00000000u, 0x00000000u, 7, 0,
+            /* phase 22.2 GRID: all 0 — FRLG storage is a DIFFERENT module (pokefirered
+               pokemon_storage_system) whose statics were not re-derived this slice. NAMED
+               degradation: FR boxes stay GCTX_FULLUI (taps dead there, no leak). */
+            0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u },
   // BPGE ROM anchors — REPLACED phase 22.0 (they were FireRed-rev0 values, wrong for EVERY
   // LeafGreen revision; battle/party/bag/menu detection was silently dead on LG). PRIMARIES are
   // now LG **rev1** — the user's cart is rev 1.1 — re-derived field-by-field from
@@ -271,7 +283,9 @@ static const GameProfile PROFILES[] = {
             0x0809FB58u, 0x0809FB44u, 0x0203998Cu,
             0x0809BBA8u, 0x0809BB94u, 0x0809BD74u, 0x0809BD60u,
             0x0810DEF0u, 0x0810DE78u, 0x08106F1Cu, 0x08106EA4u,
-            0x00000000u, 0x00000000u, 0x00000000u, 7, 0 },
+            0x00000000u, 0x00000000u, 0x00000000u, 7, 0,
+            /* phase 22.2 GRID: all 0 — same named degradation as BPRE (different FRLG module). */
+            0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u },
 
   // ===================== Ruby / Sapphire (SPEC-coop §P3) =====================================
   // Every RAM value below is VERIFIED-SYM against pret's byte-matched `symbols` branch, all FOUR
@@ -416,7 +430,9 @@ static const GameProfile PROFILES[] = {
             0x00000000u, 0x00000000u, 0x00000000u,                                               \
             0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,                                  \
             0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,                                  \
-            0x00000000u, 0x00000000u, 0x00000000u, 0, 0
+            0x00000000u, 0x00000000u, 0x00000000u, 0, 0,                                         \
+            /* phase 22.2 GRID: all 0 — the RS ROM/statics ban again (P3.5.2 explicit zeros). */  \
+            0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u
   // Pokemon Ruby (US; the values below were LIVE-READ on the rev-2 fixture ROM = the user's
   // cart, and rev1 == rev2 are byte-identical maps — RS-REV2-VERIFICATION.md §5's promotion
   // rule; a rev0 cart's drifted screens simply keep the fall-through, compare-only fail-safe).
@@ -605,6 +621,13 @@ bool game_read(GbaCore* c, const GameProfile* p, GameState* out) {
 		    (p->namingCbAlt && out->cb2 == p->namingCbAlt)) {
 			out->ctx = GCTX_NAMING; return true;
 		}
+		// Phase 22.2 (SPEC-family-grid G1): the PC storage boxes — cb2-matched, more specific
+		// than the cb2FullUi row that also lists CB2_PokeStorage (this test runs first, so the
+		// boxes become an interactive grid instead of a bare taps-dead FULLUI screen).
+		if ((p->storageCb    && out->cb2 == p->storageCb) ||
+		    (p->storageCbAlt && out->cb2 == p->storageCbAlt)) {
+			out->ctx = GCTX_STORAGE; return true;
+		}
 		if (task_active(c, p, p->dexTask)) {                        // EM dex LIST (task is unique
 			out->ctx = GCTX_LIST; out->listKind = LK_DEX;           //   to the list screen)
 			return true;
@@ -667,7 +690,8 @@ bool game_read(GbaCore* c, const GameProfile* p, GameState* out) {
 static const char* const GS_CTXN[] = {   // index = GameCtx; matches main.c's teal-line names
 	"none", "field", "b.act", "b.move", "b.tgt", "party", "fmenu", "bag", "b.oth",
 	"title", "fullui",                   // phase 22.0 census promotion (GCTX_TITLE / GCTX_FULLUI)
-	"naming", "list"                     // phase 22.1 keyboard + lists families
+	"naming", "list",                    // phase 22.1 keyboard + lists families
+	"stor"                               // phase 22.2 grid family (PC storage boxes)
 };
 const char* gamestate_ctx_name(int ctx) {
 	return (ctx >= 0 && ctx < (int)(sizeof GS_CTXN / sizeof GS_CTXN[0])) ? GS_CTXN[ctx] : "?";

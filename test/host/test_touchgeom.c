@@ -199,6 +199,136 @@ static void test_pocket_tabs(void) {
 	CHECK(baggeom_fr_pocket_arrow(8, 88) == -1, "below band dead");
 }
 
+// ============================================================================================
+// TEST 9 — phase 22.2 storage GRID rects (SPEC-family-grid §1.4): exhaustive 240x160 sweep,
+// party panel up and down, against a brute-force restatement of the spec's rects.
+// ============================================================================================
+static int stor_oracle(int gx, int gy, int inParty, int* pos) {
+	if (inParty) {   // party rects first (the panel overlays the buttons/title/grid area)
+		if (gx >= 88 && gx < 120 && gy >= 44 && gy < 76) { *pos = 0; return SGH_PARTY; }
+		if (gx >= 136 && gx < 168 && gy >= 8 && gy < 128) { *pos = 1 + (gy - 8) / 24; return SGH_PARTY; }
+		if (gx >= 128 && gx < 176 && gy >= 124 && gy < 148) { *pos = 6; return SGH_PARTY; }
+		if (gx >= 184 && gx < 232 && gy >= 32 && gy < 152) { *pos = (gy - 32) / 24 * 6 + (gx - 88) / 24; return SGH_SLOT; }
+		return SGH_NONE;
+	}
+	if (gy < 18) {
+		if (gx >= 96 && gx < 176) return SGH_BTN_PARTY;
+		if (gx >= 180 && gx < 236) return SGH_BTN_CLOSE;
+		return SGH_NONE;
+	}
+	if (gy >= 20 && gy < 36) {
+		if (gx >= 84 && gx < 100) return SGH_ARROW_L;
+		if (gx >= 220 && gx < 236) return SGH_ARROW_R;
+		if (gx >= 100 && gx < 220) return SGH_TITLE;
+		return SGH_NONE;
+	}
+	if (gx >= 88 && gx < 232 && gy >= 32 && gy < 152) { *pos = (gy - 32) / 24 * 6 + (gx - 88) / 24; return SGH_SLOT; }
+	return SGH_NONE;
+}
+static void test_storage_rects(void) {
+	puts("TEST 9: storage grid hit rects (exhaustive sweep, party up/down)");
+	int bad = 0;
+	for (int party = 0; party <= 1; party++)
+		for (int gy = 0; gy < 160; gy++)
+			for (int gx = 0; gx < 240; gx++) {
+				int p1 = -1, p2 = -1;
+				int k1 = storgeom_hit(gx, gy, party, &p1);
+				int k2 = stor_oracle(gx, gy, party, &p2);
+				if (k1 != k2 || ((k1 == SGH_SLOT || k1 == SGH_PARTY) && p1 != p2)) bad++;
+			}
+	CHECK(bad == 0, "sweep disagreements: %d", bad);
+	// spot anchors from the engine's own coordinates (icon centers, arrow sprites, cursor x)
+	int pos = -1;
+	CHECK(storgeom_hit(100, 44, 0, &pos) == SGH_SLOT && pos == 0, "icon center (100,44) = slot 0");
+	CHECK(storgeom_hit(100 + 24 * 5, 44 + 24 * 4, 0, &pos) == SGH_SLOT && pos == 29, "icon center c5r4 = slot 29");
+	CHECK(storgeom_hit(92, 28, 0, &pos) == SGH_ARROW_L, "(92,28) = left scroll arrow");
+	CHECK(storgeom_hit(228, 28, 0, &pos) == SGH_ARROW_R, "(228,28) = right scroll arrow");
+	CHECK(storgeom_hit(160, 28, 0, &pos) == SGH_TITLE, "(160,28) = title band");
+	CHECK(storgeom_hit(120, 8, 0, &pos) == SGH_BTN_PARTY, "(120,8) = PARTY POKEMON");
+	CHECK(storgeom_hit(208, 8, 0, &pos) == SGH_BTN_CLOSE, "(208,8) = CLOSE BOX");
+	CHECK(storgeom_hit(104, 52, 1, &pos) == SGH_PARTY && pos == 0, "party lead rect");
+	CHECK(storgeom_hit(152, 132, 1, &pos) == SGH_PARTY && pos == 6, "party back/cancel rect");
+	CHECK(storgeom_hit(100, 100, 1, &pos) == SGH_NONE, "grid col 0 dead under the party panel");
+	CHECK(storgeom_hit(208, 100, 1, &pos) == SGH_SLOT, "grid col 5 alive beside the panel");
+}
+
+// ============================================================================================
+// TEST 10 — phase 22.2 storage navigator (SPEC-family-grid G2/G3): a pure-C model of the
+// engine's own transition table (§1.2, InBoxInput_Normal / HandleInput_OnBox / _OnButtons /
+// _InParty) is driven by stornav_step from EVERY start to EVERY target: it must converge,
+// quickly, and a step toward an in-box target must never leave the box.
+// ============================================================================================
+static void stor_model_apply(int* a, int* p, int key) {
+	switch (*a) {
+	case 0: { int c = *p % 6, r = *p / 6;
+		if      (key == SN_UP)    { if (r > 0) *p -= 6; else { *a = 2; *p = 0; } }
+		else if (key == SN_DOWN)  { if (r < 4) *p += 6; else { *a = 3; *p = c / 3; } }
+		else if (key == SN_LEFT)  { *p = (c > 0) ? *p - 1 : *p + 5; }
+		else if (key == SN_RIGHT) { *p = (c < 5) ? *p + 1 : *p - 5; }
+		else if (key == SN_START) { *a = 2; *p = 0; }
+		break; }
+	case 2:
+		if      (key == SN_DOWN)  { *a = 0; *p = 2; }
+		else if (key == SN_UP)    { *a = 3; *p = 0; }
+		break;
+	case 3:
+		if      (key == SN_UP)    { *a = 0; *p = (*p == 0) ? 24 : 29; }
+		else if (key == SN_DOWN || key == SN_START) { *a = 2; *p = 0; }
+		else if (key == SN_LEFT)  { *p = (*p == 0) ? 1 : 0; }
+		else if (key == SN_RIGHT) { *p = (*p == 1) ? 0 : 1; }
+		break;
+	case 1:
+		if      (key == SN_UP)    { *p = (*p == 0) ? 6 : *p - 1; }
+		else if (key == SN_DOWN)  { *p = (*p == 6) ? 0 : *p + 1; }
+		else if (key == SN_RIGHT) { if (*p != 0) { *a = 0; *p = 0; } else *p = 3; }   // pos0: cursorPrevHorizPos (any 1..6)
+		break;
+	}
+}
+static void test_storage_nav(void) {
+	puts("TEST 10: storage navigator convergence (engine-model oracle)");
+	// every start x every target across the non-party areas (+ party-to-party and party-to-box)
+	static const int AREAS[3] = { 0, 2, 3 };
+	static const int NPOS[4]  = { 30, 7, 1, 2 };   // per area id
+	for (int sai = 0; sai < 3; sai++) for (int sp = 0; sp < NPOS[AREAS[sai]]; sp++)
+	for (int tai = 0; tai < 3; tai++) for (int tp = 0; tp < NPOS[AREAS[tai]]; tp++) {
+		int a = AREAS[sai], p = sp, ta = AREAS[tai];
+		int steps = 0, ok = 0;
+		while (steps < 24) {
+			int k = stornav_step(a, p, ta, tp);
+			if (k == SN_NONE) { ok = (a == ta && p == tp); break; }
+			if (ta == 0 && a == 0)   // G3: a step toward an in-box target must stay in the box
+				{ int a2 = a, p2 = p; stor_model_apply(&a2, &p2, k); CHECK(a2 == 0, "in-box step left the box (%d,%d)->(%d,%d) key %d", a, p, ta, tp, k); }
+			stor_model_apply(&a, &p, k);
+			steps++;
+		}
+		if (!ok) CHECK(0, "no convergence (%d,%d) -> (%d,%d) after %d steps", AREAS[sai], sp, ta, tp, steps);
+		else g_checks++;
+	}
+	// party-to-party and party-out
+	for (int sp = 0; sp <= 6; sp++) for (int tp = 0; tp <= 6; tp++) {
+		int a = 1, p = sp, steps = 0, ok = 0;
+		while (steps < 12) {
+			int k = stornav_step(a, p, 1, tp);
+			if (k == SN_NONE) { ok = (a == 1 && p == tp); break; }
+			stor_model_apply(&a, &p, k);
+			steps++;
+		}
+		CHECK(ok, "party nav %d -> %d", sp, tp);
+	}
+	for (int sp = 0; sp <= 6; sp++) {   // party -> a box slot (leaves via RIGHT, then grid nav)
+		int a = 1, p = sp, steps = 0, ok = 0;
+		while (steps < 24) {
+			int k = stornav_step(a, p, 0, 17);
+			if (k == SN_NONE) { ok = (a == 0 && p == 17); break; }
+			stor_model_apply(&a, &p, k);
+			steps++;
+		}
+		CHECK(ok, "party %d -> box slot 17", sp);
+	}
+	// unroutable: box -> party returns SN_NONE immediately (the handler drops the target)
+	CHECK(stornav_step(0, 5, 1, 2) == SN_NONE, "box -> party is unroutable (handler drops)");
+}
+
 int main(void) {
 	test_colcount();
 	test_validity();
@@ -208,6 +338,8 @@ int main(void) {
 	test_arrow_bands();
 	test_fling();
 	test_pocket_tabs();
+	test_storage_rects();
+	test_storage_nav();
 	printf("\n=== %d checks, %d failures ===\n", g_checks, g_fails);
 	return g_fails ? 1 : 0;
 }
