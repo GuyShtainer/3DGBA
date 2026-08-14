@@ -1436,3 +1436,32 @@ discriminator — and FR's **TOWN MAP is a KEY ITEM two taps from where lane B2'
 ended**, so it is one short arc; (2) an `MB_REGION_MAP` wall tile in Emerald, to visit B7 for
 real; (3) the FR dex GRID (parent's item 3), untouched this lane; (4) hardware sign-off —
 `MAPNAV_GAP`/`MAPNAV_A_DELAY` are feel constants only a real 3DS can judge.
+
+## PHASE 24 / LANE A1 — 🎉 THE WHOLE HM-TRAVERSAL FEATURE, PROVEN END TO END
+
+Full write-up with the state traces: **`LANE-A-TRAVERSAL.md`**. Headline: on the user's own
+Emerald save, **one tap** now (P1) surfs — including the game's own YES — and rides to the tapped
+water tile; (P2) cuts a tree and walks on through the gap; (P3) smashes the Route 111 rock and
+walks past it; and (P4) routes **Lavaridge town → the Pokemon Center's front door → across the room
+→ the back door → the hot spring**, which no dry route can reach — and does the same trip in
+reverse. Every verdict rests on a state read (`gPlayerAvatar` surf bit, the rock's own object slot
+going inactive, the three-leg map trace), not on a screenshot.
+
+**Six defects, all found by running it, all fixed with the run that exposed them.** One theme:
+a Gen-3 field script is a LEVEL, not an edge.
+
+| commit | defect |
+|---|---|
+| `2dde03e` | `Task_HandleYesNoInput` ignores input for **five frames**; our single A always fell inside that window, so the YES never landed (this is what hung phase 23). ANSWER is now level-triggered. |
+| `b0ae8d9` | The A that opens the field script needs a cadence too; and `textDlg` is false for the whole "box up, waiting for A" window (`sFieldMessageBoxMode` goes HIDDEN when printing ENDS). |
+| `70f963d` | TPH_FACE held a direction for a fixed 8 frames — swallowed whole when the avatar is still animating the last step, so every A was aimed one tile off. FACE is now closed-loop on `gObjectEvents[0].facingDirection`; new mirror field `progFacing`. |
+| `e11b620` | **The excursion tier had never executed**: `fieldtrav_excursion` required a ROM pointer for `mapHeader`, which is an EWRAM struct. The host fixture fed it the ROM header, so TEST 16 was testing a shape hardware never produces — the fixture now serves the header at the EWRAM address. |
+| `e1c6041` + `2fa4976` | A leg was planned on the frame the warp fires (the location flips first, the map loads after) and then on the previous map's grid. Boundaries now ARM a leg; the follower plans it when the layout has stopped moving, and a layout-killed leg re-arms. |
+| `a1cbdca` | The leg-boundary detector lived behind `if (!s_walking)`, so it could not see a STEP-warp terminal — the excursion parked on the terrace it had just stepped onto. |
+
+Also banked: three by-touch save fixtures (`roms/emerald-{shore,r117,lavaridge}.sav`) that put the
+next session one tap from each proof, and two recon tools (`gate.py` — is this obstacle a REAL gate
+and which tiles does it open; `plan24.py` — D4 routes that avoid encounter tiles and the map's own
+NPCs). Operational landmines re-paid: a D4 script must be waited out to COMPLETION (the file
+vanishes at pickup), a touch mid-script aborts it as "real input", never `make` during a live
+session, and a cut tree only respawns on a map LOAD (not on continuing a save made on that map).
