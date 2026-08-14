@@ -357,3 +357,19 @@ six-map identity was RAM-ONLY; future RS promotions must be PER-TITLE (a shared-
 promotion = the BPGE failure mode again). BattleMainCB2 0x0800F808 verified same on both
 maps (why the shipped shared anchor is safe). Full table: LANE-B-RS.md §2; captures ->
 evidence/rs-coop/. Next: LeafGreen 13-anchor live verification.
+
+## Lane A Entry 2 — suites green, milestone committed (+ the index race, resolved)
+
+All 15 host suites green: profiles 1295->1417 (TEST 13 pins the 16 new columns x5 games,
+TEST 14 drives naming/list detection through the real game_read incl. the bad-slot L10
+degradation + RS never-fires), control 6897->6940 (D4-T grammar + tick timeline), NEW
+touchgeom 115 396 (exhaustive 3-page x 240x160 hit sweep vs a brute-force oracle) —
+**356 326 checks, 0 failures**; make + make cia clean.
+
+COMMIT RACE (both lanes share one index): lane A staged its milestone; lane B's commit
+swallowed it (0e521db), lane B reset to fix that, and lane A's retry then swallowed lane
+B's re-staged evidence into f8f78cd (the "marker"). Net result — every change IS committed,
+messages crossed once: f8f78cd = lane B's RS-coop evidence + this lane's buildlog entry;
+**6b93a69 = the real lane-A code milestone (exactly the 12 lane-A files)**. No content lost,
+history append-only. Lesson for the morning: two lanes in ONE work tree race on the INDEX,
+not just the ref — worktrees per lane next time.
