@@ -218,5 +218,9 @@ enum { DLGROUTE_WALK = 0,   // the shipped tap-to-walk / steer machinery
 // (touchgeom.c must stay libctru-free so `clang -I source touchgeom.c` host-compiles); touch.c
 // carries the _Static_assert that pins it to the real enum, exactly as main.c:1220 does for tilt.
 #define DLGGEOM_CTX_FIELD 1   /* == GCTX_OVERWORLD == FIELD_CTX_OVERWORLD == TILT_CTX_FIELD */
-// `ctx` is a GameCtx; `textDlg` is 0/1. Pure: no state, no bus, no clock.
-int dlggeom_route(int ctx, int textDlg);
+// `ctx` is a GameCtx; `textDlg` = GameState.textDlg (text is PRINTING); `fieldLock` =
+// GameState.fieldLock (sLockFieldControls — a script owns the field, INCLUDING every frame the
+// box just sits there waiting for A). Either one is sufficient: textDlg alone would miss exactly
+// the frames a player touches (measured, phase 24 lane B1), and fieldLock alone would miss any
+// game whose profile has no sLockFieldControls address yet. Pure: no state, no bus, no clock.
+int dlggeom_route(int ctx, int textDlg, int fieldLock);

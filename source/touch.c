@@ -1690,8 +1690,15 @@ static void touch_dbg_stamp(const TouchSmart* sm, u16 ret) {
 	// channel must survive exactly the situations the other mirrors bail out of.
 	d->dlgTaps = s_dTaps; d->dlgHolds = s_dHolds; d->dlgPages = s_dPages; d->dlgSteps = s_dSteps;
 	d->dlgPager = dlg_is_pager(sm);
+	// PHASE 24 / lane B1 — the field-dialog routing channel, stamped beside the FAM-DLG counters
+	// and for the same reason: it must survive every early return below.
+	d->textDlg = sm->textDlg ? 1 : 0;
+	d->fieldLock = sm->fieldLock ? 1 : 0;
+	d->dlgOwns = (dlggeom_route(sm->ctx, d->textDlg, d->fieldLock) == DLGROUTE_DLG);
+	d->msgMode = -1;
 	const GameProfile* p = sm->prof;
 	if (!sm->core || !p) return;
+	if (p->fieldMsgMode) d->msgMode = (int32_t)gbacore_read8(sm->core, p->fieldMsgMode);
 	if (sm->ctx == GCTX_NAMING && p->namingPtr) {
 		uint32_t ptr = gbacore_read32(sm->core, p->namingPtr);
 		d->nsPtr = ptr;
@@ -1844,7 +1851,7 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 	// PHASE 24 / lane B1: a FIELD DIALOG is a FAM-DLG screen. Resolved ONCE here so the reset line
 	// below and the OVERWORLD arm cannot disagree about who owns the frame (touchgeom.h documents
 	// the rule and the live evidence; test_touchgeom TEST 18 grades it).
-	int dlgOwns = (dlggeom_route(sm->ctx, sm->textDlg ? 1 : 0) == DLGROUTE_DLG);
+	int dlgOwns = (dlggeom_route(sm->ctx, sm->textDlg ? 1 : 0, sm->fieldLock ? 1 : 0) == DLGROUTE_DLG);
 	// PHASE 23 / FAM-DLG: one line instead of adding dlg_reset() to nine per-case reset lists — the
 	// tap-advance state must die the moment the screen stops being a FAM-DLG screen (a half-finished
 	// hold must never leak a B into the battle menu the dialog just opened).

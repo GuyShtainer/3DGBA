@@ -1159,6 +1159,61 @@ static void test_family23_pager(void) {
 	}
 }
 
+// TEST 17 — PHASE 24 (lane B1): sLockFieldControls, the column that ends the field-dialog
+// walk-key leak. Every game gets one, because unlike the cb2 class lists this is IWRAM: the
+// address is revision-insensitive, both FRLG maps agree with each other, and both RS maps agree
+// with each other, so there is no rev-alternate to carry and no ROM-address ban to respect.
+// What is graded: the exact values (a silent edit is how the BPGE row was wrong for two phases),
+// the IWRAM-space property, the FRLG/RS sharing that the comments claim, and — the behavioural
+// half — that game_read turns the byte into GameState.fieldLock without disturbing textDlg.
+static void test_field_lock(void) {
+	printf("TEST 17: phase-24 fieldLock (sLockFieldControls) — the field-dialog signal\n");
+	struct { const char* code; uint32_t addr; } W[] = {
+		{ "BPEE", 0x03000F2Cu },   // pokeemerald.sym — LIVE-VERIFIED in the emulator this session
+		{ "BPRE", 0x03000F9Cu },   // pokefirered.sym == pokefirered_rev1.sym
+		{ "BPGE", 0x03000F9Cu },   // pokeleafgreen.sym == pokeleafgreen_rev1.sym == FR (one IWRAM map)
+		{ "AXVE", 0x030006A4u },   // pokeruby_rev2.sym
+		{ "AXPE", 0x030006A4u },   // pokesapphire_rev2.sym — identical, hence the shared RAM body
+	};
+	for (unsigned i = 0; i < sizeof W / sizeof W[0]; i++) {
+		const GameProfile* p = prof(W[i].code);
+		if (!p) { CHECK(0, "%s row missing", W[i].code); continue; }
+		EQU(p->fieldLock, W[i].addr, "%s fieldLock", W[i].code);
+		CHECK(p->fieldLock != 0, "%s fieldLock is SET — every game gets the field-dialog fix, "
+		      "including the two (RS) that never had a fieldMsgMode worth reading", W[i].code);
+		CHECK((p->fieldLock >> 24) == 0x03u, "%s fieldLock 0x%08X is IWRAM (0x03xxxxxx) — which is "
+		      "why no rev-alternate is needed", W[i].code, p->fieldLock);
+		CHECK(p->fieldLock != p->fieldMsgMode, "%s fieldLock is a DIFFERENT byte from fieldMsgMode "
+		      "(they answer different questions: 'a script owns the field' vs 'text is printing')",
+		      W[i].code);
+	}
+	// The sharing the row comments assert, pinned so a future edit cannot silently break it.
+	EQU(prof("BPGE")->fieldLock, prof("BPRE")->fieldLock, "FRLG share one IWRAM map");
+	EQU(prof("AXPE")->fieldLock, prof("AXVE")->fieldLock, "RS share one IWRAM map");
+	CHECK(prof("BPEE")->fieldLock != prof("BPRE")->fieldLock, "EM is its own build, not FR-derived");
+
+	// Behaviour through the REAL game_read: the byte becomes GameState.fieldLock, and it is
+	// independent of textDlg (the whole point — textDlg reads 0 while a box waits for A).
+	for (unsigned i = 0; i < sizeof W / sizeof W[0]; i++) {
+		const GameProfile* p = prof(W[i].code);
+		if (!p) continue;
+		GbaCore c; bus_reset(&c, W[i].code);
+		GameState gs;
+		bus_w8(&c, p->fieldLock, 0);
+		if (p->fieldMsgMode) bus_w8(&c, p->fieldMsgMode, 0);
+		game_read(&c, p, &gs);
+		CHECK(!gs.fieldLock && !gs.textDlg, "%s: both bytes 0 -> fieldLock 0, textDlg 0", W[i].code);
+		bus_w8(&c, p->fieldLock, 1);
+		game_read(&c, p, &gs);
+		CHECK(gs.fieldLock && !gs.textDlg,
+		      "%s: lock byte set ALONE -> fieldLock 1 while textDlg stays 0 (exactly the case a "
+		      "textDlg-only rule missed: the box waiting for A)", W[i].code);
+		bus_w8(&c, p->fieldLock, 2);
+		game_read(&c, p, &gs);
+		CHECK(gs.fieldLock, "%s: a non-1 truthy byte still means locked", W[i].code);
+	}
+}
+
 int main(void) {
 	printf("test_profiles — the per-game RAM map (source/gamestate.c PROFILES[])\n\n");
 	test_lookup();
@@ -1177,6 +1232,7 @@ int main(void) {
 	test_family22_behaviour();   // phase 22.1
 	test_family22_2_storage();   // phase 22.2 (grid)
 	test_family23_pager();       // phase 23 (FAM-DLG pager whitelist)
+	test_field_lock();           // phase 24 (lane B1) sLockFieldControls
 	printf("\n=== %d checks, %d failures ===\n", g_checks, g_fails);
 	return g_fails ? 1 : 0;
 }

@@ -101,7 +101,13 @@ static const GameProfile PROFILES[] = {
                  0x080BA4B0 options MainCB2   — VERIFIED-SRC: src/option_menu.c :400/:409 (text
                                                  speed), :446/:469/:492 (toggles), :516/:527,
                                                  :574/:583 — DPAD_LEFT/RIGHT is the value verb. */
-            { 0x081BFAB4u, 0x080BA4B0u } },
+            { 0x081BFAB4u, 0x080BA4B0u },
+            /* phase 24 (lane B1) fieldLock = sLockFieldControls, pokeemerald.sym
+               `03000f2c l 00000001 sLockFieldControls`. IWRAM -> revision-insensitive.
+               LIVE-VERIFIED this session (g_touchDbg +0xD0): 1 for the whole BLACK_BELT
+               conversation incl. every frame the box waited for A, 0 the moment control
+               returned. See gamestate.h for why fieldMsgMode could not do this job. */
+            0x03000F2Cu },
   // BPRE ROM anchors: the PRIMARIES below are FR rev0 (correct for a rev0 cart); the REV1 values —
   // the user's cart — live in the phase-22.0 ALTERNATE block at the end of the row. newKeys was
   // 0x0303011E (a digit transposition, RS-REV2-VERIFICATION.md §7): gMain 0x030030F0
@@ -232,7 +238,13 @@ static const GameProfile PROFILES[] = {
                fail-safe, and TEST 16 already pins it as a SUBSET of cb2FullUi so it can never
                become detection. OWED: one FR boot that reaches START > OPTION and reads
                g_touchDbg.dlgPager == 1 (+0xC0). *** */
-            { 0x08137F60u, 0x08088370u } },
+            { 0x08137F60u, 0x08088370u },
+            /* phase 24 (lane B1) fieldLock = sLockFieldControls 0x03000F9C — pokefirered.sym AND
+               pokefirered_rev1.sym carry the IDENTICAL value (IWRAM is rev-identical, the
+               phase-22.0 finding), so no alternate is needed. VERIFIED-SYM; the EM twin is
+               live-verified and the read is compare-only, so a wrong value could only ever
+               DISABLE the field-dialog re-route, never mis-fire it. */
+            0x03000F9Cu },
   // BPGE ROM anchors — REPLACED phase 22.0 (they were FireRed-rev0 values, wrong for EVERY
   // LeafGreen revision; battle/party/bag/menu detection was silently dead on LG). PRIMARIES are
   // now LG **rev1** — the user's cart is rev 1.1 — re-derived field-by-field from
@@ -341,7 +353,13 @@ static const GameProfile PROFILES[] = {
                LG screen reaches GCTX_FULLUI at all and a pager entry could never be consulted.
                NAMED degradation, not an oversight: it lights up for free the moment the LG cb2
                class lists are promoted (LANE-B-LG.md holds the live [exact] candidates). */
-            { 0x00000000u } },
+            { 0x00000000u },
+            /* phase 24 (lane B1) fieldLock = sLockFieldControls 0x03000F9C — pokeleafgreen.sym AND
+               pokeleafgreen_rev1.sym both carry this value, identical to FireRed's (FRLG share one
+               IWRAM map, the phase-22.0 finding). Compare-only + fail-safe, so unlike the ROM
+               anchors this row got wrong for two phases, a bad value here can only disable the
+               field-dialog re-route. VERIFIED-SYM, verify-in-emulator on the LG delta pass. */
+            0x03000F9Cu },
 
   // ===================== Ruby / Sapphire (SPEC-coop §P3) =====================================
   // Every RAM value below is VERIFIED-SYM against pret's byte-matched `symbols` branch, all FOUR
@@ -526,7 +544,15 @@ static const GameProfile PROFILES[] = {
                and the RS ROM-address ban forbids adding a summary/options cb2 that was never
                measured on the rev-2 fixture. NAMED degradation: RS gets the FAM-DLG class default
                (tap=A / hold=B / drag=D-pad) on those two screens, with no edge zones. */
-            { 0x00000000u } },
+            { 0x00000000u },
+            /* phase 24 (lane B1) fieldLock = sLockFieldControls 0x030006A4 — pokeruby_rev2.sym and
+               pokesapphire_rev2.sym carry the IDENTICAL value (IWRAM, and the RS RAM body is
+               already shared between the two titles for exactly this reason), so this is a RAM
+               column and NOT under the RS ROM-address ban. VERIFIED-SYM, verify-in-emulator.
+               It is what gives Ruby/Sapphire the field-dialog tap-advance for free — RS has no
+               fieldMsgMode-equivalent shipped, so before this column their dialogs were pure
+               walk-key leak. */
+            0x030006A4u },
   // Pokemon Sapphire (US; same promotion rule — every value below was measured on SAPPHIRE
   // itself, live [exact] on pokesapphire_rev2.sym; LANE-B-RS.md §2 drift table + §3 solo smoke).
   { "AXPE", RS_PROFILE_BODY_RAM,
@@ -546,7 +572,15 @@ static const GameProfile PROFILES[] = {
             0x08308530u, 0x08308518u,
             /* phase 23 FAM-DLG pager list: 0 for Sapphire, same reasoning as Ruby — and doubly so
                here, where the ONE classified FULLUI screen is the bag. */
-            { 0x00000000u } },
+            { 0x00000000u },
+            /* phase 24 (lane B1) fieldLock = sLockFieldControls 0x030006A4 — pokeruby_rev2.sym and
+               pokesapphire_rev2.sym carry the IDENTICAL value (IWRAM, and the RS RAM body is
+               already shared between the two titles for exactly this reason), so this is a RAM
+               column and NOT under the RS ROM-address ban. VERIFIED-SYM, verify-in-emulator.
+               It is what gives Ruby/Sapphire the field-dialog tap-advance for free — RS has no
+               fieldMsgMode-equivalent shipped, so before this column their dialogs were pure
+               walk-key leak. */
+            0x030006A4u },
   #undef RS_PROFILE_BODY_RAM
   #undef RS_PROFILE_BODY_TAIL
 };
@@ -735,6 +769,10 @@ bool game_read(GbaCore* c, const GameProfile* p, GameState* out) {
 		// text-layer scan in main.c is the game-agnostic catch-all; these are exact backups.
 		// Fail-safe: unknown address -> false (the BG0 scan still covers it).
 		out->textDlg    = p->fieldMsgMode && gbacore_read8(c, p->fieldMsgMode) != 0;
+		// PHASE 24 (lane B1): the honest "a script owns the field" read. See gamestate.h fieldLock
+		// for the measurement that made it necessary — textDlg above is a PRINTING flag, not a
+		// "box is up" flag, and it reads 0 exactly while the box waits for the player's A.
+		out->fieldLock  = p->fieldLock && gbacore_read8(c, p->fieldLock) != 0;
 		out->textBanner = task_active2(c, p, p->mapNameTask, p->mapNameTaskAlt);
 		return true;
 	}

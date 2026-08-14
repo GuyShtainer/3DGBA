@@ -239,7 +239,7 @@ int dlggeom_drag_dir(int dx, int dy) {
 // note in touchgeom.h: an overworld frame with a field textbox up is a FAM-DLG frame. Written as
 // an explicit two-clause test rather than `return ctx == ... && textDlg;` so the negative half
 // (every other context keeps its own handler, unconditionally) is the thing the reader sees.
-int dlggeom_route(int ctx, int textDlg) {
+int dlggeom_route(int ctx, int textDlg, int fieldLock) {
 	if (ctx != DLGGEOM_CTX_FIELD) return DLGROUTE_WALK;   // not the fall-through ctx: never ours
-	return textDlg ? DLGROUTE_DLG : DLGROUTE_WALK;
+	return (textDlg || fieldLock) ? DLGROUTE_DLG : DLGROUTE_WALK;
 }
