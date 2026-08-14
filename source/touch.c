@@ -386,6 +386,15 @@ static FpEngine fp_engine(const GameProfile* p) {
 	return (p->code[2] == 'R' || p->code[2] == 'G') ? FP_ENG_FRLG : FP_ENG_RSE;
 }
 
+// ...and the SAVE side, which does NOT follow the behaviour side (fix, 2026-08-14). Ruby and
+// Sapphire share Emerald's metatile numbering — so `fp_engine` is right to answer FP_ENG_RSE for
+// AXVE/AXPE — but they do NOT share its SaveBlock1.flags offset (0x1220 vs 0x1270) or its
+// SYSTEM_FLAGS base (0x800 vs 0x860). Every badge / Running-Shoes read therefore goes through the
+// TITLE, not the engine: fieldtrav.h owns the mapping, and this is its one call site.
+static FtVariant ft_variant(const GameProfile* p) {
+	return p ? fieldtrav_variant(p->code) : FT_VAR_EMERALD;
+}
+
 // PHASE 24 / lane A2 (decision D2). Defined with the other live game reads further down (they all
 // share prog_sb1 / fp_r8), but CALLED from walk_plan and walk_update_inner, which come first.
 static unsigned run_elig(GbaCore* core, const GameProfile* p);          // the five run gates
@@ -857,13 +866,16 @@ static unsigned run_elig(GbaCore* core, const GameProfile* p) {
 	if (!core || !p) return 0;
 	unsigned e = 0;
 	FpEngine eng = fp_engine(p);
-	const FtEngCfg* c = fieldtrav_cfg(eng);
+	// The flag rail is per-TITLE, not per-engine: Ruby/Sapphire keep FP_ENG_RSE for the map but
+	// carry their own flags[] offset and FLAG_SYS_B_DASH id (0x860, not Emerald's 0x8C0).
+	FtVariant var = ft_variant(p);
+	const FtEngCfg* c = fieldtrav_cfg(var);
 
 	// 1. RUNG_SHOES — FlagGet(FLAG_SYS_B_DASH). Same flag rail the HM badges use.
 	{
 		FpBus bus = { fp_r8, fp_r16, fp_r32, core };
 		uint32_t sb1 = prog_sb1(core, p);
-		if (sb1 && fieldtrav_flag_get(&bus, eng, sb1, c->runShoes)) e |= RUNG_SHOES;
+		if (sb1 && fieldtrav_flag_get(&bus, var, sb1, c->runShoes)) e |= RUNG_SHOES;
 	}
 	// 2. RUNG_MAP — gMapHeader.allowRunning. A BITFIELD, and the two engines lay it out
 	//    differently (global.fieldmap.h): RSE byte 0x1A bit 2, FRLG byte 0x19 bit 1.
@@ -969,7 +981,7 @@ static int prog_plan(GbaCore* core, const GameProfile* p, int px, int py, int gx
 	FpMap m = { fp_engine(p), p->mapHeaderPath, p->mapObjects, ptr, w, h };
 	FtParty pty = prog_party(core, p);
 	bool surfing = prog_surfing(core, p);
-	fieldtrav_plan(&bus, &m, &pty, px, py, gx, gy, surfing, s_npcG, s_npcN, &s_prog);
+	fieldtrav_plan(&bus, &m, ft_variant(p), &pty, px, py, gx, gy, surfing, s_npcG, s_npcN, &s_prog);
 
 	g_fieldDbg.progOutcome = s_prog.outcome;
 	g_fieldDbg.progUsable  = (int32_t)s_prog.usable;
@@ -1132,7 +1144,7 @@ static u16 prog_update(const TouchSmart* sm, bool touching, bool newPress,
 		if (s_progFrames == 1) {
 			FpBus bus = { fp_r8, fp_r16, fp_r32, core };
 			FtParty pty = prog_party(core, p);
-			uint32_t usable = fieldtrav_usable(&bus, fp_engine(p), &pty);
+			uint32_t usable = fieldtrav_usable(&bus, ft_variant(p), &pty);
 			g_fieldDbg.progUsable = (int32_t)usable;
 			if (!(usable & (1u << mv.hm))) { prog_end(TPE_ELIG, "STOPPED"); return 0; }
 		}

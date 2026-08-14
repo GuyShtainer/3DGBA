@@ -496,3 +496,122 @@ Capture: `evidence/impl/EM-P24-D2-cut-then-the-handed-off-leg-ran.bottom.png`.
 celiolink 1259 · control 6940 · diag 376 · **fieldpath 1808 (frozen, unchanged)** · fieldtrav
 **1102** · netlink 66 · peersprite 62078 · presence 61376 · profiles 1697 · theme 83444 · tilt 1756
 · touchgeom **371892** · trace 58 · typography 1419 · uigeom 18332 · uihit 1834 — **0 failures**.
+
+---
+
+# LANE A3 (2026-08-14) — the THIRD flag numbering: Ruby/Sapphire were reading Emerald's badges
+
+Desk-only, one confirmed correctness defect, no hardware and no emulator (another process owns
+Azahar; `make cia` deliberately not run).
+
+## The defect
+
+`source/fieldtrav.c` carried a **two-row** constant table selected by `fieldtrav_cfg(FpEngine)` —
+one row for RSE, one for FRLG. But `FpEngine` (fieldpath.h:34, **frozen**) is a *metatile-behaviour*
+discriminator, and while Ruby, Sapphire and Emerald really do share one behaviour table, they do
+**not** share a save layout. Gen 3 has **three** flag numberings, not two, so Ruby (AXVE) and
+Sapphire (AXPE) silently inherited **Emerald's** numbers, and they are wrong in both halves:
+
+1. `SaveBlock1.flags[]` is at **0x1220** in pokeruby, not Emerald's 0x1270.
+2. pokeruby's `SYSTEM_FLAGS` base is **0x800**, not Emerald's 0x860 — every badge id shifts down by
+   0x60 (BADGE01 = 0x807, not 0x867) and `FLAG_SYS_B_DASH` = 0x860, not 0x8C0.
+
+Net effect on a Ruby/Sapphire cart: the Cut badge read landed at `sb1 + 0x1270 + (0x867>>3)` =
+`sb1+0x137C`, which is **past the end of Ruby's `flags[]` (0x1220..0x1340) and inside `vars[]`** —
+i.e. the HM eligibility gates, and the Running-Shoes gate `run_elig` reads through the same rail,
+were answering from **game variables** on 2 of the 5 shipped titles. Not destructive (it is a read),
+and reachable only when a Ruby/Sapphire player sets `smartTraverse >= 1` (default 0 = Off), which is
+why this is a correctness fix rather than an emergency. The user's ~600-hour Ruby save is exactly
+the save it would have mis-answered for.
+
+## The constants, and where each one comes from
+
+Everything below was read off **pret/pokeruby at master this session**; not one value is derived by
+arithmetic from the Emerald row (deriving Ruby from Emerald is the very mistake being fixed). The
+master `include/global.h` was diffed against the local checkout at
+`gba-toolkit/projects/PokeDNA/reference/pokeruby/global.h` — byte-identical.
+
+| field | value | pokeruby citation |
+|---|---|---|
+| `flagsOff` | **0x1220** | `include/global.h:701` `/*0x1220*/ u8 flags[FLAGS_COUNT];` (and `:702` `/*0x1340*/ u16 vars[VARS_COUNT];` — the line that makes 0x1270 a real bug) |
+| `badgeCut` | **0x807** | `data/field_move_scripts.inc:3` `S_CuttableTree` → `FLAG_BADGE01_GET`; id from `include/constants/flags.h:789` |
+| `badgeSmash` | **0x809** | `data/field_move_scripts.inc:60` `S_BreakableRock` → `FLAG_BADGE03_GET` (`flags.h:791`) |
+| `badgeSurf` | **0x80B** | `src/field_control_avatar.c:506` `GetInteractedWaterScript` → `FLAG_BADGE05_GET` (`flags.h:793`) |
+| `badgeWaterfall` | **0x80E** | `src/field_control_avatar.c:511` → `FLAG_BADGE08_GET` (`flags.h:796`) |
+| `badgeStrength` | **0x80A** | `data/field_move_scripts.inc:126` `S_PushableBoulder` → `FLAG_BADGE04_GET` (`flags.h:792`) |
+| `strengthLatch` | **0x829** | `flags.h:817` `FLAG_SYS_USE_STRENGTH = SYSTEM_FLAGS + 0x29` |
+| `runShoes` | **0x860** | `flags.h:877` `FLAG_SYS_B_DASH = SYSTEM_FLAGS + 0x60` — note the trap: this id is numerically *Emerald's SYSTEM_FLAGS base* |
+| `gfxCutTree/Rock/Boulder` | **82 / 86 / 87** | `include/constants/event_objects.h:88/92/93` — **read**, not inherited; they happen to agree with Emerald, which is a fact about that file |
+
+`SYSTEM_FLAGS` itself is evaluated from its own operands rather than from the `// 0x800` comment:
+`flags.h:773` `TRAINER_FLAG_START 0x500` + `:778` `NUMBER_OF_TRAINERS 693` (0x2B5) + `0x4B` =
+**0x800** (`:779`).
+
+**ONE table covers both titles** — confirmed, not assumed: pokeruby's `Makefile:164` builds
+`ruby ruby_rev1 ruby_rev2 sapphire sapphire_rev1 sapphire_rev2` from this one tree, and none of the
+files cited above carries a `GAME_VERSION` / `GAME_REVISION` conditional (checked in `flags.h`,
+`global.h`'s `SaveBlock1`, `field_move_scripts.inc` and the water script in
+`field_control_avatar.c`).
+
+**The metatile side stays shared, verified rather than assumed:** pokeruby
+`src/metatile_behavior.c`'s `sTileBitAttributes` marks exactly 0x10/0x11/0x12/0x13/0x14/0x15/0x19/
+0x22/0x2A (+ the 0x50–0x53 currents) surfable — the same numbers pokeemerald does — so
+`fieldtrav_is_surfable` keeps its `FpEngine` parameter and RS keeps the RSE set. It is the **save**
+that splits, not the map.
+
+## The fix
+
+`fieldpath.{c,h}` are **frozen and byte-identical to HEAD** (`git diff` verified). The third row is
+reached through a discriminator owned by `fieldtrav.h`:
+
+- new `FtVariant { FT_VAR_EMERALD = 0, FT_VAR_FRLG = 1, FT_VAR_RS = 2 }`, deliberately **numerically
+  compatible** with `FpEngine` (a `_Static_assert` in fieldtrav.c pins `FT_VAR_EMERALD == FP_ENG_RSE`
+  and `FT_VAR_FRLG == FP_ENG_FRLG`), so an `FpEngine` that reaches a variant parameter still selects
+  the row it always selected — the third row can only be reached deliberately;
+- new `fieldtrav_variant(const char* code4)` — the ONE place the title→numbering map lives
+  (AXVE/AXPE → RS, BPRE/BPGE → FRLG, everything else → Emerald, matching the module's existing
+  "unknown falls back" convention; an unrecognised title has no profile, hence no SaveBlock1, hence
+  no flag reads at all);
+- `fieldtrav_cfg` / `fieldtrav_flag_get` / `fieldtrav_usable` now take an `FtVariant`;
+  `fieldtrav_scan_edges` and `fieldtrav_plan` take one too, so exactly one rule selects the row;
+- `source/touch.c` threads it from the title code it already has: `ft_variant(p)` =
+  `fieldtrav_variant(p->code)`, at the four call sites (`run_elig`'s Running-Shoes read, the plan,
+  and the per-interact eligibility re-check).
+
+**BPEE / BPRE / BPGE behaviour is unchanged** — their rows are byte-identical (the Emerald row was
+only renamed `s_cfgRse` → `s_cfgEm`, because it was never "RSE's").
+
+## The regression, and the mutation number
+
+`test/host/test_fieldtrav.c` **TEST 10** ("never prompt what the game will refuse") could not see
+this bug because it only ever asked for two engines. It now asks for the third:
+
+- **(f)** a real Ruby save — the Surf badge written at pokeruby's own address (`0x1220 + (0x80B>>3)`)
+  by a writer that deliberately does **not** go through `fieldtrav_cfg`, since a test that writes
+  through the table it grades can only agree with itself — must plan the Route 117 crossing;
+- **(g)** the mirror: the same bit at **Emerald's** offset is not a badge in a Ruby save;
+- **(h)** the defect as a property: fill Ruby's `vars[]` (0x1340+) with ordinary nonzero variable
+  values and the planner must stay deaf — *a Ruby save's game variables are never badges* — with the
+  pre-fix read spelled out alongside so the property cannot pass vacuously.
+
+TEST 2 grades the whole third row against the citations above (plus the address arithmetic: 0x137C
+is past Ruby's `flags[]` end, 0x1320 is inside it) and the five title codes through
+`fieldtrav_variant`; TEST 3 runs the FlagGet bit math on the RS numbering.
+
+**Mutation: 28 failures.** Collapsing `fieldtrav_cfg(FT_VAR_RS)` back onto the Emerald row — i.e.
+re-introducing exactly this defect with the API left intact — turns `1210 checks, 0 failures` into
+**`1210 checks, 28 failures`**: 16 in TEST 2 (row + arithmetic), 2 in TEST 3, 10 in TEST 10(f)(g)(h).
+Restored afterwards and re-verified identical.
+
+## Gate
+
+**16 suites, 0 failures** — celiolink 1259 · control 6940 · diag 376 · **fieldpath 1808 (frozen,
+unchanged)** · fieldtrav **1210** (was 1102) · netlink 66 · peersprite 62078 · presence 61376 ·
+profiles 1697 · theme 83444 · tilt 1756 · touchgeom 371892 · trace 58 (+4 loud SKIPs) · typography
+1419 · uigeom 18332 · uihit 1834. `make -j8` clean → `3DGBA.3dsx`, **zero new warnings** (the four
+`-Wmisleading-indentation` notes in `touch.c` hit lines 210–217, verified byte-identical to HEAD).
+`make cia` deliberately NOT run and Azahar not booted — another process owns the emulator.
+
+**Still unproven, as always for RS:** no Ruby or Sapphire ROM exists on this machine, so this row
+has never been executed on a live game. What is proven is the table, the seam and the property; the
+first RS hardware/emulator run remains owed.

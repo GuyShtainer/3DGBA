@@ -56,10 +56,42 @@ typedef enum {
 // elevation 3, so ONE elevation cannot describe a route that crosses a pond and lands again.
 enum { FT_MODE_FOOT = 0, FT_MODE_SURF = 1, FT_MODE_COUNT = 2 };
 
-// Per-engine constants. RSE and FRLG genuinely disagree on all of them — the badge that gates Cut
-// is BADGE01 in Emerald and BADGE02 in FireRed, the flags array sits at a different SaveBlock1
-// offset, and the object graphics ids are 82/86/87 vs 95/96/97 — so, exactly as fieldpath's
-// behaviour tables, these are two tables that must never merge.
+// WHICH FLAG NUMBERING A SAVE USES — and why this is NOT `FpEngine` (fix, 2026-08-14).
+//
+// Gen 3 has THREE flag numberings, not two. `FpEngine` (fieldpath.h) is a METATILE-BEHAVIOUR
+// discriminator: Ruby, Sapphire and Emerald share one behaviour table, so RSE is exactly right
+// there and that header is frozen. But the SAVE side does not follow the behaviour side:
+//
+//   * pokeruby puts `SaveBlock1.flags[]` at **0x1220** (include/global.h:701) where pokeemerald
+//     puts it at 0x1270, and
+//   * pokeruby's `SYSTEM_FLAGS` base is **0x800** (include/constants/flags.h:779) where
+//     pokeemerald's is 0x860 — so every badge id, and the Running-Shoes flag, shift by 0x60.
+//
+// Selecting Emerald's row for a Ruby cart therefore read `sb1 + 0x1270 + (0x867>>3)` = `sb1+0x137C`
+// — past the end of Ruby's `flags[]` (0x1220..0x1340) and INSIDE `vars[]`, i.e. the HM eligibility
+// gates were answering from game VARIABLES on 2 of the 5 shipped titles.
+//
+// The values are deliberately numerically compatible with FpEngine (`FT_VAR_EMERALD` == FP_ENG_RSE,
+// `FT_VAR_FRLG` == FP_ENG_FRLG, asserted in fieldtrav.c), so an FpEngine that reaches one of these
+// parameters by accident still selects exactly the row it selected before this fix — the third row
+// can only ever be reached deliberately, by title code.
+typedef enum {
+	FT_VAR_EMERALD = 0,   // BPEE            — pokeemerald
+	FT_VAR_FRLG    = 1,   // BPRE / BPGE     — pokefirered
+	FT_VAR_RS      = 2,   // AXVE / AXPE     — pokeruby (ONE codebase builds both; Makefile:164)
+	FT_VAR_COUNT
+} FtVariant;
+
+// The ONE place the title code -> flag numbering mapping lives. `code4` is the 4-char ROM game
+// code (GameProfile.code). Anything unrecognised answers FT_VAR_EMERALD — the module's existing
+// "unknown engine falls back to the RSE table" convention, and harmless because an unrecognised
+// title has no profile, hence no SaveBlock1, hence no flag reads at all.
+FtVariant fieldtrav_variant(const char* code4);
+
+// Per-variant constants. The three numberings genuinely disagree on all of them — the badge that
+// gates Cut is BADGE01 in Emerald and BADGE02 in FireRed, the flags array sits at a different
+// SaveBlock1 offset in all three, and the object graphics ids are 82/86/87 vs 95/96/97 — so,
+// exactly as fieldpath's behaviour tables, these are tables that must never merge.
 typedef struct {
 	uint16_t flagsOff;        // SaveBlock1.flags[] byte offset
 	uint16_t badgeCut, badgeSmash, badgeSurf, badgeWaterfall, badgeStrength;
@@ -73,8 +105,8 @@ typedef struct {
 	uint16_t runShoes;        // FLAG_SYS_B_DASH
 } FtEngCfg;
 
-// Never NULL: an unknown engine returns the RSE table (fieldpath's own fallback convention).
-const FtEngCfg* fieldtrav_cfg(FpEngine eng);
+// Never NULL: an unknown variant returns the Emerald table (fieldpath's own fallback convention).
+const FtEngCfg* fieldtrav_cfg(FtVariant var);
 
 // Is this metatile behaviour a tile Surf can float on? Per engine, per the game's own table.
 // Deliberately NOT the game's set verbatim: the four CURRENT behaviours (0x50-0x53) are surfable
@@ -97,8 +129,10 @@ typedef struct {
 	int      partyCount;   // gPlayerPartyCount, clamped 0..6 by the reader
 } FtParty;
 
-// FlagGet(f) == bit (f&7) of SaveBlock1.flags[f>>3]. pokeemerald src/event_data.c FlagGet.
-bool fieldtrav_flag_get(const FpBus* bus, FpEngine eng, uint32_t sb1, int flagId);
+// FlagGet(f) == bit (f&7) of SaveBlock1.flags[f>>3]. pokeemerald src/event_data.c FlagGet (the
+// identical function in pokeruby src/event_data.c and pokefirered src/event_data.c). BOTH halves —
+// the flags[] offset AND the flag id itself — are per-VARIANT, which is why this takes one.
+bool fieldtrav_flag_get(const FpBus* bus, FtVariant var, uint32_t sb1, int flagId);
 
 // Does any non-egg party mon know `moveId`? This is `ScrCmd_checkpartymove`'s test
 // (pokeemerald src/scrcmd.c) done from outside: walk gPlayerParty, decrypt each mon's Attacks
@@ -160,7 +194,7 @@ int fieldtrav_census(const FpBus* bus, uint32_t partyBase, int partyCount, uint3
 
 // Bitmask (1 << FT_HM_*) of the field moves the player may use RIGHT NOW: badge AND party move,
 // both read live. This is evaluated once per plan and re-checked at each INTERACT (SPEC H1.6).
-uint32_t fieldtrav_usable(const FpBus* bus, FpEngine eng, const FtParty* pty);
+uint32_t fieldtrav_usable(const FpBus* bus, FtVariant var, const FtParty* pty);
 
 // --- the move program ------------------------------------------------------------------------
 
@@ -218,9 +252,13 @@ typedef struct {
 // space). Edge objects appear in that list too; this module re-reads gObjectEvents itself and
 // lets an ELIGIBLE edge object override its own block entry — nothing else does.
 //
+// `var` is the SAVE's flag numbering (see FtVariant). It is a separate argument from `m->engine`
+// on purpose: the map speaks the RSE metatile numbering for Ruby, Sapphire AND Emerald, while the
+// save does not — this is the one seam where a Ruby cart stops being "RSE".
+//
 // Returns out->ok. out->outcome always says why, including the two "declined on purpose"
 // answers (FT_OUT_TIER0, FT_OUT_NOEDGE) that must never turn into a partial program.
-bool fieldtrav_plan(const FpBus* bus, const FpMap* m, const FtParty* pty,
+bool fieldtrav_plan(const FpBus* bus, const FpMap* m, FtVariant var, const FtParty* pty,
                     int sx, int sy, int gx, int gy, bool startSurfing,
                     const short (*npc)[2], int npcN, FtProgram* out);
 
@@ -232,8 +270,9 @@ typedef struct { int16_t slot, x, y; uint8_t hm; } FtEdge;
 
 // Scan gObjectEvents for edge objects. Returns the count written to `out` (<= FT_MAX_EDGES).
 // Coordinates are MAP-LOCAL (the +MAP_OFFSET grid bias the raw struct carries is removed here),
-// which is the space fieldtrav_plan and fieldpath_enterable both work in.
-int fieldtrav_scan_edges(const FpBus* bus, const FpMap* m, FtEdge* out);
+// which is the space fieldtrav_plan and fieldpath_enterable both work in. Takes the same `var`
+// its caller planned with, so exactly ONE rule selects the constant row.
+int fieldtrav_scan_edges(const FpBus* bus, const FpMap* m, FtVariant var, FtEdge* out);
 
 // The Attacks-substruct slot for a given personality: sSubstructTable[personality % 24][type].
 // Exposed so the host suite grades the shipped permutation table rather than a restatement of it.

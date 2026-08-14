@@ -22,7 +22,7 @@
 //
 // TEST NUMBERING
 //   TEST 1  both engines' surfable sets, every row (a shared table FAILS) ...... T1.2
-//   TEST 2  the per-engine constant block: badges / flags offset / gfx ids ..... T1.3 / T1.4
+//   TEST 2  the per-VARIANT constant block: all THREE flag numberings ........... T1.3 / T1.4
 //   TEST 3  the badge read is FlagGet's own bit math, with its degradations .... H1.4
 //   TEST 4  the substruct permutation table is a permutation, and pret's ....... H1.5
 //   TEST 5  party decryption on golden bytes: moves, egg, checksum, empty ...... H1.5
@@ -31,6 +31,7 @@
 //   TEST 8  DRY PATHS WIN — a walkable route is never displaced ................ H1.7
 //   TEST 9  the Route 117 surf crossing, end to end ........................... §1.5 / T6-P1
 //   TEST 10 never prompt what the game refuses: no badge / no mon = no plan .... §0 property 2
+//           ...incl. (f)(g)(h), the RUBY/SAPPHIRE numbering (2026-08-14 fix)
 //   TEST 11 currents and waterfalls are never free surf tiles ................. T5.8
 //   TEST 12 the Cut object edge, and the same tap with no badge ............... §2.3.1
 //   TEST 13 the interact cap fails honestly ................................... H1.8
@@ -56,7 +57,9 @@ static int g_checks = 0, g_fail = 0;
 static struct { uint32_t addr; uint32_t len; uint8_t* p; } g_ov[OV_N];
 static uint8_t g_ovObj[0x24 * 16];      // gObjectEvents[16]
 static uint8_t g_ovSb1[0x1500];         // SaveBlock1 head THROUGH the flags array (EM's
-                                        // flags[] runs 0x1270..0x139B, so 0x1300 would truncate it)
+                                        // flags[] runs 0x1270..0x139B, so 0x1300 would truncate it;
+                                        // Ruby's runs 0x1220..0x1340 and its vars[] start there,
+                                        // which TEST 10(h) writes into)
 static uint8_t g_ovParty[100 * 6];      // gPlayerParty[6]
 // PHASE 24: struct PokemonStorage — u8 currentBox at +0, BoxPokemon boxes[14][30] at +4
 // (14*30*80 = 0x8340, which is why boxNames sits at +0x8344 in pret's own struct).
@@ -192,9 +195,21 @@ static void live_from_rom(const FpBus* rb, const FtRomMap* rm, FpBus* busOut, Fp
 }
 
 // FlagSet, the writer half of fieldtrav_flag_get (pokeemerald src/event_data.c FlagSet).
-static void set_flag(FpEngine eng, int flagId) {
-	const FtEngCfg* c = fieldtrav_cfg(eng);
+static void set_flag(FtVariant var, int flagId) {
+	const FtEngCfg* c = fieldtrav_cfg(var);
 	g_ovSb1[c->flagsOff + (flagId >> 3)] |= (uint8_t)(1u << (flagId & 7));
+}
+
+// The RUBY writer, deliberately NOT routed through fieldtrav_cfg (2026-08-14 fix): a test that
+// writes the badge through the same table it is grading can only ever agree with itself, which is
+// precisely how a Ruby cart reading EMERALD's numbers stayed invisible here. Both numbers below are
+// pokeruby's own — include/global.h:701 `/*0x1220*/ u8 flags[FLAGS_COUNT]`, and flag ids off
+// include/constants/flags.h:779 SYSTEM_FLAGS 0x800 — so the byte this sets is the byte a real
+// Ruby/Sapphire cartridge sets.
+#define RUBY_FLAGS_OFF   0x1220
+#define RUBY_BADGE05_GET 0x80B      // flags.h:793, the Surf badge (field_control_avatar.c:506)
+static void set_flag_ruby(int flagId) {
+	g_ovSb1[RUBY_FLAGS_OFF + (flagId >> 3)] |= (uint8_t)(1u << (flagId & 7));
 }
 
 // Put an ACTIVE object event in a slot. Offsets: +0x00 bit0 active, +0x05 graphicsId,
@@ -329,10 +344,11 @@ int main(void) {
 	}
 
 	// ---------------------------------------------------------------- TEST 2
-	printf("TEST 2 — the per-engine constant block\n");
+	printf("TEST 2 — the per-variant constant block\n");
 	{
-		const FtEngCfg* r = fieldtrav_cfg(FP_ENG_RSE);
-		const FtEngCfg* f = fieldtrav_cfg(FP_ENG_FRLG);
+		const FtEngCfg* r = fieldtrav_cfg(FT_VAR_EMERALD);
+		const FtEngCfg* f = fieldtrav_cfg(FT_VAR_FRLG);
+		const FtEngCfg* s = fieldtrav_cfg(FT_VAR_RS);
 		// EM: include/global.h:1020 flags @0x1270; flags.h:1348 SYSTEM_FLAGS 0x860 + badge offsets;
 		// the badge-per-move mapping comes off data/scripts/field_move_scripts.inc.
 		CHECK(r->flagsOff == 0x1270, "EM SaveBlock1.flags offset");
@@ -365,33 +381,101 @@ int main(void) {
 		CHECK(r->runShoes == 0x8C0, "EM FLAG_SYS_B_DASH (Running Shoes received)");
 		CHECK(f->runShoes == 0x82F, "FR FLAG_SYS_B_DASH");
 		CHECK(r->runShoes != f->runShoes, "the Running-Shoes flag id differs between engines");
-		CHECK(fieldtrav_cfg((FpEngine)99) == r, "an unknown engine falls back to RSE, never NULL");
+		CHECK(fieldtrav_cfg((FtVariant)99) == r, "an unknown variant falls back to Emerald, never NULL");
+
+		// --- THE THIRD NUMBERING (2026-08-14 fix) ---------------------------------------------
+		// Ruby/Sapphire are NOT Emerald on the save side. pokeruby include/global.h:701
+		// `/*0x1220*/ u8 flags[FLAGS_COUNT];` (and :702 `/*0x1340*/ u16 vars[VARS_COUNT];`);
+		// include/constants/flags.h:779 SYSTEM_FLAGS = TRAINER_FLAG_START(:773, 0x500) +
+		// NUMBER_OF_TRAINERS(:778, 693) + 0x4B = 0x800; :789-796 badges = +0x07..+0x0E;
+		// :817 FLAG_SYS_USE_STRENGTH = +0x29; :877 FLAG_SYS_B_DASH = +0x60. Badge-per-move off
+		// data/field_move_scripts.inc:3/:60/:126 and src/field_control_avatar.c:506/:511.
+		CHECK(s->flagsOff == 0x1220, "RS SaveBlock1.flags offset (NOT Emerald's 0x1270)");
+		CHECK(s->badgeCut == 0x807, "RS Cut = BADGE01 (field_move_scripts.inc:3)");
+		CHECK(s->badgeSmash == 0x809, "RS Rock Smash = BADGE03 (field_move_scripts.inc:60)");
+		CHECK(s->badgeSurf == 0x80B, "RS Surf = BADGE05 (field_control_avatar.c:506)");
+		CHECK(s->badgeStrength == 0x80A, "RS Strength = BADGE04 (field_move_scripts.inc:126)");
+		CHECK(s->badgeWaterfall == 0x80E, "RS Waterfall = BADGE08 (field_control_avatar.c:511)");
+		CHECK(s->strengthLatch == 0x829, "RS FLAG_SYS_USE_STRENGTH = 0x800 + 0x29");
+		CHECK(s->runShoes == 0x860, "RS FLAG_SYS_B_DASH = 0x800 + 0x60");
+		// READ from pokeruby include/constants/event_objects.h:88/92/93 — it agrees with Emerald,
+		// which is a fact about that file, not an inheritance.
+		CHECK(s->gfxCutTree == 82 && s->gfxRock == 86 && s->gfxBoulder == 87, "RS object gfx ids");
+		// The whole point: RS must not BE Emerald. Every flag-space field differs; a table that
+		// silently fell back to the Emerald row makes all five of these equal.
+		CHECK(s->flagsOff != r->flagsOff, "RS flags offset differs from Emerald's");
+		CHECK(s->badgeCut != r->badgeCut, "RS Cut badge id differs from Emerald's");
+		CHECK(s->badgeSurf != r->badgeSurf, "RS Surf badge id differs from Emerald's");
+		CHECK(s->strengthLatch != r->strengthLatch, "RS strength latch differs from Emerald's");
+		CHECK(s->runShoes != r->runShoes, "RS Running-Shoes flag id differs from Emerald's");
+		// The arithmetic that makes this a CORRECTNESS bug and not a tidiness one: Emerald's Cut
+		// badge, read through Emerald's offset, lands past the end of Ruby's flags[] (which runs
+		// 0x1220..0x1340) and inside vars[] — i.e. it reads game VARIABLES as badge bits.
+		CHECK((uint32_t)r->flagsOff + (r->badgeCut >> 3) == 0x137Cu, "the wrong read's address");
+		CHECK(0x137Cu >= (uint32_t)s->flagsOff + 0x120u, "...and 0x137C is past Ruby's flags[] end");
+		CHECK((uint32_t)s->flagsOff + (s->badgeCut >> 3) == 0x1320u, "the RIGHT read stays in flags[]");
+		CHECK((uint32_t)r->flagsOff + (r->runShoes >> 3) == 0x1388u, "same for Running Shoes: vars[]");
+		CHECK((uint32_t)s->flagsOff + (s->runShoes >> 3) == 0x132Cu, "...vs 0x132C, inside flags[]");
+
+		// The title -> variant discriminator, which is the ONLY thing that can tell RS from EM
+		// (they share one FpEngine). All five shipped titles, plus the degradations.
+		CHECK(fieldtrav_variant("AXVE") == FT_VAR_RS, "Ruby is RS");
+		CHECK(fieldtrav_variant("AXPE") == FT_VAR_RS, "Sapphire is RS — one pokeruby tree builds both");
+		CHECK(fieldtrav_variant("BPEE") == FT_VAR_EMERALD, "Emerald");
+		CHECK(fieldtrav_variant("BPRE") == FT_VAR_FRLG, "FireRed");
+		CHECK(fieldtrav_variant("BPGE") == FT_VAR_FRLG, "LeafGreen");
+		CHECK(fieldtrav_variant("ZZZZ") == FT_VAR_EMERALD, "an unknown code falls back to Emerald");
+		CHECK(fieldtrav_variant(NULL) == FT_VAR_EMERALD, "a NULL code falls back to Emerald");
+		CHECK(fieldtrav_cfg(fieldtrav_variant("AXVE")) == s, "the Ruby code selects the RS row");
+		CHECK(fieldtrav_cfg(fieldtrav_variant("AXPE")) == s, "the Sapphire code selects the RS row");
+		// The frozen enum still selects what it always selected: fieldpath.h's FpEngine cannot
+		// name the third row, and must never accidentally land on it.
+		CHECK(fieldtrav_cfg((FtVariant)FP_ENG_RSE)  == r, "FP_ENG_RSE still selects the Emerald row");
+		CHECK(fieldtrav_cfg((FtVariant)FP_ENG_FRLG) == f, "FP_ENG_FRLG still selects the FRLG row");
 	}
 
 	// ---------------------------------------------------------------- TEST 3
 	printf("TEST 3 — the badge read is FlagGet's own bit math\n");
 	{
 		FpBus bus; FpMap m; bind("route117", &bus, &m, 3);
-		const FtEngCfg* c = fieldtrav_cfg(FP_ENG_RSE);
-		CHECK(!fieldtrav_flag_get(&bus, FP_ENG_RSE, SB1_BASE, c->badgeSurf), "no badge before it is set");
-		set_flag(FP_ENG_RSE, c->badgeSurf);
-		CHECK(fieldtrav_flag_get(&bus, FP_ENG_RSE, SB1_BASE, c->badgeSurf), "badge reads back");
+		const FtEngCfg* c = fieldtrav_cfg(FT_VAR_EMERALD);
+		CHECK(!fieldtrav_flag_get(&bus, FT_VAR_EMERALD, SB1_BASE, c->badgeSurf), "no badge before it is set");
+		set_flag(FT_VAR_EMERALD, c->badgeSurf);
+		CHECK(fieldtrav_flag_get(&bus, FT_VAR_EMERALD, SB1_BASE, c->badgeSurf), "badge reads back");
 		// Neighbouring bits in the SAME byte must be unaffected — the classic off-by-one this
 		// rail exists to catch (0x86B = byte 0x10D bit 3, so 0x86A and 0x86C share the byte).
-		CHECK(!fieldtrav_flag_get(&bus, FP_ENG_RSE, SB1_BASE, c->badgeSurf - 1), "the bit below stays clear");
-		CHECK(!fieldtrav_flag_get(&bus, FP_ENG_RSE, SB1_BASE, c->badgeSurf + 1), "the bit above stays clear");
+		CHECK(!fieldtrav_flag_get(&bus, FT_VAR_EMERALD, SB1_BASE, c->badgeSurf - 1), "the bit below stays clear");
+		CHECK(!fieldtrav_flag_get(&bus, FT_VAR_EMERALD, SB1_BASE, c->badgeSurf + 1), "the bit above stays clear");
 		// Every one of the 8 bits of one byte, independently.
 		for (int b = 0; b < 8; b++) {
 			memset(g_ovSb1, 0, sizeof g_ovSb1);
-			set_flag(FP_ENG_RSE, 0x860 + b);
+			set_flag(FT_VAR_EMERALD, 0x860 + b);
 			for (int q = 0; q < 8; q++)
-				CHECK(fieldtrav_flag_get(&bus, FP_ENG_RSE, SB1_BASE, 0x860 + q) == (q == b),
+				CHECK(fieldtrav_flag_get(&bus, FT_VAR_EMERALD, SB1_BASE, 0x860 + q) == (q == b),
 				      "bit %d set -> only %d reads true (q=%d)", b, b, q);
 		}
 		// Degradations: no save loaded and a nonsense flag id both answer FALSE, never a guess.
-		CHECK(!fieldtrav_flag_get(&bus, FP_ENG_RSE, 0, c->badgeSurf), "sb1 == 0 -> no badge");
-		CHECK(!fieldtrav_flag_get(&bus, FP_ENG_RSE, 0x08000000u, c->badgeSurf), "a ROM 'sb1' -> no badge");
-		CHECK(!fieldtrav_flag_get(&bus, FP_ENG_RSE, SB1_BASE, -1), "a negative flag id -> false");
+		CHECK(!fieldtrav_flag_get(&bus, FT_VAR_EMERALD, 0, c->badgeSurf), "sb1 == 0 -> no badge");
+		CHECK(!fieldtrav_flag_get(&bus, FT_VAR_EMERALD, 0x08000000u, c->badgeSurf), "a ROM 'sb1' -> no badge");
+		CHECK(!fieldtrav_flag_get(&bus, FT_VAR_EMERALD, SB1_BASE, -1), "a negative flag id -> false");
+
+		// The same bit math on the RS numbering (2026-08-14 fix): different flags[] base, different
+		// SYSTEM_FLAGS base, so this is a genuinely different address for a genuinely different id.
+		memset(g_ovSb1, 0, sizeof g_ovSb1);
+		const FtEngCfg* rs = fieldtrav_cfg(FT_VAR_RS);
+		for (int b = 0; b < 8; b++) {
+			memset(g_ovSb1, 0, sizeof g_ovSb1);
+			set_flag(FT_VAR_RS, 0x800 + b);
+			for (int q = 0; q < 8; q++)
+				CHECK(fieldtrav_flag_get(&bus, FT_VAR_RS, SB1_BASE, 0x800 + q) == (q == b),
+				      "RS bit %d set -> only %d reads true (q=%d)", b, b, q);
+		}
+		memset(g_ovSb1, 0, sizeof g_ovSb1);
+		set_flag(FT_VAR_RS, rs->badgeCut);
+		CHECK(g_ovSb1[0x1320] == 0x80, "the RS Cut badge really is byte 0x1320 bit 7 of SaveBlock1");
+		CHECK(fieldtrav_flag_get(&bus, FT_VAR_RS, SB1_BASE, rs->badgeCut), "and it reads back as RS");
+		CHECK(!fieldtrav_flag_get(&bus, FT_VAR_EMERALD, SB1_BASE, c->badgeCut),
+		      "the Emerald row cannot see it — the two numberings do not overlap here");
 	}
 
 	// ---------------------------------------------------------------- TEST 4
@@ -484,25 +568,25 @@ int main(void) {
 		FpBus bus; FpMap m; bind("route117", &bus, &m, 3);
 		const uint16_t surfSet[4] = { MOVE_SURF, 0, 0, 0 };
 		FtParty pty = party_of(1);
-		const FtEngCfg* c = fieldtrav_cfg(FP_ENG_RSE);
+		const FtEngCfg* c = fieldtrav_cfg(FT_VAR_EMERALD);
 
-		CHECK(fieldtrav_usable(&bus, FP_ENG_RSE, &pty) == 0, "nothing set -> nothing usable");
+		CHECK(fieldtrav_usable(&bus, FT_VAR_EMERALD, &pty) == 0, "nothing set -> nothing usable");
 
 		put_mon(0, 0x12345678u, 1u, surfSet, 1, 0, 0);
-		CHECK((fieldtrav_usable(&bus, FP_ENG_RSE, &pty) & (1u << FT_HM_SURF)) == 0,
+		CHECK((fieldtrav_usable(&bus, FT_VAR_EMERALD, &pty) & (1u << FT_HM_SURF)) == 0,
 		      "a mon that knows Surf without the badge is NOT usable");
 
 		memset(g_ovParty, 0, sizeof g_ovParty);
-		set_flag(FP_ENG_RSE, c->badgeSurf);
-		CHECK((fieldtrav_usable(&bus, FP_ENG_RSE, &pty) & (1u << FT_HM_SURF)) == 0,
+		set_flag(FT_VAR_EMERALD, c->badgeSurf);
+		CHECK((fieldtrav_usable(&bus, FT_VAR_EMERALD, &pty) & (1u << FT_HM_SURF)) == 0,
 		      "the badge without a mon is NOT usable");
 
 		put_mon(0, 0x12345678u, 1u, surfSet, 1, 0, 0);
-		uint32_t u = fieldtrav_usable(&bus, FP_ENG_RSE, &pty);
+		uint32_t u = fieldtrav_usable(&bus, FT_VAR_EMERALD, &pty);
 		CHECK((u & (1u << FT_HM_SURF)) != 0, "badge AND mon -> Surf usable");
 		CHECK((u & (1u << FT_HM_CUT)) == 0, "Cut is still not usable");
-		CHECK(fieldtrav_usable(&bus, FP_ENG_RSE, NULL) == 0, "a NULL party -> nothing usable");
-		CHECK(fieldtrav_usable(NULL, FP_ENG_RSE, &pty) == 0, "a NULL bus -> nothing usable");
+		CHECK(fieldtrav_usable(&bus, FT_VAR_EMERALD, NULL) == 0, "a NULL party -> nothing usable");
+		CHECK(fieldtrav_usable(NULL, FT_VAR_EMERALD, &pty) == 0, "a NULL bus -> nothing usable");
 	}
 
 	// ---------------------------------------------------------------- TEST 7
@@ -510,14 +594,14 @@ int main(void) {
 	{
 		FpBus bus; FpMap m; bind("route117", &bus, &m, 3);
 		FtEdge e[FT_MAX_EDGES];
-		CHECK(fieldtrav_scan_edges(&bus, &m, e) == 0, "an empty object table has no edges");
+		CHECK(fieldtrav_scan_edges(&bus, &m, FT_VAR_EMERALD, e) == 0, "an empty object table has no edges");
 
 		set_obj(1, 82, 18, 12);    // OBJ_EVENT_GFX_CUTTABLE_TREE (EM)
 		set_obj(2, 86, 19, 12);    // OBJ_EVENT_GFX_BREAKABLE_ROCK (EM)
 		set_obj(3, 87, 17, 12);    // OBJ_EVENT_GFX_PUSHABLE_BOULDER (EM)
 		set_obj(4, 3,  16, 12);    // a plain NPC — never an edge
 		set_obj(5, 95, 15, 12);    // FR's cut-tree id on an RSE map — must NOT match
-		int n = fieldtrav_scan_edges(&bus, &m, e);
+		int n = fieldtrav_scan_edges(&bus, &m, FT_VAR_EMERALD, e);
 		CHECK(n == 3, "3 edge objects found, the NPC and the wrong-engine id ignored (got %d)", n);
 		int sawCut = 0, sawRock = 0, sawBoulder = 0;
 		for (int i = 0; i < n; i++) {
@@ -530,25 +614,25 @@ int main(void) {
 		// The +MAP_OFFSET bias really is removed (a 7-tile error here would aim every route at the
 		// wrong tile — the single most likely silent bug in this whole module).
 		set_obj(1, 82, 0, 0);
-		n = fieldtrav_scan_edges(&bus, &m, e);
+		n = fieldtrav_scan_edges(&bus, &m, FT_VAR_EMERALD, e);
 		CHECK(e[0].x == 0 && e[0].y == 0, "map-local (0,0) survives the offset removal");
 
 		// An INACTIVE slot is not an edge, and slot 0 (the player) is never scanned.
 		memset(g_ovObj, 0, sizeof g_ovObj);
 		ov_w32(g_ovObj, 0x00, 1u); ov_w8(g_ovObj, 0x05, 82);         // the player wearing a tree's id
-		CHECK(fieldtrav_scan_edges(&bus, &m, e) == 0, "slot 0 is never an edge");
+		CHECK(fieldtrav_scan_edges(&bus, &m, FT_VAR_EMERALD, e) == 0, "slot 0 is never an edge");
 		set_obj(2, 82, 5, 5); ov_w32(g_ovObj + 0x24 * 2, 0x00, 0u);  // present but inactive
-		CHECK(fieldtrav_scan_edges(&bus, &m, e) == 0, "an inactive slot is not an edge");
+		CHECK(fieldtrav_scan_edges(&bus, &m, FT_VAR_EMERALD, e) == 0, "an inactive slot is not an edge");
 
 		// FRLG ids on an FRLG map.
 		FpBus fb; FpMap fm; bind("frstair", &fb, &fm, 3);
 		set_obj(1, 95, 3, 3); set_obj(2, 82, 4, 3);
-		n = fieldtrav_scan_edges(&fb, &fm, e);
+		n = fieldtrav_scan_edges(&fb, &fm, FT_VAR_FRLG, e);
 		CHECK(n == 1 && e[0].hm == FT_HM_CUT, "FRLG matches 95, not 82 (got n=%d)", n);
 
-		CHECK(fieldtrav_scan_edges(&bus, &m, NULL) == 0, "a NULL out array is refused");
+		CHECK(fieldtrav_scan_edges(&bus, &m, FT_VAR_EMERALD, NULL) == 0, "a NULL out array is refused");
 		FpMap noObj = m; noObj.mapObjects = 0;
-		CHECK(fieldtrav_scan_edges(&bus, &noObj, e) == 0, "mapObjects 0 -> no edges (named degradation)");
+		CHECK(fieldtrav_scan_edges(&bus, &noObj, FT_VAR_EMERALD, e) == 0, "mapObjects 0 -> no edges (named degradation)");
 	}
 
 	// ---------------------------------------------------------------- TEST 8
@@ -558,12 +642,12 @@ int main(void) {
 		// a long dry walk along row 8. With Surf fully available, the planner must still decline —
 		// tier order, not step count, is the primary key (SPEC H1.7).
 		FpBus bus; FpMap m; bind("route117", &bus, &m, 3);
-		set_flag(FP_ENG_RSE, fieldtrav_cfg(FP_ENG_RSE)->badgeSurf);
+		set_flag(FT_VAR_EMERALD, fieldtrav_cfg(FT_VAR_EMERALD)->badgeSurf);
 		const uint16_t surfSet[4] = { MOVE_SURF, 0, 0, 0 };
 		put_mon(0, 0x12345678u, 1u, surfSet, 1, 0, 0);
 		FtParty pty = party_of(1);
 		npc_clear();
-		bool ok = fieldtrav_plan(&bus, &m, &pty, 19, 14, 28, 14, false, g_npc, g_npcN, &g_pr);
+		bool ok = fieldtrav_plan(&bus, &m, FT_VAR_EMERALD, &pty, 19, 14, 28, 14, false, g_npc, g_npcN, &g_pr);
 		CHECK(!ok, "a walkable route is DECLINED by the traversal planner");
 		CHECK(g_pr.outcome == FT_OUT_TIER0, "outcome is TIER0, not a wet program (got %s)", OUTN(g_pr.outcome));
 		CHECK(g_pr.nMoves == 0 && g_pr.nInteracts == 0, "nothing is emitted when tier 0 wins");
@@ -574,12 +658,12 @@ int main(void) {
 	printf("TEST 9 — the Route 117 surf crossing, end to end\n");
 	{
 		FpBus bus; FpMap m; bind("route117", &bus, &m, 3);
-		set_flag(FP_ENG_RSE, fieldtrav_cfg(FP_ENG_RSE)->badgeSurf);
+		set_flag(FT_VAR_EMERALD, fieldtrav_cfg(FT_VAR_EMERALD)->badgeSurf);
 		const uint16_t surfSet[4] = { MOVE_SURF, 0, 0, 0 };
 		put_mon(0, 0x12345678u, 1u, surfSet, 1, 0, 0);
 		FtParty pty = party_of(1);
 		npc_clear(); seal_pocket();
-		bool ok = fieldtrav_plan(&bus, &m, &pty, 19, 14, 28, 14, false, g_npc, g_npcN, &g_pr);
+		bool ok = fieldtrav_plan(&bus, &m, FT_VAR_EMERALD, &pty, 19, 14, 28, 14, false, g_npc, g_npcN, &g_pr);
 		CHECK(ok, "with the dry exit sealed, the pond route is found (outcome %s)", OUTN(g_pr.outcome));
 		if (ok) {
 			CHECK(g_pr.outcome == FT_OUT_PLANNED, "outcome PLANNED");
@@ -608,7 +692,7 @@ int main(void) {
 
 		// H1.9: the tapped goal may itself be water — the program simply ends afloat.
 		npc_clear(); seal_pocket();
-		ok = fieldtrav_plan(&bus, &m, &pty, 19, 14, 24, 14, false, g_npc, g_npcN, &g_pr);
+		ok = fieldtrav_plan(&bus, &m, FT_VAR_EMERALD, &pty, 19, 14, 24, 14, false, g_npc, g_npcN, &g_pr);
 		CHECK(ok, "a tap ON the pond plans too");
 		if (ok) {
 			CHECK(g_pr.endMode == FT_MODE_SURF, "it ends AFLOAT, which is a legal terminal");
@@ -626,9 +710,9 @@ int main(void) {
 		const uint16_t surfSet[4] = { MOVE_SURF, 0, 0, 0 };
 
 		// (a) badge, no mon.
-		set_flag(FP_ENG_RSE, fieldtrav_cfg(FP_ENG_RSE)->badgeSurf);
+		set_flag(FT_VAR_EMERALD, fieldtrav_cfg(FT_VAR_EMERALD)->badgeSurf);
 		npc_clear(); seal_pocket();
-		CHECK(!fieldtrav_plan(&bus, &m, &pty, 19, 14, 28, 14, false, g_npc, g_npcN, &g_pr),
+		CHECK(!fieldtrav_plan(&bus, &m, FT_VAR_EMERALD, &pty, 19, 14, 28, 14, false, g_npc, g_npcN, &g_pr),
 		      "badge without a Surf mon plans NOTHING");
 		CHECK(g_pr.nMoves == 0, "and emits no moves");
 
@@ -636,31 +720,88 @@ int main(void) {
 		bind("route117", &bus, &m, 3);
 		put_mon(0, 0x12345678u, 1u, surfSet, 1, 0, 0);
 		npc_clear(); seal_pocket();
-		CHECK(!fieldtrav_plan(&bus, &m, &pty, 19, 14, 28, 14, false, g_npc, g_npcN, &g_pr),
+		CHECK(!fieldtrav_plan(&bus, &m, FT_VAR_EMERALD, &pty, 19, 14, 28, 14, false, g_npc, g_npcN, &g_pr),
 		      "a Surf mon without the badge plans NOTHING");
 
 		// (c) neither.
 		bind("route117", &bus, &m, 3);
 		npc_clear(); seal_pocket();
-		CHECK(!fieldtrav_plan(&bus, &m, &pty, 19, 14, 28, 14, false, g_npc, g_npcN, &g_pr),
+		CHECK(!fieldtrav_plan(&bus, &m, FT_VAR_EMERALD, &pty, 19, 14, 28, 14, false, g_npc, g_npcN, &g_pr),
 		      "neither -> nothing");
 		CHECK(g_pr.usable == 0, "the eligibility mask is empty and is reported honestly");
 
 		// (d) a genuinely unreachable tile with FULL eligibility still fails honestly.
 		bind("route117", &bus, &m, 3);
-		set_flag(FP_ENG_RSE, fieldtrav_cfg(FP_ENG_RSE)->badgeSurf);
+		set_flag(FT_VAR_EMERALD, fieldtrav_cfg(FT_VAR_EMERALD)->badgeSurf);
 		put_mon(0, 0x12345678u, 1u, surfSet, 1, 0, 0);
 		npc_clear();
-		CHECK(!fieldtrav_plan(&bus, &m, &pty, 19, 14, 16, 14, false, g_npc, g_npcN, &g_pr),
+		CHECK(!fieldtrav_plan(&bus, &m, FT_VAR_EMERALD, &pty, 19, 14, 16, 14, false, g_npc, g_npcN, &g_pr),
 		      "a tile inside a wall is never reachable");
 		CHECK(g_pr.outcome == FT_OUT_UNREACHABLE, "and says UNREACHABLE (got %s)", OUTN(g_pr.outcome));
 
 		// (e) degradations: a bad map, and a goal outside the search window.
 		FpMap bad = m; bad.gridPtr = 0x08000000u;
-		CHECK(!fieldtrav_plan(&bus, &bad, &pty, 19, 14, 28, 14, false, g_npc, g_npcN, &g_pr) &&
+		CHECK(!fieldtrav_plan(&bus, &bad, FT_VAR_EMERALD, &pty, 19, 14, 28, 14, false, g_npc, g_npcN, &g_pr) &&
 		      g_pr.outcome == FT_OUT_BADMAP, "a ROM grid pointer -> BADMAP");
-		CHECK(!fieldtrav_plan(&bus, &m, &pty, 19, 14, 19 + FP_WHALF + 1, 14, false, g_npc, g_npcN, &g_pr) &&
+		CHECK(!fieldtrav_plan(&bus, &m, FT_VAR_EMERALD, &pty, 19, 14, 19 + FP_WHALF + 1, 14, false, g_npc, g_npcN, &g_pr) &&
 		      g_pr.outcome == FT_OUT_WINDOW, "a goal past +-FP_WHALF -> WINDOW");
+
+		// --- THE THIRD NUMBERING, asked for by name (2026-08-14 fix) ---------------------------
+		// Until this block existed the suite only ever asked for TWO of the three Gen-3 flag
+		// numberings, so a Ruby/Sapphire cart reading EMERALD's badge bits was invisible here. The
+		// map stays the RSE fixture on purpose: that is exactly a Ruby cart's situation — same
+		// metatile behaviours (fieldpath's FpEngine is right), different SAVE.
+		const FtEngCfg* rs = fieldtrav_cfg(FT_VAR_RS);
+		const FtEngCfg* em = fieldtrav_cfg(FT_VAR_EMERALD);
+
+		// (f) a REAL Ruby save: the badge bit where pokeruby actually keeps it (0x1220 + 0x80B>>3 =
+		//     0x132D bit 3), written from pret's OWN constants rather than through the table under
+		//     test, plus a Surf mon. The route the game would allow must be planned.
+		bind("route117", &bus, &m, 3);
+		set_flag_ruby(RUBY_BADGE05_GET);
+		CHECK(rs->badgeSurf == RUBY_BADGE05_GET && rs->flagsOff == RUBY_FLAGS_OFF,
+		      "(the module agrees with pokeruby's own numbers, so (f) grades the same byte)");
+		put_mon(0, 0x12345678u, 1u, surfSet, 1, 0, 0);
+		npc_clear(); seal_pocket();
+		{
+			bool ok = fieldtrav_plan(&bus, &m, FT_VAR_RS, &pty, 19, 14, 28, 14, false, g_npc, g_npcN, &g_pr);
+			CHECK(ok, "a RUBY save's Surf badge is read at RUBY's offset (outcome %s)", OUTN(g_pr.outcome));
+			CHECK((g_pr.usable & (1u << FT_HM_SURF)) != 0, "...and Surf is in the eligibility mask");
+			CHECK(g_pr.nInteracts == 1 && g_pr.mv[0].hm == FT_HM_SURF, "the mount is planned, once");
+		}
+
+		// (g) the mirror: the SAME bit written where EMERALD keeps it is not a Ruby badge. If the
+		//     RS row ever collapses back into the Emerald row this passes for the wrong reason —
+		//     which is why (f) and (g) are graded together.
+		bind("route117", &bus, &m, 3);
+		set_flag(FT_VAR_EMERALD, em->badgeSurf);
+		put_mon(0, 0x12345678u, 1u, surfSet, 1, 0, 0);
+		npc_clear(); seal_pocket();
+		CHECK(!fieldtrav_plan(&bus, &m, FT_VAR_RS, &pty, 19, 14, 28, 14, false, g_npc, g_npcN, &g_pr),
+		      "a badge at EMERALD's offset is not a badge in a Ruby save");
+		CHECK((g_pr.usable & (1u << FT_HM_SURF)) == 0, "...and Surf never enters the mask");
+
+		// (h) THE DEFECT ITSELF, stated as a property. Ruby's flags[] ends at 0x1340 and vars[]
+		//     begins there (pokeruby include/global.h:701-702), so EVERY badge read through
+		//     Emerald's 0x1270 offset lands in vars[]: Cut at 0x137C, Surf at 0x137D, and the
+		//     Running Shoes at 0x1388. Fill Ruby's vars[] with ordinary nonzero variable values
+		//     and the pre-fix code answers the badge question out of them. The planner must be
+		//     deaf to it.
+		bind("route117", &bus, &m, 3);
+		memset(g_ovSb1 + 0x1340, 0xFF, 0x1400 - 0x1340);   // vars[0..47] of a Ruby SaveBlock1
+		put_mon(0, 0x12345678u, 1u, surfSet, 1, 0, 0);
+		npc_clear(); seal_pocket();
+		CHECK(!fieldtrav_plan(&bus, &m, FT_VAR_RS, &pty, 19, 14, 28, 14, false, g_npc, g_npcN, &g_pr),
+		      "a Ruby save's game VARIABLES are never badges");
+		CHECK(g_pr.usable == 0, "the eligibility mask stays empty (got 0x%X)", (unsigned)g_pr.usable);
+		// ...while the same bytes, read as the flags[] they are NOT, would have said yes: the
+		// pre-fix path is spelled out here so the property cannot be satisfied vacuously.
+		CHECK(fieldtrav_flag_get(&bus, FT_VAR_EMERALD, SB1_BASE, em->badgeSurf),
+		      "(the byte really is set — this is what the Emerald row used to read)");
+		CHECK(!fieldtrav_flag_get(&bus, FT_VAR_RS, SB1_BASE, rs->badgeSurf),
+		      "(...and the Ruby row correctly sees nothing)");
+		CHECK(!fieldtrav_flag_get(&bus, FT_VAR_RS, SB1_BASE, rs->runShoes),
+		      "the Running-Shoes gate is deaf to it too (touch.c run_elig reads this rail)");
 	}
 
 	// ---------------------------------------------------------------- TEST 11
@@ -684,8 +825,8 @@ int main(void) {
 	printf("TEST 12 — the Cut object edge\n");
 	{
 		FpBus bus; FpMap m; bind("route117", &bus, &m, 3);
-		const FtEngCfg* c = fieldtrav_cfg(FP_ENG_RSE);
-		set_flag(FP_ENG_RSE, c->badgeCut);
+		const FtEngCfg* c = fieldtrav_cfg(FT_VAR_EMERALD);
+		set_flag(FT_VAR_EMERALD, c->badgeCut);
 		const uint16_t cutSet[4] = { MOVE_CUT, 0, 0, 0 };
 		put_mon(0, 0x12345678u, 1u, cutSet, 1, 0, 0);
 		FtParty pty = party_of(1);
@@ -694,7 +835,7 @@ int main(void) {
 		// The only way out is now through the tree — the user's "a place beyond some tree".
 		set_obj(6, 82, 18, 12);
 		npc_clear(); npc_add(17, 12); npc_add(18, 12); npc_add(19, 12);
-		bool ok = fieldtrav_plan(&bus, &m, &pty, 18, 14, 18, 10, false, g_npc, g_npcN, &g_pr);
+		bool ok = fieldtrav_plan(&bus, &m, FT_VAR_EMERALD, &pty, 18, 14, 18, 10, false, g_npc, g_npcN, &g_pr);
 		CHECK(ok, "the route through the cuttable tree is found (outcome %s)", OUTN(g_pr.outcome));
 		if (ok) {
 			CHECK(g_pr.nInteracts == 1, "one interact — the Cut (got %d)", g_pr.nInteracts);
@@ -717,18 +858,18 @@ int main(void) {
 		put_mon(0, 0x12345678u, 1u, cutSet, 1, 0, 0);          // mon yes, badge no
 		set_obj(6, 82, 18, 12);
 		npc_clear(); npc_add(17, 12); npc_add(18, 12); npc_add(19, 12);
-		CHECK(!fieldtrav_plan(&bus, &m, &pty, 18, 14, 18, 10, false, g_npc, g_npcN, &g_pr),
+		CHECK(!fieldtrav_plan(&bus, &m, FT_VAR_EMERALD, &pty, 18, 14, 18, 10, false, g_npc, g_npcN, &g_pr),
 		      "no badge -> the tree stays a wall and NOTHING is planned");
 		CHECK(g_pr.nEdges == 1, "the edge was still SEEN (honest reporting), it was just not usable");
 
 		// A BOULDER is never a planned edge, badge or not (Sokoban risk, SPEC §5).
 		bind("route117", &bus, &m, 3);
-		set_flag(FP_ENG_RSE, c->badgeStrength);
+		set_flag(FT_VAR_EMERALD, c->badgeStrength);
 		const uint16_t strSet[4] = { 70 /* MOVE_STRENGTH */, 0, 0, 0 };
 		put_mon(0, 0x12345678u, 1u, strSet, 1, 0, 0);
 		set_obj(6, 87, 18, 12);
 		npc_clear(); npc_add(17, 12); npc_add(18, 12); npc_add(19, 12);
-		CHECK(!fieldtrav_plan(&bus, &m, &pty, 18, 14, 18, 10, false, g_npc, g_npcN, &g_pr),
+		CHECK(!fieldtrav_plan(&bus, &m, FT_VAR_EMERALD, &pty, 18, 14, 18, 10, false, g_npc, g_npcN, &g_pr),
 		      "a pushable boulder is NEVER routed through, even fully eligible");
 		CHECK((g_pr.usable & (1u << FT_HM_STRENGTH)) != 0, "...and Strength really was usable, which is the point");
 	}
@@ -738,8 +879,8 @@ int main(void) {
 	{
 		// Three trees in a row across the pocket mouth: 3 interacts would be needed, the cap is 2.
 		FpBus bus; FpMap m; bind("route117", &bus, &m, 3);
-		const FtEngCfg* c = fieldtrav_cfg(FP_ENG_RSE);
-		set_flag(FP_ENG_RSE, c->badgeCut);
+		const FtEngCfg* c = fieldtrav_cfg(FT_VAR_EMERALD);
+		set_flag(FT_VAR_EMERALD, c->badgeCut);
 		const uint16_t cutSet[4] = { MOVE_CUT, 0, 0, 0 };
 		put_mon(0, 0x12345678u, 1u, cutSet, 1, 0, 0);
 		FtParty pty = party_of(1);
@@ -753,7 +894,7 @@ int main(void) {
 		npc_add(17, 12); npc_add(19, 12);                  // the mouth's other two tiles
 		npc_add(17, 11); npc_add(19, 11);                  // and the flanks of the chain
 		npc_add(18, 12); npc_add(18, 11); npc_add(18, 10); // the trees block as objects
-		bool ok = fieldtrav_plan(&bus, &m, &pty, 18, 14, 18, 9, false, g_npc, g_npcN, &g_pr);
+		bool ok = fieldtrav_plan(&bus, &m, FT_VAR_EMERALD, &pty, 18, 14, 18, 9, false, g_npc, g_npcN, &g_pr);
 		CHECK(!ok, "three activations exceed FT_MAX_INTERACTS and the plan fails");
 		CHECK(g_pr.outcome == FT_OUT_UNREACHABLE, "reported honestly (got %s)", OUTN(g_pr.outcome));
 		CHECK(g_pr.nMoves == 0, "and NOTHING partial is emitted — never 'walk toward it and hope'");
@@ -762,13 +903,13 @@ int main(void) {
 		// The SAME chain two trees long IS inside the cap and plans — which proves the cap is a
 		// limit and not a blanket refusal of multi-HM routes.
 		bind("route117", &bus, &m, 3);
-		set_flag(FP_ENG_RSE, c->badgeCut);
+		set_flag(FT_VAR_EMERALD, c->badgeCut);
 		put_mon(0, 0x12345678u, 1u, cutSet, 1, 0, 0);
 		set_obj(6, 82, 18, 12); set_obj(7, 82, 18, 11);
 		npc_clear();
 		npc_add(17, 12); npc_add(19, 12); npc_add(17, 11); npc_add(19, 11);
 		npc_add(18, 12); npc_add(18, 11);
-		ok = fieldtrav_plan(&bus, &m, &pty, 18, 14, 18, 10, false, g_npc, g_npcN, &g_pr);
+		ok = fieldtrav_plan(&bus, &m, FT_VAR_EMERALD, &pty, 18, 14, 18, 10, false, g_npc, g_npcN, &g_pr);
 		CHECK(ok, "two activations are within the cap (outcome %s)", OUTN(g_pr.outcome));
 		CHECK(g_pr.nInteracts == 2, "and cost exactly 2 (got %d)", g_pr.nInteracts);
 		if (ok) {
@@ -787,12 +928,12 @@ int main(void) {
 		// a mid-water tap must plan in the SURF layer, not mount again. The player starts on
 		// (24,14) — a pond tile — and taps the far bank.
 		FpBus bus; FpMap m; bind("route117", &bus, &m, 1);   // elevation 1 = the water layer
-		set_flag(FP_ENG_RSE, fieldtrav_cfg(FP_ENG_RSE)->badgeSurf);
+		set_flag(FT_VAR_EMERALD, fieldtrav_cfg(FT_VAR_EMERALD)->badgeSurf);
 		const uint16_t surfSet[4] = { MOVE_SURF, 0, 0, 0 };
 		put_mon(0, 0x12345678u, 1u, surfSet, 1, 0, 0);
 		FtParty pty = party_of(1);
 		npc_clear();
-		bool ok = fieldtrav_plan(&bus, &m, &pty, 24, 14, 28, 14, true /* startSurfing */, g_npc, g_npcN, &g_pr);
+		bool ok = fieldtrav_plan(&bus, &m, FT_VAR_EMERALD, &pty, 24, 14, 28, 14, true /* startSurfing */, g_npc, g_npcN, &g_pr);
 		if (ok) {
 			CHECK(g_pr.startMode == FT_MODE_SURF, "the plan starts in the SURF layer");
 			for (int i = 0; i < g_pr.nMoves; i++)

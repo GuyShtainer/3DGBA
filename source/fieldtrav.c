@@ -1,16 +1,20 @@
 // fieldtrav.c — see fieldtrav.h. PURE C (CLAUDE.md #4): no libctru, no citro, no mGBA.
 //
 // Every constant is cited at the line that uses it and was RE-READ from pret this session
-// (2026-08-14). Nothing here is derived from the other engine's numbering — the Cut badge alone
+// (2026-08-14). Nothing here is derived from another game's numbering — the Cut badge alone
 // (BADGE01 in Emerald, BADGE02 in FireRed) is enough to make a shared table a silent bug that
 // only shows up as "the game refused a prompt we were sure it would accept".
+//
+// THREE tables, not two (fix, 2026-08-14): Ruby/Sapphire have their own flags[] offset AND their
+// own SYSTEM_FLAGS base, and `FpEngine` — a metatile-behaviour discriminator that fieldpath.h
+// froze at two values — cannot express that. `FtVariant` (fieldtrav.h) does; see the RS row.
 #include <string.h>   // memset
 #include <stdlib.h>   // abs
 #include "fieldtrav.h"
 
-// ============================ per-engine constants ==========================================
+// ============================ per-variant constants ==========================================
 //
-// RSE (Emerald). SaveBlock1.flags: pokeemerald include/global.h:1020 `/*0x1270*/ u8
+// EMERALD (BPEE). SaveBlock1.flags: pokeemerald include/global.h:1020 `/*0x1270*/ u8
 // flags[NUM_FLAG_BYTES]`. Flag ids: include/constants/flags.h:1348 SYSTEM_FLAGS = 0x860,
 // :1359-1366 FLAG_BADGE01_GET..FLAG_BADGE08_GET = SYSTEM_FLAGS + 0x7..0xE,
 // :1399 FLAG_SYS_USE_STRENGTH = SYSTEM_FLAGS + 0x29.
@@ -21,7 +25,10 @@
 //   src/field_control_avatar.c:450          the Surf gate            -> FLAG_BADGE05_GET (0x86B)
 //   src/field_control_avatar.c:453-458      the Waterfall gate       -> FLAG_BADGE08_GET (0x86E)
 // Object graphics ids: include/constants/event_objects.h:89/93/94.
-static const FtEngCfg s_cfgRse = {
+//
+// NOTE (2026-08-14 fix): this row is EMERALD'S, not "RSE's" — Ruby and Sapphire have their own
+// numbering and their own row below. Values below are unchanged, byte for byte.
+static const FtEngCfg s_cfgEm = {
 	/* flagsOff      */ 0x1270,
 	/* badgeCut      */ 0x867,   // BADGE01
 	/* badgeSmash    */ 0x869,   // BADGE03
@@ -63,8 +70,85 @@ static const FtEngCfg s_cfgFrlg = {
 	                             //   pret master this session — NOT derived from Emerald's 0x8C0)
 };
 
-const FtEngCfg* fieldtrav_cfg(FpEngine eng) {
-	return (eng == FP_ENG_FRLG) ? &s_cfgFrlg : &s_cfgRse;
+// RUBY / SAPPHIRE (AXVE / AXPE) — the THIRD numbering, added 2026-08-14 because `FpEngine` cannot
+// express it and Ruby carts were silently reading EMERALD's numbers. Sources are pret/pokeruby at
+// master, re-read line by line this session; NOT ONE value here is derived by arithmetic from the
+// Emerald row above (deriving Ruby from Emerald is the exact mistake being fixed).
+//
+// ONE TABLE COVERS BOTH TITLES, and both revisions: pokeruby's Makefile:164 builds
+// `ruby ruby_rev1 ruby_rev2 sapphire sapphire_rev1 sapphire_rev2` from this ONE tree, and none of
+// the files cited below carries a `GAME_VERSION` / `GAME_REVISION` conditional (checked: flags.h,
+// global.h's SaveBlock1, field_move_scripts.inc, field_control_avatar.c's water script).
+//
+//   SaveBlock1.flags: include/global.h:701 `/*0x1220*/ u8 flags[FLAGS_COUNT];`, and the NEXT line
+//     :702 `/*0x1340*/ u16 vars[VARS_COUNT];` is what makes Emerald's 0x1270 a real bug rather
+//     than a cosmetic one — 0x1270 + (0x867>>3) = 0x137C, which is inside `vars[]`.
+//   Flag ids: include/constants/flags.h:773 TRAINER_FLAG_START 0x500, :778 NUMBER_OF_TRAINERS 693
+//     (0x2B5), :779 SYSTEM_FLAGS = TRAINER_FLAG_START + NUMBER_OF_TRAINERS + 0x4B — evaluated from
+//     its own operands, 0x500 + 0x2B5 + 0x4B = **0x800** (the file's `// 0x800` comment agrees, but
+//     the arithmetic is what this row is built on). :789-796 FLAG_BADGE01..08 = SYSTEM_FLAGS +
+//     0x07..0x0E; :817 FLAG_SYS_USE_STRENGTH = SYSTEM_FLAGS + 0x29; :877 FLAG_SYS_B_DASH =
+//     SYSTEM_FLAGS + 0x60 ("got Running Shoes").
+//   Badge-to-move, off the SCRIPTS exactly as the two rows above:
+//     data/field_move_scripts.inc:3   S_CuttableTree    -> FLAG_BADGE01_GET (0x807)
+//                                :60  S_BreakableRock   -> FLAG_BADGE03_GET (0x809)
+//                                :126 S_PushableBoulder -> FLAG_BADGE04_GET (0x80A)
+//     src/field_control_avatar.c:506  GetInteractedWaterScript, Surf -> FLAG_BADGE05_GET (0x80B)
+//                               :511  ...and Waterfall             -> FLAG_BADGE08_GET (0x80E)
+//   Object graphics ids: include/constants/event_objects.h:88/92/93 — READ, not assumed: they
+//     happen to be the same 82/86/87 Emerald uses, which is a fact about pokeruby's file, not an
+//     inheritance from the row above.
+static const FtEngCfg s_cfgRs = {
+	/* flagsOff      */ 0x1220,  // include/global.h:701   (Emerald's 0x1270 lands in vars[])
+	/* badgeCut      */ 0x807,   // BADGE01 = SYSTEM_FLAGS 0x800 + 0x07
+	/* badgeSmash    */ 0x809,   // BADGE03
+	/* badgeSurf     */ 0x80B,   // BADGE05
+	/* badgeWaterfall*/ 0x80E,   // BADGE08
+	/* badgeStrength */ 0x80A,   // BADGE04
+	/* strengthLatch */ 0x829,   // FLAG_SYS_USE_STRENGTH = 0x800 + 0x29 (flags.h:817)
+	/* gfxCutTree    */ 82,      // OBJ_EVENT_GFX_CUTTABLE_TREE    (event_objects.h:88)
+	/* gfxRock       */ 86,      // OBJ_EVENT_GFX_BREAKABLE_ROCK   (event_objects.h:92)
+	/* gfxBoulder    */ 87,      // OBJ_EVENT_GFX_PUSHABLE_BOULDER (event_objects.h:93)
+	/* runShoes      */ 0x860,   // FLAG_SYS_B_DASH = 0x800 + 0x60 (flags.h:877). Note the trap:
+	                             //   this id is numerically Emerald's SYSTEM_FLAGS *base*, and
+	                             //   Emerald's own B_DASH (0x8C0) read at Emerald's 0x1270 offset
+	                             //   lands at 0x1388 — vars[] again.
+};
+
+// The metatile-behaviour side is genuinely shared: pokeruby src/metatile_behavior.c's
+// sTileBitAttributes marks exactly 0x10/0x11/0x12/0x13/0x14/0x15/0x19/0x22/0x2A (+ the 0x50-0x53
+// currents) surfable — the same numbers pokeemerald does — so `fieldtrav_is_surfable` stays keyed
+// on FpEngine and RS keeps using the RSE set. Verified, not assumed; it is the SAVE that splits.
+_Static_assert((int)FT_VAR_EMERALD == (int)FP_ENG_RSE && (int)FT_VAR_FRLG == (int)FP_ENG_FRLG,
+               "FtVariant must stay numerically compatible with FpEngine: an FpEngine that reaches "
+               "a variant parameter has to select the row it always selected, never the RS row");
+
+const FtEngCfg* fieldtrav_cfg(FtVariant var) {
+	switch (var) {
+	case FT_VAR_FRLG: return &s_cfgFrlg;
+	case FT_VAR_RS:   return &s_cfgRs;
+	default:          return &s_cfgEm;     // never NULL — an unknown variant is Emerald
+	}
+}
+
+// The title code is the ONLY thing that can tell Ruby/Sapphire from Emerald (they share one
+// FpEngine and one behaviour table), so this is the whole discriminator. `code4` need not be
+// NUL-terminated: exactly four chars are compared.
+FtVariant fieldtrav_variant(const char* code4) {
+	if (!code4) return FT_VAR_EMERALD;
+	// US 4-char game codes, the same literals gamestate.c's PROFILES[] rows are keyed on. A code
+	// with no profile has no SaveBlock1 either, so the Emerald fallback never reads anything.
+	static const struct { char c[4]; uint8_t var; } k[] = {
+		{ { 'A','X','V','E' }, FT_VAR_RS },      // Pokemon Ruby
+		{ { 'A','X','P','E' }, FT_VAR_RS },      // Pokemon Sapphire
+		{ { 'B','P','R','E' }, FT_VAR_FRLG },    // Pokemon FireRed
+		{ { 'B','P','G','E' }, FT_VAR_FRLG },    // Pokemon LeafGreen
+		{ { 'B','P','E','E' }, FT_VAR_EMERALD }, // Pokemon Emerald (explicit, not just the default)
+	};
+	for (unsigned i = 0; i < sizeof k / sizeof k[0]; i++)
+		if (code4[0] == k[i].c[0] && code4[1] == k[i].c[1] &&
+		    code4[2] == k[i].c[2] && code4[3] == k[i].c[3]) return (FtVariant)k[i].var;
+	return FT_VAR_EMERALD;
 }
 
 // ============================ the surfable metatile sets ====================================
@@ -121,10 +205,10 @@ bool fieldtrav_is_surfable(FpEngine eng, int behaviour) {
 
 // ============================ eligibility ===================================================
 
-bool fieldtrav_flag_get(const FpBus* bus, FpEngine eng, uint32_t sb1, int flagId) {
+bool fieldtrav_flag_get(const FpBus* bus, FtVariant var, uint32_t sb1, int flagId) {
 	if (!sb1 || (sb1 >> 24) != 0x02u) return false;        // no save loaded -> no badge, never a guess
 	if (flagId < 0) return false;
-	const FtEngCfg* c = fieldtrav_cfg(eng);
+	const FtEngCfg* c = fieldtrav_cfg(var);
 	// pokeemerald src/event_data.c FlagGet: gSaveBlock1Ptr->flags[id / 8] & (1 << (id & 7)).
 	uint32_t byteAddr = sb1 + (uint32_t)c->flagsOff + ((uint32_t)flagId >> 3);
 	return (bus->read8(bus->ctx, byteAddr) >> (flagId & 7)) & 1u;
@@ -263,19 +347,19 @@ int fieldtrav_census(const FpBus* bus, uint32_t partyBase, int partyCount, uint3
 #define FT_MOVE_WATERFALL  127
 #define FT_MOVE_ROCK_SMASH 249
 
-uint32_t fieldtrav_usable(const FpBus* bus, FpEngine eng, const FtParty* pty) {
+uint32_t fieldtrav_usable(const FpBus* bus, FtVariant var, const FtParty* pty) {
 	uint32_t m = 0;
 	if (!bus || !pty) return 0;
-	const FtEngCfg* c = fieldtrav_cfg(eng);
-	if (fieldtrav_flag_get(bus, eng, pty->sb1, c->badgeCut) &&
+	const FtEngCfg* c = fieldtrav_cfg(var);
+	if (fieldtrav_flag_get(bus, var, pty->sb1, c->badgeCut) &&
 	    fieldtrav_party_has_move(bus, pty, FT_MOVE_CUT))        m |= 1u << FT_HM_CUT;
-	if (fieldtrav_flag_get(bus, eng, pty->sb1, c->badgeSmash) &&
+	if (fieldtrav_flag_get(bus, var, pty->sb1, c->badgeSmash) &&
 	    fieldtrav_party_has_move(bus, pty, FT_MOVE_ROCK_SMASH)) m |= 1u << FT_HM_SMASH;
-	if (fieldtrav_flag_get(bus, eng, pty->sb1, c->badgeSurf) &&
+	if (fieldtrav_flag_get(bus, var, pty->sb1, c->badgeSurf) &&
 	    fieldtrav_party_has_move(bus, pty, FT_MOVE_SURF))       m |= 1u << FT_HM_SURF;
-	if (fieldtrav_flag_get(bus, eng, pty->sb1, c->badgeWaterfall) &&
+	if (fieldtrav_flag_get(bus, var, pty->sb1, c->badgeWaterfall) &&
 	    fieldtrav_party_has_move(bus, pty, FT_MOVE_WATERFALL))  m |= 1u << FT_HM_WATERFALL;
-	if (fieldtrav_flag_get(bus, eng, pty->sb1, c->badgeStrength) &&
+	if (fieldtrav_flag_get(bus, var, pty->sb1, c->badgeStrength) &&
 	    fieldtrav_party_has_move(bus, pty, FT_MOVE_STRENGTH))   m |= 1u << FT_HM_STRENGTH;
 	return m;
 }
@@ -298,10 +382,10 @@ uint32_t fieldtrav_usable(const FpBus* bus, FpEngine eng, const FtParty* pty) {
 #define MAP_OFFSET_H  14     // MAP_OFFSET*2   (fieldpath.c:13)
 #define MAPGRID_UNDEFINED 0x03FFu   // == MAPGRID_METATILE_ID_MASK (global.fieldmap.h:7,31)
 
-int fieldtrav_scan_edges(const FpBus* bus, const FpMap* m, FtEdge* out) {
+int fieldtrav_scan_edges(const FpBus* bus, const FpMap* m, FtVariant var, FtEdge* out) {
 	int n = 0;
 	if (!bus || !m || !m->mapObjects || !out) return 0;
-	const FtEngCfg* c = fieldtrav_cfg(m->engine);
+	const FtEngCfg* c = fieldtrav_cfg(var);
 	for (int i = 1; i < 16 && n < FT_MAX_EDGES; i++) {          // slot 0 is the player
 		uint32_t e = m->mapObjects + FT_OBJ_STRIDE * (uint32_t)i;
 		if (!(bus->read32(bus->ctx, e) & 1u)) continue;         // active:1
@@ -495,7 +579,7 @@ static int bfs_pass(FtCtx* c, int gx, int gy, int startMode, int maxUsed) {
 	return -1;
 }
 
-bool fieldtrav_plan(const FpBus* bus, const FpMap* m, const FtParty* pty,
+bool fieldtrav_plan(const FpBus* bus, const FpMap* m, FtVariant var, const FtParty* pty,
                     int sx, int sy, int gx, int gy, bool startSurfing,
                     const short (*npc)[2], int npcN, FtProgram* out) {
 	memset(out, 0, sizeof *out);
@@ -509,7 +593,7 @@ bool fieldtrav_plan(const FpBus* bus, const FpMap* m, const FtParty* pty,
 	FtCtx c;
 	memset(&c, 0, sizeof c);
 	c.bus = bus; c.m = m; c.sx = sx; c.sy = sy; c.npc = npc; c.npcN = npc ? npcN : 0;
-	c.usable = fieldtrav_usable(bus, m->engine, pty);
+	c.usable = fieldtrav_usable(bus, var, pty);
 	out->usable = c.usable;
 
 	// The FOOT-mode elevation, with fieldpath_plan's own self-consistency rail: if the tile the
@@ -523,7 +607,7 @@ bool fieldtrav_plan(const FpBus* bus, const FpMap* m, const FtParty* pty,
 	else if (pElev != 0 && !fieldpath_enterable(bus, m, sx, sy, pElev)) pElev = 0;
 	c.footElev = pElev;
 
-	c.nEdge = fieldtrav_scan_edges(bus, m, c.edge);
+	c.nEdge = fieldtrav_scan_edges(bus, m, var, c.edge);
 	out->nEdges = c.nEdge;
 
 	for (int i = 0; i < NT; i++) { s_behCache[i] = -2; s_footCache[i] = -1; s_surfCache[i] = -1; }
