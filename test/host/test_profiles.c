@@ -290,10 +290,14 @@ static void test_rs_no_rom(void) {
 }
 
 // ============================================================================================
-// TEST 5 — AXVE and AXPE share ONE RAM body (SPEC-coop P3.5.1) — and, since the lane-B fold-in,
-// differ in EXACTLY one more place: the per-title cb2Title/cb2FullUi class lists (Ruby and
-// Sapphire ROM addresses DRIFT — LANE-B-RS.md §2 headline; the lists were live-read per title
-// and must never be copied across). Everything else stays byte-identical, pinned here.
+// TEST 5 — AXVE and AXPE share ONE RAM body (SPEC-coop P3.5.1) — and differ in exactly the
+// places where Ruby and Sapphire ROM addresses genuinely DRIFT (LANE-B-RS.md §2 headline; every
+// such value is live-read or sym-read PER TITLE and must never be copied across):
+//   * the cb2Title/cb2FullUi screen-class lists (lane-B fold-in), and
+//   * phase 22.2's mapGroupsRom / mapGroupsRomAlt — Ruby's gMapGroups is 0x083085A0 and
+//     Sapphire's is 0x08308530, 0x70 apart, and this one is DEREFERENCED rather than compared, so
+//     a cross-title copy would walk a wrong ROM table instead of merely never matching.
+// Everything else stays byte-identical, pinned here.
 // ============================================================================================
 static void test_rs_rows_pinned(void) {
 	printf("TEST 5: the RS rows share one RAM body; only the per-title cb2 lists differ\n");
@@ -306,8 +310,21 @@ static void test_rs_rows_pinned(void) {
 	memset(b.code, 0, sizeof b.code);
 	memset(a.cb2Title,  0, sizeof a.cb2Title);  memset(b.cb2Title,  0, sizeof b.cb2Title);
 	memset(a.cb2FullUi, 0, sizeof a.cb2FullUi); memset(b.cb2FullUi, 0, sizeof b.cb2FullUi);
+	a.mapGroupsRom = b.mapGroupsRom = 0; a.mapGroupsRomAlt = b.mapGroupsRomAlt = 0;
 	CHECK(memcmp(&a, &b, sizeof a) == 0,
-	      "AXVE and AXPE differ ONLY in code + the per-title cb2 class lists (one RAM map)");
+	      "AXVE and AXPE differ ONLY in code + the per-title cb2 lists + gMapGroups (one RAM map)");
+	// The phase-22.2 traversal columns, both halves of the split: gPlayerParty is SHARED (all six
+	// RS maps carry 0x03004360 with size 0x258 — an IWRAM party, unlike EM/FRLG's EWRAM one),
+	// while gMapGroups is PER TITLE and the two must never be equal.
+	EQU(ru->partyBase, 0x03004360u, "Ruby gPlayerParty (IWRAM, pokeruby[_rev1|_rev2].sym)");
+	EQU(sa->partyBase, 0x03004360u, "Sapphire gPlayerParty — the same in all six RS maps");
+	EQU(ru->mapGroupsRom,    0x083085A0u, "Ruby gMapGroups rev1/rev2");
+	EQU(ru->mapGroupsRomAlt, 0x08308588u, "Ruby gMapGroups rev0 (the alternate)");
+	EQU(sa->mapGroupsRom,    0x08308530u, "Sapphire gMapGroups rev1/rev2 — measured, not copied");
+	EQU(sa->mapGroupsRomAlt, 0x08308518u, "Sapphire gMapGroups rev0");
+	CHECK(ru->mapGroupsRom != sa->mapGroupsRom,
+	      "Ruby's and Sapphire's gMapGroups are DIFFERENT — this column is dereferenced, so a "
+	      "cross-title copy would walk the wrong ROM table");
 	// The drift itself, as lane B measured it LIVE on both titles (never copy across):
 	EQU(ru->cb2Title[0], sa->cb2Title[0], "MainCB2_Intro is identical (measured on BOTH, not copied)");
 	EQU(ru->cb2Title[1] + 4u, sa->cb2Title[1], "title MainCB2 drifts +4 Ruby->Sapphire (live both)");

@@ -51,6 +51,17 @@ typedef struct {
 	bool     ctxResolved;     // ctx from a POSITIVE menu/battle match (true) vs the bare overworld fall-through (false)
 	uint8_t  nTask;           // count of active-task func ptrs in taskFp[]
 	uint32_t taskFp[8];       // active gTasks func pointers (Thumb stripped, sorted) — disambiguate cb2-ambiguous screens
+	// --- phase 22.2 TRAVERSAL (SPEC-family-traversal). Appended; every existing filler leaves
+	// them 0, which is the inert value for all three. ---
+	bool     textDlg;         // GameState.textDlg — a field textbox is up. The HM sequencer is
+	                          //   CLOSED-LOOP on this (never frame-count-blind): "the script is
+	                          //   talking" is what proves the A press landed on the tree.
+	uint16_t padKeys;         // the PHYSICAL GBA keys held this frame (to_gba_keys(kHeld)). The
+	                          //   injection seam is ADDITIVE (COVERAGE §5) — we cannot suppress
+	                          //   the user, so a running route YIELDS to them: any physical key
+	                          //   edge cancels the program (SPEC H0.2). 0 = nothing held.
+	int      traverse;        // g_prefs.smartTraverse (0 Off / 1 HM / 2 HM+Via), passed rather
+	                          //   than read so touch.c stays free of the settings module.
 } TouchSmart;
 
 // --- PHASE 18 / SPEC-door T4.11: the gdb-readable route mirror (LOGGING ONLY) ------------------
@@ -87,6 +98,25 @@ typedef struct {
 	int32_t curKeys;                  // +0x60  the key mask the router injected this frame
 	int32_t curFrame;                 // +0x64  gbacore_frame_counter of the bottom game
 	int32_t walking;                  // +0x68  1 = a route is being followed, 2 = terminal hold
+	// --- phase 22.2 TRAVERSAL (SPEC-family-traversal T2.4 "everything logs"). APPENDED, so every
+	// offset above is unchanged and the phase-18 harness scripts keep working verbatim. A route
+	// PROGRAM is multi-step, so the instrument needs the step cursor as well as the outcome:
+	// `progSeq` latches a poll on program STARTS, `progStep`/`progPhase` say where it got to, and
+	// `progEnd` says why it stopped. Reading progSeq/progStep/progHm over gdb is the whole P1-P3
+	// proof spine — a screenshot cannot distinguish "the game surfed" from "the game refused". ---
+	int32_t progSeq;        // +0x6C  bumped once per PROGRAM start (a planned conditional route)
+	int32_t progOutcome;    // +0x70  FtOutcome of the last fieldtrav_plan attempt
+	int32_t progMoves;      // +0x74  total moves in the program
+	int32_t progInteracts;  // +0x78  HM activations the program costs
+	int32_t progStep;       // +0x7C  index of the move being executed
+	int32_t progHm;         // +0x80  FtHm of the move being executed (0 = plain walk)
+	int32_t progPhase;      // +0x84  TPH_* interaction phase
+	int32_t progEnd;        // +0x88  TPE_* end reason (0 = still running)
+	int32_t progEndSeq;     // +0x8C  bumped once per program end
+	int32_t progUsable;     // +0x90  the eligibility mask (1<<FtHm) the plan was built against
+	int32_t progEdges;      // +0x94  conditional edge objects found on the map
+	int32_t progSurf;       // +0x98  live PLAYER_AVATAR_FLAG_SURFING bit (1 = afloat)
+	int32_t progMapSeq;     // +0x9C  slice 2: warp legs completed in the current excursion
 } FieldDbg;
 extern FieldDbg g_fieldDbg;
 

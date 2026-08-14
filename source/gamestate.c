@@ -86,7 +86,12 @@ static const GameProfile PROFILES[] = {
                  02039d78 sCursorArea (+1 sCursorPosition 02039d79, +2 sIsMonBeingMoved 02039d7a,
                  +3 sMovingMonOrigBoxId 02039d7b, +4 sMovingMonOrigBoxPos 02039d7c),
                  03005d94 gPokemonStoragePtr. Sym-derived / verify-in-emulator except storageCb. */
-            0x080C7D54u, 0x00000000u, 0x02039D08u, 0x02039D78u, 0x03005D94u },
+            0x080C7D54u, 0x00000000u, 0x02039D08u, 0x02039D78u, 0x03005D94u,
+            /* phase 22.2 TRAVERSAL: gPlayerParty 020244ec (size 0x258 = 6x100) + gMapGroups
+               08486578, both re-read from pokeemerald.sym this session. Emerald ships ONE
+               revision, so no alternate exists (0), and the excursion planner's self-validating
+               probe simply confirms the primary. */
+            0x020244ECu, 0x08486578u, 0x00000000u },
   // BPRE ROM anchors: the PRIMARIES below are FR rev0 (correct for a rev0 cart); the REV1 values —
   // the user's cart — live in the phase-22.0 ALTERNATE block at the end of the row. newKeys was
   // 0x0303011E (a digit transposition, RS-REV2-VERIFICATION.md §7): gMain 0x030030F0
@@ -187,7 +192,13 @@ static const GameProfile PROFILES[] = {
             /* phase 22.2 GRID: all 0 — FRLG storage is a DIFFERENT module (pokefirered
                pokemon_storage_system) whose statics were not re-derived this slice. NAMED
                degradation: FR boxes stay GCTX_FULLUI (taps dead there, no leak). */
-            0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u },
+            0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
+            /* phase 22.2 TRAVERSAL: gPlayerParty 02024284 — pokefirered.sym AND
+               pokefirered_rev1.sym AGREE (RAM is rev-identical, the phase-22.0 finding), so no
+               alternate is needed for it. gMapGroups DOES drift: rev0 083526a8 (primary, the row
+               convention) / rev1 08352718 (alternate — the user's cart). Both re-read this
+               session. The excursion probe picks whichever resolves the LIVE map correctly. */
+            0x02024284u, 0x083526A8u, 0x08352718u },
   // BPGE ROM anchors — REPLACED phase 22.0 (they were FireRed-rev0 values, wrong for EVERY
   // LeafGreen revision; battle/party/bag/menu detection was silently dead on LG). PRIMARIES are
   // now LG **rev1** — the user's cart is rev 1.1 — re-derived field-by-field from
@@ -285,7 +296,12 @@ static const GameProfile PROFILES[] = {
             0x0810DEF0u, 0x0810DE78u, 0x08106F1Cu, 0x08106EA4u,
             0x00000000u, 0x00000000u, 0x00000000u, 7, 0,
             /* phase 22.2 GRID: all 0 — same named degradation as BPRE (different FRLG module). */
-            0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u },
+            0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
+            /* phase 22.2 TRAVERSAL: gPlayerParty 02024284 — LG's OWN maps (pokeleafgreen.sym AND
+               pokeleafgreen_rev1.sym), not FR-derived; both agree, so no alternate. gMapGroups
+               drifts: primary = LG **rev1** 083526f8 (the user's 1.1 cart — the BPGE row
+               convention since 305242f), alternate = rev0 08352688. Both re-read this session. */
+            0x02024284u, 0x083526F8u, 0x08352688u },
 
   // ===================== Ruby / Sapphire (SPEC-coop §P3) =====================================
   // Every RAM value below is VERIFIED-SYM against pret's byte-matched `symbols` branch, all FOUR
@@ -432,7 +448,19 @@ static const GameProfile PROFILES[] = {
             0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,                                  \
             0x00000000u, 0x00000000u, 0x00000000u, 0, 0,                                         \
             /* phase 22.2 GRID: all 0 — the RS ROM/statics ban again (P3.5.2 explicit zeros). */  \
-            0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u
+            0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,                     \
+            /* phase 22.2 TRAVERSAL, shared half: gPlayerParty 03004360 — the ONE RS value here   \
+               that is safe to share, because all SIX Ruby/Sapphire maps (rev0/1/2 x both titles, \
+               re-read + diffed this session) carry the identical address AND the identical       \
+               0x258 size. Note it is IWRAM (0x03...), not EWRAM: fieldtrav_party_has_move        \
+               accepts both banks precisely so RS does not need a second read path. gMapGroups is  \
+               PER TITLE and is written per row below (Ruby != Sapphire — the lane-B drift rule). \
+               RS traversal still does not EXECUTE: SPEC-family-traversal §5 defers it (the RS    \
+               flags-array offset was not verified this session, so fieldtrav's flags column has  \
+               no RS value and every eligibility read returns false = no conditional edges = the  \
+               shipped walk-only behaviour). The addresses are recorded so RS lights up by a      \
+               flags-offset verification alone. */                                                \
+            0x03004360u
   // Pokemon Ruby (US; the values below were LIVE-READ on the rev-2 fixture ROM = the user's
   // cart, and rev1 == rev2 are byte-identical maps — RS-REV2-VERIFICATION.md §5's promotion
   // rule; a rev0 cart's drifted screens simply keep the fall-through, compare-only fail-safe).
@@ -446,7 +474,13 @@ static const GameProfile PROFILES[] = {
                the cb2 class is the only party detection RS gets), bag run loop 0x080A3138
                (rev-drifted `sub_80A3118`+0x20 name; the address is the live run-loop entry). */
             { 0x0806AEFCu, 0x080A3138u },
-            RS_PROFILE_BODY_TAIL },
+            RS_PROFILE_BODY_TAIL,
+            /* phase 22.2 TRAVERSAL, per-title half: RUBY's gMapGroups. Primary = rev1/rev2
+               083085a0 (identical in both maps; the user's fixture cart is rev2 — the
+               RS-REV2-VERIFICATION promotion rule), alternate = rev0 08308588. Re-read from
+               pokeruby[_rev1|_rev2].sym this session. NEVER Sapphire's value: the two titles
+               drift (08308530 there), which is the exact failure mode lane B documented. */
+            0x083085A0u, 0x08308588u },
   // Pokemon Sapphire (US; same promotion rule — every value below was measured on SAPPHIRE
   // itself, live [exact] on pokesapphire_rev2.sym; LANE-B-RS.md §2 drift table + §3 solo smoke).
   { "AXPE", RS_PROFILE_BODY_RAM,
@@ -459,7 +493,11 @@ static const GameProfile PROFILES[] = {
                the BPGE failure mode) -> NAMED degradation: the Sapphire party menu keeps the
                GCTX_OVERWORLD fall-through until a Sapphire party visit measures its own value. */
             { 0x080A3138u },
-            RS_PROFILE_BODY_TAIL },
+            RS_PROFILE_BODY_TAIL,
+            /* phase 22.2 TRAVERSAL, per-title half: SAPPHIRE's OWN gMapGroups. Primary =
+               rev1/rev2 08308530 (identical in both maps), alternate = rev0 08308518. Measured on
+               the sapphire maps, never copied from Ruby (which is 0x70 away). */
+            0x08308530u, 0x08308518u },
   #undef RS_PROFILE_BODY_RAM
   #undef RS_PROFILE_BODY_TAIL
 };

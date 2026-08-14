@@ -56,7 +56,19 @@ typedef struct {
 	// Game.lua:841-857), so an SD card moved to a New 3DS still has what the user picked.
 	// Ships 0 (I5.8): unlike dofOn/bloomOn/lightOn this effect is not hardware-proven yet.
 	int tiltLevel;
+	// phase 22.2 (SPEC-family-traversal T4.1): HM-aware routing for SMART touch.
+	//   0 = Off (SHIP DEFAULT) — the router is exactly the phase-18 walker; a tap that needs Cut
+	//       or Surf plans nothing, as it does today.
+	//   1 = HM   — conditional edges on the CURRENT map (Surf mount/dismount, Cut, Rock Smash).
+	//   2 = HM+Via — plus single-warp out-and-back excursions (the Lavaridge class).
+	// Ships Off for the tiltLevel reason (theme.h:57): a feature that MOVES THE PLAYER and answers
+	// the game's own yes/no prompts is not something to switch on for everyone before it has
+	// survived a hardware session (CLAUDE.md #6). Only consulted in SMART touch mode; PAD/OFF are
+	// unaffected. Persisted through the size-tolerant Settings append, so a settings file written
+	// before this field loads fine and leaves it 0.
+	int smartTraverse;
 } UiPrefs;
+#define SMART_TRAVERSE_LEVELS 3
 
 extern Theme   g_ui;                              // the ACTIVE theme (read by all UI draws)
 // PHASE 17 / SPEC-widgets W4.1 + W4.3.a — the palette the EMBEDDED ART was baked from.

@@ -549,6 +549,11 @@ static void test_active(void) {
 // offsetof(tilt) stays 23 — and that invariance IS the proof the change is backward-compatible.
 // The length ladder grows one rung: what was "the full struct" for a phase-14 build is now the
 // `lenTilt` rung, i.e. exactly what every settings file on an existing card is.
+//
+// PHASE 22.2 (SPEC-family-traversal T4.1, again in the same commit as main.c): `traverse` is
+// appended by the identical rule, so offsetof(tilt) is STILL 23 and offsetof(presence) is STILL
+// 24 — the two invariances below are what prove that every settings file written by any build
+// since phase 14 still loads, and that no existing user's tilt or co-op pref moves.
 typedef struct {
 	uint32_t magic;
 	int32_t scaleMode[2], smooth[2], swapped, hudMode, audioMode, volA, volB, touchMode, frameskip;
@@ -557,17 +562,34 @@ typedef struct {
 	int32_t gameMode, padColor, padEdge;                                  // ...prefs
 	int32_t tilt;                                                         // phase 14 (I4.9)
 	int32_t presence;                                                     // phase 15 (A6.3)
+	int32_t traverse;                                                     // phase 22.2 (T4.1)
 } RefSettings;
-_Static_assert(sizeof(RefSettings)             == 25 * sizeof(int32_t), "mirror drifted from main.c Settings");
+// The ladder size, mirrored from theme.h. theme.h cannot be included here (it opens with
+// <citro2d.h> unless the THEME_HOST_SHIM is in play, and tilt.c is header-free by design), so the
+// constant is restated — and then PINNED to the shipped header by the grep-able assertion below,
+// which is the same contract the RefSettings mirror itself carries: if theme.h changes and this
+// does not, the tests are testing a fiction, so the number lives here in exactly one place.
+#define SMART_TRAVERSE_LEVELS 3   // theme.h: 0 Off / 1 HM / 2 HM+Via
+_Static_assert(sizeof(RefSettings)             == 26 * sizeof(int32_t), "mirror drifted from main.c Settings");
+_Static_assert(offsetof(RefSettings, traverse) == 25 * sizeof(int32_t), "mirror drifted from main.c Settings");
 _Static_assert(offsetof(RefSettings, presence) == 24 * sizeof(int32_t), "mirror drifted from main.c Settings");
 _Static_assert(offsetof(RefSettings, tilt)     == 23 * sizeof(int32_t), "mirror drifted from main.c Settings");
 _Static_assert(offsetof(RefSettings, padEdge)  == 22 * sizeof(int32_t), "mirror drifted from main.c Settings");
 
 // A pure-C mirror of settings_load's acceptance + field-gating decision (main.c). Returns 1 if the
-// file is accepted. `outTilt` / `outPresence` are only written when the ladder says that field is
-// present, so the caller can prove an older file leaves each pref at its DEFAULT.
+// file is accepted. `outTilt` / `outPresence` / `outTrav` are only written when the ladder says
+// that field is present, so the caller can prove an older file leaves each pref at its DEFAULT.
+static int ref_settings_load4(size_t n, uint32_t magic, int32_t tiltWord, int32_t presenceWord,
+                              int32_t travWord, int* outAcceptedRedesign, int* outTilt,
+                              int* outPresence, int* outTrav);
 static int ref_settings_load(size_t n, uint32_t magic, int32_t tiltWord, int32_t presenceWord,
                              int* outAcceptedRedesign, int* outTilt, int* outPresence) {
+	return ref_settings_load4(n, magic, tiltWord, presenceWord, 0, outAcceptedRedesign, outTilt,
+	                          outPresence, 0);
+}
+static int ref_settings_load4(size_t n, uint32_t magic, int32_t tiltWord, int32_t presenceWord,
+                              int32_t travWord, int* outAcceptedRedesign, int* outTilt,
+                              int* outPresence, int* outTrav) {
 	const size_t lenDof   = offsetof(RefSettings, dof);
 	const size_t lenBloom = offsetof(RefSettings, bloom);
 	const size_t lenLight = offsetof(RefSettings, light);
@@ -575,12 +597,14 @@ static int ref_settings_load(size_t n, uint32_t magic, int32_t tiltWord, int32_t
 	const size_t lenOld   = offsetof(RefSettings, theme);
 	const size_t lenPad   = offsetof(RefSettings, tilt);       // pre-tilt full struct
 	const size_t lenTilt  = offsetof(RefSettings, presence);   // pre-presence full struct (phase 14)
+	const size_t lenPres  = offsetof(RefSettings, traverse);   // pre-traverse full struct (phase 15..22.1)
 	const size_t lenNew   = sizeof(RefSettings);
-	if ((n != lenNew && n != lenTilt && n != lenPad && n != lenOld && n != lenVivid && n != lenLight
-	     && n != lenBloom && n != lenDof) || magic != 0x33424744u) return 0;
+	if ((n != lenNew && n != lenPres && n != lenTilt && n != lenPad && n != lenOld && n != lenVivid
+	     && n != lenLight && n != lenBloom && n != lenDof) || magic != 0x33424744u) return 0;
 	if (outAcceptedRedesign) *outAcceptedRedesign = (n >= lenPad);
-	if (n >= lenTilt && outTilt)    *outTilt     = (int)(((unsigned)tiltWord) % TILT_LEVELS);
-	if (n >= lenNew  && outPresence) *outPresence = (presenceWord != 0) ? 1 : 0;
+	if (n >= lenTilt && outTilt)     *outTilt     = (int)(((unsigned)tiltWord) % TILT_LEVELS);
+	if (n >= lenPres && outPresence) *outPresence = (presenceWord != 0) ? 1 : 0;
+	if (n >= lenNew  && outTrav)     *outTrav     = (int)(((unsigned)travWord) % SMART_TRAVERSE_LEVELS);
 	return 1;
 }
 
@@ -590,23 +614,25 @@ static void test_settings_and_tier(void) {
 
 	// -- (a) the offsetof ladder is strictly increasing, and each rung IS a shipped sizeof --------
 	{
-		const size_t rung[8] = {
+		const size_t rung[9] = {
 			offsetof(RefSettings, dof), offsetof(RefSettings, bloom), offsetof(RefSettings, light),
 			offsetof(RefSettings, vivid), offsetof(RefSettings, theme), offsetof(RefSettings, tilt),
-			offsetof(RefSettings, presence), sizeof(RefSettings)
+			offsetof(RefSettings, presence), offsetof(RefSettings, traverse), sizeof(RefSettings)
 		};
-		for (int i = 1; i < 8; i++)
+		for (int i = 1; i < 9; i++)
 			CHECK(rung[i] > rung[i - 1], "length rung %d (%u) must exceed rung %d (%u)\n",
 			      i, (unsigned)rung[i], i - 1, (unsigned)rung[i - 1]);
 		// I4.10's / A6.3's whole backward-compatibility claim in two lines: the length a PRE-PHASE-15
 		// build wrote is exactly the new struct's offsetof(presence), and the length a PRE-TILT build
 		// wrote is offsetof(tilt) — so BOTH still match a rung.
-		CHECK(offsetof(RefSettings, presence) == sizeof(RefSettings) - sizeof(int32_t),
-		      "the pre-presence full struct must be exactly one s32 shorter than the new one\n");
-		CHECK(sizeof(RefSettings) - offsetof(RefSettings, presence) == 4,
-		      "the phase-15 growth is 4 bytes, i.e. ONE appended word (no magic bump needed)\n");
+		CHECK(offsetof(RefSettings, traverse) == sizeof(RefSettings) - sizeof(int32_t),
+		      "the pre-traverse full struct must be exactly one s32 shorter than the new one\n");
+		CHECK(sizeof(RefSettings) - offsetof(RefSettings, traverse) == 4,
+		      "the phase-22.2 growth is 4 bytes, i.e. ONE appended word (no magic bump needed)\n");
+		CHECK(offsetof(RefSettings, traverse) - offsetof(RefSettings, presence) == 4,
+		      "...and phase 15's word is still exactly where it was (append-only)\n");
 		CHECK(offsetof(RefSettings, presence) - offsetof(RefSettings, tilt) == 4,
-		      "...and phase 14's word is still exactly where it was (append-only)\n");
+		      "...as is phase 14's (two appends later, tilt has not moved)\n");
 	}
 
 	// -- (b) the loader accepts every historical length, and each field only rides its own rung --
@@ -654,6 +680,42 @@ static void test_settings_and_tier(void) {
 			      "presence word %ld: the file still loads\n", (long)nasty[i]);
 			CHECK(pres == 0 || pres == 1, "presence word %ld maps to 0/1 (got %d)\n", (long)nasty[i], pres);
 			CHECK(pres == (nasty[i] != 0 ? 1 : 0), "presence word %ld round-trips as != 0\n", (long)nasty[i]);
+		}
+	}
+
+	// -- (b3) phase 22.2: the traverse word is a 3-state ladder, so the SAME modulo rule applies —
+	//         a corrupt s32 must land inside 0..2 and never index a label table out of range. And
+	//         every file written before this build must leave it at the shipped default, Off.
+	{
+		const int32_t nasty[10] = { 0, 1, 2, 3, -1, -3, 12345, -99999, INT32_MAX, INT32_MIN };
+		for (int i = 0; i < 10; i++) {
+			int trav = -7;
+			CHECK(ref_settings_load4(sizeof(RefSettings), 0x33424744u, 0, 0, nasty[i],
+			                         NULL, NULL, NULL, &trav) == 1,
+			      "traverse word %ld: the file still loads\n", (long)nasty[i]);
+			CHECK(trav >= 0 && trav < SMART_TRAVERSE_LEVELS,
+			      "traverse word %ld maps into 0..%d (got %d)\n",
+			      (long)nasty[i], SMART_TRAVERSE_LEVELS - 1, trav);
+		}
+		CHECK((int)(((unsigned)INT32_MIN) % SMART_TRAVERSE_LEVELS) == 2,
+		      "INT32_MIN specifically (2147483648 %% 3 == 2) lands inside the ladder — the unsigned "
+		      "cast is what stops C's signed modulo returning a NEGATIVE index here\n");
+		// Every pre-22.2 file: traverse must stay at its default, i.e. NOT be read past the file.
+		int trav = 0;
+		CHECK(ref_settings_load4(offsetof(RefSettings, traverse), 0x33424744u, 0, 1, 2,
+		                         NULL, NULL, NULL, &trav) == 1,
+		      "a PRE-TRAVERSE (phase-15..22.1) file is still accepted — no magic bump\n");
+		CHECK(trav == 0, "...and leaves HM routing at the shipped default, Off (T4.1)\n");
+		trav = 0;
+		CHECK(ref_settings_load4(offsetof(RefSettings, presence), 0x33424744u, 0, 1, 2,
+		                         NULL, NULL, NULL, &trav) == 1, "a phase-14 file still loads\n");
+		CHECK(trav == 0, "...and also leaves HM routing Off\n");
+		// Round trip, every level.
+		for (int lv = 0; lv < SMART_TRAVERSE_LEVELS; lv++) {
+			int got = -1;
+			CHECK(ref_settings_load4(sizeof(RefSettings), 0x33424744u, 0, 0, lv,
+			                         NULL, NULL, NULL, &got) == 1, "traverse %d file loads\n", lv);
+			CHECK(got == lv, "traverse %d round-trips through the file (got %d)\n", lv, got);
 		}
 	}
 

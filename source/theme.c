@@ -28,7 +28,11 @@ static int s_artId = THEME_INDIGO;
 // seed = the "Teal" chip 205,168 + contrast 14). The trailing 0 is phase 14's tiltLevel = Off
 // (SPEC-integration I5.8: the other HD-2D effects default ON because they are hardware-proven;
 // this one is not, so upgrading changes no existing user's frame budget).
-UiPrefs g_prefs = { THEME_INDIGO, 205, 168, 14, 0, 0, 0, 0 };
+// The trailing zeros are the SHIPPED DEFAULTS and are written out rather than left to C's
+// zero-fill so each one is a visible decision: tiltLevel 0 = Off (phase 14, hardware-unproven
+// effect), smartTraverse 0 = Off (phase 22.2, SPEC-family-traversal T4.1 — a feature that MOVES
+// the player and answers the game's own yes/no prompts does not switch itself on for everyone).
+UiPrefs g_prefs = { THEME_INDIGO, 205, 168, 14, 0, 0, 0, /* tiltLevel */ 0, /* smartTraverse */ 0 };
 
 const char* const THEME_NAMES[THEME_PRESET_COUNT] = {
 	"Indigo + Gold", "Midnight OLED", "Daylight", "Per-game Duo", "Retro Purple", "Custom",

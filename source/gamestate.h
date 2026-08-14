@@ -307,6 +307,37 @@ typedef struct {
 	uint32_t pcStoragePtr;    // gPokemonStoragePtr (deref -> +0 currentBox u8, +4 boxes[14][30]
 	                          //   of 80-byte BoxPokemon; flags byte +19 bit1 = hasSpecies).
 	                          //   LOGGING/proof only (the g_touchDbg occupancy mask).
+	// --- phase 22.2 (lane A) — the TRAVERSAL family (HM-aware routing; SPEC-family-traversal
+	// §1.4/§3.1). Both values were RE-READ from the pret byte-matched symbol maps THIS session
+	// (2026-08-14 scratchpad syms/: pokeemerald.sym, pokefirered[_rev1].sym,
+	// pokeleafgreen[_rev1].sym, pokeruby[_rev1].sym, pokesapphire[_rev1].sym) rather than copied
+	// from the spec — the house zero-guess rule; the spec's values agreed on every overlap.
+	//
+	// gPlayerParty (symbol size 0x258 == 6 x 100 in ALL NINE maps, which is itself the proof the
+	// party stride is 100 and PARTY_SIZE is 6):
+	//   BPEE 0x020244EC | BPRE 0x02024284 (rev0 == rev1) | BPGE 0x02024284 (LG's OWN maps, rev0
+	//   == rev1) | AXVE/AXPE 0x03004360 — note RS's party lives in IWRAM, not EWRAM, which is why
+	//   fieldtrav_party_has_move accepts bank 0x02 AND 0x03 instead of hard-coding one map.
+	// It is read ONLY through fieldtrav_party_has_move, which verifies each mon's own Gen-3
+	// checksum before believing a single move id, so a wrong address degrades to "no mon knows
+	// that HM" (= no conditional edges = today's walk-only behaviour), never to a phantom HM.
+	//
+	// gMapGroups is the ROM map-header table the SLICE-2 excursion search walks. It is the one
+	// value in this struct that is REV-SENSITIVE **and dereferenced** (every other rev-alternate
+	// is compare-only, hence fail-safe by construction):
+	//   BPEE 0x08486578 | BPRE rev0 0x083526A8 / rev1 0x08352718 | BPGE rev0 0x08352688 /
+	//   rev1 0x083526F8 | AXVE 0x083085A0 | AXPE 0x08308530 (per-title: Ruby and Sapphire DIFFER,
+	//   the LANE-B drift lesson).
+	// Because profile_for keys on the 4-char game code and cannot see the header's revision byte,
+	// the alternate is carried alongside and the excursion planner picks between them with a
+	// SELF-VALIDATING probe: whichever table resolves the CURRENT (mapGroup,mapNum) to a header
+	// whose mapLayout matches the LIVE gMapHeader's is the right one. A rev mismatch therefore
+	// fails the probe and disables excursions rather than dereferencing a wrong pointer.
+	// 0 in either slot = named degradation: no excursions for that game, same-map HM routing
+	// (slice 1) is unaffected. Appending is the only safe edit: PROFILES[] is POSITIONAL. ---
+	uint32_t partyBase;       // gPlayerParty (100-byte stride, 6 slots)
+	uint32_t mapGroupsRom;    // gMapGroups (ROM: MapHeader** per group) — slice 2
+	uint32_t mapGroupsRomAlt; // gMapGroups, other revision (0 = none)
 } GameProfile;
 
 // One-pass snapshot of the live game.

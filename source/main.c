@@ -2409,13 +2409,16 @@ typedef struct {
 	s32 presence;         // co-op presence pref (SPEC-avatar A6.3). NO magic bump, same as phase
 	                      // 14: SETTINGS_MAGIC identifies the FAMILY and the length ladder does the
 	                      // versioning, so every file a pre-phase-15 build wrote still loads.
+	// --- phase 22.2 (appended; files that end at `presence` still load, traverse stays 0 = Off) ---
+	s32 traverse;         // g_prefs.smartTraverse, 0..SMART_TRAVERSE_LEVELS-1 (SPEC-traversal T4.1)
 } Settings;
 // SPEC-integration I7.6: test/host/test_tilt.c TEST 6 replicates this layout (main.c cannot be
 // host-compiled), so pin the two together. If a field is inserted anywhere above, these fire and
 // the test's copy must be updated in the same edit — the alternative is a silently-shifted
 // offsetof ladder that mis-loads every older settings file. offsetof(tilt) staying 23 across the
 // phase-15 append IS the proof that the change is backward-compatible (SPEC-avatar A6.3.2).
-_Static_assert(sizeof(Settings)             == 25 * sizeof(s32), "Settings grew/shrank — sync test_tilt TEST 6");
+_Static_assert(sizeof(Settings)             == 26 * sizeof(s32), "Settings grew/shrank — sync test_tilt TEST 6");
+_Static_assert(offsetof(Settings, traverse) == 25 * sizeof(s32), "Settings.traverse moved — sync test_tilt TEST 6");
 _Static_assert(offsetof(Settings, presence) == 24 * sizeof(s32), "Settings.presence moved — sync test_tilt TEST 6");
 _Static_assert(offsetof(Settings, tilt)     == 23 * sizeof(s32), "Settings.tilt moved — sync test_tilt TEST 6");
 _Static_assert(offsetof(Settings, padEdge)  == 22 * sizeof(s32), "Settings.padEdge moved — sync test_tilt TEST 6");
@@ -2444,8 +2447,12 @@ static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, int* 
 	// the new sizeof. Getting this rename wrong rejects every existing settings file, which is the
 	// whole reason the ladder exists.
 	size_t lenTilt  = offsetof(Settings, presence);   // includes tiltLevel (pre-presence)
-	size_t lenNew   = sizeof s;                       // + presence
-	if ((n != lenNew && n != lenTilt && n != lenPad && n != lenOld && n != lenVivid && n != lenLight && n != lenBloom && n != lenDof)
+	// phase 22.2 (SPEC-family-traversal T4.1): one more rung, same rename shuffle. lenPres is the
+	// PRE-TRAVERSE full struct — exactly what every phase-15..22.1 build wrote — and lenNew is the
+	// new sizeof. Same no-magic-bump rule: the ladder is the version.
+	size_t lenPres  = offsetof(Settings, traverse);   // includes presence (pre-traverse)
+	size_t lenNew   = sizeof s;                       // + traverse
+	if ((n != lenNew && n != lenPres && n != lenTilt && n != lenPad && n != lenOld && n != lenVivid && n != lenLight && n != lenBloom && n != lenDof)
 	    || s.magic != SETTINGS_MAGIC) return;      // tolerate older files
 	scaleMode[0] = ((unsigned)s.scaleMode[0]) % 3;
 	scaleMode[1] = ((unsigned)s.scaleMode[1]) % 3;
@@ -2477,7 +2484,11 @@ static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, int* 
 	// A6.3: a 2-state pref, so != 0 is the whole clamp — a corrupt word can only ever produce
 	// on/off. Older (pre-phase-15) files leave it at the shipped default, which is OFF (A6.3.4:
 	// a new feature ships inert so no existing user's frame changes).
-	if (n >= lenNew && presenceOn) *presenceOn = s.presence != 0;
+	if (n >= lenPres && presenceOn) *presenceOn = s.presence != 0;
+	// Modulo for the same reason tiltLevel uses it: a corrupt/negative word must land inside the
+	// ladder, never index a label table out of range. Older files leave it 0 = Off (T4.1's
+	// shipped default), so no existing user's tap behaviour changes on upgrade.
+	if (n >= lenNew) g_prefs.smartTraverse = ((unsigned)s.traverse) % SMART_TRAVERSE_LEVELS;
 	theme_apply(g_prefs.theme, g_prefs.customBaseHue, g_prefs.customAccentHue, g_prefs.customContrast);
 }
 
@@ -2489,7 +2500,8 @@ static void settings_save(const int scaleMode[2], const bool smooth[2], bool swa
 	               g_prefs.theme, g_prefs.customBaseHue, g_prefs.customAccentHue, g_prefs.customContrast,
 	               g_prefs.gameMode, g_prefs.padColor, g_prefs.padEdge,
 	               g_prefs.tiltLevel,     // phase 14, I4.9: appended, so the file grew by 4 B
-	               presenceOn };          // phase 15, A6.3.3: appended last, another 4 B
+	               presenceOn,            // phase 15, A6.3.3: appended, another 4 B
+	               g_prefs.smartTraverse };   // phase 22.2, T4.1: appended last, another 4 B
 	FILE* f = fopen(SETTINGS_PATH, "wb");
 	if (!f) return;
 	fwrite(&s, 1, sizeof s, f);
@@ -2538,9 +2550,14 @@ enum {
 	ACT_PREVIEW_PAD, ACT_PREVIEW_SMART,   // Touch tab: set the mode + resume to see it live
 	ACT_TILT,                             // phase 14 HD-2D diorama tilt (PK_SEG, 4 rungs) — I4.7
 	ACT_PRESENCE,                         // phase 15 co-op presence (PK_TOG, 2 states) — A6.1.4
+	ACT_TRAVERSE,                         // phase 22.2 HM routing (PK_SEG, 3 rungs) — T4.1
 };
 static const char* const MENU_TAB_NAMES[6] = { "SESSION", "DISPLAY", "AUDIO", "ENHANCE", "LINK", "TOUCH" };
 static const char* const PAD_EDGE_NAMES[3] = { "Round", "Soft", "Sharp" };
+// PHASE 22.2 / SPEC-family-traversal T4.1. One table, the same three consumers the tilt ladder has
+// (the pause seg, the pre-game settings seg, the value text). "Via" is the honest short word for
+// "route through a door and back out again" — it promises a detour, not a teleport.
+static const char* const TRAVERSE_NAMES[SMART_TRAVERSE_LEVELS] = { "Off", "HM", "HM+Via" };
 // SPEC-integration Q1, RESOLVED: NOT "Off/Soft/Med/Deep". The shipped ladder is a deliberately
 // mild OFF/10/15/20 deg (SPEC-render R2.5.5 — gen1recomp's own OFF/15/35/50 is undefensible for
 // us above its first rung because they render up to 2.56x more world and we have a fixed 240x160
@@ -2660,12 +2677,19 @@ static const PCtl PT_LINK[] = {
 static const PCtl PT_TOUCH[] = {
   {PK_SEG,ACT_TOUCHMODE,3, 93,26,208,30,0},{PK_BTN,ACT_PREVIEW_PAD,0, 93,109,106,44,0},
   {PK_BTN,ACT_PREVIEW_SMART,0, 203,109,106,44,0},{PK_SWATCH,ACT_PADCOL,0, 93,195,208,31,0},
-  {PK_SEG,ACT_PADEDGE,3, 93,253,208,30,"GAMEPAD · EDGES",OV_SECTION} };
+  {PK_SEG,ACT_PADEDGE,3, 93,253,208,30,"GAMEPAD · EDGES",OV_SECTION},
+  // PHASE 22.2 / SPEC-family-traversal T4.1. It belongs on TOUCH, not ENHANCE: it changes what a
+  // TAP does, and only in SMART mode. Placed below the edges row (which ends at 283) with the same
+  // OV_SECTION caption offset the two segs above use, so the panel simply scrolls one row further
+  // — uihit_content_h derives the extent from this table, so nothing else needs to know.
+  {PK_SEG,ACT_TRAVERSE,SMART_TRAVERSE_LEVELS, 93,311,208,30,"SMART · HM ROUTES",OV_SECTION} };
 static const PCtl* const PTABS[6] = { PT_SESSION, PT_DISPLAY, PT_AUDIO, PT_ENHANCE, PT_LINK, PT_TOUCH };
 // I4.4: ENHANCE goes 5 -> 6 for the tilt row. Forgetting this is SILENT — the row would never
 // draw (the draw loop is `for (i < nPd)`) and the touch hit-test loop would never reach it.
 // A6.1.1: LINK goes 6 -> 7 for the phase-15 CO-OP row, and it is the SAME silent trap.
-static const int PTABN[6] = { 3, 6, 4, 6, 7, 5 };
+// A6.1.1 again for phase 22.2: TOUCH goes 5 -> 6 for the HM-ROUTES row, and forgetting it is the
+// SAME silent trap (the draw loop and the hit-test loop are both `for (i < nPd)`).
+static const int PTABN[6] = { 3, 6, 4, 6, 7, 6 };
 static const char* const PT_PLATE[6] = { "pause-bot-session","pause-bot-display","pause-bot-audio",
                                          "pause-bot-enhance","pause-bot-link","pause-bot-touch" };
 
@@ -2980,6 +3004,7 @@ static int menu_layout(int tab, MenuW* out) {
 		PUSH(W_BUTTON, ACT_PREVIEW_SMART, 2, 0);
 		PUSH(W_SECTION, ACT_PADCOL, 0, 0);    PUSH(W_SWATCH, ACT_PADCOL, 0, 0);
 		PUSH(W_SECTION, ACT_PADEDGE, 0, 0);   PUSH(W_SEG, ACT_PADEDGE, 0, 0);
+		PUSH(W_SECTION, ACT_TRAVERSE, 0, 0);  PUSH(W_SEG, ACT_TRAVERSE, 0, 0);   // phase 22.2 (T4.1)
 		break;
 	}
 	return n;
@@ -3557,6 +3582,14 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 							for (int i = 0; i < 4; i++) sm.battlerPos[i] = gsr.battlerPos[i];
 							sm.bagListTaskBase = gsr.bagListTaskBase;
 							sm.listBase = gsr.listBase; sm.listKind = gsr.listKind;   // phase 22.1 list family
+							// phase 22.2 TRAVERSAL: the three passthroughs the HM sequencer needs.
+							// textDlg is gamestate's existing sFieldMessageBoxMode read (no new
+							// address); padKeys is the SAME to_gba_keys(kHeld) mapping the physical
+							// pad uses, so "the player touched the controls" is one comparison and
+							// the additive seam yields to them; traverse is the persisted pref.
+							sm.textDlg = gsr.textDlg;
+							sm.padKeys = to_gba_keys(kHeld);
+							sm.traverse = g_prefs.smartTraverse;
 							sm.cb2 = gsr.cb2; sm.ctxResolved = gsr.ctxResolved; sm.nTask = gsr.nTask;   // touch-log fingerprint (LOGGING ONLY)
 							for (int i = 0; i < 8; i++) sm.taskFp[i] = gsr.taskFp[i];
 						}
@@ -4066,12 +4099,14 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 						case ACT_FILTER: cur = smooth[swapped?(focused^1):focused]; break; case ACT_HUD: cur=hudMode; break;
 						case ACT_AUDIOMODE: cur=audioMode; break; case ACT_TOUCHMODE: cur=touchMode; break;
 						case ACT_TILT: cur=g_prefs.tiltLevel; break;
+						case ACT_TRAVERSE: cur=g_prefs.smartTraverse; break;   // phase 22.2 (T4.1)
 						default: cur=g_prefs.padEdge; break; }
 					cur = (segSet >= 0) ? segSet : ((cur + adj + n) % n);
 					switch (act) { case ACT_SCALE_TOP: scaleMode[0]=cur; break; case ACT_SCALE_BOT: scaleMode[1]=cur; break;
 						case ACT_FILTER: smooth[swapped?(focused^1):focused]=cur; break; case ACT_HUD: hudMode=cur; break;
 						case ACT_AUDIOMODE: audioMode=cur; audio_reset_stream(); break; case ACT_TOUCHMODE: touchMode=cur; break;
 						case ACT_TILT: g_prefs.tiltLevel=cur; break;
+						case ACT_TRAVERSE: g_prefs.smartTraverse=cur; break;   // phase 22.2 (T4.1)
 						default: g_prefs.padEdge=cur; break; }
 					// I4.14: name the two things a player cannot see from the row itself — that the
 					// effect is overworld-only (PHASE.md invariant 5), and that an Old 3DS keeps the
@@ -5180,6 +5215,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 						case ACT_FILTER:o=S_FILT;cur=smooth[fsd];break;case ACT_HUD:o=S_HUD;cur=hudMode;break;
 						case ACT_AUDIOMODE:o=S_AUD;cur=audioMode;break;case ACT_TOUCHMODE:o=S_TCH;cur=touchMode;break;
 						case ACT_TILT:o=TILT_NAMES;cur=g_prefs.tiltLevel;break;   // phase 14 (I4.6 label table)
+						case ACT_TRAVERSE:o=TRAVERSE_NAMES;cur=g_prefs.smartTraverse;break;   // phase 22.2 (T4.1)
 						default:o=S_EDG;cur=g_prefs.padEdge;break;}
 					assets_seg(txtBuf, x, y, w, h, o, c->nseg, cur, g_ui.ink, g_art.dim);
 					if (sel) sel_ring(x, y, w, h, ui_seg_radius(h), 0.0f);
@@ -5428,11 +5464,13 @@ static void run_settings(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextB
 			switch (act) { case ACT_SCALE_TOP: cur=scaleMode[0]; break; case ACT_SCALE_BOT: cur=scaleMode[1]; break;
 				case ACT_FILTER: cur=smooth[0]; break; case ACT_HUD: cur=hudMode; break; case ACT_AUDIOMODE: cur=audioMode; break;
 				case ACT_TOUCHMODE: cur=touchMode; break; case ACT_TILT: cur=g_prefs.tiltLevel; break;
+				case ACT_TRAVERSE: cur=g_prefs.smartTraverse; break;   // phase 22.2 (T4.1)
 				default: cur=g_prefs.padEdge; break; }
 			cur = (segSet >= 0) ? segSet : ((cur + adj + ns) % ns);
 			switch (act) { case ACT_SCALE_TOP: scaleMode[0]=cur; break; case ACT_SCALE_BOT: scaleMode[1]=cur; break;
 				case ACT_FILTER: smooth[0]=smooth[1]=cur; break; case ACT_HUD: hudMode=cur; break; case ACT_AUDIOMODE: audioMode=cur; break;
 				case ACT_TOUCHMODE: touchMode=cur; break; case ACT_TILT: g_prefs.tiltLevel=cur; break;
+				case ACT_TRAVERSE: g_prefs.smartTraverse=cur; break;   // phase 22.2 (T4.1)
 				default: g_prefs.padEdge=cur; break; }
 			SETSAVE();
 		} else if (pk == PK_STEP && adj) { int* v = (act==ACT_VOLA)?&volA:&volB; *v += adj*32; if(*v<0)*v=0; if(*v>256)*v=256; SETSAVE(); }
@@ -5497,6 +5535,7 @@ static void run_settings(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextB
 				const char* const* o=A; int cur=0; switch(c->act){case ACT_SCALE_TOP:cur=scaleMode[0];break;case ACT_SCALE_BOT:cur=scaleMode[1];break;
 				case ACT_FILTER:o=F;cur=smooth[fsd];break;case ACT_HUD:o=H;cur=hudMode;break;case ACT_AUDIOMODE:o=M;cur=audioMode;break;
 				case ACT_TOUCHMODE:o=T;cur=touchMode;break;case ACT_TILT:o=TILT_NAMES;cur=g_prefs.tiltLevel;break;
+				case ACT_TRAVERSE:o=TRAVERSE_NAMES;cur=g_prefs.smartTraverse;break;   // phase 22.2 (T4.1)
 				default:o=E;cur=g_prefs.padEdge;break;}
 				assets_seg(txtBuf,x,y,w,h,o,c->nseg,cur,g_ui.ink,g_art.dim); if(sel) sel_ring(x,y,w,h,ui_seg_radius(h),0.0f); break; }
 			case PK_STEP: { int v=(c->act==ACT_VOLA)?volA:volB; assets_fill9("fill-secondary-r8",x,y+2,20,h-4,7.0f);
