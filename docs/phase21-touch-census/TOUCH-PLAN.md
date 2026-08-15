@@ -109,7 +109,7 @@ Column key:
 | B13/B14 | Cable car / Seagallop | leak | tap=A; cutscene | TAP | DLG | S | - | — · **B1:VER-mech** |
 | B15 | Braille walls | tap=A | done (dialog) | DONE | DLG | — | - | — |
 | B16 | Secret base | overworld ✓ | works via B1; decoration placement = E-family grid below | DONE | TRAV | — | - | — |
-| B17 | Decoration place/tidy | leak | lists = FAM-LIST; placement grid: tap tile = move cursor (grid write) — RSE-only, low priority | FULL (late) | GRID | L | substate | — |
+| B17 | Decoration place/tidy | leak | **SPEC'd, LANE-D-FULL.md S2 — smaller than 'L' and the most touch-shaped screen left.** The placement cursor has **no cb2**: it is `Task_SelectLocation` (decoration.c:1845) under `CB2_Overworld`, so detection is TASK-based and must run **before** the walker or a tap arms a BFS route. Two rules differ from FAM-MAP: `JOY_HELD(DPAD_ANY) == DPAD_UP` compares the WHOLE mask so **diagonals are rejected** (axis-at-a-time only), and `gSprites[sDecor_CameraSpriteObjectIdx1].data[4]` is a **readable engine-idle flag** gating the whole handler — the signal FAM-NAV had to infer with a retry, here it can be read, so the pacing is exactly closed-loop. Cursor = `tCursorX/tCursorY` in the task's own data[] (no new address); `sCurDecorMapX/Y` 0x0203AA34/36 are the anchor | FULL | GRID | **M** | task + substate | — · **reachability is the risk**: needs a registered secret base AND owned decorations — CHECK FIRST |
 | B18 | Map name popup | passive | nothing | DEFER (passive) | — | — | — | emu |
 | B19 | Whiteout | leak-ish | nothing (cutscene) | DEFER (cutscene) | — | — | — | — |
 | B20 | Field HM prompts | fmenu ✓ | done; superseded by FAM-TRAV auto-HM anyway | DONE | POPUP | — | - | emu |
@@ -143,7 +143,7 @@ Column key:
 | D5 | Pyramid bag | leak | FAM-LIST instance | FULL | LIST | S (with lists) | substate | — |
 | D6 | Pike/Palace/Arena/Tower halls | overworld+dialog | B1 + DLG defaults | TAP | DLG | — | - | — · **B1:VERIFIED** |
 | D7 | Choose-frontier-party | party ✓ partially (choose mode is residual!) | extend GCTX_PARTY to choose-half mode (slot 6 = confirm) — known gap (COVERAGE §3) | FULL | GRID | S | promo | emu (E2d) |
-| D8 | Easy-chat screen | leak | **FAM-KB second instance**: word-matrix keyboard (groups list → word grid) | FULL | KB | M | substate | — |
+| D8 | Easy-chat screen | leak | **NOT the naming keyboard's twin — SPEC'd, LANE-D-FULL.md S1.** What transfers is the **FAM-NAV** shape (one cb2 `CB2_EasyChatScreen` 0x0811A278 + a sub-state byte `inputState` at `sEasyChatScreen`+0x04, eleven values; every sub-handler `JOY_NEW`; every cursor a sprite set from the logical value ⇒ never write). What does NOT transfer is the fixed column table: **WORD SELECT is fixed** (`x = col*13*8+28`, `y = row*16+96`, 2×4 scrolling) but **the PHRASE ROW's slot x positions are MEASURED TEXT** — `GetStringWidth(FONT_NORMAL, …)+17` accumulated over the live phrase (:3175-3204) — so v1 should hit-test the word grid exactly and the phrase row **by index, approximately, and say so** | FULL | KB→NAV | M | substate (`sEasyChatScreen` 0x0203A118) | — · reachability owed (Dewford trend / interview NPCs) |
 | D9 | Walda phrase | leak | = D8 | FULL | KB | — | substate | — |
 | D10 | Trainer Hill records | leak | tap=A | TAP | DLG | S | - | — · **B1:VER-mech** |
 | D11 | Apprentice | dialog+party | covered by fmenu/party/D8 | TAP | POPUP | — | - | — · **B1:VER-mech** |
@@ -193,8 +193,8 @@ Column key:
 
 | # | Screen | Now | Target | Class | Fam | Eff | Sym | Ver |
 |---|---|---|---|---|---|---|---|---|
-| G1 | Main menu (ring) | leak | tap ring item = cursor write + A; B chip | FULL | LIST | M | substate (pokenav struct ptr) | emu |
-| G2 | Hoenn map | leak | = FAM-MAP (pan + tap-select landmark) | FULL | MAP | M | substate | emu |
+| G1 | PokéNav menus | **FAM-NAV, tappable ✓ (shipped)** | tap an option row = the game's own `cursorPos` is WALKED there with one-edge presses on a **WRAPPING** ring (`min(down,up)`, so bottom→top is ONE press) → A. Drag = the target follows the finger, no pick; hold = B. **Never a cursor write**: A acts on `cursorPos` while the highlight and the description are driven by `currMenuItem` + an event-driven slide, so a write would leave a screen whose highlighted row is not the row A picks | **DONE** | LIST | M | promo+substate | emu · **D2:VERIFIED** (phase 25) — `CB2_Pokenav` 0x081C7400 + `gPokenavResources` 0x0203CF40; the sub-app is `currentMenuIndex` +0x04 and the menu is `substructPtrs[1]` → `struct Pokenav_Menu` (menuType +0x00, cursorPos +0x02). v1 claims the **six MENU sub-apps only** (index ≤ 5). Live: five taps, ring costs 2+2+1 = `navSteps` **5 exactly**, **two WRAPS** (one caught mid-route with the cursor on row 4 and the target on row 3 — a state no straight-line navigator can reach), the CONDITION menu's **in-place `menuType` mutation** observed (2→3, rows 5→3, sub-app UNCHANGED), `ReturnToMainMenu`'s own `cursorPos = 1` read back, hold=B closed it. LANE-D-FULL.md Entries 5-8 |
+| G2 | Hoenn map | leak | = FAM-MAP (pan + tap-select landmark) | FULL | MAP | M | substate | emu · **D2: the substate blocker is GONE** — `g_touchDbg.navIdx` now publishes `currentMenuIndex` on EVERY PokéNav frame including the feature sub-apps, live-read as **12** on the ribbons list and **5** on the return-from-ribbons main menu. G2-G5 have an identifier to key on |
 | G3 | Condition graphs | leak | tap party slot tabs; radar is display-only | TAP | PAGE | S | substate | emu · **B1:UNREACH** |
 | G4 | Match Call list | leak | FAM-LIST (tap row, tap CALL sub-option) | FULL | LIST | M | substate | emu |
 | G5 | Ribbons | leak | FAM-LIST + tap ribbon cell on the summary grid | FULL | LIST | S | substate | emu |
@@ -203,12 +203,12 @@ Column key:
 
 | # | Screen | Now | Target | Class | Fam | Eff | Sym | Ver |
 |---|---|---|---|---|---|---|---|---|
-| H1 | Choose contest mon | party-family | = E2 choose-mode fix | FULL | GRID | — | promo | — |
+| H1 | Choose contest mon | party-family | = E2 choose-mode fix | FULL | GRID | — | promo | — · **D2: not a contest row at all** — it IS the known `GCTX_PARTY` choose-half gap (COVERAGE §3 / row D7). Take it WITH D7, not with the contests |
 | H2 | Contest lobby | dialog/multi | fmenu covers | TAP | POPUP | — | - | — · **B1:VER-mech** |
-| H3 | Contest appeals | leak | tap move card = cursor write + A (4-wide picker each round); rounds between = tap-advance | FULL | GRID | M | substate | — |
+| H3 | Contest appeals | leak | tap move card = cursor write + A (4-wide picker each round); rounds between = tap-advance | FULL | GRID | M | substate | — · **D2: UNREACHABLE, measured** — behind entering a contest (a multi-minute progression event), the same wall C1 hit on H4/H5/H6 |
 | H4/H5 | Results / painting | leak | tap=A | TAP | DLG | S | promo | — · **C1:PROMOTED-SYM, screen UNREACHABLE this session** (`CB2_ShowContestResults` 0x080F5C00 / `CB2_HoldContestPainting` 0x0812FDF8; a contest run is a multi-minute progression event) |
 | H6 | Berry Blender | leak | minigame: tap = A at the arrow (timing) — honest mapping IS just tap=A; keep | TAP | MINI | S | promo | — · **C1:PROMOTED-SYM, screen UNREACHABLE this session** (`CB2_PlayBlender` 0x08081898 + `CB2_EndBlenderGame` 0x08081FC8) |
-| H7 | Pokéblock case | leak | FAM-LIST | FULL | LIST | S | promo+substate | emu |
+| H7 | Pokéblock case | **FAM-LIST, DISCOVERED list ✓ (shipped)** | free instantiation, **zero new addresses**: `pokeblock.c` builds a plain `ListMenuInit` list (:596) driven by `ListMenu_ProcessInput` (:1025/:1074), so the P-D dummy-task scan finds it; `CB2_PokeblockMenu` **0x0813591C** was already census-[exact] in `cb2FullUi` and only had to be added to `cb2List` | **DONE** | LIST | **none** (the `promo+substate` cost was illusory) | emu · **D2:VERIFIED** — `ctx` 12 GCTX_LIST / `listKind` 5 LK_FULLUI, `listBase` = gTasks+40·2+8, `lTotal` **4** matching the four rows on screen, and a tap moved `lRow` 0→2 onto the Lv50 block with its USE/TOSS/CANCEL popup. LANE-D-FULL.md Entry 9 |
 | H8 | Pokéblock feed | leak | tap=A (cutscene) | TAP | DLG | S | promo | emu · **B1:UNREACH** |
 | H9 | Use-Pokéblock condition | leak | tap mon portrait = cursor; tap block = feed | FULL | GRID | M | promo+substate | emu |
 | H10 | TV / BuzzNav | dialog | tap=A | TAP | DLG | — | - | emu · **B1:VER-mech** |
