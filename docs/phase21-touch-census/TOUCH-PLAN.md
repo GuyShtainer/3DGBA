@@ -1,9 +1,13 @@
 # Phase 21 — THE SMART-TOUCH MASTER PLAN
 
 _Synthesis of the census (CATALOG.md, 143 rows), the coverage audit (COVERAGE.md), the two
-emulator visit passes (VISITED-emerald.md + VISITED-firered.md, 61 distinct catalog rows
-photographed and cb2-certain), the live fingerprint harvest (CB2-HARVEST.md, ~60 [exact]
-zero-guess resolutions), and the three overnight family specs (SPEC-family-keyboard.md,
+emulator visit passes (VISITED-emerald.md + VISITED-firered.md, **61 distinct catalog rows**
+photographed — re-measured and confirmed 2026-08-15, `EVIDENCE-INTEGRITY.md`; "cb2-certain"
+is certain **to the callback family, not to the individual screen**: one `CB2_Pokedex` read
+covers all six dex sub-screens, one `CB2_Overworld` covers 32 FireRed rows, so within a
+family the screen identity rests on the picture), the live fingerprint harvest
+(CB2-HARVEST.md, ~60 [exact] zero-guess resolutions), and the three overnight family specs
+(SPEC-family-keyboard.md,
 SPEC-family-lists.md, SPEC-family-traversal.md). Written 2026-08-14. **No touch was
 implemented in this phase — this plan is the deliverable.**_
 
@@ -129,7 +133,7 @@ Column key:
 | C12 | Recorded battle ask | leak | fmenu (yes/no) | TAP | POPUP | S | - | — · **B1:VER-mech** |
 | C13/C15 | tutorials/Marowak | consumed by saves | inherit battle | DEFER (new-game) | — | — | — | — |
 | C14 | Pokedude demo | leak (FR) | tap=A advance, B=quit chip (it's a TV show) | TAP | DLG | S | rev1 | emu · **B1:UNREACH** |
-| C20 | Evolution scene | leak | tap=A, hold=B (cancel evolution is a real verb!) | **VERIFIED (EM)** | DLG | S | promo-family | emu · **R:VISITED + harvested LIVE `[exact]`** — `CB2_EvolutionSceneUpdate` **0x0813E3A4** read off the live screen, `ctx` **10 = GCTX_FULLUI**, `fieldLock`/`dlgOwns` **0/0** (nothing to fall back on — only the promotion classifies it), one tap `dlgTaps` 0→1, one hold `dlgHolds` 0→1, game evolved SANDSHREW→SANDSLASH. **C1's "no cheap trigger existed" was FALSE**: it measured the party and the bag, not the 195 PC-box mons it was standing in front of — a **box Sandshrew Lv21** (box 0 slot 14, `exp 9261 = 21³`, `EVO_LEVEL 22`) on **one** of the bag's 7 Rare Candies. STILL OWED: the hold's CANCEL verb — the B fired but outside the game's own window (`evolution_scene.c:638-641` needs `heldKeys == B_BUTTON` while `tState == EVOSTATE_WAIT_CYCLE_MON_SPRITE`); recipe in LANE-R-REACH.md Entry 4. FR half still sym-only |
+| C20 | Evolution scene | leak | tap=A, hold=B (cancel evolution is a real verb!) | **SCREEN VISITED; VERBS UNPROVEN** | DLG | S | promo-family | emu · **R:VISITED + harvested LIVE `[exact]`** — `CB2_EvolutionSceneUpdate` **0x0813E3A4** read off the live screen, `ctx` **10 = GCTX_FULLUI**, `fieldLock`/`dlgOwns` **0/0** (nothing to fall back on — only the promotion classifies it), one tap `dlgTaps` 0→1, one hold `dlgHolds` 0→1, game evolved SANDSHREW→SANDSLASH. **C1's "no cheap trigger existed" was FALSE**: it measured the party and the bag, not the 195 PC-box mons it was standing in front of — a **box Sandshrew Lv21** (box 0 slot 14, `exp 9261 = 21³`, `EVO_LEVEL 22`) on **one** of the bag's 7 Rare Candies. STILL OWED: the hold's CANCEL verb — the B fired but outside the game's own window (`evolution_scene.c:638-641` needs `heldKeys == B_BUTTON` while `tState == EVOSTATE_WAIT_CYCLE_MON_SPRITE`); recipe in LANE-R-REACH.md Entry 4. FR half still sym-only |
 | C21 | Egg hatch | leak | tap=A; naming hop = FAM-KB | TAP | DLG | S | - | — · **B1:VER-mech** |
 | C22 | Forget-move summary hop | leak | FAM-PAGE summary instance: tap a move row = select, tap page arrows | FULL | PAGE | S (with E1) | promo | emu |
 
@@ -470,7 +474,11 @@ sign-off).
 ## 5. Cross-references
 
 - Census ground truth: `CATALOG.md` (143 rows) · `VISITED-emerald.md` / `VISITED-firered.md`
-  (61 rows live-certain) · `CB2-HARVEST.md` (~60 [exact] fingerprints, zero guesses).
+  (**61 distinct rows**, re-measured 2026-08-15 — 43 Emerald + 42 FireRed, 24 in both; the
+  "41 + 41" per-game split in REPORT.md's first draft did not reconcile and 41+41 = 82 is a
+  sum WITH overlap, never a count of screens) · `CB2-HARVEST.md` (~60 [exact] fingerprints,
+  zero guesses) · **`EVIDENCE-INTEGRITY.md`** (what each capture pair does and does not
+  prove; the one withdrawn capture).
 - Audit: `COVERAGE.md` (GCTX matrix §1, profile inventory §2, known-broken §3, promotion
   pipeline §4, seam §5).
 - Family specs (ready for phase 22): `SPEC-family-keyboard.md`, `SPEC-family-lists.md`,
