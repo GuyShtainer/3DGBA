@@ -499,6 +499,7 @@ static int prog_plan(GbaCore* core, const GameProfile* p, int px, int py, int gx
 static bool prog_surfing(GbaCore* core, const GameProfile* p);   // fwd: gPlayerAvatar surf bit
 static int  prog_facing(GbaCore* core, const GameProfile* p);    // fwd: gObjectEvents[0] facing
 static int  prog_tap_gate(GbaCore* core, const GameProfile* p, int px, int py, int* gx, int* gy);
+static int  prog_retargeted_goal(int* gx, int* gy);              // fwd: the last plan's real goal
 
 static u16 walk_update_inner(bool touching, bool newPress, bool gvalid, int gx, int gy,
                              int px, int py, int mapG, int mapN, GbaCore* core, const GameProfile* p,
@@ -583,9 +584,11 @@ static u16 walk_update_inner(bool touching, bool newPress, bool gvalid, int gx, 
 				// that is no longer on screen. Refuse those (map changed, or the player jumped
 				// further than the one tile a step in flight can cover) rather than route to a
 				// tile the user never pointed at.
-				// PHASE 26 / lane W. The tap's EFFECTIVE goal, and the one question that has to be
-				// asked before the dry router rather than after it (see prog_tap_gate): a tap on a
-				// waterfall tile, a mid-surf tap aimed UPWARD, or a tap on a boulder. Everything
+				// PHASE 26 / lane W. The one question that has to be asked BEFORE the dry router
+				// rather than after it (see prog_tap_gate): a tap on a waterfall tile, a mid-surf
+				// tap aimed UPWARD, or a tap on a boulder — the three taps where tier 0 either
+				// answers WRONGLY (it will plot a swim up a fall) or answers so well that the
+				// interaction can never be reached (a blocked goal is a legal terminal). Everything
 				// else keeps the shipped tier order exactly — gate == 0.
 				int tgx = s_downPx + ddx, tgy = s_downPy + ddy;
 				int gate = (traverse >= 1) ? prog_tap_gate(core, p, px, py, &tgx, &tgy) : 0;
@@ -595,6 +598,17 @@ static u16 walk_update_inner(bool touching, bool newPress, bool gvalid, int gx, 
 					   to a router that would swim into the fall and be flushed back down. */
 				} else if (ftr == 1) {
 					/* armed by the conditional planner */
+				} else if (gate == 2) {
+					// The tapped tile IS a fall, and the conditional planner declined (no badge, no
+					// mon, or the top already reached). The raw tile can never go to the dry router,
+					// so fall back to the EFFECTIVE goal fieldtrav resolved — the top of the column
+					// — and only if it really retargeted one. Otherwise: nothing, which is what the
+					// user sees today for an unreachable tap.
+					int rgx, rgy;
+					if (prog_retargeted_goal(&rgx, &rgy) &&
+					    walk_plan(core, p, px, py, rgx, rgy, mapG, mapN)) {
+						s_walking = true; s_lpx = px; s_lpy = py; s_stall = 0; s_replans = 0;
+					}
 				} else if (walk_plan(core, p, px, py, tgx, tgy, mapG, mapN)) {
 					s_walking = true; s_lpx = px; s_lpy = py; s_stall = 0; s_replans = 0;
 				} else if (traverse >= 1) {
@@ -1041,11 +1055,16 @@ static void prog_chip_refresh(void) {
 //     beside the boulder); only the TERMINAL differs, a hold versus the game's own prompt. Nothing
 //     is displaced, which is why this is not the tier inversion H1.7 forbids.
 //
-// Returns  1 = ask the conditional planner FIRST,  0 = shipped order, unchanged,
-//         -1 = plan NOTHING (a waterfall tap whose column will not resolve; handing that to the dry
-//              router is exactly the flush described above).
-// Also rewrites (*gx,*gy) to the EFFECTIVE goal, so whichever tier ends up owning the tap aims at
-// the same tile (the retarget rule itself, and its citations, are in fieldtrav_plan).
+// Returns  2 = the tap landed ON a waterfall: ask the conditional planner FIRST, and NEVER hand the
+//              raw tile to a router afterwards (that tile is the flush),
+//          1 = ask the conditional planner FIRST, ordinary fallback afterwards,
+//          0 = shipped order, unchanged,
+//         -1 = plan NOTHING (a waterfall tap whose column will not resolve).
+//
+// It CLASSIFIES only; it does not move the goal. The retarget has exactly one implementation, in
+// `fieldtrav_plan`, which is also what makes it host-testable and what makes `FtProgram.wfRetarget`
+// (and the `progRetarget` mirror) mean something on a live run — a gate that quietly pre-retargeted
+// would leave the planner with nothing to report.
 //
 // Cost discipline: this runs on every tap while the toggle is on, so the cheap tests come first —
 // one behaviour read, then a coordinate compare and the avatar's surf bit, and only then anything
@@ -1058,14 +1077,13 @@ static int prog_tap_gate(GbaCore* core, const GameProfile* p, int px, int py, in
 	FpBus bus = { fp_r8, fp_r16, fp_r32, core };
 	FpMap m = { fp_engine(p), p->mapHeaderPath, p->mapObjects, ptr, w, h };
 
-	// (1) The tap landed ON a waterfall. Retarget onto the tile the game's own ride ends on — a
-	//     tall fall's top is otherwise unreachable by a tap at all (the window is 5 tiles up, and
-	//     Ever Grande's fall is 8), and the raw tile must never be handed to a router.
+	// (1) The tap landed ON a waterfall — "take me up this". A tall fall's top is unreachable by a
+	//     tap at all (the window is 5 tiles up; Ever Grande's fall is 8), so this gesture is the
+	//     only one available. Refuse outright if the column will not resolve: the raw tile is the
+	//     one thing that must never reach a router.
 	if (fieldtrav_is_waterfall(m.engine, fieldpath_behaviour_at(&bus, &m, *gx, *gy))) {
 		int ty = fieldtrav_waterfall_top(&bus, &m, *gx, *gy);
-		if (ty < 0 || abs(ty - py) > FP_WHALF) return -1;
-		*gy = ty;
-		return 1;
+		return (ty < 0 || abs(ty - py) > FP_WHALF) ? -1 : 2;
 	}
 	FtVariant var = ft_variant(p);
 	// (2) Mid-surf, aimed UPWARD, with Waterfall actually usable. The direction test is what keeps
@@ -1081,6 +1099,16 @@ static int prog_tap_gate(GbaCore* core, const GameProfile* p, int px, int py, in
 		if (fieldtrav_strength_tap(&bus, &m, var, &pty, *gx, *gy) >= 0) return 1;
 	}
 	return 0;
+}
+
+// The goal the LAST `fieldtrav_plan` actually resolved, and 1 only when it really moved it: a tap
+// on a waterfall aims at the tile the game's own ride ends on, not at the tile the finger touched.
+// The tap handler needs it for one case — a fall the conditional planner declined — where the raw
+// tile must not be handed to the dry router but the top of the column safely can be.
+static int prog_retargeted_goal(int* gx, int* gy) {
+	if (!s_prog.wfRetarget) return 0;
+	*gx = s_prog.goalX; *gy = s_prog.goalY;
+	return 1;
 }
 
 // Plan (or re-plan) a conditional route to (gx,gy). Returns:
