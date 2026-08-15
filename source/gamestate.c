@@ -169,10 +169,31 @@ static const GameProfile PROFILES[] = {
             { 0x0813591Cu, 0x00000000u, 0x00000000u, 0x00000000u },
             /* phase 25 (lane C1) cb2Inert — the CREDITS, detected and given nothing (TOUCH-PLAN
                L2). CB2_Credits 0x081754DC + CB2_StartCreditsSequence 0x08175620 (the multi-state
-               starter set at hall_of_fame.c:781). VERIFIED-SYM on pokeemerald.sym, LIVE-UNREACHED
-               and honestly so: the credits play once after the Elite Four and Gen 3 has no
-               replay, so no save on this machine can visit them. Compare-only => a wrong value
-               can only mean "no change". */
+               starter set at hall_of_fame.c:781). VERIFIED-SYM on pokeemerald.sym.
+
+               PHASE 27 (lane R) — THE REASON WRITTEN HERE WAS FALSE, and the phase-25 audit F1
+               caught it. It used to read "the credits play once after the Elite Four and Gen 3
+               has no replay, so no save on this machine can visit them." They replay on EVERY
+               league clear. Re-read from pret this session, not inherited:
+                 data/maps/EverGrandeCity_HallOfFame/scripts.inc:54 (male) / :61 (female)
+                     `special GameClear` — UNCONDITIONAL on both branches, no flag guard;
+                 src/post_battle_event_funcs.c:23-30 — GameClear() tests FLAG_SYS_GAME_CLEAR only
+                     to decide whether gHasHallOfFameRecords is TRUE, never to skip anything, and
+                     ends at :84 SetMainCallback2(CB2_DoHallOfFameScreen);
+                 src/hall_of_fame.c:743 -> Task_Hof_HandleExit -> :775 StartCredits() ->
+                     :779-781 SetMainCallback2(CB2_StartCreditsSequence).
+               No gate anywhere on that path. L2 is BUDGET-GATED (one Elite Four rematch), not
+               unreachable, and it arrives jointly with the Hall-of-Fame scene (row L1).
+
+               AND THE STING, which is why this class exists at all: the fast-forward at
+               src/credits.c:349-351 is `JOY_HELD(B_BUTTON) && gHasHallOfFameRecords && ...`, and
+               gHasHallOfFameRecords is TRUE only when FLAG_SYS_GAME_CLEAR was ALREADY set — i.e.
+               only on a REPEAT clear. So a finger resting on the screen double-speeds the credits
+               on exactly the run that used to be called impossible, and roms/emerald-fix.sav has
+               FLAG_SYS_GAME_CLEAR = 1 (read out of the save this session). GCTX_INERT is not a
+               precaution here; it is the fix.
+
+               Compare-only => a wrong value can only mean "no change". */
             { 0x081754DCu, 0x08175620u, 0x00000000u, 0x00000000u },
             /* phase 25 questLog = 0: Emerald has no quest log (an FRLG feature). */
             0x00000000u,
@@ -373,9 +394,15 @@ static const GameProfile PROFILES[] = {
                that IS rev-sensitive is already covered on both revisions. */
             { 0x0813CE78u, 0x081318DCu, 0x00000000u, 0x00000000u },
             /* phase 25 (lane C1) cb2Inert — the CREDITS (TOUCH-PLAN L2). CB2_Credits 0x080F3A60,
-               VERIFIED-SYM on pokefirered_rev1.sym, LIVE-UNREACHED (same reason as Emerald).
-               FR's credits main loop is the same shape as EM's; the row ships one value because
-               FRLG's starter is not a separate long-lived callback. */
+               VERIFIED-SYM on pokefirered_rev1.sym, LIVE-UNREACHED. FR's credits main loop is the
+               same shape as EM's; the row ships one value because FRLG's starter is not a separate
+               long-lived callback.
+               PHASE 27 (lane R): "same reason as Emerald" used to point at a FALSE reason — see
+               the BPEE cb2Inert comment above. FRLG replays its credits on every league clear too;
+               this half is unreached for the ordinary budget reason (no FR save on this machine
+               stands at the Indigo Plateau), which is a sentence about our fixtures, not about the
+               engine. REV NOTE: 0x080F3A60 is FireRed **rev1** (the user's cart); a rev0 cart
+               simply gets no INERT classification here, i.e. as broken as before, never mis-keyed. */
             { 0x080F3A60u, 0x00000000u, 0x00000000u, 0x00000000u },
             /* phase 25 (lane C1) questLog = gQuestLogState 0x0203ADFA (row K4). EWRAM, and
                IDENTICAL in pokefirered.sym / pokefirered_rev1.sym / both LeafGreen maps —
