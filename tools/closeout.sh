@@ -63,13 +63,40 @@ done
 
 echo "== 6. evidence integrity =="
 # A byte-identical capture cited as independent proof has already been withdrawn from this tree.
+#
+# PHASE 29 LANE E: the whole-file hash this check used to run was BOTH too loud and too
+# quiet. Too loud, because a census capture photographs BOTH 3DS screens and only one is
+# the subject — the other holds a second, undriven game whose static screens repeat, which
+# is 18 of the 20 groups it reported and carries no claim. Too quiet, because the subject
+# screen's HUD strip (clock + FPS) changes every capture, so two shots of one unchanged
+# game screen hash differently and slip through. `censusguard` hashes the 240x160 GBA
+# frame of the SUBJECT screen only — the exact thing a census row claims.
 EV=docs/phase21-touch-census/evidence
-if [ -d "$EV" ]; then
-  DUPS=$(find "$EV" -name '*.png' -exec shasum {} + 2>/dev/null | awk '{print $1}' | sort | uniq -d | wc -l | tr -d ' ')
-  if [ "$DUPS" = 0 ]; then ok "no duplicate captures"
+GUARD=tools/emutest/.venv/bin/python
+if [ -d "$EV" ] && [ -x "$GUARD" ]; then
+  # exit 1 ONLY when a group names two census rows; aux/ working captures may repeat.
+  if OUT=$("$GUARD" tools/emutest/censusguard.py audit "$EV/emerald" "$EV/firered" 2>&1); then
+    ok "$(printf '%s\n' "$OUT" | head -1 | sed 's/^censusguard: //')"
   else
-    warn "$DUPS duplicate capture hash(es) — a duplicate is only OK if no claim rests on it:"
-    find "$EV" -name '*.png' -exec shasum {} + 2>/dev/null | sort | awk '{if($1==p)print "         "$2; p=$1}' | head -6
+    bad "two census rows share one subject frame — one of them has no evidence of its own:"
+    printf '%s\n' "$OUT" | awk '/\[CENSUS ROW\]/{p=1} /\[aux\]/{p=0} p' | sed 's/^/       /'
+  fi
+elif [ -d "$EV" ]; then
+  warn "censusguard needs tools/emutest/.venv (run tools/emutest/setup.sh) — evidence unchecked"
+fi
+# impl/ captures are single-screen and ZOOMED (720x480), not native 3DS screens, so
+# censusguard cannot crop a GBA frame out of them — the whole-file hash IS the right check
+# there and stays. Known standing item: the phase-23 FR-dlg-P2 / FR-dlg-P4 pair
+# (579bffca…), found and reported by lane C1 in a388d48; P4's claim rests on its gdb
+# deltas, not on that picture.
+if [ -d "$EV/impl" ]; then
+  IDUP=$(find "$EV/impl" -name '*.png' -exec shasum -a 256 {} + 2>/dev/null \
+         | awk '{print $1}' | sort | uniq -d | wc -l | tr -d ' ')
+  if [ "$IDUP" -le 1 ]; then ok "evidence/impl: $IDUP duplicate pair (the known phase-23 one)"
+  else
+    warn "evidence/impl has $IDUP duplicate hash(es) — one file must not carry two claims:"
+    find "$EV/impl" -name '*.png' -exec shasum -a 256 {} + 2>/dev/null | sort \
+      | awk '{if($1==p)print "         "$2; p=$1}' | head -8
   fi
 fi
 

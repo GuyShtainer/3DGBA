@@ -19,6 +19,21 @@ and confirms its CB2 live.
   mask the Thumb bit, resolve against the matching symbol file (user's FR is **rev1**;
   user's R/S carts are **rev2** — use the per-rev sym files, never the rev0 map). A screen
   identified this way is CERTAIN. Never promote a guessed address.
+- **What that certainty covers — measured 2026-08-15, `EVIDENCE-INTEGRITY.md` §3.** The
+  cb2 read identifies the **callback family, not the screen**. Across the banked census one
+  `CB2_Pokedex` read covers all six Emerald dex sub-screens, `CB2_UpdatePartyMenu` covers
+  six, and FireRed's `CB2_Overworld` covers **32** rows (every task-over-map dialog, shop,
+  Safari and PC screen). Only 12 Emerald and 6 FireRed captures sit on a callback used by
+  no other capture. So: the callback is evidenced by a live read; **which screen inside the
+  family is evidenced by the picture.** State both, never one for the other.
+- **What a capture PAIR is.** The harness banks `<id>.top.png` **and** `<id>.bottom.png`,
+  but only one of them is the census subject: Emerald ran as gameA on the **top** screen,
+  FireRed as gameB on the **bottom** (`VISITED-*.md` headers). The other file photographs
+  the *second, undriven game* — during the Emerald pass FireRed free-ran its boot demo
+  (`CB2_TitleScreenRun` ×126, `CB2_Intro` ×53, `CB2_InitCopyrightScreenAfterTitleScreen`
+  ×5 in `CAPTURES-emerald.log`), so those companions legitimately repeat and **carry no
+  claim about the screen they are filed with**. `tools/emutest/censusguard.py` encodes
+  which screen is the subject; `tools/closeout.sh` §6 hashes only that one.
 - Reachability is judged against the **staged endgame saves** (see BUILDLOG session note:
   Emerald = everything unlocked incl. Frontier/contests/pokenav; FireRed = completed;
   Ruby ~600h completed).

@@ -9,8 +9,9 @@ does today, and plan making every screen feel touch-native. Done — the plan is
 | Metric | Count |
 |---|---|
 | Screens catalogued (all 5 games, from the pret decomps) | **143 rows** (≈70 touch-distinct interactive surfaces) |
-| Visited live in the emulator & identified with certainty | **61 distinct screens** (41 Emerald + 41 FireRed, 21 FR-only) |
-| Screenshot pairs banked | **~165** (evidence/emerald/ 143 files, evidence/firered/ 194 files) |
+| Visited live in the emulator | **61 distinct catalog rows** — 43 Emerald + 42 FireRed, **24 in both** (43 + 42 − 24 = 61). _Corrected 2026-08-15, `EVIDENCE-INTEGRITY.md`: the first draft's "41 Emerald + 41 FireRed, 21 FR-only" does not reconcile (41 + 21 = 62), and **41 + 41 = 82 is a sum with overlap** — it is not a number of screens and must not be quoted as one._ |
+| …identified with certainty | **to the callback family, not to the screen.** The live `gMain.callback2` read is exact, but one read covers a whole family: `CB2_Pokedex` covers all 6 Emerald dex sub-screens, `CB2_Overworld` covers 32 FireRed rows. Within a family the screen identity rests on the picture alone (§ `EVIDENCE-INTEGRITY.md` §3) |
+| Census-row captures banked | **170 subject frames** (74 Emerald tops + 96 FireRed bottoms), all distinct, **+1 withdrawn** (`firered/withdrawn/I4c-slotspin`). Plus 183 `emerald/aux/` working captures and, in every pair, a companion screen photographing the OTHER, undriven game — a companion carries no claim |
 | Live cb2 fingerprints harvested (zero guesses, all [exact] on pret symbol maps) | **~60** |
 | Screens already touch-native today | **8 GCTX contexts — on Emerald only** |
 | Screens where a full touch mapping is worth building | **≈42**, collapsing into **8 design families** |

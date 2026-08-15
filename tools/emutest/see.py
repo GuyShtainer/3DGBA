@@ -619,6 +619,13 @@ def main(argv=None):
     s.add_argument("out", help="output PNG ('both' writes OUT.top.png + OUT.bottom.png)")
     s.add_argument("--raw-window", metavar="FULL.png",
                    help="also save the uncropped window capture")
+    s.epilog = ("NOTE (phase 29 lane E): `shot` is stateless — it has no memory of the "
+                "previous capture and cannot tell a fresh screen from a stale one. To "
+                "BANK census evidence use `run censusguard bank SHOT.png OUT.png "
+                "--screen top|bottom --against <evidence dir>`, which reconstructs to "
+                "native res and refuses to write a frame that repeats one already "
+                "banked. `shot` + `native.py` + an eyeball is what banked "
+                "firered/I4c-slotspin, a re-shot of I4-slotmachine labelled 'mid-spin'.")
     s.add_argument("--wake", action="store_true",
                    help="wake a sleeping display first (synchronous `caffeinate -u -t 3`). A background caffeinate is NOT reliable — observed four live caffeinate processes with the display asleep anyway; a short synchronous one immediately before the grab is. Off by default: waking the user's display is a side effect they should ask for.")
     s.set_defaults(fn=cmd_shot)
