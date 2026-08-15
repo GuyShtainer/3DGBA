@@ -383,7 +383,9 @@ VERIFY flag as every other traversal timing.
 
 ## 8. Gate
 
-**Host suites: 17 binaries, 0 failures**, run from the committed tree.
+**Host suites: 18 binaries, 0 failures**, run from the committed tree. (The "17" this line
+shipped with was wrong — phase-26 audit O6a; corrected phase 28 / lane X, which takes it to 19 by
+adding `test_progtap`.)
 `test_fieldtrav` went **1210 → 3397 checks** (this lane and lane W's Waterfall/Strength lane both
 landed in it; the DIVE blocks are TEST 20 and TEST 21). `test_fieldpath` unchanged at 1808.
 `make -j8` — see the lane log. **No emulator was booted and `make cia` was not run.**

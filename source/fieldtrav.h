@@ -517,8 +517,10 @@ bool fieldtrav_underwater(const FpBus* bus, const FpMap* m);
 
 // Follow gMapHeader.connections (+0x0C) and return the map on the other end of direction `dir`.
 // False = this map has no such connection — which is the honest answer for BOTH "no connections at
-// all" (pret emits a NULL pointer there: tools/mapjson/mapjson.cpp:155-159, and 455 of Emerald's
-// 869 maps take that branch) and the SCRIPTED dive maps (Sootopolis, Sealed Chamber, Marine Cave,
+// all" (pret emits a NULL pointer there: tools/mapjson/mapjson.cpp:155-159, and 454 of Emerald's
+// 518 maps take that branch — phase-26 audit F3, re-measured on the user's own BPEE ROM by
+// phase 28 lane X: 518 maps enumerated through fieldtrav_rom_map, 454 with a non-ROM +0x0C)
+// and the SCRIPTED dive maps (Sootopolis, Sealed Chamber, Marine Cave,
 // Seafloor Cavern, Abandoned Ship, Route 134), whose destination is set by an ON_DIVE_WARP map
 // script running `setdivewarp` rather than by a connection (src/overworld.c:766-769). We do not
 // interpret map scripts, so those dive spots are REFUSED, not guessed — a named degradation.

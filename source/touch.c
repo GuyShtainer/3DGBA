@@ -15,6 +15,7 @@
 #include "touchgeom.h" // phase 22.1: keyboard + list hit geometry (pure C, host-tested)
 #include "progseq.h"   // phase 25 / audit O2: the interact sequencer (pure C, host-tested)
 #include "excseq.h"    // phase 25 / audit O2: the excursion leg machine (pure C, host-tested)
+#include "progtap.h"   // phase 28 / audit O3: the tap gate's decision (pure C, host-tested)
 
 const char* const TOUCH_NAMES[3] = { "Off", "Gamepad", "Smart" };
 
@@ -500,6 +501,11 @@ static bool prog_surfing(GbaCore* core, const GameProfile* p);   // fwd: gPlayer
 static int  prog_facing(GbaCore* core, const GameProfile* p);    // fwd: gObjectEvents[0] facing
 static int  prog_tap_gate(GbaCore* core, const GameProfile* p, int px, int py, int* gx, int* gy);
 static int  prog_retargeted_goal(int* gx, int* gy);              // fwd: the last plan's real goal
+static bool prog_strength_on(GbaCore* core, const GameProfile* p);   // fwd: the live latch
+// PHASE 28 / lane X: the object slot the last STRENGTH plan aimed at, so the live mirror can watch
+// the boulder that is supposed to STAY PUT. Latched at plan time, kept afterwards (the question is
+// asked once the program has ended); -1 until a Strength plan happens.
+static int  s_strObj = -1;
 
 static u16 walk_update_inner(bool touching, bool newPress, bool gvalid, int gx, int gy,
                              int px, int py, int mapG, int mapN, GbaCore* core, const GameProfile* p,
@@ -758,6 +764,17 @@ static u16 walk_update(bool touching, bool newPress, bool gvalid, int gx, int gy
 	// unreadable the moment the program ended. It is a read of the game's own gPlayerAvatar.
 	g_fieldDbg.progSurf = prog_surfing(core, p) ? 1 : 0;
 	g_fieldDbg.progFacing = prog_facing(core, p);   // ...and which way we are aiming an A
+	// PHASE 28 / lane X: the two never-executed HMs' OWN observables, in the live half for the same
+	// reason the surf bit is — they are asked about exactly when the program is over. See touch.h.
+	g_fieldDbg.progBeh   = (core && p && p->mapObjects)
+	                     ? (int32_t)gbacore_read8(core, p->mapObjects + 0x1Eu) : -1;
+	g_fieldDbg.progLatch = prog_strength_on(core, p) ? 1 : 0;
+	g_fieldDbg.progObjSlot = s_strObj;
+	if (s_strObj >= 0 && core && p && p->mapObjects) {
+		uint32_t b = p->mapObjects + 0x24u * (uint32_t)s_strObj;
+		g_fieldDbg.progObjX = (int32_t)(int16_t)gbacore_read16(core, b + 0x10u) - 7;
+		g_fieldDbg.progObjY = (int32_t)(int16_t)gbacore_read16(core, b + 0x12u) - 7;
+	}
 	return k;
 }
 
@@ -1069,36 +1086,39 @@ static void prog_chip_refresh(void) {
 // Cost discipline: this runs on every tap while the toggle is on, so the cheap tests come first —
 // one behaviour read, then a coordinate compare and the avatar's surf bit, and only then anything
 // that walks the party.
+// PHASE 28 / lane X (phase-26 audit O3): the DECISION now lives in `progtap.c`, where a host suite
+// compiles it; this function is only the READS, in the order the cost discipline above demands —
+// one behaviour read, then a coordinate compare and the avatar's surf bit, and only then anything
+// that walks the party. The scope argument for `PT_GATE_FIRST` is written out in progtap.c.
 static int prog_tap_gate(GbaCore* core, const GameProfile* p, int px, int py, int* gx, int* gy) {
 	(void)px;
-	if (!core || !p || !gx || !gy) return 0;
+	if (!core || !p || !gx || !gy) return PT_GATE_SHIPPED;
 	int w, h; uint32_t ptr;
-	if (!map_read(core, p, &w, &h, &ptr)) return 0;
+	if (!map_read(core, p, &w, &h, &ptr)) return PT_GATE_SHIPPED;
 	FpBus bus = { fp_r8, fp_r16, fp_r32, core };
 	FpMap m = { fp_engine(p), p->mapHeaderPath, p->mapObjects, ptr, w, h };
 
-	// (1) The tap landed ON a waterfall — "take me up this". A tall fall's top is unreachable by a
-	//     tap at all (the window is 5 tiles up; Ever Grande's fall is 8), so this gesture is the
-	//     only one available. Refuse outright if the column will not resolve: the raw tile is the
-	//     one thing that must never reach a router.
-	if (fieldtrav_is_waterfall(m.engine, fieldpath_behaviour_at(&bus, &m, *gx, *gy))) {
-		int ty = fieldtrav_waterfall_top(&bus, &m, *gx, *gy);
-		return (ty < 0 || abs(ty - py) > FP_WHALF) ? -1 : 2;
+	PtObs o;
+	o.py = py; o.whalf = FP_WHALF;
+	o.goalIsWaterfall = fieldtrav_is_waterfall(m.engine, fieldpath_behaviour_at(&bus, &m, *gx, *gy)) ? 1 : 0;
+	o.topY = o.goalIsWaterfall ? fieldtrav_waterfall_top(&bus, &m, *gx, *gy) : -1;
+	o.upward = (*gy < py) ? 1 : 0;
+	o.surfing = 0; o.waterfallUsable = 0; o.strengthTap = 0;
+	if (!o.goalIsWaterfall) {
+		FtVariant var = ft_variant(p);
+		if (o.upward) {
+			o.surfing = prog_surfing(core, p) ? 1 : 0;
+			if (o.surfing) {
+				FtParty pty = prog_party(core, p);
+				o.waterfallUsable = (fieldtrav_usable(&bus, var, &pty) & (1u << FT_HM_WATERFALL)) ? 1 : 0;
+			}
+		}
+		if (!(o.upward && o.surfing && o.waterfallUsable)) {
+			FtParty pty = prog_party(core, p);
+			o.strengthTap = (fieldtrav_strength_tap(&bus, &m, var, &pty, *gx, *gy) >= 0) ? 1 : 0;
+		}
 	}
-	FtVariant var = ft_variant(p);
-	// (2) Mid-surf, aimed UPWARD, with Waterfall actually usable. The direction test is what keeps
-	//     this off every ordinary water tap: the edge only ever climbs.
-	if (*gy < py && prog_surfing(core, p)) {
-		FtParty pty = prog_party(core, p);
-		if (fieldtrav_usable(&bus, var, &pty) & (1u << FT_HM_WATERFALL)) return 1;
-	}
-	// (3) The boulder terminal. `fieldtrav_strength_tap` is the SAME function fieldtrav_plan uses
-	//     to decide whether the edge exists, so the gate and the planner cannot disagree.
-	{
-		FtParty pty = prog_party(core, p);
-		if (fieldtrav_strength_tap(&bus, &m, var, &pty, *gx, *gy) >= 0) return 1;
-	}
-	return 0;
+	return progtap_gate(&o);
 }
 
 // The goal the LAST `fieldtrav_plan` actually resolved, and 1 only when it really moved it: a tap
@@ -1106,9 +1126,7 @@ static int prog_tap_gate(GbaCore* core, const GameProfile* p, int px, int py, in
 // The tap handler needs it for one case — a fall the conditional planner declined — where the raw
 // tile must not be handed to the dry router but the top of the column safely can be.
 static int prog_retargeted_goal(int* gx, int* gy) {
-	if (!s_prog.wfRetarget) return 0;
-	*gx = s_prog.goalX; *gy = s_prog.goalY;
-	return 1;
+	return progtap_retargeted_goal(s_prog.wfRetarget, s_prog.goalX, s_prog.goalY, gx, gy);
 }
 
 // Plan (or re-plan) a conditional route to (gx,gy). Returns:
@@ -1146,6 +1164,10 @@ static int prog_plan(GbaCore* core, const GameProfile* p, int px, int py, int gx
 	// see forced movement, would cheerfully swim into it. For every non-retargeted tap these two
 	// are identical (fieldtrav_plan sets goalX/goalY = gx/gy on entry).
 	s_progGoalX = s_prog.goalX; s_progGoalY = s_prog.goalY;
+	// PHASE 28 / lane X: remember which object a STRENGTH program will prompt at, so the live mirror
+	// can publish that boulder's coordinates. LOGGING ONLY — nothing plans off it.
+	for (int i = 0; i < s_prog.nMoves; i++)
+		if (s_prog.mv[i].hm == FT_HM_STRENGTH) { s_strObj = s_prog.mv[i].objSlot; break; }
 	g_fieldDbg.progSeq = ++s_progSeq;
 	g_fieldDbg.progEnd = TPE_NONE;
 	prog_dbg_stamp();

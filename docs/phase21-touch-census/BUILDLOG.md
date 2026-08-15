@@ -163,7 +163,8 @@ scanline window radius and a battle transition type. `flashLevel`/`FLAG_SYS_USE_
 ZERO times in fieldmap.c / field_player_avatar.c / field_control_avatar.c. Emerald's Registeel
 braille door is the one near-miss and is a party-menu puzzle, not a tile edge.
 
-Gate: 17 host suite binaries, 0 failures; `test_fieldtrav` 1210 -> 3397 checks (shared with
+Gate: 18 host suite binaries, 0 failures ("17" was wrong — audit O6a, corrected phase 28 / lane X;
+19 from phase 28, which adds `test_progtap`); `test_fieldtrav` 1210 -> 3397 checks (shared with
 lane W's Waterfall/Strength blocks; DIVE is TEST 20/21). `make -j8` clean, no new warnings.
 `source/fieldpath.{c,h}` byte-identical (frozen, rule 2). Mutation gate: 17 of 19 bite; the
 two that do not are named and explained in SPEC-hm-dive §8 rather than papered over.

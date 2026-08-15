@@ -181,6 +181,24 @@ typedef struct {
 	int32_t progRetarget;   // +0xC0  1 = this plan's goal was retargeted off a waterfall tile
 	int32_t progGoalX;      // +0xC4  …and the goal it was retargeted TO (map-local), so the tap and
 	int32_t progGoalY;      // +0xC8    the destination can be compared in one read
+	// --- PHASE 28 / lane X — the LIVE channel for the two HMs phase 26 implemented and never ran.
+	// Both proofs are about a byte inside the emulated console that no screenshot and no existing
+	// mirror could reach, so each is published where the harness can read it every frame:
+	//   * progBeh   — gObjectEvents[0].currentMetatileBehavior (+0x1E), the SAME byte the game's
+	//     own waterfall ride loops on (pokeemerald src/field_effect.c:1885). A ride is proven by
+	//     watching it read 0x13 for each tile of the column and then stop.
+	//   * progLatch — FlagGet(FLAG_SYS_USE_STRENGTH) live. progseq completes on this flag, so
+	//     without the mirror "the boulder activated" is only inferable from TPE_ARRIVED.
+	//   * progObj*  — the object slot the last STRENGTH plan aimed at, and that object's live
+	//     currentCoords (map-local, the engine's +7 grid bias removed). The W2 safety property is
+	//     a NEGATIVE — the boulder must NOT move — and a negative needs a number, before and after.
+	// LOGGING ONLY; nothing reads them back. Cost: three EWRAM reads plus a flag read per overworld
+	// frame, alongside the progSurf/progFacing reads already made there.
+	int32_t progBeh;        // +0xCC  currentMetatileBehavior of the player object, -1 unreadable
+	int32_t progLatch;      // +0xD0  1 = FLAG_SYS_USE_STRENGTH is set right now
+	int32_t progObjSlot;    // +0xD4  object slot a STRENGTH plan aimed at (-1 = none this session)
+	int32_t progObjX;       // +0xD8  …its live currentCoords, map-local
+	int32_t progObjY;       // +0xDC
 } FieldDbg;
 extern FieldDbg g_fieldDbg;
 
