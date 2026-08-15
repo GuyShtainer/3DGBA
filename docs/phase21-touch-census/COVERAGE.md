@@ -113,8 +113,15 @@ From the phase-18 T5 audit (`docs/phase18-crisp/SPEC-door.md:464-520`) — resid
 - **T5.3 Tall grass:** routes cross it; a wild encounter drops the route correctly, but nothing
   resumes it after the battle.
 - **T5.8 Forced-movement tiles** (ice, currents, spin, muddy slopes): walkable to the router, slide
-  the player, desync into a stall. Unmitigated (the bounded path-only behaviour scan was optional and
-  not taken — SPEC-door Open Q7).
+  the player, desync into a stall. **Partly mitigated since phase 26** (audit §6.9 asked for this
+  sync): `fieldtrav`'s SURF tier now refuses a waterfall as a transit tile (`transition()`, 5 checks
+  in `test_fieldtrav`), so the traversal layer no longer plots a swim up a fall. Still unmitigated:
+  the CURRENTS twin (0x50–0x53) inside the same tier, and — the one that bites at the shipped default
+  — the FROZEN `fieldpath` router, which still plots a swim up a fall whenever `smartTraverse` is 0,
+  because the containment lives in the tap gate and the tap gate only runs at level ≥ 1. **Phase 28 /
+  lane X measured that live** (Route 114, emulator): with Waterfall not yet usable, a tap on the fall
+  handed the retargeted goal to `fieldpath`, which planned a 4-step swim UP the column and reported
+  `end=ARRIVED` — while the player never moved (LANE-X-EXECUTE.md, defect X2).
 - **T5.9 Connected maps:** behaviour reads outside the current map's bounds are refused
   (classification falls back to legacy) — pret has the identical limitation.
 - Bag: visible-rows-only select; no direct scroll-field write (deliberate — racy); no item-count

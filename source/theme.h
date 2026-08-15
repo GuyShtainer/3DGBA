@@ -59,7 +59,11 @@ typedef struct {
 	// phase 22.2 (SPEC-family-traversal T4.1): HM-aware routing for SMART touch.
 	//   0 = Off (SHIP DEFAULT) — the router is exactly the phase-18 walker; a tap that needs Cut
 	//       or Surf plans nothing, as it does today.
-	//   1 = HM   — conditional edges on the CURRENT map (Surf mount/dismount, Cut, Rock Smash).
+	//   1 = HM   — conditional edges on the CURRENT map: Surf mount/dismount, Cut, Rock Smash,
+	//       WATERFALL (phase 26 — a tap on a fall means "take me up it", one interact for the whole
+	//       column) and the STRENGTH terminal (a tap ON a boulder activates the move; the router
+	//       never routes THROUGH one and never pushes one). Dive is planned by fieldtrav_dive but
+	//       is NOT wired to touch, so no level plans it.
 	//   2 = HM+Via — plus single-warp out-and-back excursions (the Lavaridge class).
 	// Ships Off for the tiltLevel reason (theme.h:57): a feature that MOVES THE PLAYER and answers
 	// the game's own yes/no prompts is not something to switch on for everyone before it has

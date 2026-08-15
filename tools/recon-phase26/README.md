@@ -11,11 +11,11 @@ Build (from the project root):
 
 | tool | question it answers |
 |---|---|
-| `wfscan.c`   | every MB_WATERFALL column in a ROM: base tile, height, the tile below, the landing, collision |
+| `wfscan.c`   | every MB_WATERFALL column in a ROM: base tile, height, the tile below, the landing, collision. **Takes the engine and the group table** (phase-26 audit O7 — it used to hardcode Emerald's and answer 0 for FireRed): `wfscan [rom] [gMapGroupsHex] [eng 0=RSE/1=FRLG] [nGroups] [counts...]`. Verified phase 28: EM 62, FR 17, RB 39. |
 | `mapdump2.c` | behaviour / collision / elevation for a rectangle of one map |
 | `reach2.c`   | SURF-layer flood from a tile (this engine's surfable set, waterfalls excluded) |
 | `foot.c`     | FOOT flood at a given elevation, plus distances to named tiles |
-| `bscan.c`    | every `ObjectEventTemplate` in a ROM with a given `graphicsId` (e.g. 87 = pushable boulder) |
+| `bscan.c`    | every `ObjectEventTemplate` in a ROM with a given `graphicsId` (e.g. 87 = pushable boulder). Usage: `bscan rom mgHex gfx nGroups counts...`; Emerald 87 gives **ten** sites (audit F1, re-run phase 28) |
 
 `gMapGroups` per title (gamestate.c's own profile values): BPEE `08486578`, BPRE rev1 `08352718`,
 BPGE rev1 `083526F8`, AXVE rev2 `083085A0`.
