@@ -47,8 +47,18 @@ typedef enum {
 	FT_HM_CUT,        // an OBJECT edge: the cuttable tree's object slot deactivates
 	FT_HM_SMASH,      // an OBJECT edge: the breakable rock's object slot deactivates
 	FT_HM_SURF,       // a METATILE edge: mount at the shore, the game steps you onto the water
-	FT_HM_WATERFALL,  // slice 2 — mid-surf vertical edge
-	FT_HM_STRENGTH,   // activation only (never a planned edge in v1)
+	FT_HM_WATERFALL,  // PHASE 26 / lane W — a MULTI-TILE metatile edge. The player is already
+	                  //   surfing, faces a MB_WATERFALL tile, and ONE interaction carries them up
+	                  //   the WHOLE contiguous column of them (the game rides while the tile it
+	                  //   lands on is still a waterfall — pokeemerald src/field_effect.c:1880-1893
+	                  //   WaterfallFieldEffect_ContinueRideOrEnd). So a waterfall edge is one
+	                  //   FtMove that moves the player K+1 tiles, not one tile.
+	FT_HM_STRENGTH,   // PHASE 26 / lane W — a TERMINAL-ONLY edge: it exists ONLY when the tapped
+	                  //   GOAL tile is the boulder itself, and it ACTIVATES Strength (the game's
+	                  //   FLAG_SYS_USE_STRENGTH latch) without pushing anything. The router never
+	                  //   passes THROUGH a boulder: pushing is a puzzle, and a puzzle is the
+	                  //   player's to solve (see the argument on fieldtrav.c's `edge_at`).
+	FT_HM_DIVE,       // PHASE 26 — a MAP TRANSITION, not a tile edge (SPEC-hm-dive §1)
 	FT_HM_COUNT
 } FtHm;
 
@@ -103,6 +113,15 @@ typedef struct {
 	// in touchgeom.c (rungeom_*), while the ONE thing it needs from the save is
 	// FlagGet(FLAG_SYS_B_DASH) — "have the Running Shoes been received".
 	uint16_t runShoes;        // FLAG_SYS_B_DASH
+	// PHASE 26 / lane V (SPEC-hm-dive). APPENDED for the same positional-init reason as `runShoes`.
+	// **0 means "this engine has no Dive at all"** and is a NAMED value, not a missing one: it is
+	// the only honest FRLG row, because FireRed/LeafGreen never reach a dive script (pokefirered
+	// src/field_control_avatar.c ProcessPlayerFieldInput has no dive hook, and
+	// data/scripts/field_moves.inc:210 labels the whole block "@ Unused leftover from R/S").
+	// Carrying Emerald's 0x86D across would be worse than useless: FRLG's OWN badge07 is
+	// **0x826, the WATERFALL badge** (this struct's `badgeWaterfall`), so an FRLG save with the
+	// Soul Badge would read as dive-eligible. That is the c2a58db mistake in a new costume.
+	uint16_t badgeDive;       // FLAG_BADGE07_GET in RSE; 0 = engine has no Dive
 } FtEngCfg;
 
 // Never NULL: an unknown variant returns the Emerald table (fieldpath's own fallback convention).
@@ -112,9 +131,55 @@ const FtEngCfg* fieldtrav_cfg(FtVariant var);
 // Deliberately NOT the game's set verbatim: the four CURRENT behaviours (0x50-0x53) are surfable
 // in both engines and are EXCLUDED here, because a current moves the player on its own and the
 // router must never steer into a tile that takes the controls away (COVERAGE §3, rule T5.8).
-// MB_WATERFALL 0x13 is likewise excluded from free surfing: it is a waterfall EDGE (slice 2), not
-// a tile to drift onto.
+// MB_WATERFALL 0x13 is likewise excluded from free surfing — and PHASE 26 turned that from a
+// design preference into a MEASURED necessity. On the user's own Emerald ROM every climbable
+// waterfall metatile reads collision 0 / elevation 1, i.e. exactly the same as the ocean above and
+// below it (62 columns across 7 maps, read through this file's own ROM adapter). Nothing about the
+// TILE stops a surfing player entering it. What stops them is
+// `sForcedMovementTestFuncs[14] = MetatileBehavior_IsWaterfall`
+// (pokeemerald src/field_player_avatar.c:159) -> `sForcedMovementFuncs[15] =
+// ForcedMovement_PushedSouthByCurrent` (:185/:434): step on, get flushed straight back down. So a
+// waterfall left in the surfable set would not be a slow route — it would be an infinite loop.
 bool fieldtrav_is_surfable(FpEngine eng, int behaviour);
+
+// --- WATERFALL: the vertical edge (PHASE 26 / lane W, SPEC-hm-waterfall) -----------------------
+
+// Is this behaviour MB_WATERFALL? **0x13 in all three engines**, and read in each engine's own
+// header rather than carried across (the c2a58db rule): pokeemerald
+// include/constants/metatile_behaviors.h:24 (the enum, counted from MB_NORMAL at :5),
+// pokefirered :17 `#define MB_WATERFALL 0x13`, pokeruby :23 `#define MB_WATERFALL 0x13`. Each
+// engine's `MetatileBehavior_IsWaterfall` is the single-value compare this mirrors
+// (pokeemerald src/metatile_behavior.c:995, pokefirered :594, pokeruby :1062).
+//
+// Takes an FpEngine and not an FtVariant on purpose: this is a METATILE question, and Ruby,
+// Sapphire and Emerald really do share one behaviour table. It is the SAVE side that splits.
+bool fieldtrav_is_waterfall(FpEngine eng, int behaviour);
+
+// Where the game's own ride ENDS, given that (x, yFall) is a waterfall tile.
+//
+// `FLDEFF_USE_WATERFALL` is not a one-tile step. pokeemerald src/field_effect.c:1873-1893:
+// `WaterfallFieldEffect_RideUp` issues ONE slow walk north, and
+// `WaterfallFieldEffect_ContinueRideOrEnd` then asks `MetatileBehavior_IsWaterfall(objectEvent->
+// currentMetatileBehavior)` — if the tile the player just landed on is STILL a waterfall it rides
+// again. So the ride climbs the whole contiguous column and stops on the first tile above it that
+// is not a waterfall. (pokefirered src/field_effect.c and pokeruby src/field_effect.c carry the
+// identical five-step task table.)
+//
+// Returns that landing y, or -1 if (x,yFall) is not a waterfall / the column runs off the search
+// window / the behaviour cannot be read. NEVER a guess: an unreadable column means no edge.
+int fieldtrav_waterfall_top(const FpBus* bus, const FpMap* m, int x, int yFall);
+
+// --- DIVE: the two metatile tests, per variant (PHASE 26, SPEC-hm-dive §2) ---------------------
+//
+// These are the game's OWN two predicates, and they are NOT symmetric:
+//   * `MetatileBehavior_IsDiveable`  — a SHORT allow-list (three deep-water behaviours). Anything
+//     else on the surface is not a dive spot.
+//   * `MetatileBehavior_IsUnableToEmerge` — a short DENY-list, so every other underwater tile can
+//     surface. Mirroring that asymmetry is the whole point of two functions.
+// They take an `FtVariant`, not an `FpEngine`, because the FRLG answer is "there is no Dive in
+// this engine at all" — a fact about the GAME, not about its metatile numbering (see `badgeDive`).
+bool fieldtrav_is_diveable(FtVariant var, int behaviour);
+bool fieldtrav_can_emerge(FtVariant var, int behaviour);
 
 // --- eligibility: the game's own gates, mirrored --------------------------------------------
 
@@ -224,7 +289,10 @@ typedef enum {
 	FT_OUT_NOEDGE,         // edges exist on the map but none are eligible (no badge / no mon)
 	FT_OUT_CAP,            // a route exists but needs more than FT_MAX_INTERACTS activations
 	// --- slice 2 (SPEC §3.5), appended so every value above keeps its number ---
-	FT_OUT_NOEXC           // excursion search ran and NO out-and-back candidate survived
+	FT_OUT_NOEXC,          // excursion search ran and NO out-and-back candidate survived
+	// --- phase 26 / DIVE (SPEC-hm-dive §4.4), appended for the same reason ---
+	FT_OUT_NODIVE          // the dive search ran and refused: no eligibility, no paired map, no
+	                       //   reachable dive spot, or no surfacing spot that reaches the goal
 } FtOutcome;
 
 #define FT_MAX_INTERACTS 2                  // SPEC H1.8 hard cap: a 3-HM route fails honestly
@@ -239,6 +307,12 @@ typedef struct {
 	int      startMode, endMode;    // FT_MODE_*
 	uint32_t usable;         // the eligibility mask this plan was built against (diagnostics)
 	int      nEdges;         // conditional edges FOUND on the map (0 => nothing to plan through)
+	// PHASE 26 / lane W. APPENDED (this struct is memset + named-assigned, never positionally
+	// initialised, so the end is the only safe place and a new field defaults to 0).
+	// 1 = the TAP landed on a MB_WATERFALL tile and `goalX/goalY` is NOT the tile the user
+	// touched: it is the tile the game's own ride would leave them on. See the retarget block in
+	// fieldtrav_plan. The caller MUST re-plan against `goalX/goalY`, never against the raw tap.
+	int      wfRetarget;
 	FtMove   mv[FT_MAXMOVES];
 } FtProgram;
 
@@ -277,6 +351,38 @@ int fieldtrav_scan_edges(const FpBus* bus, const FpMap* m, FtVariant var, FtEdge
 // The Attacks-substruct slot for a given personality: sSubstructTable[personality % 24][type].
 // Exposed so the host suite grades the shipped permutation table rather than a restatement of it.
 int fieldtrav_substruct_slot(uint32_t personality, int type);
+
+// --- STRENGTH: what "Strength by touch" means, and the one probe it needs ----------------------
+// PHASE 26 / lane W, SPEC-hm-waterfall §5. Settled rather than deferred:
+//
+// A BOULDER IS A PUZZLE, NOT AN OBSTACLE. Every other conditional edge REMOVES its blocker (the
+// tree and the rock deactivate; the water becomes rideable) and leaves the world in the state the
+// player would have chosen anyway. A boulder does not vanish — it MOVES, one tile per bump
+// (pokeemerald src/field_player_avatar.c TryPushBoulder), and where it lands is the answer to a
+// puzzle. Auto-pushing one to shorten a walk can strand it against a wall and lock the puzzle
+// until the map is re-entered. So the router NEVER pushes, and never plans a path THROUGH a
+// boulder — the boulder stays a plain blocker for transit, exactly as it is today.
+//
+// What "by touch" then means is the other half of the game's own model, which the shipped code was
+// missing entirely: `EventScript_StrengthBoulder` (pokeemerald data/scripts/field_move_scripts.inc
+// :123-133) is an ACTIVATION — badge, party move, a yes/no, and then `setflag FLAG_SYS_USE_STRENGTH`
+// (:145). Nothing moves. It is per-map-visit (`ClearTempFieldEventData`, src/event_data.c:45,
+// runs on every map load), so it is also the thing a player forgets and has to walk back for.
+// Tapping the boulder itself is unambiguous intent, costs nothing, and is undoable by walking out
+// of the map. THAT is the feature, and `FT_HM_STRENGTH` is a TERMINAL edge only.
+//
+// This probe is the tier gate touch.c needs BEFORE it consults the dry router: tapping a boulder
+// already succeeds at tier 0 (fieldpath deliberately allows a blocked GOAL as the terminal), so
+// without asking first, a Strength program could never be reached. Cheap by construction — the
+// object scan runs first and the expensive party decrypt only if a boulder really is there.
+//
+// Returns the gObjectEvents slot of a boulder ON (gx,gy) that the game would ACTUALLY prompt for,
+// or -1. -1 covers all four honest refusals: no boulder there; no badge / no mon that knows
+// STRENGTH; and — the one that is easy to miss — FLAG_SYS_USE_STRENGTH ALREADY SET, where the
+// script prints `Text_StrengthActivated` with no yes/no at all (:157 EventScript_
+// CheckActivatedBoulder), so a program aimed at it would sit waiting for a prompt that never comes.
+int fieldtrav_strength_tap(const FpBus* bus, const FpMap* m, FtVariant var, const FtParty* pty,
+                           int gx, int gy);
 
 // ==============================================================================================
 // SLICE 2 — CROSS-MAP EXCURSIONS (SPEC-family-traversal §3, the "Lavaridge class")
@@ -363,3 +469,97 @@ typedef struct {
 bool fieldtrav_excursion(const FpBus* bus, const FpMap* m, uint32_t mapGroupsRom,
                          int curGrp, int curNum, int sx, int sy, int gx, int gy,
                          const short (*npc)[2], int npcN, FtExcursion* out);
+
+// ==============================================================================================
+// PHASE 26 / LANE V — DIVE (SPEC-hm-dive)
+// ==============================================================================================
+// THE ARCHITECTURAL POINT, settled from pret before a line of this was written: **Dive is not a
+// tile edge.** Cut, Rock Smash and Surf all end with the player still on the map they started on.
+// Dive MOVES THE PLAYER TO A DIFFERENT MAP — and it does it through a mechanism that is neither a
+// tile edge nor a warp event:
+//
+//   pokeemerald src/overworld.c:756-782 `SetDiveWarp(dir, x, y)` looks up
+//   `GetMapConnection(CONNECTION_DIVE|CONNECTION_EMERGE)` — a MAP CONNECTION, the same table that
+//   carries the north/south/east/west route seams — and calls
+//   `SetWarpDestination(connection->mapGroup, connection->mapNum, WARP_ID_NONE, x, y)` with the
+//   player's OWN tile. There is no warp record, no warpId and no destination coordinate of any
+//   kind: **the coordinate map is the IDENTITY**. You dive at (x,y) and you arrive at (x,y).
+//
+// That makes Dive a THIRD kind of map transition (tile edge / warp event / connection), and it is
+// why this is not `fieldtrav_excursion` with a different constant: the excursion machinery is
+// keyed on warp INDICES and on `ft_warp_approach`'s terminal semantics, and a dive has neither.
+// What it does share is the SHAPE — leave the map, cross the other one, come back somewhere new —
+// so the search below is the same out-and-back with the warp pair replaced by (a) any diveable
+// tile here and (b) any surfacing tile there.
+//
+// Coordinates are identity, so the two maps are DIMENSION-ALIGNED. Measured on pret's own layout
+// data this session, all seven Emerald pairs agree exactly (Route 105/124/125/126/127/128/129 vs
+// their UNDERWATER_ twins), every diveable surface tile has a walkable underwater counterpart, and
+// every emergeable underwater tile has a surfable, collision-free surface counterpart.
+
+// MapHeader.connections direction ids — pokeemerald include/constants/global.h:153/154
+// (identical values in pokefirered include/constants/global.h:125/126 and pokeruby).
+#define FT_CONN_DIVE    5
+#define FT_CONN_EMERGE  6
+// The widest connection list any vanilla map carries is 5 (MAP_ROUTE124, measured across all 869
+// pokeemerald data/maps/*/map.json this session); 16 is the loose structural cap that keeps a bad
+// pointer from walking the ROM.
+#define FT_MAX_CONN 16
+
+// Which way a dive plan goes. Derived, never guessed: `FT_DIVE_UP` iff the LIVE map header says
+// MAP_TYPE_UNDERWATER, which is the game's own emerge gate (pokeemerald
+// src/field_control_avatar.c:475 `gMapHeader.mapType == MAP_TYPE_UNDERWATER`).
+enum { FT_DIVE_DOWN = 0, FT_DIVE_UP = 1 };
+
+// gMapHeader.mapType (+0x17) == MAP_TYPE_UNDERWATER (5). `m->mapHeader` is the EWRAM gMapHeader
+// STRUCT, the same pointer fieldtrav_excursion reads MapEvents out of.
+bool fieldtrav_underwater(const FpBus* bus, const FpMap* m);
+
+// Follow gMapHeader.connections (+0x0C) and return the map on the other end of direction `dir`.
+// False = this map has no such connection — which is the honest answer for BOTH "no connections at
+// all" (pret emits a NULL pointer there: tools/mapjson/mapjson.cpp:155-159, and 455 of Emerald's
+// 869 maps take that branch) and the SCRIPTED dive maps (Sootopolis, Sealed Chamber, Marine Cave,
+// Seafloor Cavern, Abandoned Ship, Route 134), whose destination is set by an ON_DIVE_WARP map
+// script running `setdivewarp` rather than by a connection (src/overworld.c:766-769). We do not
+// interpret map scripts, so those dive spots are REFUSED, not guessed — a named degradation.
+bool fieldtrav_connection(const FpBus* bus, uint32_t mapHeader, int dir, int* grp, int* num);
+
+// One dive out-and-back. Both coordinate pairs are map-local, and each is valid in BOTH maps at
+// once — that is what "the coordinate map is the identity" means in practice.
+typedef struct {
+	bool     ok;
+	int      outcome;          // FtOutcome (FT_OUT_PLANNED / FT_OUT_NODIVE / FT_OUT_BADMAP / …)
+	int      dir;              // FT_DIVE_DOWN / FT_DIVE_UP, or -1 if the search never got that far
+	int      dGroup, dNum;     // the paired map (underwater twin, or the surface above)
+	int      diveX, diveY;     // where the HM is used here == where we arrive over there
+	int      upX, upY;         // where the HM is used over there == where we arrive back here
+	int      stepsOut;         // legs, in steps, for ranking + diagnostics only
+	int      stepsMid;
+	int      stepsBack;
+	int      nSpots;           // reachable HM spots found on THIS map (0 => nothing to plan from)
+} FtDive;
+
+#define FT_DIVE_CAND 8       // at most 8 candidate dive spots, nearest first (FT_EXC_CAND's rule)
+
+// Plan a dive out-and-back from (sx,sy) to (gx,gy) on the CURRENT map.
+//
+// PRECONDITIONS, enforced by the caller and not re-litigated here: same-map planning (tier 0 dry
+// walk, tier 1 conditional edges) has ALREADY failed, so a dive can never displace a same-map
+// route.
+//
+// `startSurfing` is the live PLAYER_AVATAR_FLAG_SURFING bit. On a SURFACE map a dive is only
+// planned when it is already set: `TrySetDiveWarp` reads the player's OWN tile (pokeemerald
+// src/field_control_avatar.c:965-971), and that tile is deep water, so the player is necessarily
+// afloat. A tap that would need "mount Surf, THEN dive" is refused whole (FT_OUT_NODIVE) rather
+// than half-planned — the mount is tier 1's job and chaining the two is a later slice.
+// Underwater the flag is PLAYER_AVATAR_FLAG_UNDERWATER instead, so it is ignored there and the
+// map type decides.
+//
+// `npc`/`npcN` are the live occupied tiles in gBackupMapLayout (+MAP_OFFSET) space, exactly as
+// fieldtrav_plan and fieldtrav_excursion take them: they block THIS map's two legs. The paired
+// map is read from ROM and therefore carries no object events at all, which is precisely why the
+// executor re-plans that leg live on arrival (the H3.4 rule, unchanged).
+bool fieldtrav_dive(const FpBus* bus, const FpMap* m, uint32_t mapGroupsRom,
+                    int curGrp, int curNum, FtVariant var, const FtParty* pty,
+                    int sx, int sy, int gx, int gy, bool startSurfing,
+                    const short (*npc)[2], int npcN, FtDive* out);

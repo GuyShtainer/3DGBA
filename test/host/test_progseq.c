@@ -569,6 +569,153 @@ static void test_invariants(void) {
 	CHECK(aimed == 0, "the frame that ends a program injects nothing either");
 }
 
+// ---------------------------------------------------------------------------------------------
+// TEST 11 — the WATERFALL ride: a MULTI-TILE interact whose end the GAME announces
+// (phase 26 / lane W)
+// ---------------------------------------------------------------------------------------------
+// Every interact the sequencer knew before this one finished in a way our own code could predict:
+// Surf moves the player exactly ONE tile, Cut and Smash move them none. The waterfall ride moves
+// them K+1 tiles, and K is a property of the map. So the completion test cannot be a count of
+// anything — it has to be the game's own loop condition, `MetatileBehavior_IsWaterfall(objectEvent
+// ->currentMetatileBehavior)` (pokeemerald src/field_effect.c:1885), inverted.
+//
+// The world model below is that loop, written independently: three fall tiles, one slow step per
+// "frame", `onWaterfall` true while the avatar is on one. If the sequencer completed on anything
+// else — the first movement, a frame count, the surf bit alone — it would finish mid-ride and
+// re-plan from a tile the player is being carried off.
+static void test_waterfall(void) {
+	World w; w_init(&w);
+	prog_walk_then(&w.pr, 0, DIR_U, FT_HM_WATERFALL, -1);
+	w.s.phase = TPH_DONE; w.s.frames = 0;
+	w.o.surfing = 1;                       // the ride only exists mid-surf
+	const int FALL = 3;                    // Route 114's fall, in tiles
+
+	w_step(&w);
+	CHECK(w.s.on && w.s.step == 0, "the ride has not started: no movement yet");
+	CHECK(w.a.stampSurf == 1, "…and DONE still re-reads the surf bit every frame");
+
+	// The ride: one tile per step, `onWaterfall` set for every tile of the column.
+	for (int i = 0; i < FALL; i++) {
+		w.o.py -= 1;
+		w.o.onWaterfall = 1;
+		w_step(&w);
+		CHECK(w.s.on && w.s.step == 0 && !w.a.replan,
+		      "tile %d of the fall: still riding, nothing re-planned", i + 1);
+	}
+	// The last slow walk lands on the pool ABOVE, which is not a waterfall — the game unlocks the
+	// player here, and so do we.
+	w.o.py -= 1;
+	w.o.onWaterfall = 0;
+	w_step(&w);
+	CHECK(w.a.end == TPE_ARRIVED,
+	      "the first non-waterfall tile ends the ride, and it consumed the last move");
+	CHECK(w.s.step == 1, "…exactly ONE move for a %d-tile climb", FALL);
+
+	// The three ways it must NOT complete, each one a live-defect shape.
+	World a; w_init(&a); prog_walk_then(&a.pr, 0, DIR_U, FT_HM_WATERFALL, -1);
+	a.s.phase = TPH_DONE; a.s.frames = 0; a.o.surfing = 1; a.o.onWaterfall = 0;
+	w_run(&a, 40);
+	CHECK(a.s.on && a.s.step == 0,
+	      "standing still and not on a fall is NOT a finished ride (the pre-ride frames)");
+
+	World b; w_init(&b); prog_walk_then(&b.pr, 0, DIR_U, FT_HM_WATERFALL, -1);
+	b.s.phase = TPH_DONE; b.s.frames = 0; b.o.surfing = 1;
+	b.o.py -= 1; b.o.onWaterfall = 1;
+	w_run(&b, 40);
+	CHECK(b.s.on && b.s.step == 0, "moving while still ON the fall is NOT the end of the ride");
+
+	World c; w_init(&c); prog_walk_then(&c.pr, 0, DIR_U, FT_HM_WATERFALL, -1);
+	c.s.phase = TPH_DONE; c.s.frames = 0; c.o.surfing = 0;   // the surf bit went away
+	c.o.py -= 1; c.o.onWaterfall = 0;
+	w_run(&c, 40);
+	CHECK(c.s.on && c.s.step == 0, "losing the surf bit is not a completed ride either");
+
+	// A ride that never ends still times out rather than hanging.
+	World t; w_init(&t); prog_walk_then(&t.pr, 0, DIR_U, FT_HM_WATERFALL, -1);
+	t.s.phase = TPH_DONE; t.s.frames = 0; t.o.surfing = 1; t.o.onWaterfall = 1; t.o.py -= 1;
+	w_run(&t, TP_DONE_BUDGET + 8);
+	CHECK(t.a.end == TPE_TIMEOUT, "a ride that never lands times out");
+
+	// A waterfall interact is reached through the SAME phase spine as every other one, which is the
+	// property that lets it reuse the level-triggered ANSWER the yes/no needs (all three engines'
+	// scripts end in `msgbox ..., MSGBOX_YESNO`).
+	World e; w_init(&e); prog_walk_then(&e.pr, 2, DIR_U, FT_HM_WATERFALL, -1);
+	e.o.facing = 2;                        // already facing NORTH (the game's code for UP)
+	w_step(&e); e.o.px = e.o.px, e.o.py -= 1; w_step(&e);   // one walk step lands
+	e.o.py -= 1; w_step(&e);                                // the second
+	CHECK(e.s.phase == TPH_FACE, "the walk legs hand over to FACE at the interact");
+	w_run(&e, 4);
+	CHECK(e.s.phase == TPH_A, "…FACE closes on the avatar's own facing, exactly as for Cut");
+}
+
+// ---------------------------------------------------------------------------------------------
+// TEST 12 — STRENGTH: the activation ends the program, and never presses the walk key
+// (phase 26 / lane W)
+// ---------------------------------------------------------------------------------------------
+// The safety property in one test. A Strength move is planned only INTO the tapped boulder, and
+// the boulder does not move when Strength is activated — so if the sequencer ever emitted the walk
+// key for that move, the game would read it as a bump and PUSH the boulder (pokeemerald
+// src/field_player_avatar.c TryPushBoulder), which is the one thing this feature promises not to
+// do. It also cannot complete on anything the map shows, because nothing on the map changes: the
+// only proof is FlagGet(FLAG_SYS_USE_STRENGTH).
+static void test_strength(void) {
+	World w; w_init(&w);
+	prog_walk_then(&w.pr, 1, DIR_U, FT_HM_STRENGTH, 6);
+	w.s.step = 1; w.s.phase = TPH_DONE; w.s.frames = 0;
+	w.o.objActive = 1;                     // the boulder is STILL THERE, and always will be
+
+	w_run(&w, 30);
+	CHECK(w.s.on && w.s.step == 1,
+	      "the boulder staying put is not failure — Strength is proven by a FLAG, not by the map");
+	w.o.strengthOn = 1;                    // `setflag FLAG_SYS_USE_STRENGTH`
+	w_step(&w);
+	CHECK(w.a.end == TPE_ARRIVED, "the latch is the proof, and the program ENDS on it");
+	CHECK(w.a.replan == 0, "…it does not re-plan into the boulder");
+
+	// THE PROPERTY, stated precisely. The direction IS held at the boulder — that is TPH_FACE, and
+	// it is how the avatar turns to face it — but the game only turns a bump into a PUSH when the
+	// latch is already set: `TryPushBoulder` opens `if (FlagGet(FLAG_SYS_USE_STRENGTH))`
+	// (pokeemerald src/field_player_avatar.c). So the property that keeps the boulder still is not
+	// "never hold a direction", it is **never hold one once Strength is active** — the executor
+	// must emit its last direction key strictly BEFORE the flag it is about to set. Drive a
+	// complete run — walk, face, A, dialog, yes/no, answer, done — and count both.
+	World f; w_init(&f);
+	prog_walk_then(&f.pr, 2, DIR_U, FT_HM_STRENGTH, 6);
+	f.o.facing = 2;                        // facing NORTH already
+	f.o.objActive = 1;
+	int keysWhileActive = 0, faceHolds = 0, walkSteps = 0;
+	for (int i = 0; i < 900 && f.s.on; i++) {
+		int stepBefore = f.s.step, phaseBefore = f.s.phase;
+		progseq_step(&f.s, &f.pr, &f.o, &f.a);
+		f.frames++;
+		if (f.a.keyDir >= 0) {
+			if (f.o.strengthOn) keysWhileActive++;
+			else if (stepBefore >= 2) faceHolds++;          // move 2 IS the Strength interact
+			else if (walkSteps < 2) { f.o.py -= 1; walkSteps++; }
+			CHECK(phaseBefore == TPH_WALK || phaseBefore == TPH_FACE,
+			      "a direction key only ever leaves WALK or FACE (phase %d)", phaseBefore);
+		}
+		// the world answers: a field textbox, then the yes/no, then the flag
+		if (f.s.phase == TPH_DLG)    f.o.textDlg = 1;
+		if (f.s.phase == TPH_YESNO)  f.o.ctx = PSQ_CTX_FIELDMENU;
+		if (f.s.phase == TPH_ANSWER && f.a.answered) f.o.ctx = PSQ_CTX_OVERWORLD;
+		if (f.s.phase == TPH_DONE)   f.o.strengthOn = 1;
+	}
+	CHECK(walkSteps == 2, "the two approach steps really were walked (%d)", walkSteps);
+	CHECK(faceHolds > 0, "the boulder IS faced, by holding into it (%d frames)", faceHolds);
+	CHECK(keysWhileActive == 0,
+	      "…but NOT ONE direction key is emitted once STRENGTH is active — a bump then would be a "
+	      "PUSH, and the router does not push (%d)", keysWhileActive);
+	CHECK(f.a.end == TPE_ARRIVED, "and the program ends ARRIVED at the boulder (end %d)", f.a.end);
+	CHECK(f.s.step == 3, "…with the terminal move consumed (step %d)", f.s.step);
+
+	// It times out honestly rather than waiting forever for a flag that never sets.
+	World t; w_init(&t); prog_walk_then(&t.pr, 0, DIR_U, FT_HM_STRENGTH, 6);
+	t.s.phase = TPH_DONE; t.s.frames = 0;
+	w_run(&t, TP_DONE_BUDGET + 8);
+	CHECK(t.a.end == TPE_TIMEOUT, "an activation that never lands times out");
+}
+
 int main(void) {
 	test_abort_ladder();
 	test_walk();
@@ -577,6 +724,8 @@ int main(void) {
 	test_dlg();
 	test_yesno();
 	test_done();
+	test_waterfall();
+	test_strength();
 	test_elig();
 	test_p1_surf_e2e();
 	test_invariants();

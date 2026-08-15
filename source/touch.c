@@ -498,6 +498,7 @@ static int prog_plan(GbaCore* core, const GameProfile* p, int px, int py, int gx
                      int mapG, int mapN);   // fwd: the phase-22.2 conditional-edge planner
 static bool prog_surfing(GbaCore* core, const GameProfile* p);   // fwd: gPlayerAvatar surf bit
 static int  prog_facing(GbaCore* core, const GameProfile* p);    // fwd: gObjectEvents[0] facing
+static int  prog_tap_gate(GbaCore* core, const GameProfile* p, int px, int py, int* gx, int* gy);
 
 static u16 walk_update_inner(bool touching, bool newPress, bool gvalid, int gx, int gy,
                              int px, int py, int mapG, int mapN, GbaCore* core, const GameProfile* p,
@@ -582,7 +583,19 @@ static u16 walk_update_inner(bool touching, bool newPress, bool gvalid, int gx, 
 				// that is no longer on screen. Refuse those (map changed, or the player jumped
 				// further than the one tile a step in flight can cover) rather than route to a
 				// tile the user never pointed at.
-				if (walk_plan(core, p, px, py, s_downPx + ddx, s_downPy + ddy, mapG, mapN)) {
+				// PHASE 26 / lane W. The tap's EFFECTIVE goal, and the one question that has to be
+				// asked before the dry router rather than after it (see prog_tap_gate): a tap on a
+				// waterfall tile, a mid-surf tap aimed UPWARD, or a tap on a boulder. Everything
+				// else keeps the shipped tier order exactly — gate == 0.
+				int tgx = s_downPx + ddx, tgy = s_downPy + ddy;
+				int gate = (traverse >= 1) ? prog_tap_gate(core, p, px, py, &tgx, &tgy) : 0;
+				int ftr  = (gate > 0) ? prog_plan(core, p, px, py, tgx, tgy, mapG, mapN) : 0;
+				if (gate < 0) {
+					/* a waterfall column we cannot resolve: plan NOTHING rather than hand the tap
+					   to a router that would swim into the fall and be flushed back down. */
+				} else if (ftr == 1) {
+					/* armed by the conditional planner */
+				} else if (walk_plan(core, p, px, py, tgx, tgy, mapG, mapN)) {
 					s_walking = true; s_lpx = px; s_lpy = py; s_stall = 0; s_replans = 0;
 				} else if (traverse >= 1) {
 					// PHASE 22.2 / SPEC-family-traversal H1.7 — the TIER ORDER, made structural:
@@ -590,12 +603,14 @@ static u16 walk_update_inner(bool touching, bool newPress, bool gvalid, int gx, 
 					// walk has ALREADY failed. A wet or destructive detour can therefore never
 					// displace a walkable route, however much longer the walk would have been.
 					// Declining (return 0) leaves the tap doing exactly what it does today.
-					if (prog_plan(core, p, px, py, s_downPx + ddx, s_downPy + ddy, mapG, mapN) == 0 &&
-					    traverse >= 2) {
+					// (`gate > 0` means it has ALREADY been consulted above, and re-running the
+					// same BFS to get the same answer would only cost a frame.)
+					if (gate == 0) ftr = prog_plan(core, p, px, py, tgx, tgy, mapG, mapN);
+					if (ftr == 0 && traverse >= 2) {
 						// PHASE 23 / SPEC H3.2: excursions are the LAST tier, consulted only once
 						// the dry walk AND the conditional-edge planner have both failed — so a
 						// same-map route can never be displaced by a trip through a building.
-						exc_plan(core, p, px, py, s_downPx + ddx, s_downPy + ddy, mapG, mapN);
+						exc_plan(core, p, px, py, tgx, tgy, mapG, mapN);
 					}
 				}
 			}
@@ -858,6 +873,27 @@ static int prog_facing(GbaCore* core, const GameProfile* p) {
 	return (f >= 1 && f <= 4) ? f : -1;
 }
 
+// PHASE 26 / lane W — "is the avatar standing on a waterfall RIGHT NOW". This is not our idea of
+// where the player is: it is `gObjectEvents[0].currentMetatileBehavior`, the game's OWN cached
+// behaviour byte at +0x1E (pokeemerald include/global.fieldmap.h:248, pokefirered :same block,
+// pokeruby :215 — one offset, three engines), which is the exact field the waterfall ride tests to
+// decide whether to keep climbing (src/field_effect.c:1885). One byte, no ROM chain walk, and the
+// same read `run_elig`'s terrain gate already makes every frame B is held.
+static bool prog_on_waterfall(GbaCore* core, const GameProfile* p) {
+	if (!core || !p || !p->mapObjects) return false;
+	int beh = (int)gbacore_read8(core, p->mapObjects + 0x1Eu);
+	return fieldtrav_is_waterfall(fp_engine(p), beh);
+}
+// ...and FlagGet(FLAG_SYS_USE_STRENGTH), the ONLY thing an activation changes. Same flag rail as
+// the badges (per TITLE, not per engine — the c2a58db split), so Ruby's 0x829@0x1220 and Emerald's
+// 0x889@0x1270 are both reached by the one table.
+static bool prog_strength_on(GbaCore* core, const GameProfile* p) {
+	if (!core || !p) return false;
+	FpBus bus = { fp_r8, fp_r16, fp_r32, core };
+	FtVariant var = ft_variant(p);
+	return fieldtrav_flag_get(&bus, var, prog_sb1(core, p), fieldtrav_cfg(var)->strengthLatch);
+}
+
 // PHASE 24 / lane A2 (decision D2) — the five gates of "may this leg RUN", each read off the
 // game's own state, each defaulting to CLEAR. The rule being mirrored is quoted with its pret
 // lines in touchgeom.h; this function is only the reads.
@@ -971,6 +1007,7 @@ static const char* prog_chip_for(int hm) {
 	case FT_HM_SMASH:     return "SMASH >";
 	case FT_HM_SURF:      return "SURF >";
 	case FT_HM_WATERFALL: return "FALLS >";
+	case FT_HM_STRENGTH:  return "STRENGTH";   // no "->": the program ENDS at the boulder (lane W)
 	default:              return "ROUTE >";
 	}
 }
@@ -981,6 +1018,69 @@ static void prog_chip_refresh(void) {
 		if (s_prog.mv[i].hm != FT_HM_NONE) { hm = s_prog.mv[i].hm; break; }
 	s_progChip = prog_chip_for(hm);
 	s_progChipHold = 0;                                    // sticky while the program runs
+}
+
+// ============================================================================================
+// PHASE 26 / lane W — THE TAP GATE: the three taps the DRY router cannot answer honestly.
+// ============================================================================================
+// The shipped tier order (dry walk first, conditional edges only if it fails — SPEC H1.7) exists
+// so a wet or destructive detour can never displace a walkable route. It assumes something that is
+// true for Cut, Rock Smash and Surf and FALSE for the two HMs this lane adds: that when the dry
+// router answers, its answer is right.
+//
+//   * WATERFALL. A waterfall metatile is collision 0 and elevation 1 — measured, 62 columns across
+//     7 maps on the user's own Emerald ROM — i.e. indistinguishable from the ocean above and below
+//     it to `fieldpath_enterable`. The frozen tier-0 router therefore plots a straight swim UP a
+//     fall and calls it a route, and the game's forced movement (pokeemerald
+//     src/field_player_avatar.c:159 -> :185 ForcedMovement_PushedSouthByCurrent) flushes the player
+//     straight back down, forever. Tier 0 does not merely miss the waterfall edge — it wins with a
+//     wrong answer, so asking it first would make the whole HM unreachable.
+//   * STRENGTH. Tapping a boulder ALREADY succeeds at tier 0, because fieldpath deliberately allows
+//     a blocked GOAL as the terminal (fieldpath.h:146-152) — so a Strength activation could never
+//     be reached either. Here the route is IDENTICAL with or without the gate (walk to the tile
+//     beside the boulder); only the TERMINAL differs, a hold versus the game's own prompt. Nothing
+//     is displaced, which is why this is not the tier inversion H1.7 forbids.
+//
+// Returns  1 = ask the conditional planner FIRST,  0 = shipped order, unchanged,
+//         -1 = plan NOTHING (a waterfall tap whose column will not resolve; handing that to the dry
+//              router is exactly the flush described above).
+// Also rewrites (*gx,*gy) to the EFFECTIVE goal, so whichever tier ends up owning the tap aims at
+// the same tile (the retarget rule itself, and its citations, are in fieldtrav_plan).
+//
+// Cost discipline: this runs on every tap while the toggle is on, so the cheap tests come first —
+// one behaviour read, then a coordinate compare and the avatar's surf bit, and only then anything
+// that walks the party.
+static int prog_tap_gate(GbaCore* core, const GameProfile* p, int px, int py, int* gx, int* gy) {
+	(void)px;
+	if (!core || !p || !gx || !gy) return 0;
+	int w, h; uint32_t ptr;
+	if (!map_read(core, p, &w, &h, &ptr)) return 0;
+	FpBus bus = { fp_r8, fp_r16, fp_r32, core };
+	FpMap m = { fp_engine(p), p->mapHeaderPath, p->mapObjects, ptr, w, h };
+
+	// (1) The tap landed ON a waterfall. Retarget onto the tile the game's own ride ends on — a
+	//     tall fall's top is otherwise unreachable by a tap at all (the window is 5 tiles up, and
+	//     Ever Grande's fall is 8), and the raw tile must never be handed to a router.
+	if (fieldtrav_is_waterfall(m.engine, fieldpath_behaviour_at(&bus, &m, *gx, *gy))) {
+		int ty = fieldtrav_waterfall_top(&bus, &m, *gx, *gy);
+		if (ty < 0 || abs(ty - py) > FP_WHALF) return -1;
+		*gy = ty;
+		return 1;
+	}
+	FtVariant var = ft_variant(p);
+	// (2) Mid-surf, aimed UPWARD, with Waterfall actually usable. The direction test is what keeps
+	//     this off every ordinary water tap: the edge only ever climbs.
+	if (*gy < py && prog_surfing(core, p)) {
+		FtParty pty = prog_party(core, p);
+		if (fieldtrav_usable(&bus, var, &pty) & (1u << FT_HM_WATERFALL)) return 1;
+	}
+	// (3) The boulder terminal. `fieldtrav_strength_tap` is the SAME function fieldtrav_plan uses
+	//     to decide whether the edge exists, so the gate and the planner cannot disagree.
+	{
+		FtParty pty = prog_party(core, p);
+		if (fieldtrav_strength_tap(&bus, &m, var, &pty, *gx, *gy) >= 0) return 1;
+	}
+	return 0;
 }
 
 // Plan (or re-plan) a conditional route to (gx,gy). Returns:
@@ -1006,7 +1106,13 @@ static int prog_plan(GbaCore* core, const GameProfile* p, int px, int py, int gx
 
 	progseq_arm(&s_seq, px, py);
 	s_progMapG = mapG; s_progMapN = mapN;
-	s_progGoalX = gx; s_progGoalY = gy;
+	// PHASE 26 / lane W: the EFFECTIVE goal, not the raw tap. `fieldtrav_plan` retargets a tap that
+	// landed on a waterfall tile onto the tile the game's own ride ends on (`wfRetarget`), and every
+	// re-plan after an interact has to aim at that same tile. Aiming at the raw tap instead would
+	// send the post-ride re-plan back at the waterfall — and the frozen tier-0 router, which cannot
+	// see forced movement, would cheerfully swim into it. For every non-retargeted tap these two
+	// are identical (fieldtrav_plan sets goalX/goalY = gx/gy on entry).
+	s_progGoalX = s_prog.goalX; s_progGoalY = s_prog.goalY;
 	g_fieldDbg.progSeq = ++s_progSeq;
 	g_fieldDbg.progEnd = TPE_NONE;
 	prog_dbg_stamp();
@@ -1113,6 +1219,14 @@ static u16 prog_update(const TouchSmart* sm, bool touching, bool newPress,
 	o.facing     = (s_seq.phase == TPH_FACE) ? prog_facing(core, p) : -1;
 	o.surfing    = (s_seq.phase == TPH_DONE) ? (prog_surfing(core, p) ? 1 : 0) : 0;
 	o.objActive  = (s_seq.phase == TPH_DONE) ? (prog_obj_active(core, p, mv.objSlot) ? 1 : 0) : 0;
+	// PHASE 26 / lane W — the two DONE-phase observables the new HMs prove themselves with, read
+	// only for the HM that needs them: the waterfall ride's own loop condition (one EWRAM byte) and
+	// the Strength latch (one flag read through the per-title rail). Both default to 0, which is the
+	// safe answer everywhere else — "the ride has not finished" and "Strength is not active yet".
+	o.onWaterfall = (s_seq.phase == TPH_DONE && mv.hm == FT_HM_WATERFALL)
+	              ? (prog_on_waterfall(core, p) ? 1 : 0) : 0;
+	o.strengthOn  = (s_seq.phase == TPH_DONE && mv.hm == FT_HM_STRENGTH)
+	              ? (prog_strength_on(core, p) ? 1 : 0) : 0;
 
 	ProgAct act;
 	progseq_step(&s_seq, &s_prog, &o, &act);

@@ -303,6 +303,283 @@ static void replay(const FtProgram* pr, int sx, int sy, int* ex, int* ey) {
 
 static FtProgram g_pr;   // ~17 KB — static, like the shipped caller
 
+// PHASE 26 / lane V. pokeemerald include/constants/moves.h:295 `#define MOVE_DIVE 291`. Kept in
+// this lane's own block rather than beside the MOVE_* list above, so the two phase-26 lanes
+// sharing this file never edit the same lines.
+#define MOVE_DIVE 291
+
+// ================= PHASE 26 / LANE W — the WATERFALL / STRENGTH helpers (TEST 22/23) =========
+// Same discipline as lane V's block above: everything this lane needs lives here, so the two
+// phase-26 lanes sharing this file never edit the same lines.
+//
+// pokeemerald include/constants/moves.h: MOVE_STRENGTH 70 (:74), MOVE_WATERFALL 127 (:131) — the
+// two ids `fieldtrav_usable` compares against, restated here so the suite is asserting pret's
+// numbers and not fieldtrav.c's copy of them.
+#define MOVE_STRENGTH_W   70
+#define MOVE_WATERFALL_W 127
+
+// A bus that serves the RAM overlay (the synthesised SaveBlock1 + gPlayerParty) on top of an
+// ARBITRARY inner bus. TEST 22 needs both at once: every map read has to reach the live grid built
+// out of the user's own cartridge, while the badge and party reads have to reach the fixture save
+// this file constructs. `ctx` is the inner FpBus. The overlay windows are EWRAM addresses well
+// clear of LIVE_BASE (0x02900000) and HDR_BASE (0x02037318), so neither can shadow the other.
+static uint8_t wf_r8(void* ctx, uint32_t a) {
+	for (int i = 0; i < OV_N; i++)
+		if (g_ov[i].p && a >= g_ov[i].addr && a < g_ov[i].addr + g_ov[i].len)
+			return g_ov[i].p[a - g_ov[i].addr];
+	const FpBus* inner = (const FpBus*)ctx;
+	return inner->read8(inner->ctx, a);
+}
+static uint16_t wf_r16(void* c, uint32_t a) { return (uint16_t)(wf_r8(c, a) | (wf_r8(c, a + 1) << 8)); }
+static uint32_t wf_r32(void* c, uint32_t a) { return (uint32_t)wf_r16(c, a) | ((uint32_t)wf_r16(c, a + 2) << 16); }
+
+// ================= PHASE 26 / LANE V — the DIVE two-map world (TEST 20/21) ==================
+// Self-contained on purpose: its own bus, its own ROM image, its own live grid and its own save.
+// Nothing above is touched, so the lane sharing this file cannot collide with it — and, more to
+// the point, a dive needs a chain no compiled-in fixture carries (gMapHeader.connections ->
+// gMapGroups -> the OTHER map's MapHeader/MapLayout/tileset/grid) and the user's ROM is optional.
+//
+// Every structure offset below is the one fieldtrav.c cites at the line that reads it:
+//   MapHeader      +0x00 mapLayout, +0x04 events, +0x08 mapScripts, +0x0C connections,
+//                  +0x17 mapType                                   (global.fieldmap.h:173-182)
+//   MapConnections +0x00 s32 count, +0x04 MapConnection*           (global.fieldmap.h:165-169)
+//   MapConnection  +0x00 direction, +0x04 offset, +0x08 mapGroup, +0x09 mapNum, stride 12
+//                  (pokeemerald asm/macros/map.inc:152-158 — the ASSEMBLER, because pokeruby's C
+//                   comments on this struct ignore the alignment of `offset` and are wrong)
+//   MapLayout      +0x00 width, +0x04 height, +0x0C map, +0x10/+0x14 primary/secondary Tileset
+//   Tileset        +0x10 metatileAttributes (RSE)                  (fieldpath.c:125)
+#define DV_ROM_BASE    0x08000000u
+#define DV_LIVE_BASE   0x02A00000u    // deliberately NOT LIVE_BASE: TEST 16's world stays intact
+#define DV_HDR_BASE    0x02037318u    // gMapHeader — the EWRAM STRUCT, as on hardware (phase 24)
+#define DV_OBJ_BASE    0x02037000u    // gObjectEvents; slot 0 carries the player's elevation
+#define DV_SB1_BASE    0x02025734u
+#define DV_PARTY_BASE  0x02024000u
+#define DV_MAPGROUPS   (DV_ROM_BASE + 0x0000u)
+
+#define DVR_GROUP0  0x0010u
+#define DVR_HDR_S   0x0020u
+#define DVR_HDR_U   0x0040u
+#define DVR_LAY_S   0x0060u
+#define DVR_LAY_U   0x0080u
+#define DVR_TILESET 0x00A0u
+#define DVR_ATTRS   0x00C0u
+#define DVR_CONN_S  0x0100u
+#define DVR_CONNL_S 0x0110u
+#define DV_DIVE_REC 2          // the dive record is the LAST of three, as it is on Route 124
+#define DVR_CONN_U  0x0180u    // clear of DVR_CONNL_S, which is now THREE 12-byte records long
+#define DVR_CONNL_U 0x0190u
+#define DVR_EVENTS  0x0200u
+#define DVR_GRID_S  0x0400u
+#define DVR_GRID_U  0x0600u
+
+#define DV_W 16
+#define DV_H 8
+#define DV_BW (DV_W + 15)
+#define DV_BH (DV_H + 14)
+
+static uint8_t g_dvRom[0x2000];
+static uint8_t g_dvLive[2 * DV_BW * DV_BH];
+static uint8_t g_dvHdr[0x20];
+static uint8_t g_dvObj[0x24];
+static uint8_t g_dvSb1[0x1500];
+static uint8_t g_dvParty[100 * 6];
+// A DECOY MapConnections in EWRAM: a perfectly well-formed table sitting at an address
+// gMapHeader.connections could only hold if the header read were wrong. The ROM-pointer guard is
+// what stops it being followed, and this is what makes that guard observable.
+#define DV_DECOY_BASE 0x02028000u
+static uint8_t g_dvDecoy[16];
+
+static uint8_t dv_r8(void* c, uint32_t a) {
+	(void)c;
+	if (a >= DV_LIVE_BASE  && a < DV_LIVE_BASE  + sizeof g_dvLive)  return g_dvLive[a - DV_LIVE_BASE];
+	if (a >= DV_HDR_BASE   && a < DV_HDR_BASE   + sizeof g_dvHdr)   return g_dvHdr[a - DV_HDR_BASE];
+	if (a >= DV_OBJ_BASE   && a < DV_OBJ_BASE   + sizeof g_dvObj)   return g_dvObj[a - DV_OBJ_BASE];
+	if (a >= DV_SB1_BASE   && a < DV_SB1_BASE   + sizeof g_dvSb1)   return g_dvSb1[a - DV_SB1_BASE];
+	if (a >= DV_PARTY_BASE && a < DV_PARTY_BASE + sizeof g_dvParty) return g_dvParty[a - DV_PARTY_BASE];
+	if (a >= DV_DECOY_BASE && a < DV_DECOY_BASE + sizeof g_dvDecoy) return g_dvDecoy[a - DV_DECOY_BASE];
+	if (a >= DV_ROM_BASE   && a < DV_ROM_BASE   + sizeof g_dvRom)   return g_dvRom[a - DV_ROM_BASE];
+	return 0;
+}
+static uint16_t dv_r16(void* c, uint32_t a) { return (uint16_t)(dv_r8(c, a) | (dv_r8(c, a + 1) << 8)); }
+static uint32_t dv_r32(void* c, uint32_t a) { return (uint32_t)dv_r16(c, a) | ((uint32_t)dv_r16(c, a + 2) << 16); }
+
+static void dvw16(uint32_t off, uint16_t v) { g_dvRom[off] = (uint8_t)v; g_dvRom[off + 1] = (uint8_t)(v >> 8); }
+static void dvw32(uint32_t off, uint32_t v) { for (int i = 0; i < 4; i++) g_dvRom[off + i] = (uint8_t)(v >> (8 * i)); }
+
+// A gBackupMapLayout word: metatile id (bits 0-9) | collision (10-11) | elevation (12-15).
+static uint16_t dvW(int id, int coll, int elev) {
+	return (uint16_t)((id & 0x3FF) | ((coll & 3) << 10) | ((elev & 0xF) << 12));
+}
+// Metatile ids in the synthetic tileset, each pinned to ONE pret behaviour:
+//   0 = MB_NORMAL 0x00, 1 = MB_OCEAN_WATER 0x15, 2 = MB_DEEP_WATER 0x12, 3 = MB_NO_SURFACING 0x19
+#define DV_MT_LAND  0
+#define DV_MT_SEA   1
+#define DV_MT_DEEP  2
+#define DV_MT_NOSUR 3
+#define DV_ROCK  dvW(DV_MT_LAND, 1, 3)      // impassable in both layers
+
+static void dv_grid_put(uint32_t base, int x, int y, uint16_t v) {
+	dvw16(base + 2u * (uint32_t)(x + DV_W * y), v);
+}
+static uint16_t dv_grid_get(uint32_t base, int x, int y) {
+	return dv_r16(0, DV_ROM_BASE + base + 2u * (uint32_t)(x + DV_W * y));
+}
+static void dv_live_put(int x, int y, uint16_t v) {
+	uint32_t o = 2u * (uint32_t)((x + 7) + DV_BW * (y + 7));
+	g_dvLive[o] = (uint8_t)v; g_dvLive[o + 1] = (uint8_t)(v >> 8);
+}
+
+// Copy one ROM grid into the border-padded live buffer — what the console's map loader does.
+static void dv_live_from(uint32_t romGrid) {
+	for (int gy = 0; gy < DV_BH; gy++)
+		for (int gx = 0; gx < DV_BW; gx++) {
+			int x = gx - 7, y = gy - 7;
+			uint16_t v = 0x03FFu;                       // MAPGRID_UNDEFINED
+			if (x >= 0 && x < DV_W && y >= 0 && y < DV_H) v = dv_grid_get(romGrid, x, y);
+			uint32_t o = 2u * (uint32_t)(gx + DV_BW * gy);
+			g_dvLive[o] = (uint8_t)v; g_dvLive[o + 1] = (uint8_t)(v >> 8);
+		}
+}
+
+static void dv_flag_set(int id)   { g_dvSb1[0x1270 + (id >> 3)] |=  (uint8_t)(1u << (id & 7)); }
+// The same bit written through FIRERED's numbering (flags[] at 0x0EE0, pokefirered
+// include/global.h:790). Used to arm the FRLG refusal properly: "no dive" only proves something if
+// the badge a mis-ported table WOULD have read is genuinely set.
+static void dv_flag_set_frlg(int id) { g_dvSb1[0x0EE0 + (id >> 3)] |= (uint8_t)(1u << (id & 7)); }
+static void dv_flag_clear(int id) { g_dvSb1[0x1270 + (id >> 3)] &= (uint8_t)~(1u << (id & 7)); }
+static void dv_set_badge(void)    { dv_flag_set(0x86D); }     // FLAG_BADGE07_GET, Emerald
+static void dv_clear_badge(void)  { dv_flag_clear(0x86D); }
+static FtParty dv_party(int n) { FtParty p; p.sb1 = DV_SB1_BASE; p.partyBase = DV_PARTY_BASE; p.partyCount = n; return p; }
+
+// `up == 0` builds the DOWN world: two surface chambers a rock wall apart, joined by an
+// underwater corridor. `up == 1` mirrors it: two underwater pockets a rock wall apart, joined by
+// open sea on top. Either way exactly ONE tile per side takes the HM, so every step count the
+// test asserts is forced rather than a tie broken by scan order.
+static void dv_world(int up) {
+	memset(g_dvRom, 0, sizeof g_dvRom);
+	memset(g_dvObj, 0, sizeof g_dvObj);
+	memset(g_dvSb1, 0, sizeof g_dvSb1);
+	memset(g_dvParty, 0, sizeof g_dvParty);
+
+	dvw32(0x0000,           DV_ROM_BASE + DVR_GROUP0);      // gMapGroups[0]
+	dvw32(DVR_GROUP0 + 0,   DV_ROM_BASE + DVR_HDR_S);       // map (0,0) — the surface
+	dvw32(DVR_GROUP0 + 4,   DV_ROM_BASE + DVR_HDR_U);       // map (0,1) — its underwater twin
+
+	dvw32(DVR_HDR_S + 0x00, DV_ROM_BASE + DVR_LAY_S);
+	dvw32(DVR_HDR_S + 0x04, DV_ROM_BASE + DVR_EVENTS);
+	dvw32(DVR_HDR_S + 0x0C, DV_ROM_BASE + DVR_CONN_S);
+	g_dvRom[DVR_HDR_S + 0x17] = 3;                          // MAP_TYPE_ROUTE
+	dvw32(DVR_HDR_U + 0x00, DV_ROM_BASE + DVR_LAY_U);
+	dvw32(DVR_HDR_U + 0x04, DV_ROM_BASE + DVR_EVENTS);
+	dvw32(DVR_HDR_U + 0x0C, DV_ROM_BASE + DVR_CONN_U);
+	g_dvRom[DVR_HDR_U + 0x17] = 5;                          // MAP_TYPE_UNDERWATER
+
+	for (int i = 0; i < 2; i++) {
+		uint32_t lay = i ? DVR_LAY_U : DVR_LAY_S;
+		dvw32(lay + 0x00, DV_W);
+		dvw32(lay + 0x04, DV_H);
+		dvw32(lay + 0x0C, DV_ROM_BASE + (i ? DVR_GRID_U : DVR_GRID_S));
+		dvw32(lay + 0x10, DV_ROM_BASE + DVR_TILESET);       // primary  (ids < 512 use this one)
+		dvw32(lay + 0x14, DV_ROM_BASE + DVR_TILESET);       // secondary (never reached here)
+	}
+	dvw32(DVR_TILESET + 0x10, DV_ROM_BASE + DVR_ATTRS);     // Tileset.metatileAttributes
+	dvw16(DVR_ATTRS + 2 * DV_MT_LAND,  0x00);               // MB_NORMAL
+	dvw16(DVR_ATTRS + 2 * DV_MT_SEA,   0x15);               // MB_OCEAN_WATER
+	dvw16(DVR_ATTRS + 2 * DV_MT_DEEP,  0x12);               // MB_DEEP_WATER
+	dvw16(DVR_ATTRS + 2 * DV_MT_NOSUR, 0x19);               // MB_NO_SURFACING
+
+	// THREE records, with the dive one LAST — MAP_ROUTE124 carries five and puts its dive
+	// connection at the end (pokeemerald data/maps/Route124/map.json), so a list that is scanned
+	// rather than indexed, at the right STRIDE, is the only thing that finds it.
+	dvw32(DVR_CONN_S + 0x00, 3);                            // MapConnections.count
+	dvw32(DVR_CONN_S + 0x04, DV_ROM_BASE + DVR_CONNL_S);
+	g_dvRom[DVR_CONNL_S + 0 * 12 + 0x00] = 1;               // CONNECTION_SOUTH
+	g_dvRom[DVR_CONNL_S + 0 * 12 + 0x08] = 0;  g_dvRom[DVR_CONNL_S + 0 * 12 + 0x09] = 7;
+	g_dvRom[DVR_CONNL_S + 1 * 12 + 0x00] = 4;               // CONNECTION_EAST
+	g_dvRom[DVR_CONNL_S + 1 * 12 + 0x08] = 0;  g_dvRom[DVR_CONNL_S + 1 * 12 + 0x09] = 8;
+	g_dvRom[DVR_CONNL_S + DV_DIVE_REC * 12 + 0x00] = FT_CONN_DIVE;
+	g_dvRom[DVR_CONNL_S + DV_DIVE_REC * 12 + 0x08] = 0;
+	g_dvRom[DVR_CONNL_S + DV_DIVE_REC * 12 + 0x09] = 1;                  // -> (0,1)
+	dvw32(DVR_CONN_U + 0x00, 1);
+	dvw32(DVR_CONN_U + 0x04, DV_ROM_BASE + DVR_CONNL_U);
+	g_dvRom[DVR_CONNL_U + 0x00] = FT_CONN_EMERGE;
+	g_dvRom[DVR_CONNL_U + 0x08] = 0;  g_dvRom[DVR_CONNL_U + 0x09] = 0;   // -> (0,0)
+
+	for (int y = 0; y < DV_H; y++)
+		for (int x = 0; x < DV_W; x++) {
+			dv_grid_put(DVR_GRID_S, x, y, DV_ROCK);
+			dv_grid_put(DVR_GRID_U, x, y, DV_ROCK);
+		}
+	if (!up) {
+		// SURFACE: a west chamber (x 0-5) and an east chamber (x 10-15), rock in between.
+		for (int y = 3; y <= 5; y++)
+			for (int x = 0; x < DV_W; x++)
+				if (x <= 5 || x >= 10) dv_grid_put(DVR_GRID_S, x, y, dvW(DV_MT_SEA, 0, 1));
+		dv_grid_put(DVR_GRID_S, 2, 4, dvW(DV_MT_DEEP, 0, 1));      // the ONE dive spot
+		// A SANDBAR across the west chamber: MB_NORMAL, and COLLISION 0. A walker could stand on
+		// it; a surfer cannot float over it, because surfing tests the BEHAVIOUR and not just the
+		// collision bits. The second deep-water tile behind it is therefore invisible to a surfing
+		// player — which is what pins the `nSpots == 1` assertion to the behaviour test rather
+		// than to the collision bits it would otherwise be indistinguishable from.
+		for (int y = 3; y <= 5; y++) dv_grid_put(DVR_GRID_S, 4, y, dvW(DV_MT_LAND, 0, 1));
+		dv_grid_put(DVR_GRID_S, 5, 4, dvW(DV_MT_DEEP, 0, 1));
+		// UNDERWATER: one open corridor the whole width, unsurfaceable except two shafts.
+		for (int x = 0; x < DV_W; x++) dv_grid_put(DVR_GRID_U, x, 4, dvW(DV_MT_NOSUR, 0, 3));
+		dv_grid_put(DVR_GRID_U, 2, 4, dvW(DV_MT_LAND, 0, 3));
+		dv_grid_put(DVR_GRID_U, 13, 4, dvW(DV_MT_LAND, 0, 3));     // the ONE surfacing spot
+		dv_live_from(DVR_GRID_S);
+		memcpy(g_dvHdr, g_dvRom + DVR_HDR_S, sizeof g_dvHdr);
+	} else {
+		// The mirror: the split is UNDERWATER and the open water is on top.
+		for (int x = 0; x < DV_W; x++)
+			if (x <= 5 || x >= 10) dv_grid_put(DVR_GRID_U, x, 4, dvW(DV_MT_NOSUR, 0, 3));
+		dv_grid_put(DVR_GRID_U, 2, 4, dvW(DV_MT_LAND, 0, 3));      // the ONE surfacing spot
+		dv_grid_put(DVR_GRID_U, 13, 4, dvW(DV_MT_LAND, 0, 3));
+		for (int y = 3; y <= 5; y++)
+			for (int x = 0; x < DV_W; x++) dv_grid_put(DVR_GRID_S, x, y, dvW(DV_MT_SEA, 0, 1));
+		dv_grid_put(DVR_GRID_S, 2, 4, dvW(DV_MT_DEEP, 0, 1));
+		dv_grid_put(DVR_GRID_S, 13, 4, dvW(DV_MT_DEEP, 0, 1));     // the ONE dive-back spot
+		// A REEF on the direct line: MB_NORMAL with COLLISION 0 again, so the surface crossing has
+		// to detour around it. Its whole job is to make the mid-leg step count depend on the
+		// surfable-behaviour test — 13 with it, 11 without.
+		dv_grid_put(DVR_GRID_S, 7, 4, dvW(DV_MT_LAND, 0, 1));
+		dv_live_from(DVR_GRID_U);
+		memcpy(g_dvHdr, g_dvRom + DVR_HDR_U, sizeof g_dvHdr);
+	}
+
+	// The player object: active, elevation 3. Underwater that is the REAL elevation of every
+	// swimmable tile (measured across pret's seven Emerald pairs), so the elevation rail is armed
+	// rather than disarmed for the upward legs.
+	g_dvObj[0x00] = 1;
+	g_dvObj[0x0B] = 3;
+	dv_set_badge();
+	{
+		const uint16_t diveSet[4] = { MOVE_DIVE, MOVE_SURF, 0, 0 };
+		put_mon_at(g_dvParty, 0x12345678u, 0xCAFEBABEu, diveSet, 260, 1, 0, 0);
+	}
+}
+
+static void dv_bind(FpBus* bus, FpMap* m) {
+	bus->read8 = dv_r8; bus->read16 = dv_r16; bus->read32 = dv_r32; bus->ctx = 0;
+	memset(m, 0, sizeof *m);
+	m->engine = FP_ENG_RSE;
+	m->mapHeader = DV_HDR_BASE;      // EWRAM, exactly as touch.c passes it
+	m->mapObjects = DV_OBJ_BASE;
+	m->gridPtr = DV_LIVE_BASE;
+	m->backupW = DV_BW; m->backupH = DV_BH;
+}
+// Surgical world edits the refusal cases need.
+static void dv_conn_dir(int which, int dir) {
+	g_dvRom[which ? DVR_CONNL_U : (DVR_CONNL_S + DV_DIVE_REC * 12)] = (uint8_t)dir;
+}
+static void dv_conn_count(int n) { dvw32(DVR_CONN_S + 0x00, (uint32_t)n); }
+static void dv_conn_ptr(uint32_t v) { dvw32(DVR_HDR_S + 0x0C, v); g_dvHdr[0x0C] = (uint8_t)v;
+	g_dvHdr[0x0D] = (uint8_t)(v >> 8); g_dvHdr[0x0E] = (uint8_t)(v >> 16); g_dvHdr[0x0F] = (uint8_t)(v >> 24); }
+static void dv_wall_under(int x) { dv_grid_put(DVR_GRID_U, x, 4, DV_ROCK); }
+static void dv_open_under(int x) { dv_grid_put(DVR_GRID_U, x, 4, dvW(DV_MT_NOSUR, 0, 3)); }
+static void dv_block_goal(void)   { dv_live_put(14, 4, DV_ROCK); }
+static void dv_unblock_goal(void) { dv_live_put(14, 4, dvW(DV_MT_SEA, 0, 1)); }
+
 int main(void) {
 	printf("=== test_fieldtrav (phase 22.2 HM traversal planner) ===\n");
 
@@ -1188,6 +1465,639 @@ int main(void) {
 		      FT_CENSUS_MAX, cen.nBox);
 		CHECK(cen.box[FT_CENSUS_MAX - 1].species == (uint16_t)(300 + FT_CENSUS_MAX - 1),
 		      "…the last kept record is the %dth mon, in slot order", FT_CENSUS_MAX);
+	}
+
+
+	// ================================================================ TEST 20 / 21
+	// PHASE 26 / LANE V — DIVE (SPEC-hm-dive). Self-contained: these two blocks bring their own
+	// bus, their own ROM image and their own live grid, so nothing above them changes and the
+	// lane sharing this file with the Waterfall/Strength lane cannot collide with them.
+	//
+	// ---------------------------------------------------------------- TEST 20
+	printf("\nTEST 20 — DIVE: the constants, the two metatile sets, and the FRLG zero\n");
+	{
+		// (a) The badge, per variant, against pret's OWN numbers — written here as literals read
+		// off the three flags.h files this session, never through fieldtrav_cfg (the c2a58db rule:
+		// a test that asks the table under test for the answer can only agree with itself).
+		//   pokeemerald flags.h:1348 SYSTEM_FLAGS 0x860 + :1365 FLAG_BADGE07_GET (+0xD) = 0x86D,
+		//     and it is BADGE07 because src/field_control_avatar.c:465/475 says so — Dive is HM08.
+		//   pokeruby   flags.h:779   SYSTEM_FLAGS 0x800 + :795 (+0x0D)               = 0x80D,
+		//     gate at pokeruby src/field_control_avatar.c:521/531.
+		//   pokefirered: NO DIVE AT ALL -> 0.
+		CHECK(fieldtrav_cfg(FT_VAR_EMERALD)->badgeDive == 0x86D, "EM badgeDive == FLAG_BADGE07_GET 0x86D (got 0x%X)",
+		      fieldtrav_cfg(FT_VAR_EMERALD)->badgeDive);
+		CHECK(fieldtrav_cfg(FT_VAR_RS)->badgeDive == 0x80D, "RS badgeDive == FLAG_BADGE07_GET 0x80D (got 0x%X)",
+		      fieldtrav_cfg(FT_VAR_RS)->badgeDive);
+		CHECK(fieldtrav_cfg(FT_VAR_FRLG)->badgeDive == 0, "FRLG badgeDive is the NAMED ZERO (got 0x%X)",
+		      fieldtrav_cfg(FT_VAR_FRLG)->badgeDive);
+		// The two traps this row exists to stop, stated as assertions rather than as prose:
+		CHECK(fieldtrav_cfg(FT_VAR_FRLG)->badgeDive != fieldtrav_cfg(FT_VAR_EMERALD)->badgeDive,
+		      "FRLG never inherits Emerald's dive badge");
+		CHECK(fieldtrav_cfg(FT_VAR_FRLG)->badgeWaterfall == 0x826,
+		      "…and FRLG's OWN badge07 is 0x826 — the WATERFALL badge, the value a careless port "
+		      "would have put in badgeDive");
+		CHECK(fieldtrav_cfg(FT_VAR_EMERALD)->badgeDive != fieldtrav_cfg(FT_VAR_EMERALD)->badgeWaterfall,
+		      "EM dive (BADGE07) and waterfall (BADGE08) are different badges");
+		CHECK(fieldtrav_cfg(FT_VAR_RS)->badgeDive != fieldtrav_cfg(FT_VAR_EMERALD)->badgeDive,
+		      "RS dive badge is its own number, not Emerald's");
+		CHECK(fieldtrav_cfg(FT_VAR_RS)->badgeDive == fieldtrav_cfg(FT_VAR_RS)->badgeSurf + 2,
+		      "…and it sits where pokeruby's own BADGE05..BADGE07 run puts it");
+
+		// (b) MetatileBehavior_IsDiveable — an ALLOW-list of exactly three, swept over every byte.
+		// pokeemerald src/metatile_behavior.c:853-861 / pokeruby :927-935.
+		int nDiveEm = 0, nDiveRs = 0, nDiveFr = 0;
+		for (int b = 0; b < 256; b++) {
+			int want = (b == 0x11 || b == 0x12 || b == 0x14);
+			CHECK(fieldtrav_is_diveable(FT_VAR_EMERALD, b) == (want != 0),
+			      "EM diveable(0x%02X) == %d", b, want);
+			CHECK(fieldtrav_is_diveable(FT_VAR_RS, b) == (want != 0), "RS diveable(0x%02X) == %d", b, want);
+			CHECK(fieldtrav_is_diveable(FT_VAR_FRLG, b) == false, "FRLG diveable(0x%02X) is never true", b);
+			nDiveEm += fieldtrav_is_diveable(FT_VAR_EMERALD, b);
+			nDiveRs += fieldtrav_is_diveable(FT_VAR_RS, b);
+			nDiveFr += fieldtrav_is_diveable(FT_VAR_FRLG, b);
+		}
+		CHECK(nDiveEm == 3 && nDiveRs == 3 && nDiveFr == 0,
+		      "exactly three diveable behaviours in RSE, none in FRLG (%d/%d/%d)", nDiveEm, nDiveRs, nDiveFr);
+		CHECK(!fieldtrav_is_diveable(FT_VAR_EMERALD, -1), "an unreadable behaviour is never diveable");
+
+		// The asymmetry that makes this a separate function from fieldtrav_is_surfable: two of the
+		// commonest water tiles in the game are surfable and NOT diveable.
+		CHECK(fieldtrav_is_surfable(FP_ENG_RSE, 0x10) && !fieldtrav_is_diveable(FT_VAR_EMERALD, 0x10),
+		      "MB_POND_WATER is surfable but not diveable");
+		CHECK(fieldtrav_is_surfable(FP_ENG_RSE, 0x15) && !fieldtrav_is_diveable(FT_VAR_EMERALD, 0x15),
+		      "MB_OCEAN_WATER is surfable but not diveable");
+
+		// (c) MetatileBehavior_IsUnableToEmerge — a DENY-list, so the default answer is YES.
+		// pokeemerald :863-877 (its MB_WATER_DOOR arm is `#ifdef BUGFIX`, which vanilla does not
+		// define, so it must NOT be in our set) / pokeruby IsNotSurfacable :937-943.
+		int nNoEmerge = 0;
+		for (int b = 0; b < 256; b++) {
+			int deny = (b == 0x19 || b == 0x2A);
+			CHECK(fieldtrav_can_emerge(FT_VAR_EMERALD, b) == (deny == 0), "EM can_emerge(0x%02X) == %d", b, !deny);
+			CHECK(fieldtrav_can_emerge(FT_VAR_RS, b) == (deny == 0), "RS can_emerge(0x%02X) == %d", b, !deny);
+			CHECK(fieldtrav_can_emerge(FT_VAR_FRLG, b) == false, "FRLG can_emerge(0x%02X) is never true", b);
+			nNoEmerge += !fieldtrav_can_emerge(FT_VAR_EMERALD, b);
+		}
+		CHECK(nNoEmerge == 2, "exactly two behaviours block surfacing (got %d)", nNoEmerge);
+		CHECK(fieldtrav_can_emerge(FT_VAR_EMERALD, 0x6C),
+		      "MB_WATER_DOOR 0x6C still emerges — the BUGFIX arm is not in the shipped cartridge");
+		CHECK(!fieldtrav_can_emerge(FT_VAR_EMERALD, -1), "an unreadable behaviour never emerges");
+		CHECK(fieldtrav_can_emerge(FT_VAR_EMERALD, 0x00),
+		      "MB_NORMAL emerges — which matters, because MB_NORMAL is what pret's underwater "
+		      "layouts are actually paved with");
+
+		// (d) Eligibility: badge AND mon, and the FRLG engine refusal on top.
+		FpBus bus; FpMap m;
+		const uint16_t diveSet[4] = { MOVE_DIVE, 0, 0, 0 };
+		const uint16_t surfSet[4] = { MOVE_SURF, 0, 0, 0 };
+
+		bind("route117", &bus, &m, 3);
+		put_mon(0, 0x12345678u, 0xCAFEBABEu, diveSet, 1, 0, 0);
+		CHECK(!(fieldtrav_usable(&bus, FT_VAR_EMERALD, &(FtParty){ SB1_BASE, PARTY_BASE, 1 }) & (1u << FT_HM_DIVE)),
+		      "EM: a mon that knows Dive but no badge -> no DIVE bit");
+		set_flag(FT_VAR_EMERALD, 0x86D);
+		CHECK((fieldtrav_usable(&bus, FT_VAR_EMERALD, &(FtParty){ SB1_BASE, PARTY_BASE, 1 }) & (1u << FT_HM_DIVE)),
+		      "EM: badge07 + a mon that knows Dive -> the DIVE bit");
+
+		bind("route117", &bus, &m, 3);
+		put_mon(0, 0x12345678u, 0xCAFEBABEu, surfSet, 1, 0, 0);
+		set_flag(FT_VAR_EMERALD, 0x86D);
+		CHECK(!(fieldtrav_usable(&bus, FT_VAR_EMERALD, &(FtParty){ SB1_BASE, PARTY_BASE, 1 }) & (1u << FT_HM_DIVE)),
+		      "EM: the badge alone, with no mon that knows Dive -> no DIVE bit");
+
+		// THE FRLG REGRESSION GUARD. Give a FireRed save everything a careless port would have
+		// asked for — its OWN badge07 (0x826, which really is set on any save that beat Koga) and a
+		// mon that really does know MOVE_DIVE — and the bit must still refuse to light.
+		bind("route117", &bus, &m, 3);
+		put_mon(0, 0x12345678u, 0xCAFEBABEu, diveSet, 1, 0, 0);
+		set_flag(FT_VAR_FRLG, 0x826);
+		uint32_t frMask = fieldtrav_usable(&bus, FT_VAR_FRLG, &(FtParty){ SB1_BASE, PARTY_BASE, 1 });
+		CHECK(!(frMask & (1u << FT_HM_DIVE)),
+		      "FRLG: badge07 + MOVE_DIVE still gives NO dive (mask 0x%X)", frMask);
+		// …and the CONTROL that makes that refusal mean something: the bit really is set in this
+		// save, read back through the SHIPPED flag reader. Without this line, "no dive" could just
+		// as well be "the test forgot to set a badge".
+		CHECK(fieldtrav_flag_get(&bus, FT_VAR_FRLG, SB1_BASE, 0x826),
+		      "…and FRLG's badge07 bit IS set in this save, so the refusal is a decision, not a hole");
+		// The `flagId == 0` trap: without the `c->badgeDive &&` guard, a zero badge id reads bit 0
+		// of flags[0] — a live TEMP flag (pokeemerald flags.h:11 TEMP_FLAGS_START 0x0), not a hole.
+		bind("route117", &bus, &m, 3);
+		put_mon(0, 0x12345678u, 0xCAFEBABEu, diveSet, 1, 0, 0);
+		set_flag(FT_VAR_FRLG, 0);
+		CHECK(!(fieldtrav_usable(&bus, FT_VAR_FRLG, &(FtParty){ SB1_BASE, PARTY_BASE, 1 }) & (1u << FT_HM_DIVE)),
+		      "FRLG: flag id 0 set + MOVE_DIVE -> still no dive (the zero-badge-id trap)");
+
+		// RUBY, written through pokeruby's own numbers rather than through the table under test.
+		bind("route117", &bus, &m, 3);
+		put_mon(0, 0x12345678u, 0xCAFEBABEu, diveSet, 1, 0, 0);
+		set_flag_ruby(0x80D);                       // pokeruby flags.h:779 + :795
+		CHECK((fieldtrav_usable(&bus, FT_VAR_RS, &(FtParty){ SB1_BASE, PARTY_BASE, 1 }) & (1u << FT_HM_DIVE)),
+		      "RS: the badge byte a real Ruby cart sets lights the DIVE bit");
+		CHECK(!(fieldtrav_usable(&bus, FT_VAR_EMERALD, &(FtParty){ SB1_BASE, PARTY_BASE, 1 }) & (1u << FT_HM_DIVE)),
+		      "…and the same save read with EMERALD's numbering does NOT — the c2a58db split holds");
+	}
+
+	// ---------------------------------------------------------------- TEST 21
+	printf("TEST 21 — DIVE: the map-connection transition, planned end to end\n");
+	{
+		dv_world(0);                                 // live = the SURFACE map, D = its underwater twin
+		FpBus bus; FpMap m;
+		dv_bind(&bus, &m);
+		FtParty pty = dv_party(1);
+		FtDive dv;
+
+		// (a) The pieces the plan is built out of, asserted separately so a failure says WHICH.
+		CHECK(!fieldtrav_underwater(&bus, &m), "the surface map does not read as MAP_TYPE_UNDERWATER");
+		int cg = -1, cn = -1;
+		CHECK(fieldtrav_connection(&bus, DV_HDR_BASE, FT_CONN_DIVE, &cg, &cn) && cg == 0 && cn == 1,
+		      "the surface map's CONNECTION_DIVE points at map (0,1) (got %d,%d)", cg, cn);
+		CHECK(!fieldtrav_connection(&bus, DV_HDR_BASE, FT_CONN_EMERGE, &cg, &cn) && cg == -1 && cn == -1,
+		      "…and it has no CONNECTION_EMERGE, with the out-params cleared on refusal");
+		CHECK(!fieldtrav_connection(&bus, DV_HDR_BASE, 2 /* CONNECTION_NORTH */, &cg, &cn),
+		      "a direction this map does not carry is refused, not answered with record 0");
+		// The dive record is the THIRD of three, so finding it proves both the scan and the
+		// 12-byte stride (asm/macros/map.inc:152-158 — the alignment padding pokeruby's C comments
+		// on this struct get wrong). Records 0 and 1 must still read as themselves.
+		CHECK(fieldtrav_connection(&bus, DV_HDR_BASE, 1 /* SOUTH */, &cg, &cn) && cg == 0 && cn == 7,
+		      "record 0 (SOUTH) reads as (0,7) (got %d,%d)", cg, cn);
+		CHECK(fieldtrav_connection(&bus, DV_HDR_BASE, 4 /* EAST */, &cg, &cn) && cg == 0 && cn == 8,
+		      "record 1 (EAST) reads as (0,8) (got %d,%d)", cg, cn);
+		// The structural rails, each a NAMED refusal rather than a garbage read.
+		dv_conn_ptr(0);
+		CHECK(!fieldtrav_connection(&bus, DV_HDR_BASE, FT_CONN_DIVE, &cg, &cn),
+		      "a NULL connections pointer -> no connection (455 of Emerald's 869 maps store one)");
+		// A WELL-FORMED table at an EWRAM address: count 1, a real ROM record list, a real
+		// destination. Only the ROM-pointer rule refuses it — a reader that just followed the
+		// pointer would answer confidently from a struct the header cannot legally hold.
+		for (unsigned i = 0; i < sizeof g_dvDecoy; i++) g_dvDecoy[i] = 0;
+		g_dvDecoy[0] = 1;                                          // count = 1
+		{ uint32_t lp = DV_ROM_BASE + DVR_CONNL_S + DV_DIVE_REC * 12;
+		  for (int i = 0; i < 4; i++) g_dvDecoy[4 + i] = (uint8_t)(lp >> (8 * i)); }
+		dv_conn_ptr(DV_DECOY_BASE);
+		CHECK(!fieldtrav_connection(&bus, DV_HDR_BASE, FT_CONN_DIVE, &cg, &cn),
+		      "a WELL-FORMED connections table in EWRAM is still refused: the pointer must be ROM");
+		dv_conn_ptr(DV_ROM_BASE + DVR_CONN_S);
+		dv_conn_count(0);
+		CHECK(!fieldtrav_connection(&bus, DV_HDR_BASE, FT_CONN_DIVE, &cg, &cn), "count 0 -> refused");
+		dv_conn_count(FT_MAX_CONN + 1);
+		CHECK(!fieldtrav_connection(&bus, DV_HDR_BASE, FT_CONN_DIVE, &cg, &cn),
+		      "an impossible count (> %d, the sane cap) is refused", FT_MAX_CONN);
+		dv_conn_count(3);
+		CHECK(fieldtrav_connection(&bus, DV_HDR_BASE, FT_CONN_DIVE, &cg, &cn) && cg == 0 && cn == 1,
+		      "…and the restored table reads correctly again");
+		CHECK(!fieldtrav_connection(&bus, 0, FT_CONN_DIVE, &cg, &cn), "a NULL map header is refused");
+		CHECK(!fieldtrav_connection(&bus, DV_HDR_BASE, FT_CONN_DIVE, 0, &cn), "a NULL out-param is refused");
+
+		// (b) THE PLAN. West lagoon -> east lagoon, separated by a rock wall the surface cannot
+		// cross; the only deep-water tile is (2,4) and the only surfacing tile underwater is
+		// (13,4), so every number below is forced.
+		bool ok = fieldtrav_dive(&bus, &m, DV_MAPGROUPS, 0, 0, FT_VAR_EMERALD, &pty,
+		                         1, 4, 14, 4, true, 0, 0, &dv);
+		CHECK(ok && dv.ok && dv.outcome == FT_OUT_PLANNED, "a dive route is planned (outcome %d)", dv.outcome);
+		CHECK(dv.dir == FT_DIVE_DOWN, "…downward (dir %d)", dv.dir);
+		CHECK(dv.dGroup == 0 && dv.dNum == 1, "…into map (0,1) (got %d,%d)", dv.dGroup, dv.dNum);
+		CHECK(dv.diveX == 2 && dv.diveY == 4, "…diving at the ONE deep-water tile (2,4) (got %d,%d)",
+		      dv.diveX, dv.diveY);
+		CHECK(dv.upX == 13 && dv.upY == 4, "…surfacing at the ONE emergeable tile (13,4) (got %d,%d)",
+		      dv.upX, dv.upY);
+		CHECK(dv.stepsOut == 1 && dv.stepsMid == 11 && dv.stepsBack == 1,
+		      "…legs 1/11/1 (got %d/%d/%d)", dv.stepsOut, dv.stepsMid, dv.stepsBack);
+		CHECK(dv.nSpots == 1,
+		      "exactly one reachable dive spot: the second one sits behind a collision-free SANDBAR "
+		      "a surfer cannot cross (got %d)", dv.nSpots);
+		// The identity coordinate map, stated as an assertion: the tile you dive AT is the tile you
+		// arrive ON, both ways. That is what SetWarpDestination(..., WARP_ID_NONE, x, y) means.
+		CHECK(dv.diveX == 2 && dv.upY == 4,
+		      "the plan carries ONE (x,y) per transition because the coordinate map is the identity");
+
+		// (c) A rock wall really does separate the two lagoons on the surface: the same tap with
+		// the dive tier unavailable has nowhere to go. Proved by asking the LAYERED planner.
+		fieldtrav_plan(&bus, &m, FT_VAR_EMERALD, &pty, 1, 4, 14, 4, true, 0, 0, &g_pr);
+		CHECK(!g_pr.ok && g_pr.outcome == FT_OUT_UNREACHABLE,
+		      "…and the surface really is impassable: tier 1 answers UNREACHABLE (%s)", OUTN(g_pr.outcome));
+
+		// (d) NEVER PROMPT WHAT THE GAME WILL REFUSE — the five ways a dive is declined whole.
+		FtParty noBadge = dv_party(1); dv_clear_badge();
+		CHECK(!fieldtrav_dive(&bus, &m, DV_MAPGROUPS, 0, 0, FT_VAR_EMERALD, &noBadge,
+		                      1, 4, 14, 4, true, 0, 0, &dv) && dv.outcome == FT_OUT_NOEDGE,
+		      "no badge -> NOEDGE, nothing planned (outcome %d)", dv.outcome);
+		dv_set_badge();
+		// Arm the FRLG side honestly: set FireRed's OWN badge07 (0x826) in FireRed's OWN flags[],
+		// so the save under the FRLG numbering has every bit a mis-ported dive row would look at.
+		dv_flag_set_frlg(0x826);
+		CHECK(fieldtrav_flag_get(&bus, FT_VAR_FRLG, DV_SB1_BASE, 0x826),
+		      "the dive world's save has FRLG badge07 set, read through the shipped flag reader");
+		CHECK(!fieldtrav_dive(&bus, &m, DV_MAPGROUPS, 0, 0, FT_VAR_FRLG, &pty,
+		                      1, 4, 14, 4, true, 0, 0, &dv) && dv.outcome == FT_OUT_NOEDGE,
+		      "the FRLG variant refuses the identical world, badge and all (outcome %d)", dv.outcome);
+		CHECK(!fieldtrav_dive(&bus, &m, DV_MAPGROUPS, 0, 0, FT_VAR_EMERALD, &pty,
+		                      1, 4, 14, 4, false /* on foot */, 0, 0, &dv) && dv.outcome == FT_OUT_NODIVE,
+		      "a tap taken NOT surfing is refused whole, never half-planned (outcome %d)", dv.outcome);
+		CHECK(!fieldtrav_dive(&bus, &m, 0x02000000u, 0, 0, FT_VAR_EMERALD, &pty,
+		                      1, 4, 14, 4, true, 0, 0, &dv) && dv.outcome == FT_OUT_BADMAP,
+		      "a gMapGroups that is not ROM -> BADMAP (outcome %d)", dv.outcome);
+		CHECK(!fieldtrav_dive(&bus, &m, DV_MAPGROUPS, 0, 0, FT_VAR_EMERALD, &pty,
+		                      1, 4, 14, 60, true, 0, 0, &dv) && dv.outcome == FT_OUT_WINDOW,
+		      "a goal outside the +-32 window -> WINDOW (outcome %d)", dv.outcome);
+
+		// (e) The CONNECTION is the mechanism, so removing either half kills the plan. This is the
+		// honest refusal that covers every SCRIPTED dive spot in the game (Sootopolis, the Sealed
+		// Chamber, Marine Cave, Seafloor Cavern, the Abandoned Ship, Route 134): those maps set
+		// their destination from an ON_DIVE_WARP map script, so they carry no dive CONNECTION.
+		dv_conn_dir(0, 4 /* CONNECTION_EAST */);
+		CHECK(!fieldtrav_dive(&bus, &m, DV_MAPGROUPS, 0, 0, FT_VAR_EMERALD, &pty,
+		                      1, 4, 14, 4, true, 0, 0, &dv) && dv.outcome == FT_OUT_NODIVE,
+		      "no CONNECTION_DIVE on this map -> NODIVE (outcome %d)", dv.outcome);
+		dv_conn_dir(0, FT_CONN_DIVE);
+		// A dive connection that points at THIS map. No vanilla map does that, but a garbage read
+		// of the group/num bytes easily produces it, and "dive from here to here" is a program
+		// that would run forever.
+		g_dvRom[DVR_CONNL_S + DV_DIVE_REC * 12 + 0x09] = 0;         // -> (0,0), ourselves
+		CHECK(!fieldtrav_dive(&bus, &m, DV_MAPGROUPS, 0, 0, FT_VAR_EMERALD, &pty,
+		                      1, 4, 14, 4, true, 0, 0, &dv) && dv.outcome == FT_OUT_NODIVE,
+		      "a dive connection pointing at the current map is refused (outcome %d)", dv.outcome);
+		g_dvRom[DVR_CONNL_S + DV_DIVE_REC * 12 + 0x09] = 1;
+		dv_conn_dir(1, 4);
+		CHECK(!fieldtrav_dive(&bus, &m, DV_MAPGROUPS, 0, 0, FT_VAR_EMERALD, &pty,
+		                      1, 4, 14, 4, true, 0, 0, &dv) && dv.outcome == FT_OUT_NODIVE,
+		      "a one-way dive (no return CONNECTION_EMERGE) is refused -> NODIVE (outcome %d)", dv.outcome);
+		dv_conn_dir(1, FT_CONN_EMERGE);
+		CHECK(fieldtrav_dive(&bus, &m, DV_MAPGROUPS, 0, 0, FT_VAR_EMERALD, &pty,
+		                     1, 4, 14, 4, true, 0, 0, &dv), "…and restoring both connections restores the plan");
+
+		// (f) The three ways the SEARCH itself comes up empty, each a different refusal path.
+		short npc1[1][2]; npc1[0][0] = (short)(2 + 7); npc1[0][1] = (short)(4 + 7);
+		CHECK(!fieldtrav_dive(&bus, &m, DV_MAPGROUPS, 0, 0, FT_VAR_EMERALD, &pty,
+		                      1, 4, 14, 4, true, npc1, 1, &dv) && dv.outcome == FT_OUT_NODIVE &&
+		      dv.nSpots == 0,
+		      "an NPC parked on the only dive tile -> no reachable spot -> NODIVE (spots %d)", dv.nSpots);
+		dv_wall_under(8);        // seal the underwater corridor at x=8
+		CHECK(!fieldtrav_dive(&bus, &m, DV_MAPGROUPS, 0, 0, FT_VAR_EMERALD, &pty,
+		                      1, 4, 14, 4, true, 0, 0, &dv) && dv.outcome == FT_OUT_NODIVE &&
+		      dv.nSpots == 1,
+		      "a dive spot that reaches no surfacing tile -> NODIVE, with the spot still counted (%d)",
+		      dv.nSpots);
+		dv_open_under(8);
+		dv_block_goal();
+		CHECK(!fieldtrav_dive(&bus, &m, DV_MAPGROUPS, 0, 0, FT_VAR_EMERALD, &pty,
+		                      1, 4, 14, 4, true, 0, 0, &dv) && dv.outcome == FT_OUT_NODIVE,
+		      "a goal the player could not occupy is refused, not bumped (outcome %d)", dv.outcome);
+		dv_unblock_goal();
+
+		// (g) Two degenerate shapes the search must get right on its own.
+		//   1. The player is ALREADY floating on the dive tile — the zero-step out-leg. (The root
+		//      of a BFS is a candidate spot like any other, which is easy to write and easy to
+		//      forget.)
+		CHECK(fieldtrav_dive(&bus, &m, DV_MAPGROUPS, 0, 0, FT_VAR_EMERALD, &pty,
+		                     2, 4, 14, 4, true, 0, 0, &dv) && dv.stepsOut == 0 &&
+		      dv.diveX == 2 && dv.diveY == 4,
+		      "standing ON the dive tile plans a zero-step out-leg (got %d steps at %d,%d)",
+		      dv.stepsOut, dv.diveX, dv.diveY);
+		//   2. A goal ordinary surfing already reaches must NOT produce "dive here, surface here"
+		//      — a pair of prompts that moves nobody. touch.c never asks (tier 0/1 run first), but
+		//      a planner that answers nonsense when asked nonsense is one refactor from shipping it.
+		CHECK(!fieldtrav_dive(&bus, &m, DV_MAPGROUPS, 0, 0, FT_VAR_EMERALD, &pty,
+		                      1, 4, 3, 4, true, 0, 0, &dv) && dv.outcome == FT_OUT_NODIVE,
+		      "a goal plain surfing already reaches is refused, not answered with a round trip to "
+		      "the same tile (outcome %d)", dv.outcome);
+
+		// (h) …and NOTHING above left a stale answer behind: the same call still plans.
+		CHECK(fieldtrav_dive(&bus, &m, DV_MAPGROUPS, 0, 0, FT_VAR_EMERALD, &pty,
+		                     1, 4, 14, 4, true, 0, 0, &dv) && dv.diveX == 2 && dv.upX == 13,
+		      "the world is back where it started and the plan reproduces exactly");
+
+		// (i) UPWARD — the same machinery run from the underwater side. The map TYPE decides the
+		// direction (pokeemerald src/field_control_avatar.c:475), not the avatar flags, so
+		// `startSurfing` is false here and the plan still goes.
+		dv_world(1);                                  // live = the UNDERWATER map, D = the surface
+		dv_bind(&bus, &m);
+		CHECK(fieldtrav_underwater(&bus, &m), "the live map now reads as MAP_TYPE_UNDERWATER");
+		FtDive up;
+		bool okUp = fieldtrav_dive(&bus, &m, DV_MAPGROUPS, 0, 1, FT_VAR_EMERALD, &pty,
+		                           1, 4, 14, 4, false, 0, 0, &up);
+		CHECK(okUp && up.outcome == FT_OUT_PLANNED, "an upward (emerge) route is planned (outcome %d)",
+		      up.outcome);
+		CHECK(up.dir == FT_DIVE_UP, "…and it knows it is going UP (dir %d)", up.dir);
+		CHECK(up.dGroup == 0 && up.dNum == 0, "…into the surface map (0,0) (got %d,%d)", up.dGroup, up.dNum);
+		// `diveX/diveY` is always "where the HM is used HERE" — surfacing, this time — and
+		// `upX/upY` is "where it is used over there". The west pocket's only shaft is (2,4), and
+		// the open sea above leads to the only deep-water tile the east pocket sits under, (13,4).
+		CHECK(up.diveX == 2 && up.diveY == 4,
+		      "…surfacing at the one emergeable underwater tile in reach, (2,4) (got %d,%d)",
+		      up.diveX, up.diveY);
+		CHECK(up.upX == 13 && up.upY == 4,
+		      "…and diving back at the one deep-water tile over the east pocket, (13,4) (got %d,%d)",
+		      up.upX, up.upY);
+		CHECK(up.stepsOut == 1 && up.stepsBack == 1, "…legs 1/../1 (got %d/../%d)",
+		      up.stepsOut, up.stepsBack);
+		CHECK(up.nSpots == 1, "…from exactly one reachable surfacing spot (got %d)", up.nSpots);
+		// The surface crossing detours around the reef: 13 steps, not the 11 a straight line would
+		// take. That number is the surfable-behaviour test doing its job on the PAIRED map's leg.
+		CHECK(up.stepsMid == 13,
+		      "…and the surface leg goes AROUND the collision-free reef: 13 steps, not 11 (got %d)",
+		      up.stepsMid);
+	}
+
+	// ================================================================ TEST 22 / 23
+	// PHASE 26 / LANE W — WATERFALL (the vertical mid-surf edge) and STRENGTH (the terminal).
+	//
+	// TEST 22 is graded against the USER'S OWN Emerald ROM rather than a synthesised grid, because
+	// the two things that make a waterfall hard are both properties of the REAL map data and a mock
+	// would let me choose them:
+	//   * a climbable waterfall metatile is collision 0 / elevation 1 — the SAME as the ocean above
+	//     and below it — so nothing about the tile stops a router entering it (62 columns across
+	//     7 maps, all identical);
+	//   * the falls are TALL. Ever Grande's is 8 tiles, which is what forces the goal retarget.
+	// A hand-built 3-tile fall would have proved neither.
+	printf("\nTEST 22 — WATERFALL: the metatile, the ride, and the vertical edge\n");
+	{
+		// --- (a) the metatile test, exhaustively, both engines. 0x13 and nothing else.
+		int wfHits = 0;
+		for (int b = 0; b <= 0xFF; b++) {
+			bool rse = fieldtrav_is_waterfall(FP_ENG_RSE, b), frlg = fieldtrav_is_waterfall(FP_ENG_FRLG, b);
+			CHECK(rse == (b == 0x13), "RSE  0x%02X waterfall == %d", b, b == 0x13);
+			CHECK(frlg == (b == 0x13), "FRLG 0x%02X waterfall == %d", b, b == 0x13);
+			if (rse) wfHits++;
+		}
+		CHECK(wfHits == 1, "exactly ONE behaviour is a waterfall (got %d)", wfHits);
+		CHECK(!fieldtrav_is_waterfall(FP_ENG_RSE, -1), "an unreadable behaviour is never a waterfall");
+		// The pairing that makes the whole feature safe: a waterfall is an EDGE and never free
+		// water. If 0x13 ever rejoined the surfable set, the layered planner would swim straight up
+		// a fall and the game's forced movement would flush the player back down forever.
+		CHECK(fieldtrav_is_waterfall(FP_ENG_RSE, 0x13) && !fieldtrav_is_surfable(FP_ENG_RSE, 0x13),
+		      "RSE 0x13 is a waterfall AND not surfable — both halves, together");
+		CHECK(fieldtrav_is_waterfall(FP_ENG_FRLG, 0x13) && !fieldtrav_is_surfable(FP_ENG_FRLG, 0x13),
+		      "FRLG 0x13 is a waterfall AND not surfable");
+	}
+	rom_load();
+	if (!g_rom) {
+		printf("TEST 22 (ROM half) / 23 — PARTIAL SKIP: roms/emerald.gba not readable from the CWD; "
+		       "the real-map waterfall checks did not run\n");
+	} else {
+		FpBus rb; rb.read8 = rom_r8; rb.read16 = rom_r16; rb.read32 = rom_r32; rb.ctx = 0;
+
+		// --- (b) fieldtrav_waterfall_top == the game's own ride, on Route 114 (0,29).
+		// The fall is x 9..12, y 10..12; the pool below is y=13 and the landing is y=9. Every one
+		// of those numbers was read out of this ROM through the shipped readers.
+		FtRomMap r114;
+		CHECK(fieldtrav_rom_map(&rb, EM_MAPGROUPS, 0, 29, &r114), "Route114 (0,29) resolves");
+		FpBus l1; FpMap m1;
+		live_from_rom(&rb, &r114, &l1, &m1);
+		CHECK(fieldpath_behaviour_at(&l1, &m1, 9, 12) == 0x13, "…(9,12) really is MB_WATERFALL");
+		CHECK(fieldpath_behaviour_at(&l1, &m1, 9, 13) == 0x15, "…(9,13) below it is MB_OCEAN_WATER");
+		CHECK(fieldpath_behaviour_at(&l1, &m1, 9,  9) == 0x15, "…(9,9) above it is MB_OCEAN_WATER");
+		// EVERY tile of the column answers with the SAME landing — that identity is the retarget
+		// rule, and it is why a tap anywhere on a fall can mean "take me up it".
+		for (int y = 10; y <= 12; y++)
+			CHECK(fieldtrav_waterfall_top(&l1, &m1, 9, y) == 9,
+			      "the ride from (9,%d) ends at y=9 (got %d)", y, fieldtrav_waterfall_top(&l1, &m1, 9, y));
+		CHECK(fieldtrav_waterfall_top(&l1, &m1, 9, 13) == -1, "a non-waterfall tile is not a fall");
+		CHECK(fieldtrav_waterfall_top(&l1, &m1, 9,  9) == -1, "…nor is the pool above it");
+		CHECK(fieldtrav_waterfall_top(0, &m1, 9, 12) == -1, "a NULL bus refuses rather than guesses");
+
+		// --- (c) the edge itself, planned end to end on that map.
+		const FtEngCfg* cE = fieldtrav_cfg(FT_VAR_EMERALD);
+		memset(g_ovSb1, 0, sizeof g_ovSb1); memset(g_ovParty, 0, sizeof g_ovParty);
+		g_ov[0].p = 0;                                   // no object overlay: this is a ROM map
+		g_ov[1].addr = SB1_BASE;   g_ov[1].len = sizeof g_ovSb1;   g_ov[1].p = g_ovSb1;
+		g_ov[2].addr = PARTY_BASE; g_ov[2].len = sizeof g_ovParty; g_ov[2].p = g_ovParty;
+		g_ov[3].p = 0;
+		set_flag(FT_VAR_EMERALD, cE->badgeWaterfall);
+		const uint16_t wfSet[4] = { MOVE_WATERFALL_W, 0, 0, 0 };
+		put_mon(0, 0x12345678u, 1u, wfSet, 1, 0, 0);
+		FtParty pty = party_of(1);
+		// The overlay lives at EWRAM addresses the live bus does not serve, so route the party and
+		// flag reads through a bus that checks the overlay FIRST and falls back to the live world.
+		FpBus wbus = { wf_r8, wf_r16, wf_r32, &l1 };
+
+		CHECK((fieldtrav_usable(&wbus, FT_VAR_EMERALD, &pty) & (1u << FT_HM_WATERFALL)) != 0,
+		      "the fixture really is Waterfall-eligible (badge 0x%03X + MOVE_WATERFALL)", cE->badgeWaterfall);
+		bool ok = fieldtrav_plan(&wbus, &m1, FT_VAR_EMERALD, &pty, 9, 13, 9, 9, true, 0, 0, &g_pr);
+		CHECK(ok && g_pr.outcome == FT_OUT_PLANNED,
+		      "surfing at the foot of Route 114's fall, a tap on the pool above PLANS (outcome %s)",
+		      OUTN(g_pr.outcome));
+		if (ok) {
+			CHECK(g_pr.nMoves == 1, "ONE move — the ride is a single edge, not three steps (got %d)",
+			      g_pr.nMoves);
+			CHECK(g_pr.nInteracts == 1, "…costing exactly one interact (got %d)", g_pr.nInteracts);
+			CHECK(g_pr.mv[0].hm == FT_HM_WATERFALL, "…and it is a WATERFALL (got hm %d)", g_pr.mv[0].hm);
+			CHECK(g_pr.mv[0].dir == FP_U, "…faced NORTH, which is what IsPlayerSurfingNorth wants");
+			CHECK(g_pr.mv[0].objSlot == -1, "…with no object slot: a metatile edge proves itself");
+			CHECK(g_pr.endMode == FT_MODE_SURF, "…and the player is still afloat at the top");
+			CHECK(g_pr.wfRetarget == 0, "…the tap was already the landing tile, so nothing was retargeted");
+		}
+
+		// --- (d) the negative controls. Either half of the game's gate missing = NO plan, and the
+		// outcome is UNREACHABLE — i.e. the plain-walk pass could not cross the fall either, which
+		// is the T5.8 property asserted on real map bytes. Each control keeps SURF eligible so the
+		// refusal cannot be the blanket "this player has no field moves at all" answer (NOEDGE):
+		// the player is eligible for something, just not for this.
+		const uint16_t surfWf[4] = { MOVE_SURF, MOVE_WATERFALL_W, 0, 0 };
+		memset(g_ovSb1, 0, sizeof g_ovSb1);
+		set_flag(FT_VAR_EMERALD, cE->badgeSurf);         // Surf badge only — no Waterfall badge
+		put_mon(0, 0x12345678u, 1u, surfWf, 1, 0, 0);    // …and a mon that DOES know Waterfall
+		CHECK((fieldtrav_usable(&wbus, FT_VAR_EMERALD, &pty) & (1u << FT_HM_WATERFALL)) == 0 &&
+		      (fieldtrav_usable(&wbus, FT_VAR_EMERALD, &pty) & (1u << FT_HM_SURF)) != 0,
+		      "the control is exact: Surf usable, Waterfall not");
+		CHECK(!fieldtrav_plan(&wbus, &m1, FT_VAR_EMERALD, &pty, 9, 13, 9, 9, true, 0, 0, &g_pr),
+		      "no BADGE -> nothing is planned");
+		CHECK(g_pr.outcome == FT_OUT_UNREACHABLE,
+		      "…and UNREACHABLE, not TIER0: the tier-0 pass cannot swim OR walk up a fall (got %s)",
+		      OUTN(g_pr.outcome));
+		set_flag(FT_VAR_EMERALD, cE->badgeWaterfall);
+		const uint16_t noWf[4] = { MOVE_SURF, 0, 0, 0 };
+		put_mon(0, 0x12345678u, 1u, noWf, 1, 0, 0);      // badge back, no mon knows the move
+		CHECK(!fieldtrav_plan(&wbus, &m1, FT_VAR_EMERALD, &pty, 9, 13, 9, 9, true, 0, 0, &g_pr),
+		      "no MON that knows WATERFALL -> nothing is planned");
+		CHECK(g_pr.outcome == FT_OUT_UNREACHABLE, "…also UNREACHABLE (got %s)", OUTN(g_pr.outcome));
+		put_mon(0, 0x12345678u, 1u, wfSet, 1, 0, 0);
+		// ON FOOT the edge does not exist at all: the game's gate is IsPlayerSurfingNorth.
+		CHECK(!fieldtrav_plan(&wbus, &m1, FT_VAR_EMERALD, &pty, 9, 13, 9, 9, false, 0, 0, &g_pr),
+		      "…and it is a MID-SURF edge: the same tap taken on foot plans nothing");
+
+		// --- (e) THE RETARGET, on the fall that needs it: Ever Grande (0,8), 8 tiles tall.
+		// A tap reaches 5 tiles above the player (touch.c: ddy = s_downGy/16 - 5), so from the pool
+		// at y=68 the landing at y=59 is NINE tiles away and cannot be tapped at all. Tapping the
+		// FALL is the only gesture available, and it has to mean "take me up".
+		FtRomMap rEG;
+		CHECK(fieldtrav_rom_map(&rb, EM_MAPGROUPS, 0, 8, &rEG), "EverGrandeCity (0,8) resolves");
+		FpBus l2; FpMap m2;
+		live_from_rom(&rb, &rEG, &l2, &m2);
+		FpBus wbus2 = { wf_r8, wf_r16, wf_r32, &l2 };
+		CHECK(fieldtrav_waterfall_top(&l2, &m2, 20, 67) == 59,
+		      "Ever Grande's fall is 8 tiles: (20,67) -> y=59 (got %d)",
+		      fieldtrav_waterfall_top(&l2, &m2, 20, 67));
+		CHECK(59 - 68 == -9, "…and the landing is 9 tiles above the pool, i.e. OUTSIDE a tap's reach");
+		bool okEG = fieldtrav_plan(&wbus2, &m2, FT_VAR_EMERALD, &pty, 20, 68, 20, 63, true, 0, 0, &g_pr);
+		CHECK(okEG && g_pr.outcome == FT_OUT_PLANNED,
+		      "a tap ON the fall (20,63) plans (outcome %s)", OUTN(g_pr.outcome));
+		if (okEG) {
+			CHECK(g_pr.wfRetarget == 1, "…and says it RETARGETED the goal");
+			CHECK(g_pr.goalX == 20 && g_pr.goalY == 59,
+			      "…onto the tile the game's own ride ends on, (20,59) (got %d,%d)",
+			      g_pr.goalX, g_pr.goalY);
+			CHECK(g_pr.nMoves == 1 && g_pr.mv[0].hm == FT_HM_WATERFALL,
+			      "…as a single WATERFALL move (%d moves, hm %d)", g_pr.nMoves, g_pr.mv[0].hm);
+		}
+
+		// --- (f) DOWNWARD is deliberately NOT modelled. Riding down a fall is FREE in Gen 3 (it is
+		// forced movement, not an HM — field_player_avatar.c:159/185), but it is also a tile that
+		// takes the controls away, which rule T5.8 forbids routing into. So the planner refuses,
+		// and this check is what stops a later session "fixing" that by accident.
+		CHECK(!fieldtrav_plan(&wbus2, &m2, FT_VAR_EMERALD, &pty, 20, 59, 20, 68, true, 0, 0, &g_pr),
+		      "the DOWN edge does not exist: a tap below the fall, from above it, plans nothing");
+		CHECK(g_pr.outcome == FT_OUT_UNREACHABLE, "…UNREACHABLE, honestly (got %s)", OUTN(g_pr.outcome));
+
+		// --- (g) OUR one added rule: the landing must be water the player may float on. Route 119
+		// carries a decorative fall (x 21..23, y 79..82) whose top tile is MB_NORMAL with collision
+		// set — the game would ride it (a held movement ignores collision), we refuse it.
+		FtRomMap r119;
+		CHECK(fieldtrav_rom_map(&rb, EM_MAPGROUPS, 0, 34, &r119), "Route119 (0,34) resolves");
+		FpBus l3; FpMap m3;
+		live_from_rom(&rb, &r119, &l3, &m3);
+		CHECK(fieldpath_behaviour_at(&l3, &m3, 21, 82) == 0x13, "…(21,82) is a waterfall tile");
+		CHECK(fieldtrav_waterfall_top(&l3, &m3, 21, 82) == 78,
+		      "…its ride would end at y=78 (got %d)", fieldtrav_waterfall_top(&l3, &m3, 21, 82));
+		CHECK(!fieldtrav_is_surfable(FP_ENG_RSE, fieldpath_behaviour_at(&l3, &m3, 21, 78)),
+		      "…on a tile that is NOT floatable, so the edge is refused (beh 0x%02X)",
+		      fieldpath_behaviour_at(&l3, &m3, 21, 78));
+	}
+
+	printf("TEST 23 — STRENGTH: a terminal, never a thoroughfare\n");
+	{
+		// Back to the compiled-in fixture: Strength is about OBJECTS and eligibility, and the
+		// route117 overlay is where every other object-edge test lives.
+		FpBus bus; FpMap m; bind("route117", &bus, &m, 3);
+		const FtEngCfg* c = fieldtrav_cfg(FT_VAR_EMERALD);
+		const uint16_t strSet[4] = { MOVE_STRENGTH_W, 0, 0, 0 };
+		FtParty pty = party_of(1);
+
+		// --- the probe, refusal by refusal. Empty map first.
+		npc_clear();
+		CHECK(fieldtrav_strength_tap(&bus, &m, FT_VAR_EMERALD, &pty, 18, 12) < 0,
+		      "no boulder on the tile -> no Strength tap");
+
+		// A CUT TREE on that tile is not a boulder, however eligible the player is.
+		set_flag(FT_VAR_EMERALD, c->badgeStrength);
+		put_mon(0, 0x12345678u, 1u, strSet, 1, 0, 0);
+		set_obj(6, 82 /* OBJ_EVENT_GFX_CUTTABLE_TREE */, 18, 12);
+		CHECK(fieldtrav_strength_tap(&bus, &m, FT_VAR_EMERALD, &pty, 18, 12) < 0,
+		      "a cuttable tree is not a boulder");
+
+		// The real thing.
+		set_obj(6, 87 /* OBJ_EVENT_GFX_PUSHABLE_BOULDER */, 18, 12);
+		CHECK(fieldtrav_strength_tap(&bus, &m, FT_VAR_EMERALD, &pty, 18, 12) == 6,
+		      "an eligible, un-activated boulder answers with its own object slot");
+		CHECK(fieldtrav_strength_tap(&bus, &m, FT_VAR_EMERALD, &pty, 18, 13) < 0,
+		      "…and only on the tile it is actually standing on");
+
+		// THE LATCH. `goto_if_set FLAG_SYS_USE_STRENGTH` sends the script to a plain textbox with
+		// no yes/no at all, so a program aimed at it would wait for a prompt that never comes.
+		g_ovSb1[c->flagsOff + (c->strengthLatch >> 3)] |= (uint8_t)(1u << (c->strengthLatch & 7));
+		CHECK(fieldtrav_strength_tap(&bus, &m, FT_VAR_EMERALD, &pty, 18, 12) < 0,
+		      "FLAG_SYS_USE_STRENGTH already set -> nothing to activate, so no tap");
+		g_ovSb1[c->flagsOff + (c->strengthLatch >> 3)] &= (uint8_t)~(1u << (c->strengthLatch & 7));
+		CHECK(fieldtrav_strength_tap(&bus, &m, FT_VAR_EMERALD, &pty, 18, 12) == 6, "…and back again");
+
+		// Either half of the eligibility gate missing = no tap.
+		memset(g_ovSb1, 0, sizeof g_ovSb1);
+		CHECK(fieldtrav_strength_tap(&bus, &m, FT_VAR_EMERALD, &pty, 18, 12) < 0, "no badge -> no tap");
+		set_flag(FT_VAR_EMERALD, c->badgeStrength);
+		put_mon(0, 0x12345678u, 1u, (const uint16_t[4]){ MOVE_CUT, 0, 0, 0 }, 1, 0, 0);
+		CHECK(fieldtrav_strength_tap(&bus, &m, FT_VAR_EMERALD, &pty, 18, 12) < 0,
+		      "no mon that knows STRENGTH -> no tap");
+		put_mon(0, 0x12345678u, 1u, strSet, 1, 0, 0);
+
+		// The FRLG row really is the one being read (gfx 97, not 82/87, and its own flag ids).
+		{
+			FpBus fb; FpMap fm; bind("frstair", &fb, &fm, 3);
+			const FtEngCfg* cf = fieldtrav_cfg(FT_VAR_FRLG);
+			set_flag(FT_VAR_FRLG, cf->badgeStrength);
+			put_mon(0, 0x12345678u, 1u, strSet, 1, 0, 0);
+			FtParty fp = party_of(1);
+			set_obj(5, 87, 4, 4);                       // EMERALD's boulder id, on an FRLG map
+			CHECK(fieldtrav_strength_tap(&fb, &fm, FT_VAR_FRLG, &fp, 4, 4) < 0,
+			      "gfx 87 is not a boulder in FRLG — the two rows must never merge");
+			set_obj(5, 97 /* OBJ_EVENT_GFX_PUSHABLE_BOULDER, pokefirered */, 4, 4);
+			CHECK(fieldtrav_strength_tap(&fb, &fm, FT_VAR_FRLG, &fp, 4, 4) == 5,
+			      "gfx 97 IS, and it reads FRLG's own badge (0x%03X) and latch (0x%03X)",
+			      cf->badgeStrength, cf->strengthLatch);
+		}
+
+		// --- the PLAN. Tapping the boulder itself is a program that ENDS at it.
+		bind("route117", &bus, &m, 3);
+		set_flag(FT_VAR_EMERALD, c->badgeStrength);
+		put_mon(0, 0x12345678u, 1u, strSet, 1, 0, 0);
+		set_obj(6, 87, 18, 12);
+		npc_clear(); npc_add(18, 12);                    // the boulder is in the block list, as on hw
+		bool ok = fieldtrav_plan(&bus, &m, FT_VAR_EMERALD, &pty, 18, 14, 18, 12, false, g_npc, g_npcN, &g_pr);
+		CHECK(ok && g_pr.outcome == FT_OUT_PLANNED,
+		      "a tap ON the boulder plans an ACTIVATION (outcome %s)", OUTN(g_pr.outcome));
+		if (ok) {
+			CHECK(g_pr.nInteracts == 1, "one interact (got %d)", g_pr.nInteracts);
+			CHECK(g_pr.nMoves == 2, "two moves: one walk, then the terminal (got %d)", g_pr.nMoves);
+			CHECK(g_pr.mv[g_pr.nMoves - 1].hm == FT_HM_STRENGTH,
+			      "the LAST move is the STRENGTH interact (got hm %d)", g_pr.mv[g_pr.nMoves - 1].hm);
+			CHECK(g_pr.mv[g_pr.nMoves - 1].dir == FP_U, "…facing the boulder (north)");
+			CHECK(g_pr.mv[g_pr.nMoves - 1].objSlot == 6,
+			      "…naming the boulder's own slot (got %d)", g_pr.mv[g_pr.nMoves - 1].objSlot);
+			for (int i = 0; i + 1 < g_pr.nMoves; i++)
+				CHECK(g_pr.mv[i].hm == FT_HM_NONE, "every move before it is a plain walk (i=%d)", i);
+		}
+
+		// --- THE PROPERTY: never a thoroughfare. The same fully-eligible boulder, with the goal
+		// one tile BEYOND it, must still be a wall — this is what stops a route pushing a boulder
+		// out of a puzzle to save two steps.
+		bind("route117", &bus, &m, 3);
+		set_flag(FT_VAR_EMERALD, c->badgeStrength);
+		put_mon(0, 0x12345678u, 1u, strSet, 1, 0, 0);
+		set_obj(6, 87, 18, 12);
+		npc_clear(); seal_pocket();
+		CHECK(!fieldtrav_plan(&bus, &m, FT_VAR_EMERALD, &pty, 18, 14, 18, 10, false, g_npc, g_npcN, &g_pr),
+		      "a boulder is NEVER routed THROUGH, even when the goal is right behind it");
+		CHECK((g_pr.usable & (1u << FT_HM_STRENGTH)) != 0, "…and Strength really was usable");
+
+		// …and the case that actually GRADES the goal-only rule rather than the eligibility that
+		// happens to precede it: TWO boulders, one ON the tapped goal and one sealing the only way
+		// to it. "There is an activatable boulder somewhere in this plan" is now TRUE, so the rule
+		// that has to do the work is the tile comparison itself — drop it and the router walks
+		// through the chokepoint boulder to reach the tapped one, pushing a puzzle piece out of the
+		// way to save a walk, which is the exact failure this whole design exists to prevent.
+		bind("route117", &bus, &m, 3);
+		set_flag(FT_VAR_EMERALD, c->badgeStrength);
+		put_mon(0, 0x12345678u, 1u, strSet, 1, 0, 0);
+		set_obj(6, 87, 18, 12);                          // B: the chokepoint, mouth of the pocket
+		set_obj(7, 87, 18, 10);                          // A: the tapped goal, out in the open
+		npc_clear(); seal_pocket();                      // (17,12) and (19,12) blocked, (18,12) is B
+		CHECK(fieldtrav_strength_tap(&bus, &m, FT_VAR_EMERALD, &pty, 18, 10) == 7,
+		      "the TAPPED boulder is activatable — so the plan is not being refused for eligibility");
+		CHECK(!fieldtrav_plan(&bus, &m, FT_VAR_EMERALD, &pty, 18, 14, 18, 10, false, g_npc, g_npcN, &g_pr),
+		      "a second boulder in the way is still a WALL, even with an activatable one at the goal");
+		CHECK(g_pr.outcome == FT_OUT_UNREACHABLE,
+		      "…and it says UNREACHABLE, not PLANNED (got %s)", OUTN(g_pr.outcome));
+		CHECK(g_pr.nEdges == 2, "…both boulders were seen (%d)", g_pr.nEdges);
+		// Remove the chokepoint and the identical tap succeeds — which is what proves the refusal
+		// above was caused by boulder B and not by anything else in the setup.
+		bind("route117", &bus, &m, 3);
+		set_flag(FT_VAR_EMERALD, c->badgeStrength);
+		put_mon(0, 0x12345678u, 1u, strSet, 1, 0, 0);
+		set_obj(7, 87, 18, 10);
+		npc_clear(); npc_add(17, 12); npc_add(19, 12); npc_add(18, 10);
+		CHECK(fieldtrav_plan(&bus, &m, FT_VAR_EMERALD, &pty, 18, 14, 18, 10, false, g_npc, g_npcN, &g_pr),
+		      "…with the chokepoint gone, the same tap plans the activation");
+		CHECK(g_pr.nInteracts == 1 && g_pr.mv[g_pr.nMoves - 1].hm == FT_HM_STRENGTH,
+		      "…as ONE Strength terminal (%d interacts, last hm %d)",
+		      g_pr.nInteracts, g_pr.mv[g_pr.nMoves - 1].hm);
+
+		// --- and the latch again, this time through the planner: nothing to activate, no program.
+		bind("route117", &bus, &m, 3);
+		set_flag(FT_VAR_EMERALD, c->badgeStrength);
+		g_ovSb1[c->flagsOff + (c->strengthLatch >> 3)] |= (uint8_t)(1u << (c->strengthLatch & 7));
+		put_mon(0, 0x12345678u, 1u, strSet, 1, 0, 0);
+		set_obj(6, 87, 18, 12);
+		npc_clear(); npc_add(18, 12);
+		CHECK(!fieldtrav_plan(&bus, &m, FT_VAR_EMERALD, &pty, 18, 14, 18, 12, false, g_npc, g_npcN, &g_pr),
+		      "Strength already active -> the tap falls through to the shipped walker, as today");
 	}
 
 	printf("\n%d checks, %d failures\n", g_checks, g_fail);

@@ -42,6 +42,13 @@ static const FtEngCfg s_cfgEm = {
 	/* runShoes      */ 0x8C0,   // FLAG_SYS_B_DASH = SYSTEM_FLAGS 0x860 + 0x60
 	                             //   (pokeemerald include/constants/flags.h:1462, re-read this
 	                             //   session; used by PlayerNotOnBikeMoving's dash test)
+	/* badgeDive     */ 0x86D,   // FLAG_BADGE07_GET = SYSTEM_FLAGS 0x860 + 0xD
+	                             //   (include/constants/flags.h:1348 + :1365). Read off the GATE,
+	                             //   not off the HM number: src/field_control_avatar.c:465
+	                             //   `TrySetupDiveDownScript` and :475 `TrySetupDiveEmergeScript`
+	                             //   both test FLAG_BADGE07_GET — Dive is HM08 but its badge is the
+	                             //   SEVENTH, which is exactly the kind of off-by-one the
+	                             //   read-the-script rule exists to catch.
 };
 
 // FRLG (FireRed / LeafGreen). SaveBlock1.flags: pokefirered include/global.h:790 `/*0x0EE0*/`.
@@ -68,6 +75,23 @@ static const FtEngCfg s_cfgFrlg = {
 	/* runShoes      */ 0x82F,   // FLAG_SYS_B_DASH = SYS_FLAGS 0x800 + 0x2F
 	                             //   (pokefirered include/constants/flags.h:1381, fetched from
 	                             //   pret master this session — NOT derived from Emerald's 0x8C0)
+	/* badgeDive     */ 0,       // **FRLG HAS NO DIVE.** A named zero, verified four ways against
+	                             //   pret/pokefirered at master (fetched + diffed this session):
+	                             //     1. src/field_control_avatar.c:193-299 ProcessPlayerFieldInput
+	                             //        has NO dive/emerge hook — where pokeemerald :153 and :180
+	                             //        call TrySetupDiveEmergeScript / TrySetupDiveDownScript,
+	                             //        FireRed simply has neither call.
+	                             //     2. `TrySetDiveWarp` (:1143) is `static` with ZERO call sites
+	                             //        in the file, and `dive_warp` (:1118) has none either.
+	                             //     3. data/scripts/field_moves.inc:210 labels the whole dive
+	                             //        block "@ Unused leftover from R/S" in pret's own words.
+	                             //     4. FireRed has NO underwater map: none of the 425 maps in
+	                             //        data/maps/map_groups.json is one, so there is nowhere for
+	                             //        a dive connection to point.
+	                             //   The DANGEROUS wrong answer here is 0x826 — FRLG's own
+	                             //   FLAG_BADGE07_GET, which is this table's `badgeWaterfall`. A
+	                             //   FireRed save with the Soul Badge would then read as
+	                             //   dive-eligible. Zero is the only value that cannot lie.
 };
 
 // RUBY / SAPPHIRE (AXVE / AXPE) — the THIRD numbering, added 2026-08-14 because `FpEngine` cannot
@@ -113,6 +137,12 @@ static const FtEngCfg s_cfgRs = {
 	                             //   this id is numerically Emerald's SYSTEM_FLAGS *base*, and
 	                             //   Emerald's own B_DASH (0x8C0) read at Emerald's 0x1270 offset
 	                             //   lands at 0x1388 — vars[] again.
+	/* badgeDive     */ 0x80D,   // FLAG_BADGE07_GET = SYSTEM_FLAGS 0x800 + 0x0D
+	                             //   (flags.h:779 + :795). Ruby/Sapphire DO have Dive, and pokeruby
+	                             //   hooks it exactly where pokeemerald does:
+	                             //   src/field_control_avatar.c:233 (B button -> emerge) and :259
+	                             //   (A button -> dive), both gated on FLAG_BADGE07_GET at :521/:531.
+	                             //   Derived from pokeruby's own flags.h, NOT from Emerald's 0x86D.
 };
 
 // The metatile-behaviour side is genuinely shared: pokeruby src/metatile_behavior.c's
@@ -201,6 +231,107 @@ static bool surfable_frlg(int b) {
 bool fieldtrav_is_surfable(FpEngine eng, int behaviour) {
 	if (behaviour < 0) return false;                       // unreadable -> never "yes"
 	return (eng == FP_ENG_FRLG) ? surfable_frlg(behaviour) : surfable_rse(behaviour);
+}
+
+// ============================ the WATERFALL metatile ========================================
+// PHASE 26 / lane W. ONE value, and it is 0x13 in all three engines — but read in each engine's
+// own header rather than carried across, because "the numbers happen to agree" is a fact about
+// those three files and not a licence to derive one from another (the c2a58db rule):
+//   pokeemerald include/constants/metatile_behaviors.h:24  MB_WATERFALL, the 20th entry of the
+//                enum that opens `MB_NORMAL` at :5   -> 0x13
+//   pokefirered include/constants/metatile_behaviors.h:17  `#define MB_WATERFALL 0x13`
+//   pokeruby    include/constants/metatile_behaviors.h:23  `#define MB_WATERFALL 0x13`
+// and each engine's own single-value predicate is what this mirrors: pokeemerald
+// src/metatile_behavior.c:995, pokefirered :594, pokeruby :1062 — all three are literally
+// `metatileBehavior == MB_WATERFALL`, which is why ONE function serves all three engines here
+// while `fieldtrav_is_surfable` needs two tables.
+#define MB_WATERFALL_ALL 0x13
+
+bool fieldtrav_is_waterfall(FpEngine eng, int behaviour) {
+	(void)eng;                                       // deliberately engine-invariant; see above
+	if (behaviour < 0) return false;                 // unreadable -> never "yes"
+	return behaviour == MB_WATERFALL_ALL;
+}
+
+// The ride, simulated. pokeemerald src/field_effect.c:1873-1893:
+//     WaterfallFieldEffect_RideUp:            ObjectEventSetHeldMovement(GetWalkSlowMovementAction(DIR_NORTH))
+//     WaterfallFieldEffect_ContinueRideOrEnd: if (MetatileBehavior_IsWaterfall(objectEvent->
+//                                                 currentMetatileBehavior)) -> back to RideUp
+// so the ride climbs the whole contiguous column and stops on the first tile above it that is not
+// a waterfall. Note what it does NOT test: collision. The ascent is a HELD movement, which bypasses
+// the collision check entirely — so this function must not add one either, or it would refuse
+// columns the game itself rides. (What the CALLER checks is the LANDING tile, which does have to
+// be somewhere the player may legitimately float.)
+//
+// FP_WBOX is the cap: a column that runs past the search window cannot be planned anyway, and a
+// bound is what stops a garbage behaviour read turning into an unbounded loop.
+int fieldtrav_waterfall_top(const FpBus* bus, const FpMap* m, int x, int yFall) {
+	if (!bus || !m) return -1;
+	if (!fieldtrav_is_waterfall(m->engine, fieldpath_behaviour_at(bus, m, x, yFall))) return -1;
+	int y = yFall;
+	for (int i = 0; i < FP_WBOX; i++) {
+		y--;
+		int b = fieldpath_behaviour_at(bus, m, x, y);
+		if (b < 0) return -1;                        // off the map / unreadable -> no edge
+		if (!fieldtrav_is_waterfall(m->engine, b)) return y;
+	}
+	return -1;                                       // an implausibly long column: refuse
+}
+
+// ============================ the two DIVE metatile sets ====================================
+// PHASE 26 / lane V. Both are the game's own function, transcribed at the line that uses it, and
+// both were read INDEPENDENTLY in pokeemerald and pokeruby — the numbers agree, which is a fact
+// about those two files and not an inheritance (the c2a58db rule).
+//
+// DIVEABLE — an allow-list of exactly three:
+//   pokeemerald src/metatile_behavior.c:853-861 `MetatileBehavior_IsDiveable`:
+//        MB_INTERIOR_DEEP_WATER || MB_DEEP_WATER || MB_SOOTOPOLIS_DEEP_WATER
+//        values from include/constants/metatile_behaviors.h (the enum, counted this session):
+//        MB_INTERIOR_DEEP_WATER = 0x11, MB_DEEP_WATER = 0x12, MB_SOOTOPOLIS_DEEP_WATER = 0x14.
+//   pokeruby   src/metatile_behavior.c:927-935 — same three, under R/S's older names
+//        MB_SEMI_DEEP_WATER / MB_UNUSED_DEEP_WATER / MB_SOOTOPOLIS_DEEP_WATER, with the values
+//        spelled out in its own include/constants/metatile_behaviors.h:21 = 0x11, :22 = 0x12,
+//        :24 = 0x14. Read there, not carried over.
+//
+// Note what is NOT in the set: MB_POND_WATER 0x10 and MB_OCEAN_WATER 0x15 are surfable but NOT
+// diveable, which is why `fieldtrav_is_surfable` cannot stand in for this.
+static bool diveable_rse(int b) {
+	switch (b) {
+	case 0x11:   // MB_INTERIOR_DEEP_WATER  (pokeruby MB_SEMI_DEEP_WATER)
+	case 0x12:   // MB_DEEP_WATER           (pokeruby MB_UNUSED_DEEP_WATER)
+	case 0x14:   // MB_SOOTOPOLIS_DEEP_WATER
+		return true;
+	default:
+		return false;
+	}
+}
+
+bool fieldtrav_is_diveable(FtVariant var, int behaviour) {
+	if (behaviour < 0) return false;               // unreadable -> never "yes"
+	// FRLG: there is no dive hook in ProcessPlayerFieldInput at all, so no behaviour is diveable
+	// however the tile is painted. pokefirered's `MetatileBehavior_IsDiveable` (src/
+	// metatile_behavior.c:478-484) still EXISTS and would answer TRUE for 0x11/0x12 — which is
+	// exactly the trap: the predicate survived the port, its only two callers did not.
+	if (var == FT_VAR_FRLG) return false;
+	return diveable_rse(behaviour);
+}
+
+// CAN-EMERGE — a DENY-list, so the default answer is YES:
+//   pokeemerald src/metatile_behavior.c:863-877 `MetatileBehavior_IsUnableToEmerge`:
+//        MB_NO_SURFACING || MB_SEAWEED_NO_SURFACING  (+ MB_WATER_DOOR, but ONLY under `#ifdef
+//        BUGFIX`, which vanilla does not define — pret's comment right above it calls the vanilla
+//        behaviour "the dive glitch". We target the SHIPPED cartridge, so MB_WATER_DOOR stays out;
+//        a route that emerges on a water door is a route the real game also allows.)
+//        Values: metatile_behaviors.h MB_NO_SURFACING = 0x19, MB_SEAWEED_NO_SURFACING = 0x2A.
+//   pokeruby   src/metatile_behavior.c:937-943 `MetatileBehavior_IsNotSurfacable` — the same two,
+//        values from its own metatile_behaviors.h:29 = 0x19 and :46 = 0x2A.
+//
+// The caller only ever asks this about a tile it has ALREADY proved walkable underwater, so
+// "everything not on the deny-list" is not as loose as it looks.
+bool fieldtrav_can_emerge(FtVariant var, int behaviour) {
+	if (behaviour < 0) return false;               // unreadable -> never "yes"
+	if (var == FT_VAR_FRLG) return false;          // no underwater maps exist in FRLG at all
+	return !(behaviour == 0x19 || behaviour == 0x2A);
 }
 
 // ============================ eligibility ===================================================
@@ -346,6 +477,15 @@ int fieldtrav_census(const FpBus* bus, uint32_t partyBase, int partyCount, uint3
 #define FT_MOVE_STRENGTH    70
 #define FT_MOVE_WATERFALL  127
 #define FT_MOVE_ROCK_SMASH 249
+// PHASE 26: pokeemerald include/constants/moves.h:295 `#define MOVE_DIVE 291`. The move id is
+// engine-invariant (it is a battle move and FRLG's table carries it too) — what is NOT invariant
+// is whether the FIELD can ever use it, and that lives in `badgeDive`.
+#define FT_MOVE_DIVE       291
+
+// The three-bit packing in the layered planner's `s_meta` (`(cost & 7) << 2`) is what caps this
+// enum: an 8th field move would silently alias onto FT_HM_NONE. Named here so the next HM lands
+// on a compile error instead of a wrong route.
+_Static_assert(FT_HM_COUNT <= 8, "FtHm must fit the 3-bit edge tag packed into fieldtrav.c s_meta");
 
 uint32_t fieldtrav_usable(const FpBus* bus, FtVariant var, const FtParty* pty) {
 	uint32_t m = 0;
@@ -361,6 +501,14 @@ uint32_t fieldtrav_usable(const FpBus* bus, FtVariant var, const FtParty* pty) {
 	    fieldtrav_party_has_move(bus, pty, FT_MOVE_WATERFALL))  m |= 1u << FT_HM_WATERFALL;
 	if (fieldtrav_flag_get(bus, var, pty->sb1, c->badgeStrength) &&
 	    fieldtrav_party_has_move(bus, pty, FT_MOVE_STRENGTH))   m |= 1u << FT_HM_STRENGTH;
+	// DIVE (phase 26). `badgeDive == 0` means the ENGINE has no Dive, and the guard is checked
+	// FIRST and separately: flag id 0 is inside the TEMP block (pokeemerald
+	// include/constants/flags.h:11 `TEMP_FLAGS_START 0x0`) — a real, settable bit, not a hole — so
+	// falling through to fieldtrav_flag_get would answer from a scratch script flag rather than
+	// refusing. This one line is the whole FRLG degradation.
+	if (c->badgeDive &&
+	    fieldtrav_flag_get(bus, var, pty->sb1, c->badgeDive) &&
+	    fieldtrav_party_has_move(bus, pty, FT_MOVE_DIVE))       m |= 1u << FT_HM_DIVE;
 	return m;
 }
 
@@ -406,6 +554,47 @@ int fieldtrav_scan_edges(const FpBus* bus, const FpMap* m, FtVariant var, FtEdge
 	return n;
 }
 
+// PHASE 26 / lane W — "would the game prompt for STRENGTH if the player pressed A at (gx,gy)?"
+//
+// The four honest refusals, all read off `EventScript_StrengthBoulder`
+// (pokeemerald data/scripts/field_move_scripts.inc:123-133; pokefirered data/scripts/
+// field_moves.inc:122-133; pokeruby data/field_move_scripts.inc:126-136 — the same five lines in
+// the same order in all three):
+//
+//     lockall
+//     goto_if_unset FLAG_BADGE04_GET, EventScript_CantStrength      <- badge      (2)
+//     goto_if_set FLAG_SYS_USE_STRENGTH, EventScript_CheckActivatedBoulder <- LATCH (3)
+//     checkpartymove MOVE_STRENGTH                                  <- party move (2)
+//     goto_if_eq VAR_RESULT, PARTY_SIZE, EventScript_CantStrength
+//     msgbox Text_WantToStrength, MSGBOX_YESNO                      <- the prompt we aim at
+//
+//   1. no PUSHABLE_BOULDER object standing on that tile;
+//   2. no badge or no party mon that knows STRENGTH — `fieldtrav_usable` carries both halves;
+//   3. **FLAG_SYS_USE_STRENGTH already set** — this is the one that would otherwise hang the
+//      executor: the script branches to `EventScript_CheckActivatedBoulder` (:157), which prints
+//      `Text_StrengthActivated` with MSGBOX_DEFAULT and no yes/no at all, so a program aimed at it
+//      would advance textboxes until TP_YESNO_BUDGET expired and end TPE_UNEXPECTED. The latch is
+//      per MAP VISIT (`ClearTempFieldEventData`, src/event_data.c:45, called on every map load), so
+//      it genuinely has to be READ, never remembered;
+//   4. the map/bus is not readable at all.
+//
+// Order matters for cost, not for correctness: the object scan is 15 word reads and runs first, so
+// the party decrypt only happens for a tap that really landed on a boulder.
+int fieldtrav_strength_tap(const FpBus* bus, const FpMap* m, FtVariant var, const FtParty* pty,
+                           int gx, int gy) {
+	if (!bus || !m || !pty) return -1;
+	FtEdge e[FT_MAX_EDGES];
+	int n = fieldtrav_scan_edges(bus, m, var, e);
+	int slot = -1;
+	for (int i = 0; i < n; i++)
+		if (e[i].hm == FT_HM_STRENGTH && e[i].x == gx && e[i].y == gy) { slot = e[i].slot; break; }
+	if (slot < 0) return -1;                                     // (1)
+	const FtEngCfg* cfg = fieldtrav_cfg(var);
+	if (fieldtrav_flag_get(bus, var, pty->sb1, cfg->strengthLatch)) return -1;   // (3)
+	if (!(fieldtrav_usable(bus, var, pty) & (1u << FT_HM_STRENGTH))) return -1;  // (2)
+	return slot;
+}
+
 // ============================ the layered planner ===========================================
 //
 // State = (tile, mode, interactsUsed). Minimising (interacts, steps) LEXICOGRAPHICALLY is the
@@ -441,6 +630,12 @@ typedef struct {
 	FtEdge edge[FT_MAX_EDGES];
 	int nEdge;
 	uint32_t usable;
+	// PHASE 26 / lane W — STRENGTH is a TERMINAL edge, so the planner has to know which tile the
+	// user actually tapped. `strengthGoal` is 1 only when a Strength activation at (gx,gy) is a
+	// thing the GAME would prompt for (see fieldtrav_strength_tap): eligible AND not already
+	// latched. Anywhere else, and on every other tile, a boulder stays a plain blocker.
+	int gx, gy;
+	int strengthGoal;
 } FtCtx;
 
 static int tile_idx(const FtCtx* c, int x, int y) {
@@ -479,12 +674,33 @@ static bool npc_blocks(const FtCtx* c, int x, int y) {
 	return false;
 }
 
-// The eligible edge object standing on (x,y), or NULL. Strength is excluded on purpose: pushing
-// a boulder is a Sokoban problem and a mis-planned push can soft-lock a puzzle until the map is
-// re-entered (SPEC §5), so a boulder stays a plain blocker for the router.
+// The eligible edge object standing on (x,y), or NULL.
+//
+// STRENGTH IS A TERMINAL, NOT A THOROUGHFARE (phase 26 / lane W). Cut and Rock Smash REMOVE their
+// blocker — the object slot deactivates and the tile is ordinary ground for the rest of the
+// program — so routing through them is free of consequence. A boulder does not vanish: pushing it
+// MOVES it one tile per bump (pokeemerald src/field_player_avatar.c TryPushBoulder), and where a
+// boulder ends up is the answer to a puzzle. A router that pushed one to shorten a walk could
+// strand it against a wall and lock that puzzle until the map is re-entered. So:
+//
+//   * transit  — a boulder is a plain blocker, forever. Nothing below can return one for a tile
+//                that is not the goal, which is what makes "the router never pushes" structural
+//                rather than a rule someone has to remember.
+//   * terminal — when the user taps the boulder ITSELF, that is explicit intent, and the honest
+//                thing to offer is the game's own ACTIVATION script (badge + party move + a yes/no
+//                + `setflag FLAG_SYS_USE_STRENGTH`, data/scripts/field_move_scripts.inc:123-145).
+//                It moves nothing and it wears off on the next map load. `strengthGoal` is set by
+//                fieldtrav_plan only when the game would really prompt.
+//
+// The BFS cannot expand THROUGH the goal (bfs_pass returns the moment the goal tile is dequeued),
+// so a Strength edge into the goal can never become a route to somewhere else.
 static const FtEdge* edge_at(const FtCtx* c, int x, int y) {
 	for (int i = 0; i < c->nEdge; i++) {
 		if (c->edge[i].x != x || c->edge[i].y != y) continue;
+		if (c->edge[i].hm == FT_HM_STRENGTH) {
+			if (!c->strengthGoal || x != c->gx || y != c->gy) return 0;   // transit: plain blocker
+			return &c->edge[i];                                           // terminal: activate
+		}
 		if (c->edge[i].hm != FT_HM_CUT && c->edge[i].hm != FT_HM_SMASH) return 0;
 		if (!(c->usable & (1u << c->edge[i].hm))) return 0;      // no badge / no mon -> plain blocker
 		return &c->edge[i];
@@ -497,6 +713,25 @@ static const FtEdge* edge_at(const FtCtx* c, int x, int y) {
 // Only the DESTINATION matters: every rule below is a property of the tile being entered, which is
 // also why the source tile is not a parameter.
 static int transition(FtCtx* c, int mode, int nx, int ny, int nti, int* nmode) {
+	// PHASE 26 / lane W — THE T5.8 RULE, applied to BOTH layers. Excluding MB_WATERFALL from the
+	// surfable set (fieldtrav_is_surfable) is not enough, and the host suite proved it on the user's
+	// own ROM: a waterfall metatile is collision 0, and while the player is SURFING the elevation
+	// half of `fieldpath_enterable` is DISARMED (fieldtrav_plan sets pElev = 0 there, because on
+	// water the live elevation is the water layer's and says nothing about coming ashore). So
+	// `foot_ok` answered TRUE for every tile of a waterfall, the SURF->FOOT "dismount" fired onto
+	// the first fall tile, and the FOOT layer then walked the player calmly up all eight of Ever
+	// Grande's — a tier-0 route, which by H1.7 would have SHIPPED, and which the game answers by
+	// flushing the player back to the bottom (ForcedMovement_PushedSouthByCurrent,
+	// src/field_player_avatar.c:159/185).
+	//
+	// A waterfall is a tile that takes the controls away, in every mode. The ONLY way onto a fall is
+	// the multi-tile edge in bfs_pass, which jumps the whole column and never stands on one.
+	//
+	// NOT FIXED HERE, and named so the next lane can: the four CURRENT behaviours (0x50-0x53) have
+	// the identical shape — excluded from `fieldtrav_is_surfable`, collision 0, and therefore still
+	// reachable through this same `foot_ok` hole while surfing. That is a pre-existing defect of the
+	// SURF tier, not of this HM, and fixing it changes routes no test in this phase can prove.
+	if (fieldtrav_is_waterfall(c->m->engine, beh_at(c, nti, nx, ny))) return -1;
 	if (mode == FT_MODE_FOOT) {
 		if (foot_ok(c, nti, nx, ny)) {
 			if (npc_blocks(c, nx, ny)) {
@@ -575,6 +810,44 @@ static int bfs_pass(FtCtx* c, int gx, int gy, int startMode, int maxUsed) {
 			s_meta[nidx]   = (uint8_t)((d & 3) | ((cost & 7) << 2));
 			s_queue[tail++] = (int16_t)nidx;
 		}
+		// --- the FIFTH successor: WATERFALL (phase 26 / lane W) ---------------------------------
+		// Every edge above is a step to a 4-NEIGHBOUR. A waterfall is not: one interaction carries
+		// the player up the WHOLE contiguous column of MB_WATERFALL tiles (field_effect.c:1880-1893,
+		// cited on fieldtrav_waterfall_top), so it is a single edge from the tile below the fall to
+		// the tile above it — K+1 tiles in one move. Modelling it as a normal step would be the
+		// worst of both worlds: the executor would expect one tile of movement and the game would
+		// deliver eight.
+		//
+		// The game's own gate, mirrored exactly (pokeemerald src/field_control_avatar.c:453-458 /
+		// pokefirered :608-613 / pokeruby :509-514):
+		//   MetatileBehavior_IsWaterfall(the tile faced)   -> the fall must be DIRECTLY NORTH
+		//   FlagGet(the waterfall badge) && checkpartymove -> `usable` carries both halves
+		//   IsPlayerSurfingNorth()                         -> mode must already be SURF; the
+		//                                                     "north" half is what the executor's
+		//                                                     FACE step provides.
+		// One rule is OURS and not the game's: the LANDING tile must be water we may legitimately
+		// float on. The game does not check (the ride is a held movement), but a plan has to end
+		// somewhere the player can actually be, and refusing is the honest answer for the handful
+		// of decorative falls whose top is dry land.
+		if (mode == FT_MODE_SURF && used < maxUsed && (c->usable & (1u << FT_HM_WATERFALL))) {
+			int fti = tile_idx(c, x, y - 1);
+			if (fti >= 0 && fieldtrav_is_waterfall(c->m->engine, beh_at(c, fti, x, y - 1))) {
+				int ty = fieldtrav_waterfall_top(c->bus, c->m, x, y - 1);
+				int lti = (ty >= 0) ? tile_idx(c, x, ty) : -1;
+				if (lti >= 0 && surf_ok(c, lti, x, ty) && !npc_blocks(c, x, ty)) {
+					int nidx = state_idx(lti, FT_MODE_SURF, used + 1);
+					if (s_parent[nidx] == -1) {
+						s_parent[nidx] = (int16_t)cur;
+						// FP_U is the direction the executor holds to FACE the fall, and it is the
+						// direction the ride travels. The tile count is deliberately NOT stored:
+						// the executor watches the game's own currentMetatileBehavior to know when
+						// the ride ended, and then re-plans from reality (H0.1).
+						s_meta[nidx] = (uint8_t)((FP_U & 3) | ((FT_HM_WATERFALL & 7) << 2));
+						s_queue[tail++] = (int16_t)nidx;
+					}
+				}
+			}
+		}
 	}
 	return -1;
 }
@@ -612,6 +885,38 @@ bool fieldtrav_plan(const FpBus* bus, const FpMap* m, FtVariant var, const FtPar
 
 	for (int i = 0; i < NT; i++) { s_behCache[i] = -2; s_footCache[i] = -1; s_surfCache[i] = -1; }
 
+	// --- THE WATERFALL GOAL RETARGET (phase 26 / lane W) ------------------------------------
+	// A tap can only reach 5 tiles above the player (touch.c: `ddy = s_downGy/16 - 5`, and the GBA
+	// view is 10 tiles tall with the avatar on row 5), so a fall of K tiles is only tappable from
+	// its base while K <= 4. Measured on the user's own Emerald ROM, 3 of the 7 waterfall sites are
+	// taller than that — including the one every player has to climb, EverGrandeCity's K=8 fall up
+	// to Victory Road. Their tops are literally unreachable by a tap.
+	//
+	// So a tap that lands ON a waterfall tile is read as what it plainly means — "take me up this
+	// fall" — and the goal moves to the tile the game's OWN ride would leave the player on. This is
+	// fieldpath's `headRetarget` precedent (fieldpath.h:87: tapping the wall above a door is
+	// retargeted onto the door), applied to the one other multi-tile piece of scenery in the game.
+	//
+	// It is also a SAFETY fix, not only a convenience. A waterfall tile is collision 0 / elevation 1
+	// — measured, 62 columns on the user's ROM — so it passes `fieldpath_enterable` and the frozen
+	// tier-0 router would happily plot a swim straight up it, where the game's forced movement
+	// (field_player_avatar.c:159/185) flushes the player back down forever. Retargeting means
+	// neither router is ever asked for a route that ENDS on a fall.
+	if (fieldtrav_is_waterfall(m->engine, fieldpath_behaviour_at(bus, m, gx, gy))) {
+		int ty = fieldtrav_waterfall_top(bus, m, gx, gy);
+		if (ty >= 0 && abs(ty - sy) <= FP_WHALF) { gy = ty; out->wfRetarget = 1; }
+		// A column we cannot resolve is left alone: the tap then simply fails to plan, which is the
+		// same nothing it does today.
+	}
+	out->goalX = gx; out->goalY = gy;
+	c.gx = gx; c.gy = gy;
+
+	// STRENGTH is a TERMINAL edge (see `edge_at`): the boulder standing on the GOAL becomes
+	// conditional only when the game would really prompt — eligible AND not already latched.
+	// `fieldtrav_strength_tap` is the one rule, shared with touch.c's tier gate, so the planner and
+	// the gate can never disagree about what a boulder tap means.
+	c.strengthGoal = (fieldtrav_strength_tap(bus, m, var, pty, gx, gy) >= 0) ? 1 : 0;
+
 	int startMode = startSurfing ? FT_MODE_SURF : FT_MODE_FOOT;
 	out->startMode = startMode;
 
@@ -643,7 +948,10 @@ bool fieldtrav_plan(const FpBus* bus, const FpMap* m, FtVariant var, const FtPar
 		tmp[n].dir = (int8_t)(meta & 3);
 		tmp[n].hm  = (uint8_t)((meta >> 2) & 7);
 		tmp[n].objSlot = -1;
-		if (tmp[n].hm == FT_HM_CUT || tmp[n].hm == FT_HM_SMASH) {
+		// The object that the interact aims at, named for the executor (Cut/Smash watch its active
+		// bit) and for the log (Strength: which boulder was activated — the proof there is the
+		// FLAG, not the slot, but the slot is what a reader needs to find it on screen).
+		if (tmp[n].hm == FT_HM_CUT || tmp[n].hm == FT_HM_SMASH || tmp[n].hm == FT_HM_STRENGTH) {
 			int ti = cur % NT;
 			int x = sx + (ti % FP_WBOX) - FP_WHALF, y = sy + (ti / FP_WBOX) - FP_WHALF;
 			const FtEdge* e = edge_at(&c, x, y);
@@ -768,20 +1076,43 @@ void fieldtrav_rom_bus(FtRomBus* rb, const FpBus* inner, const FtRomMap* rm, FpE
 }
 
 // --- plain dry reachability, shared by every leg ----------------------------------------------
-// A second, much smaller BFS than fieldtrav_plan's layered one: no modes, no conditional edges,
-// just "can a walker get from A to B on this grid, and in how many steps". Used three times per
-// candidate (out-leg on the live map, mid-leg on D's ROM grid, back-leg on the live map), so the
-// distance field is kept per-call in a static the same way the layered search does.
+// A second, much smaller BFS than fieldtrav_plan's layered one: no conditional edges, just "can
+// the player get from A to B on this grid, and in how many steps". Used three times per candidate
+// (out-leg on the live map, mid-leg on D's ROM grid, back-leg on the live map), so the distance
+// field is kept per-call in a static the same way the layered search does.
+//
+// PHASE 26 added the MODE. The excursion tier only ever walks, but a dive route is swum: its home
+// legs are the SURF layer and its underwater legs are the ordinary collision+elevation rule (see
+// FT_BFS_* below). `FT_BFS_FOOT` is byte-for-byte the pre-phase-26 function — the three excursion
+// call sites pass it and nothing about them changed.
+enum {
+	FT_BFS_FOOT = 0,       // fieldpath_enterable(pElev). No behaviour reads at all.
+	FT_BFS_WATER,          // surfable behaviour + collision, elevation DISARMED — `surf_ok`'s rule
+	                       //   verbatim (water is elevation 1 and land 3, so a foot elevation on
+	                       //   the water layer means nothing). Fills s_bfsBeh.
+	FT_BFS_FOOT_BEH        // FT_BFS_FOOT + fills s_bfsBeh. This is the UNDERWATER leg: measured on
+	                       //   pret's own layout data, every swimmable underwater tile is
+	                       //   collision 0 / elevation 3 and every blocked one is collision 1, so
+	                       //   the ordinary walk rule is exactly right down there — but the
+	                       //   surfacing test needs each tile's behaviour, hence the cache.
+};
 static int16_t s_dist[NT];
 static int16_t s_dq[NT];
+// Behaviour of every VISITED tile, or -1. Written only in the two beh-wanting modes, so a
+// FT_BFS_FOOT pass costs exactly what it always did (a behaviour read walks a 5-deep ROM chain).
+static int16_t s_bfsBeh[NT];
 
 static void ft_dry_bfs(const FpBus* bus, const FpMap* m, int ox, int oy, int sx, int sy,
-                       int pElev, const short (*npc)[2], int npcN) {
-	for (int i = 0; i < NT; i++) s_dist[i] = -1;
+                       int pElev, int mode, const short (*npc)[2], int npcN) {
+	int wantBeh = (mode != FT_BFS_FOOT);
+	for (int i = 0; i < NT; i++) { s_dist[i] = -1; if (wantBeh) s_bfsBeh[i] = -1; }
 	int slx = sx - ox + FP_WHALF, sly = sy - oy + FP_WHALF;
 	if (slx < 0 || slx >= FP_WBOX || sly < 0 || sly >= FP_WBOX) return;
 	int head = 0, tail = 0;
 	s_dist[slx + FP_WBOX * sly] = 0;
+	// The ROOT tile is a legitimate candidate spot (a player already floating on deep water is
+	// standing on their own dive tile), so its behaviour has to be in the cache too.
+	if (wantBeh) s_bfsBeh[slx + FP_WBOX * sly] = (int16_t)fieldpath_behaviour_at(bus, m, sx, sy);
 	s_dq[tail++] = (int16_t)(slx + FP_WBOX * sly);
 	while (head < tail) {
 		int ti = s_dq[head++];
@@ -793,13 +1124,24 @@ static void ft_dry_bfs(const FpBus* bus, const FpMap* m, int ox, int oy, int sx,
 			int nti = nlx + FP_WBOX * nly;
 			if (s_dist[nti] >= 0) continue;
 			int nx = x + s_dxs[d], ny = y + s_dys[d];
-			if (!fieldpath_enterable(bus, m, nx, ny, pElev)) continue;
+			int nbeh = wantBeh ? fieldpath_behaviour_at(bus, m, nx, ny) : -1;
+			if (mode == FT_BFS_WATER) {
+				// surf_ok's two halves, in its order: the behaviour must be in this engine's
+				// surfable set AND the tile must have no collision. The literal 0 disarms the
+				// elevation half — water is elevation 1 and land 3, so a foot elevation says
+				// nothing about a tile you are floating on. (Every caller happens to pass pElev 0
+				// here too, because a nonzero one only exists on the underwater legs and those use
+				// FT_BFS_FOOT_BEH; the 0 states the rule locally rather than inheriting it.)
+				if (!fieldtrav_is_surfable(m->engine, nbeh)) continue;
+				if (!fieldpath_enterable(bus, m, nx, ny, 0)) continue;
+			} else if (!fieldpath_enterable(bus, m, nx, ny, pElev)) continue;
 			bool blocked = false;                       // live NPCs (empty on a ROM map)
 			for (int i = 0; i < npcN; i++)
 				if (npc[i][0] == (short)(nx + MAP_OFFSET) && npc[i][1] == (short)(ny + MAP_OFFSET))
 					{ blocked = true; break; }
 			if (blocked) continue;
 			s_dist[nti] = (int16_t)(s_dist[ti] + 1);
+			if (wantBeh) s_bfsBeh[nti] = (int16_t)nbeh;
 			s_dq[tail++] = (int16_t)nti;
 		}
 	}
@@ -856,7 +1198,7 @@ bool fieldtrav_excursion(const FpBus* bus, const FpMap* m, uint32_t mapGroupsRom
 	if (pElev != 0 && !fieldpath_enterable(bus, m, sx, sy, pElev)) pElev = 0;
 
 	// Leg 1 distance field: everything reachable on foot from the player, on the LIVE map.
-	ft_dry_bfs(bus, m, sx, sy, sx, sy, pElev, npc, npcN);
+	ft_dry_bfs(bus, m, sx, sy, sx, sy, pElev, FT_BFS_FOOT, npc, npcN);
 	// Snapshot it — the mid/back BFS passes reuse the same static array.
 	static int16_t outLeg[NT];
 	memcpy(outLeg, s_dist, sizeof outLeg);
@@ -899,7 +1241,7 @@ bool fieldtrav_excursion(const FpBus* bus, const FpMap* m, uint32_t mapGroupsRom
 		// Inside D the elevation rule is disarmed (0 = ELEVATION_TRANSITION, "compatible with
 		// anything"): the arrival elevation is whatever the doorway carries, and an interior is
 		// exactly where a confident-but-wrong elevation would make the whole map unreachable.
-		ft_dry_bfs(&dbus, &dmap, arrX, arrY, arrX, arrY, 0, 0, 0);
+		ft_dry_bfs(&dbus, &dmap, arrX, arrY, arrX, arrY, 0, FT_BFS_FOOT, 0, 0);
 		// SNAPSHOT it. The leg-3 BFS below runs INSIDE the j loop and reuses the same static
 		// distance field, so a second return-warp candidate would otherwise be measured against
 		// the CURRENT map's distances instead of the interior's — a silent mis-ranking that only
@@ -923,7 +1265,7 @@ bool fieldtrav_excursion(const FpBus* bus, const FpMap* m, uint32_t mapGroupsRom
 			ft_arrival_tile(bus, m, here[back].x, here[back].y, &bx, &by);
 			if (bx == sx && by == sy) continue;                   // lands where we already are
 			// Leg 3 on the LIVE map, from the return tile to the goal.
-			ft_dry_bfs(bus, m, sx, sy, bx, by, 0, npc, npcN);
+			ft_dry_bfs(bus, m, sx, sy, bx, by, 0, FT_BFS_FOOT, npc, npcN);
 			int dBack = ft_dist_at(sx, sy, gx, gy);
 			if (dBack < 0) continue;
 
@@ -944,6 +1286,213 @@ bool fieldtrav_excursion(const FpBus* bus, const FpMap* m, uint32_t mapGroupsRom
 	}
 
 	if (out->wi < 0) { out->outcome = FT_OUT_NOEXC; return false; }
+	out->ok = true;
+	out->outcome = FT_OUT_PLANNED;
+	return true;
+}
+
+// ==============================================================================================
+// PHASE 26 / LANE V — DIVE (SPEC-hm-dive)
+// ==============================================================================================
+// Read the header before this code: Dive is a MAP CONNECTION with an IDENTITY coordinate map, so
+// the search is an out-and-back whose two "warps" are (a) any diveable tile reachable here and
+// (b) any surfacing tile reachable over there, and whose arrival tile is always the departure
+// tile's own (x,y).
+//
+// Structure offsets, re-read from pret at the line that uses them:
+//   struct MapHeader      /*0x0C*/ const struct MapConnections *connections, /*0x17*/ u8 mapType
+//                         (pokeemerald include/global.fieldmap.h:176/182; pokeruby's own
+//                         include/global.fieldmap.h:148/154 has the identical block).
+//   struct MapConnections /*0x00*/ s32 count, /*0x04*/ const struct MapConnection *connections
+//                         (global.fieldmap.h:165-169).
+//   struct MapConnection  direction u8, offset s32, mapGroup u8, mapNum u8 — the C struct's own
+//                         comments in pokeruby are WRONG about the offsets (they ignore the 4-byte
+//                         alignment of `offset`), so the ASSEMBLER is the authority:
+//                         pokeemerald asm/macros/map.inc:152-158 emits
+//                            .byte direction ; .space 3 ; .4byte offset ; map (2 bytes) ; .space 2
+//                         = direction +0x00, offset +0x04, mapGroup +0x08, mapNum +0x09, stride 12.
+//   MAP_TYPE_UNDERWATER   5 (include/constants/map_types.h:9, identical in pokeruby's :9).
+#define FT_CONN_STRIDE 12u
+#define FT_MAPTYPE_UNDERWATER 5
+
+bool fieldtrav_underwater(const FpBus* bus, const FpMap* m) {
+	if (!bus || !m || !m->mapHeader) return false;
+	return bus->read8(bus->ctx, m->mapHeader + 0x17u) == FT_MAPTYPE_UNDERWATER;
+}
+
+bool fieldtrav_connection(const FpBus* bus, uint32_t mapHeader, int dir, int* grp, int* num) {
+	if (grp) *grp = -1;
+	if (num) *num = -1;
+	if (!bus || !mapHeader || !grp || !num) return false;
+	uint32_t conns = bus->read32(bus->ctx, mapHeader + 0x0Cu);      // MapHeader.connections
+	// A map with no connections stores a literal NULL there (tools/mapjson/mapjson.cpp:155-159),
+	// and pret's own GetMapConnection would fault on it — we just answer "no".
+	if (!ft_rom_ptr(conns)) return false;
+	int32_t n = (int32_t)bus->read32(bus->ctx, conns + 0x00u);      // MapConnections.count
+	if (n <= 0 || n > FT_MAX_CONN) return false;
+	uint32_t p = bus->read32(bus->ctx, conns + 0x04u);              // MapConnections.connections
+	if (!ft_rom_ptr(p)) return false;
+	for (int i = 0; i < n; i++) {
+		uint32_t r = p + FT_CONN_STRIDE * (uint32_t)i;
+		if ((int)bus->read8(bus->ctx, r + 0x00u) != dir) continue;  // MapConnection.direction
+		*grp = (int)bus->read8(bus->ctx, r + 0x08u);                // .mapGroup
+		*num = (int)bus->read8(bus->ctx, r + 0x09u);                // .mapNum
+		return true;
+	}
+	return false;                                                   // GetMapConnection's own NULL
+}
+
+// One candidate HM spot on the current map, ranked by how far it is.
+typedef struct { int16_t x, y, d; } FtSpot;
+
+// "Could the player occupy (x,y) in this BFS mode" — ft_dry_bfs's own admission test, factored out
+// so the GOAL can be held to exactly the rule the search expands by.
+static bool ft_mode_ok(const FpBus* bus, const FpMap* m, int x, int y, int pElev, int mode) {
+	if (mode == FT_BFS_WATER)
+		return fieldtrav_is_surfable(m->engine, fieldpath_behaviour_at(bus, m, x, y)) &&
+		       fieldpath_enterable(bus, m, x, y, 0);
+	return fieldpath_enterable(bus, m, x, y, pElev);
+}
+
+bool fieldtrav_dive(const FpBus* bus, const FpMap* m, uint32_t mapGroupsRom,
+                    int curGrp, int curNum, FtVariant var, const FtParty* pty,
+                    int sx, int sy, int gx, int gy, bool startSurfing,
+                    const short (*npc)[2], int npcN, FtDive* out) {
+	memset(out, 0, sizeof *out);
+	out->outcome = FT_OUT_BADMAP;
+	out->dir = -1;
+	out->dGroup = out->dNum = -1;
+	if (!bus || !m || !out) return false;
+	if (!ft_rom_ptr(mapGroupsRom) || !m->mapHeader) return false;
+	if (m->backupW <= 0 || m->backupW > 512 || m->backupH <= 0 || m->backupH > 512) return false;
+	if (abs(gx - sx) > FP_WHALF || abs(gy - sy) > FP_WHALF) { out->outcome = FT_OUT_WINDOW; return false; }
+
+	// (1) ELIGIBILITY FIRST — badge AND a party mon that knows the move, the game's own gate
+	// (pokeemerald src/field_control_avatar.c:465/475 FlagGet(FLAG_BADGE07_GET), and the script's
+	// own `checkpartymove MOVE_DIVE` at data/scripts/field_move_scripts.inc:220/243). An FRLG save
+	// can never set this bit at all (`badgeDive == 0`), so this line is also the engine refusal.
+	if (!(fieldtrav_usable(bus, var, pty) & (1u << FT_HM_DIVE))) { out->outcome = FT_OUT_NOEDGE; return false; }
+
+	// (2) WHICH WAY. The map type is the game's own emerge gate, so it decides — never the avatar
+	// flags, which say UNDERWATER rather than SURFING down there anyway.
+	bool underwater = fieldtrav_underwater(bus, m);
+	int dir = underwater ? FT_DIVE_UP : FT_DIVE_DOWN;
+	out->dir = dir;
+	// On a surface map the dive tile is the player's OWN tile and it is deep water, so the player
+	// must already be afloat. "Mount Surf, then dive" is a two-interact chain and is refused whole.
+	if (!underwater && !startSurfing) { out->outcome = FT_OUT_NODIVE; return false; }
+
+	// (3) THE PAIRED MAP, both ways. Requiring the RETURN connection as well is what stops us
+	// planning a one-way trip: a dive we cannot undo would strand the route (and the player) on a
+	// map the tap never named.
+	int dg, dn;
+	if (!fieldtrav_connection(bus, m->mapHeader, underwater ? FT_CONN_EMERGE : FT_CONN_DIVE, &dg, &dn)) {
+		out->outcome = FT_OUT_NODIVE; return false;      // no connection: incl. every scripted spot
+	}
+	if (dg == curGrp && dn == curNum) { out->outcome = FT_OUT_NODIVE; return false; }
+	FtRomMap rm;
+	if (!fieldtrav_rom_map(bus, mapGroupsRom, dg, dn, &rm)) { out->outcome = FT_OUT_BADMAP; return false; }
+	FtRomBus rb; FpBus dbus; FpMap dmap;
+	fieldtrav_rom_bus(&rb, bus, &rm, m->engine, &dbus, &dmap);
+	int bg, bn;
+	if (!fieldtrav_connection(&dbus, rm.header, underwater ? FT_CONN_DIVE : FT_CONN_EMERGE, &bg, &bn) ||
+	    bg != curGrp || bn != curNum) {
+		out->outcome = FT_OUT_NODIVE; return false;
+	}
+	out->dGroup = dg; out->dNum = dn;
+
+	// (4) THE TWO HOME LEGS, both in the mode the player is in RIGHT NOW.
+	//   * diving DOWN we are surfing, so the home legs are the SURF layer;
+	//   * diving UP we are underwater, where the ordinary collision+elevation walk rule applies —
+	//     with fieldtrav_plan's own self-consistency rail on the elevation read.
+	int homeMode = underwater ? FT_BFS_FOOT_BEH : FT_BFS_WATER;
+	int homeElev = 0;
+	if (underwater) {
+		homeElev = fieldpath_player_elev(bus, m);
+		if (homeElev != 0 && !fieldpath_enterable(bus, m, sx, sy, homeElev)) homeElev = 0;
+	}
+	// Leg 1: from the player. Snapshot both the distances AND the behaviours — the emerge/dive
+	// tests need them and the next BFS overwrites the caches.
+	ft_dry_bfs(bus, m, sx, sy, sx, sy, homeElev, homeMode, npc, npcN);
+	static int16_t outLeg[NT], outBeh[NT];
+	memcpy(outLeg, s_dist, sizeof outLeg);
+	memcpy(outBeh, s_bfsBeh, sizeof outBeh);
+	// Leg 3: rooted at the GOAL, so ONE pass serves every candidate return tile. Legal because the
+	// step rule here is a property of the tile being ENTERED alone (fieldpath_enterable /
+	// surfable), which makes the relation symmetric between two enterable tiles — the excursion
+	// tier gets the same answer by re-running a BFS per candidate, which this cannot afford.
+	//
+	// The one thing a goal-rooted BFS would otherwise get wrong: it seeds dist[goal] = 0 WITHOUT
+	// asking whether the goal can be occupied, so a route could be scored that ends by bumping an
+	// impassable tile. Tier 0 allows exactly that (a blocked goal IS the terminal — you tap a sign
+	// and walk into it), but a whole dive round trip that ends in a bump is not a trade worth
+	// making, so hold the goal to the same rule the search expands by.
+	if (!ft_mode_ok(bus, m, gx, gy, homeElev, homeMode)) { out->outcome = FT_OUT_NODIVE; return false; }
+	ft_dry_bfs(bus, m, sx, sy, gx, gy, homeElev, homeMode, npc, npcN);
+	static int16_t goalLeg[NT];
+	memcpy(goalLeg, s_dist, sizeof goalLeg);
+
+	// (5) CANDIDATE HM SPOTS on this map: reachable in the home mode, and the tile the game would
+	// accept the HM on. Nearest first, capped — FT_EXC_CAND's rule.
+	FtSpot cand[FT_DIVE_CAND];
+	int nCand = 0, nSpots = 0;
+	for (int ti = 0; ti < NT; ti++) {
+		if (outLeg[ti] < 0) continue;
+		int beh = outBeh[ti];
+		bool spot = underwater ? fieldtrav_can_emerge(var, beh) : fieldtrav_is_diveable(var, beh);
+		if (!spot) continue;
+		nSpots++;
+		int x = sx + (ti % FP_WBOX) - FP_WHALF, y = sy + (ti / FP_WBOX) - FP_WHALF;
+		// Insertion into a fixed nearest-first table: cheaper than sorting the whole map, and it
+		// keeps the SAME 8 spots a sort-then-truncate would have kept.
+		int at = nCand;
+		while (at > 0 && cand[at - 1].d > outLeg[ti]) at--;
+		if (at >= FT_DIVE_CAND) continue;
+		for (int k = (nCand < FT_DIVE_CAND ? nCand : FT_DIVE_CAND - 1); k > at; k--) cand[k] = cand[k - 1];
+		cand[at].x = (int16_t)x; cand[at].y = (int16_t)y; cand[at].d = (int16_t)outLeg[ti];
+		if (nCand < FT_DIVE_CAND) nCand++;
+	}
+	out->nSpots = nSpots;
+	if (nCand <= 0) { out->outcome = FT_OUT_NODIVE; return false; }
+
+	// (6) THE SEARCH. For each candidate dive spot, cross the paired map from the tile of the SAME
+	// name and look for a surfacing tile whose home twin reaches the goal.
+	//   * the paired map's mode is the OTHER one (dive down -> we swim underwater; emerge up -> we
+	//     surf on top);
+	//   * its elevation rule is disarmed, the excursion tier's own choice for a map we cannot see
+	//     the player standing on. Measured harmless: every swimmable underwater tile in pret's
+	//     seven Emerald pairs is collision 0 / elevation 3, and every blocked one is collision 1.
+	//   * D carries NO object events (it is ROM), which is why the executor re-plans that leg live
+	//     on arrival — the H3.4 rule, unchanged.
+	int dMode = underwater ? FT_BFS_WATER : FT_BFS_FOOT_BEH;
+	int bestScore = 0x7FFFFFFF;
+	for (int ci = 0; ci < nCand; ci++) {
+		int cx = cand[ci].x, cy = cand[ci].y;
+		ft_dry_bfs(&dbus, &dmap, cx, cy, cx, cy, 0, dMode, 0, 0);
+		for (int ti = 0; ti < NT; ti++) {
+			if (s_dist[ti] < 0) continue;
+			int beh = s_bfsBeh[ti];
+			bool spot = underwater ? fieldtrav_is_diveable(var, beh) : fieldtrav_can_emerge(var, beh);
+			if (!spot) continue;
+			int ux = cx + (ti % FP_WBOX) - FP_WHALF, uy = cy + (ti / FP_WBOX) - FP_WHALF;
+			if (ux == cx && uy == cy) continue;            // straight back up where we went down
+			// Home again at the SAME (x,y) — the identity map. It has to be inside the home
+			// window and it has to reach the goal, both of which goalLeg answers in one lookup.
+			int hlx = ux - sx + FP_WHALF, hly = uy - sy + FP_WHALF;
+			if (hlx < 0 || hlx >= FP_WBOX || hly < 0 || hly >= FP_WBOX) continue;
+			int dBack = goalLeg[hlx + FP_WBOX * hly];
+			if (dBack < 0) continue;
+			int score = cand[ci].d + s_dist[ti] + dBack;
+			if (score >= bestScore) continue;
+			bestScore     = score;
+			out->diveX    = cx;   out->diveY = cy;
+			out->upX      = ux;   out->upY   = uy;
+			out->stepsOut = cand[ci].d;
+			out->stepsMid = s_dist[ti];
+			out->stepsBack = dBack;
+		}
+	}
+	if (bestScore == 0x7FFFFFFF) { out->outcome = FT_OUT_NODIVE; return false; }
 	out->ok = true;
 	out->outcome = FT_OUT_PLANNED;
 	return true;

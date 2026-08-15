@@ -84,6 +84,15 @@ typedef struct {
 	int facing;      // gObjectEvents[0].facingDirection low nibble: 1 D / 2 U / 3 L / 4 R, -1 = ?
 	int surfing;     // gPlayerAvatar PLAYER_AVATAR_FLAG_SURFING
 	int objActive;   // the tracked object slot's active:1 bit (the Cut/Smash proof)
+	// PHASE 26 / lane W. Two more "the game answers for itself" reads, each consulted by exactly
+	// one HM in exactly one phase (TPH_DONE), and each ONE byte on the console.
+	int onWaterfall; // gObjectEvents[0].currentMetatileBehavior (+0x1E) is MB_WATERFALL. This is
+	                 //   literally the condition the ride loop itself tests (pokeemerald
+	                 //   src/field_effect.c:1885 WaterfallFieldEffect_ContinueRideOrEnd), so the
+	                 //   ride is over exactly when it goes false — no frame count, no tile count.
+	int strengthOn;  // FlagGet(FLAG_SYS_USE_STRENGTH) — the ONLY proof a Strength activation
+	                 //   landed, because unlike Cut and Smash nothing on the map changes
+	                 //   (data/scripts/field_move_scripts.inc:145 `setflag FLAG_SYS_USE_STRENGTH`).
 } ProgObs;
 
 // --- what touch.c must DO about it ------------------------------------------------------------

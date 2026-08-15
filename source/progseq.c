@@ -193,6 +193,37 @@ void progseq_step(ProgSeq* s, const FtProgram* pr, const ProgObs* o, ProgAct* a)
 				s->step++;
 				done = 1;
 			}
+		} else if (mv.hm == FT_HM_WATERFALL) {
+			// PHASE 26 / lane W. The ride is MULTI-TILE and self-terminating, and the game will say
+			// when: pokeemerald src/field_effect.c:1880-1893 WaterfallFieldEffect_ContinueRideOrEnd
+			// re-issues the slow walk north for as long as `MetatileBehavior_IsWaterfall(objectEvent
+			// ->currentMetatileBehavior)` holds, and unlocks the player the first time it does not.
+			// So the completion test is that same condition, inverted — never a tile count.
+			//
+			// Why `moved` is still required: on the FIRST frames of this phase the player is below
+			// the fall, has not moved and is not on a waterfall, which would satisfy `!onWaterfall`
+			// on its own and declare a ride that never started finished. Why `surfing` is still
+			// required: the ride only exists mid-surf, so losing the surf bit means something else
+			// happened (a battle, a warp) and the honest answer is to keep waiting for the budget.
+			if (o->surfing && moved && !o->onWaterfall) {
+				s->lpx = o->px; s->lpy = o->py;
+				s->step++;                   // ONE move consumed however many tiles it carried us
+				done = 1;
+			}
+		} else if (mv.hm == FT_HM_STRENGTH) {
+			// PHASE 26 / lane W. Nothing on the map changes when Strength is activated — the
+			// boulder is still there, the player has not moved, no object slot deactivates. The
+			// only observable is the game's own latch (`setflag FLAG_SYS_USE_STRENGTH`,
+			// data/scripts/field_move_scripts.inc:145), which is exactly what the executor watches.
+			//
+			// A Strength edge is a TERMINAL by construction (fieldtrav.c edge_at), so this step is
+			// the LAST one and `s->step++` runs it off the end into TPE_ARRIVED below. That is the
+			// safety property, not an accident: the walk key for this move is never emitted, so the
+			// program cannot bump the boulder and push it somewhere the player did not ask for.
+			if (o->strengthOn) {
+				s->step++;
+				done = 1;
+			}
 		} else {
 			// Cut / Rock Smash: the object slot deactivates and the player stays put, so the walk
 			// step still has to happen — the same step index, now in WALK phase.
