@@ -37,6 +37,7 @@
 //   TEST 5  the retry cadence and the give-up budget
 //   TEST 6  the whole P4 excursion, leg by leg
 //   TEST 7  layout_kill re-arms; home_done ends it; and neither fires early
+//   TEST 7b what the phase-27 dims fix does NOT cure — measured live, pinned as a defect
 //   TEST 8  invariants over an exhaustive sweep of map/dim/px inputs
 #include <stdio.h>
 #include <stdarg.h>
@@ -417,6 +418,57 @@ static void test_kill_and_home(void) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// TEST 7b — WHAT THE PHASE-27 FIX DOES *NOT* CURE, measured live and pinned here (lane R)
+// ---------------------------------------------------------------------------------------------
+// Forgetting the dims at a re-arm removes one failure mode: "settled on frame 0 by a fossil".
+// It does NOT remove the OTHER one, and the live P4 on the fixed build says so out loud —
+// `planSeq 4 -> routeEnd 6 (MAPCHANGE) -> planSeq 5` still happened, byte for byte the sequence
+// lane C2 recorded before the fix (final planSeq 5, endSeq 3, arrived (5,5) beh 0x28).
+//
+// The reason, and it is a property of the RULE, not a bug in it: "stable" means the dimensions
+// did not move between two reads, and a map the game has NOT started rebuilding yet does not move
+// either. After the STEP warp home, gBackupMapLayout keeps the Pokemon Center's 14x9 through the
+// whole fade — far longer than EXC_SETTLE_EVERY — so the two reads agree ON THE OLD MAP, the leg
+// plans on it, and the follow loop's layout check kills the BFS when the town's 20x20 finally
+// lands. TEST 6's fixture (old dims for 6 frames) is the case the fix covers; this is the case
+// the live warp actually produces.
+//
+// So this test asserts the DEFECT, deliberately, the way lane C2 asserted the one it could not
+// take: if someone fixes it, this goes red and gets rewritten. The candidate fix is stated in
+// LANE-R-REACH.md — refuse to settle until the layout has been observed to CHANGE since the
+// boundary, with a frame-grace escape so two same-size rooms (a change that is invisible in the
+// dims) do not hang the leg until EXC_SETTLE_BUDGET. It needs its own live P4 to grade, which is
+// why this lane measured it and did not guess at it.
+static void test_slow_layout_residue(void) {
+	ExcSeq s; excseq_reset(&s);
+	excseq_arm(&s, TOWN_G, TOWN_N, 5, 5);
+	excseq_boundary(&s, PC_G, PC_N, PC_G, PC_N, 2, 1);
+	follow(&s, PC_G, PC_N, 7, 1, 14, 9, 0);              // leg 1 lives on the PC's grid
+	excseq_settle_planned(&s, PC_G, PC_N);
+	CHECK(excseq_boundary(&s, TOWN_G, TOWN_N, PC_G, PC_N, 2, 1) == EXC_B_ARMED, "leg 2 armed by the STEP warp home");
+	CHECK(s.lastW == -1, "with no dims history, per the phase-27 fix");
+
+	// THE REAL TRACE: the PC's 14x9 outlives the settle cadence, then the town arrives.
+	int planned = 0, first = -1, dimsAtPlan = 0;
+	for (int f = 0; f < 60 && !planned; f++) {
+		int mw = (f < 30) ? 14 : 20, mh = (f < 30) ? 9 : 20;
+		if (follow(&s, TOWN_G, TOWN_N, 9, 1, mw, mh, 1)) { planned = 1; first = f; dimsAtPlan = mw; }
+	}
+	CHECK(planned == 1, "leg 2 is planned");
+	CHECK(first == EXC_SETTLE_EVERY, "on the first cadence frame (frame %d) — the fix cannot see further", first);
+	CHECK(dimsAtPlan == 14, "AND IT IS STILL THE OLD MAP'S GRID: a map that has not started loading "
+	                        "does not move either, so 'stable' is satisfied by the PC sitting still");
+	// ...and the recovery is the one the live run takes: the layout check kills it, the leg
+	// re-arms, and the retry lands on the town.
+	excseq_layout_kill(&s);
+	planned = 0; first = -1; dimsAtPlan = 0;
+	for (int f = 0; f < 60 && !planned; f++)
+		if (follow(&s, TOWN_G, TOWN_N, 9, 1, 20, 20, 1)) { planned = 1; first = f; dimsAtPlan = 20; }
+	CHECK(planned == 1 && dimsAtPlan == 20, "the retry plans on the town's own grid");
+	CHECK(first == EXC_SETTLE_EVERY, "one wasted BFS later (frame %d) — the live cost, still there", first);
+}
+
+// ---------------------------------------------------------------------------------------------
 // TEST 8 — invariants over an exhaustive sweep
 // ---------------------------------------------------------------------------------------------
 static void test_invariants(void) {
@@ -496,6 +548,7 @@ int main(void) {
 	test_cadence_budget();
 	test_p4_excursion();
 	test_kill_and_home();
+	test_slow_layout_residue();
 	test_invariants();
 	test_neighbourhood();
 	printf("\n=== %d checks, %d failures ===\n", g_checks, g_fails);
