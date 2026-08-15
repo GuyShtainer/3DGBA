@@ -253,6 +253,49 @@ bool fieldtrav_is_waterfall(FpEngine eng, int behaviour) {
 	return behaviour == MB_WATERFALL_ALL;
 }
 
+// ============================ the four CURRENTs =============================================
+// PHASE 29 / lane F. The waterfall's untreated twin, named by SPEC-hm-waterfall §4.1 and by the
+// NOT-FIXED-HERE note in `transition()` below. Same shape as MB_WATERFALL: one contiguous block of
+// four values, identical in all three engines, and read in each engine's own header rather than
+// carried across (the c2a58db rule):
+//   pokeemerald include/constants/metatile_behaviors.h:85-88 (the enum, counted from MB_NORMAL at
+//               :5 -> 0x50 EASTWARD, 0x51 WESTWARD, 0x52 NORTHWARD, 0x53 SOUTHWARD)
+//   pokefirered :62-65 `#define MB_EASTWARD_CURRENT 0x50` … `#define MB_SOUTHWARD_CURRENT 0x53`
+//   pokeruby    :84-87 the same four (0x50 spelled MB_UNUSED_EASTWARD_CURRENT)
+// and the game's own four predicates are single-value compares, exactly as mirrored here
+// (pokeemerald src/metatile_behavior.c:409/417/425/433).
+#define MB_CURRENT_LO 0x50
+#define MB_CURRENT_HI 0x53
+
+bool fieldtrav_is_current(FpEngine eng, int behaviour) {
+	(void)eng;                                       // deliberately engine-invariant; see above
+	if (behaviour < 0) return false;                 // unreadable -> never "yes"
+	return behaviour >= MB_CURRENT_LO && behaviour <= MB_CURRENT_HI;
+}
+
+// SPEC-hm-waterfall §4.2's refusal, applied where the FROZEN router's answer is consumed.
+//
+// The rule is the same one `transition()` enforces below — a tile that takes the controls away is
+// never a tile to route THROUGH — and it is stated here as a property of a finished path so that
+// `source/fieldpath.{c,h}` need not be touched. Directions are FpPlan's own step codes
+// (fieldpath.h:46 FP_R/FP_L/FP_D/FP_U) and the deltas are fieldpath's own table (fieldpath.c:248
+// `dxs = {1,-1,0,0}, dys = {0,0,1,-1}`), so a screen and the walk it screens step identically.
+int fieldtrav_path_forced(const FpBus* bus, const FpMap* m, int px, int py,
+                          const int8_t* path, int pathLen) {
+	if (!bus || !m || !path || pathLen <= 0) return -1;
+	static const int dxs[4] = { 1, -1, 0, 0 }, dys[4] = { 0, 0, 1, -1 };
+	int x = px, y = py;
+	for (int i = 0; i < pathLen; i++) {
+		int d = path[i];
+		if (d < 0 || d > 3) return -1;               // not a step code: nothing to say about it
+		x += dxs[d]; y += dys[d];
+		int b = fieldpath_behaviour_at(bus, m, x, y);
+		if (b < 0) continue;                         // unreadable: NOT a refusal (see the header)
+		if (fieldtrav_is_waterfall(m->engine, b) || fieldtrav_is_current(m->engine, b)) return i;
+	}
+	return -1;
+}
+
 // The ride, simulated. pokeemerald src/field_effect.c:1873-1893:
 //     WaterfallFieldEffect_RideUp:            ObjectEventSetHeldMovement(GetWalkSlowMovementAction(DIR_NORTH))
 //     WaterfallFieldEffect_ContinueRideOrEnd: if (MetatileBehavior_IsWaterfall(objectEvent->
@@ -727,11 +770,19 @@ static int transition(FtCtx* c, int mode, int nx, int ny, int nti, int* nmode) {
 	// A waterfall is a tile that takes the controls away, in every mode. The ONLY way onto a fall is
 	// the multi-tile edge in bfs_pass, which jumps the whole column and never stands on one.
 	//
-	// NOT FIXED HERE, and named so the next lane can: the four CURRENT behaviours (0x50-0x53) have
-	// the identical shape — excluded from `fieldtrav_is_surfable`, collision 0, and therefore still
-	// reachable through this same `foot_ok` hole while surfing. That is a pre-existing defect of the
-	// SURF tier, not of this HM, and fixing it changes routes no test in this phase can prove.
-	if (fieldtrav_is_waterfall(c->m->engine, beh_at(c, nti, nx, ny))) return -1;
+	// PHASE 29 / lane F — THE TWIN, FIXED. Phase 26 left this note here: "the four CURRENT
+	// behaviours (0x50-0x53) have the identical shape — excluded from `fieldtrav_is_surfable`,
+	// collision 0, and therefore still reachable through this same `foot_ok` hole while surfing."
+	// It is the same defect, one term away, and it is now the same refusal: a current is
+	// `sForcedMovementTestFuncs[6..9]` (pokeemerald src/field_player_avatar.c:158) exactly as the
+	// waterfall is `[14]` (:160), so both take the controls away and neither is ever a tile to
+	// stand on. The ONLY way onto a fall is the multi-tile edge in bfs_pass, which jumps the whole
+	// column and never stands on one; there is no edge onto a current at all.
+	{
+		int nb = beh_at(c, nti, nx, ny);
+		if (fieldtrav_is_waterfall(c->m->engine, nb) || fieldtrav_is_current(c->m->engine, nb))
+			return -1;
+	}
 	if (mode == FT_MODE_FOOT) {
 		if (foot_ok(c, nti, nx, ny)) {
 			if (npc_blocks(c, nx, ny)) {

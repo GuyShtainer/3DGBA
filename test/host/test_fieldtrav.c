@@ -2172,7 +2172,12 @@ int main(void) {
 			}
 		}
 		CHECK(refused > 0, "the sweep really exercised the new rule (%d TIER0 refusals)", refused);
-		CHECK(planned == 0 || planned > 0, "sweep bookkeeping (planned %d, other %d)", planned, other);
+		// PHASE 29 / lane F — audit O7: this used to read `planned == 0 || planned > 0`, which can
+		// never fail and inflated the count by one. The real bookkeeping invariant is that every
+		// goal in the window was classified into exactly one bucket.
+		CHECK(refused + planned + other == 25 * 25 - 1,
+		      "every goal in the 25x25 window is classified exactly once (%d + %d + %d of %d)",
+		      refused, planned, other, 25 * 25 - 1);
 		// Every surviving plan must be a genuine dive: at least one step on the OTHER map, and a
 		// surfacing tile that is not the dive tile. (`planned` may legitimately be 0 here — Route
 		// 126's dive field is one connected body — so the assertion is about the survivors, not
@@ -2195,12 +2200,218 @@ int main(void) {
 		CHECK(dv.outcome == FT_OUT_TIER0 || dv.outcome == FT_OUT_NODIVE || dv.outcome == FT_OUT_PLANNED,
 		      "every sweep answer is one of the three honest outcomes (last %s)", OUTN(dv.outcome));
 
-		// (d) The rule is about REACHABILITY, not about distance: a goal the player cannot reach in
-		//     the home mode (dry land on this map) is still not a dive, but it must not be TIER0.
+		// (d) The rule is about REACHABILITY, not about distance. PHASE 29 / lane F — audit O7: the
+		//     comment here used to describe the goal the player CANNOT reach in the home mode and
+		//     then assert the opposite case (the player's own tile, which is trivially reachable).
+		//     Both are worth having, so both are written, and the unreachable one is graded as a
+		//     PROPERTY against an independent function rather than a hand-picked tile.
+		//     The independent oracle is `fieldtrav_plan`'s own tier-0 verdict: it is a forward,
+		//     edge-aware BFS from the player, where the dive precondition is a backward dry BFS
+		//     rooted at the goal, so agreeing is a real statement about the map and not a
+		//     restatement of one function by itself.
 		CHECK(!fieldtrav_dive(&dbus, &m1, EM_MAPGROUPS, 0, 41, FT_VAR_EMERALD, &pty,
 		                      20, 40, 20, 40, true, 0, 0, &dv),
 		      "the player's OWN tile is refused");
 		CHECK(dv.outcome == FT_OUT_TIER0, "…as TIER0 (distance 0 is trivially reachable)");
+		int unreachN = 0, wrongTier = 0, tierMismatch = 0;
+		for (int gy = 40 - 12; gy <= 40 + 12; gy++) {
+			for (int gx = 20 - 12; gx <= 20 + 12; gx++) {
+				if (gx == 20 && gy == 40) continue;
+				fieldtrav_plan(&dbus, &m1, FT_VAR_EMERALD, &pty, 20, 40, gx, gy, true, 0, 0, &g_pr);
+				bool plainReaches = (g_pr.outcome == FT_OUT_TIER0);
+				fieldtrav_dive(&dbus, &m1, EM_MAPGROUPS, 0, 41, FT_VAR_EMERALD, &pty,
+				               20, 40, gx, gy, true, 0, 0, &dv);
+				bool diveRefused = (dv.outcome == FT_OUT_TIER0);
+				if (!plainReaches) {
+					unreachN++;
+					if (diveRefused) wrongTier++;         // the case the old comment described
+				}
+				if (plainReaches != diveRefused) tierMismatch++;
+			}
+		}
+		CHECK(unreachN > 0,
+		      "the window really contains goals plain surfing cannot reach — the case (d) names "
+		      "(%d of %d)", unreachN, 25 * 25 - 1);
+		CHECK(wrongTier == 0,
+		      "…and NOT ONE of them is refused as TIER0: the precondition is about reachability, "
+		      "not distance (%d wrong)", wrongTier);
+		CHECK(tierMismatch == 0,
+		      "…the guard fires on exactly the goals the shipped router already reaches, graded "
+		      "against fieldtrav_plan's own tier-0 verdict (%d disagreements)", tierMismatch);
+	}
+
+	// ================================================================ TEST 25
+	// PHASE 29 / lane F — DEFECT X2, and the CURRENTS twin SPEC-hm-waterfall §4.1 named and left.
+	//
+	// The defect, live (phase 28, Route 114): a tap on the fall with Waterfall UNUSABLE was handed
+	// to the FROZEN tier-0 router, which has no forced-movement table, plotted four UP steps
+	// straight through the column and reported ARRIVED at a tile the player never left. §4.2 asked
+	// a later phase to give `fieldpath_plan` the same refusal `transition()` enforces; the file is
+	// frozen, so the refusal is a SCREEN on the answer — `fieldtrav_path_forced` — and this test is
+	// the real-cartridge repro of both halves.
+	printf("\nTEST 25 — X2: a dry path is never allowed THROUGH a fall or a current\n");
+	{
+		// --- (a) the currents metatile test, exhaustively. 0x50..0x53 and nothing else.
+		int curHits = 0;
+		for (int b = 0; b <= 0xFF; b++) {
+			bool rse = fieldtrav_is_current(FP_ENG_RSE, b), frlg = fieldtrav_is_current(FP_ENG_FRLG, b);
+			bool want = (b >= 0x50 && b <= 0x53);
+			CHECK(rse == want, "RSE  0x%02X current == %d", b, want);
+			CHECK(frlg == want, "FRLG 0x%02X current == %d", b, want);
+			if (rse) curHits++;
+		}
+		CHECK(curHits == 4, "exactly FOUR behaviours are currents (got %d)", curHits);
+		CHECK(!fieldtrav_is_current(FP_ENG_RSE, -1), "an unreadable behaviour is never a current");
+		// The same pairing the waterfall has, and for the same reason: a tile that takes the
+		// controls away is never free water.
+		for (int b = 0x50; b <= 0x53; b++) {
+			CHECK(!fieldtrav_is_surfable(FP_ENG_RSE, b), "RSE  0x%02X is not surfable either", b);
+			CHECK(!fieldtrav_is_surfable(FP_ENG_FRLG, b), "FRLG 0x%02X is not surfable either", b);
+		}
+		CHECK(!fieldtrav_is_current(FP_ENG_RSE, 0x13) && !fieldtrav_is_waterfall(FP_ENG_RSE, 0x50),
+		      "the two families are disjoint");
+	}
+	rom_load();
+	if (!g_rom) {
+		printf("TEST 25 (ROM half) — PARTIAL SKIP: roms/emerald.gba not readable from the CWD\n");
+	} else {
+		FpBus rb; rb.read8 = rom_r8; rb.read16 = rom_r16; rb.read32 = rom_r32; rb.ctx = 0;
+		FtRomMap r114;
+		CHECK(fieldtrav_rom_map(&rb, EM_MAPGROUPS, 0, 29, &r114), "Route114 (0,29) resolves");
+		FpBus l1; FpMap m1;
+		live_from_rom(&rb, &r114, &l1, &m1);
+
+		// --- (b) THE PHASE-28 REPRO, on the cartridge, through the FROZEN router. This is the
+		// measurement the audit made independently: fieldpath_plan (12,13) -> (12,9) = pathLen 4,
+		// four UP steps, every one of them into the 0x13 column.
+		static FpPlan pl;
+		bool okFp = fieldpath_plan(&l1, &m1, 12, 13, 12, 9, 0, 0, &pl);
+		CHECK(okFp && pl.pathLen == 4,
+		      "the FROZEN router still plots the swim: (12,13)->(12,9) pathLen %d (ok %d)",
+		      pl.pathLen, okFp ? 1 : 0);
+		int upSteps = 0;
+		for (int i = 0; i < pl.pathLen; i++) if (pl.path[i] == FP_U) upSteps++;
+		CHECK(upSteps == 4, "…all four steps UP, straight through the fall (%d)", upSteps);
+		CHECK(fieldpath_behaviour_at(&l1, &m1, 12, 12) == 0x13 &&
+		      fieldpath_behaviour_at(&l1, &m1, 12, 10) == 0x13,
+		      "…and the column really is MB_WATERFALL on this cartridge");
+
+		// --- (c) THE SCREEN. It must catch that path at its FIRST forced tile, which is step 0.
+		CHECK(fieldtrav_path_forced(&l1, &m1, 12, 13, pl.path, pl.pathLen) == 0,
+		      "the screen refuses the swim at step 0 (got %d)",
+		      fieldtrav_path_forced(&l1, &m1, 12, 13, pl.path, pl.pathLen));
+		// …and it does NOT refuse an honest route. A plain swim along the pool below the fall.
+		static FpPlan pl2;
+		if (fieldpath_plan(&l1, &m1, 12, 13, 9, 13, 0, 0, &pl2) && pl2.pathLen > 0) {
+			CHECK(fieldtrav_path_forced(&l1, &m1, 12, 13, pl2.path, pl2.pathLen) == -1,
+			      "a plain swim ALONG the pool (12,13)->(9,13) is clean (%d steps)", pl2.pathLen);
+		}
+		// The degenerate inputs answer "nothing found", never a false refusal.
+		CHECK(fieldtrav_path_forced(0, &m1, 12, 13, pl.path, pl.pathLen) == -1, "NULL bus -> -1");
+		CHECK(fieldtrav_path_forced(&l1, &m1, 12, 13, pl.path, 0) == -1, "an empty path -> -1");
+		CHECK(fieldtrav_path_forced(&l1, &m1, 12, 13, 0, 4) == -1, "a NULL path -> -1");
+		{   // a step code that is not one of FP_R/L/D/U stops the walk rather than indexing wildly
+			int8_t bad[3] = { FP_U, 9, FP_U };
+			CHECK(fieldtrav_path_forced(&l1, &m1, 12, 9, bad, 3) == -1,
+			      "a garbage step code answers 'nothing found', not a crash");
+		}
+		{   // AN UNREADABLE TILE IS NOT A REFUSAL. -1 means "nothing was found", never "nothing is
+			// there" — a screen that treated an off-map read as forced would silently delete every
+			// route that passes near a map edge.
+			int8_t off[6] = { FP_L, FP_L, FP_L, FP_L, FP_L, FP_L };
+			CHECK(fieldpath_behaviour_at(&l1, &m1, -1, 13) < 0,
+			      "…(-1,13) really is unreadable (%d)", fieldpath_behaviour_at(&l1, &m1, -1, 13));
+			CHECK(fieldtrav_path_forced(&l1, &m1, 2, 13, off, 6) == -1,
+			      "a path that walks off the map is clean, not refused (got %d)",
+			      fieldtrav_path_forced(&l1, &m1, 2, 13, off, 6));
+		}
+		// The screen is position-relative: the SAME path from a start that never enters the column
+		// is clean, which is what stops it becoming "refuse anything near a fall".
+		CHECK(fieldtrav_path_forced(&l1, &m1, 5, 13, pl.path, pl.pathLen) == -1,
+		      "the same four UP steps taken from (5,13) touch no fall");
+		// It answers with the FIRST forced step, not merely "somewhere": a detour along the pool
+		// and then up is refused at index 2, the step that actually enters the column.
+		{
+			int8_t detour[3] = { FP_L, FP_R, FP_U };
+			CHECK(fieldpath_behaviour_at(&l1, &m1, 11, 13) == 0x15,
+			      "…(11,13) is pool water, so the first two steps are clean (beh 0x%02X)",
+			      fieldpath_behaviour_at(&l1, &m1, 11, 13));
+			CHECK(fieldtrav_path_forced(&l1, &m1, 12, 13, detour, 3) == 2,
+			      "…and the screen names step 2, the one that enters the fall (got %d)",
+			      fieldtrav_path_forced(&l1, &m1, 12, 13, detour, 3));
+		}
+		// Every tile of the column is refused, not just the bottom one — the whole 3-tile fall.
+		for (int y = 12; y >= 10; y--) {
+			int8_t up1[1] = { FP_U };
+			CHECK(fieldtrav_path_forced(&l1, &m1, 12, y + 1, up1, 1) == 0,
+			      "a single step onto (12,%d) is refused", y);
+		}
+		// …and Ever Grande's K=8 column, the fall the whole retarget exists for.
+		{
+			FtRomMap rEG2;
+			if (fieldtrav_rom_map(&rb, EM_MAPGROUPS, 0, 8, &rEG2)) {
+				FpBus lE; FpMap mE;
+				live_from_rom(&rb, &rEG2, &lE, &mE);
+				int8_t up8[8] = { FP_U, FP_U, FP_U, FP_U, FP_U, FP_U, FP_U, FP_U };
+				CHECK(fieldtrav_path_forced(&lE, &mE, 20, 68, up8, 8) == 0,
+				      "Ever Grande's 8-tile fall is refused at its first step too (got %d)",
+				      fieldtrav_path_forced(&lE, &mE, 20, 68, up8, 8));
+			}
+		}
+
+		// --- (d) THE TWIN, in `transition()`. The four currents are now the same refusal as the
+		// waterfall in BOTH modes. Emerald's currents live on Route 134's westward drift; rather
+		// than assume a map, find one on the cartridge and prove the planner will not route into
+		// it. (If this ROM has none in the scanned set the check says so instead of passing.)
+		{
+			const int scanG[] = { 0, 0, 0 }, scanN[] = { 47, 48, 49 };   // Routes 132/133/134
+			int found = 0, refusedThrough = 0;
+			for (int i = 0; i < 3 && !found; i++) {
+				FtRomMap rc;
+				if (!fieldtrav_rom_map(&rb, EM_MAPGROUPS, scanG[i], scanN[i], &rc)) continue;
+				FpBus lc; FpMap mc;
+				live_from_rom(&rb, &rc, &lc, &mc);
+				for (int y = 1; y < rc.h - 1 && !found; y++) {
+					for (int x = 1; x < rc.w - 1; x++) {
+						if (!fieldtrav_is_current(mc.engine, fieldpath_behaviour_at(&lc, &mc, x, y)))
+							continue;
+						// A tile beside it that is ordinary water, and a goal on the far side.
+						if (!fieldtrav_is_surfable(mc.engine, fieldpath_behaviour_at(&lc, &mc, x, y + 1)))
+							continue;
+						if (!fieldtrav_is_surfable(mc.engine, fieldpath_behaviour_at(&lc, &mc, x, y - 1)))
+							continue;
+						memset(g_ovSb1, 0, sizeof g_ovSb1); memset(g_ovParty, 0, sizeof g_ovParty);
+						g_ov[0].p = 0;
+						g_ov[1].addr = SB1_BASE;   g_ov[1].len = sizeof g_ovSb1;   g_ov[1].p = g_ovSb1;
+						g_ov[2].addr = PARTY_BASE; g_ov[2].len = sizeof g_ovParty; g_ov[2].p = g_ovParty;
+						g_ov[3].p = 0;
+						const uint16_t sf[4] = { MOVE_SURF, 0, 0, 0 };
+						set_flag(FT_VAR_EMERALD, fieldtrav_cfg(FT_VAR_EMERALD)->badgeSurf);
+						put_mon(0, 0x12345678u, 1u, sf, 1, 0, 0);
+						FtParty pc = party_of(1);
+						FpBus cb = { wf_r8, wf_r16, wf_r32, &lc };
+						// A one-tile "route" whose only step is ONTO the current.
+						fieldtrav_plan(&cb, &mc, FT_VAR_EMERALD, &pc, x, y + 1, x, y, true, 0, 0, &g_pr);
+						found = 1;
+						if (g_pr.outcome != FT_OUT_TIER0) refusedThrough = 1;
+						CHECK(refusedThrough,
+						      "map (%d,%d) (%d,%d) is a CURRENT and the planner refuses to route "
+						      "onto it (outcome %s)", scanG[i], scanN[i], x, y, OUTN(g_pr.outcome));
+						// …and the SCREEN refuses it too, which is the half that guards the FROZEN
+						// router — the same defect as the waterfall, on the twin behaviour.
+						{
+							int8_t up1[1] = { FP_U };
+							CHECK(fieldtrav_path_forced(&lc, &mc, x, y + 1, up1, 1) == 0,
+							      "…and a dry path that steps onto (%d,%d) is screened out", x, y);
+						}
+						break;
+					}
+				}
+			}
+			if (!found)
+				printf("TEST 25 (d) — NOT RUN: no current metatile found on Routes 132/133/134 of "
+				       "this cartridge; the transition() twin is graded by the mutation only\n");
+		}
 	}
 
 	printf("\n%d checks, %d failures\n", g_checks, g_fail);

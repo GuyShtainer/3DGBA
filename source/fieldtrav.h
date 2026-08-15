@@ -155,6 +155,41 @@ bool fieldtrav_is_surfable(FpEngine eng, int behaviour);
 // Sapphire and Emerald really do share one behaviour table. It is the SAVE side that splits.
 bool fieldtrav_is_waterfall(FpEngine eng, int behaviour);
 
+// --- PHASE 29 / lane F: the FORCED-MOVEMENT family, and the screen that keeps a dry plan out of it
+//
+// Is this behaviour one of the four CURRENTs? **0x50-0x53 in all three engines**, and read in each
+// engine's own header rather than carried across (the c2a58db rule):
+//   pokeemerald include/constants/metatile_behaviors.h:85-88  MB_EASTWARD/WESTWARD/NORTHWARD/
+//                SOUTHWARD_CURRENT — the enum's 81st..84th entries counting from MB_NORMAL at :5,
+//                i.e. 0x50..0x53
+//   pokefirered  :62-65  `#define MB_EASTWARD_CURRENT 0x50` … `MB_SOUTHWARD_CURRENT 0x53`
+//   pokeruby     :84-87  same four values (0x50 is spelled MB_UNUSED_EASTWARD_CURRENT there)
+// and each engine's `MetatileBehavior_Is{North,South,West,East}wardCurrent` is the single-value
+// compare this mirrors (pokeemerald src/metatile_behavior.c:409-439).
+//
+// WHY IT IS A PREDICATE OF ITS OWN, alongside `fieldtrav_is_waterfall`. Both name tiles that take
+// the controls away: `sForcedMovementTestFuncs[6..9]` are the four currents and `[14]` is the
+// waterfall (pokeemerald src/field_player_avatar.c:158-160), and every one of them is collision 0,
+// so nothing in a collision/elevation test can tell them from open water. SPEC-hm-waterfall §4.1
+// named the currents as the waterfall's untreated twin; this is that term.
+bool fieldtrav_is_current(FpEngine eng, int behaviour);
+
+// "Would the game take the controls away anywhere along this dry path?"
+//
+// SPEC-hm-waterfall §4.2, implemented on the CALLER side because `fieldpath.{c,h}` is FROZEN. The
+// frozen tier-0 router has no forced-movement table: a waterfall (and each current) is collision 0
+// and elevation-compatible with the water around it, so `fieldpath_plan` will happily plot a swim
+// straight UP a fall and report ARRIVED at a tile the player never reaches — measured live, phase
+// 28 (`fieldpath_plan(12,13 -> 12,9)` on Route 114 = pathLen 4, four UP steps through the column).
+// The spec's instruction was to give the router the same refusal `fieldtrav`'s own `transition()`
+// enforces; the frozen file cannot take it, so its ONE caller screens the answer instead.
+//
+// Walks `path` (FP_R/L/D/U step codes, the encoding `FpPlan.path` uses) from (px,py) and returns
+// the index of the FIRST step that enters a forced-movement tile, or -1 if the whole path is clean.
+// An unreadable behaviour is NOT a refusal: -1 means "nothing was found", never "nothing is there".
+int fieldtrav_path_forced(const FpBus* bus, const FpMap* m, int px, int py,
+                          const int8_t* path, int pathLen);
+
 // Where the game's own ride ENDS, given that (x, yFall) is a waterfall tile.
 //
 // `FLDEFF_USE_WATERFALL` is not a one-tile step. pokeemerald src/field_effect.c:1873-1893:
