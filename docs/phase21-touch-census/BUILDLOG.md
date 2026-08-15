@@ -213,8 +213,10 @@ tree is **689** (audit O6/F3 — corrected in LANE-X-EXECUTE.md by phase 29 / la
 **Both of the lane's load-bearing NEGATIVES were wrong**, and the audit measured both: Ever Grande's
 fly point is chosen by the region-map CELL you tap, not by badge count (`region_map.c:2007`), so the
 K=8 site was runnable; and the fixture save's registered item IS the Mach Bike (`registeredItem =
-259`), so "Magma Hideout is behind a Mach-Bike wall" named a wall that is not there. That is the
-sixth and seventh time this project has written off runnable work with an unmeasured negative.
+259`), so "Magma Hideout is behind a Mach-Bike wall" named a wall that is not there. Two more
+occurrences of the negative-claim failure phase 25 named; phase 27's `2aeb7e5` counts the running
+total at **eight**, and its narrower lesson is the one that keeps earning its keep — *a stale
+artefact is not evidence of a live process; an mtime says when, never who.*
 
 ## 2026-08-15 — PHASE 29 / lane F: the two defects phase 28 found, FIXED
 
@@ -267,3 +269,8 @@ landmine written at the top of the file.
 and resumed, the app freezes ~20 s into a GAME session on this machine, and the same freeze
 reproduces byte-for-byte on **phase 28's own binary**, so it is not this lane's change. Details,
 reproduction and the next session's shortest path in LANE-F-EXECUTOR.md §3.
+
+**Standing item, third recurrence:** instance a still carries `traverse = 1` in the user's own
+`settings.bin` (offset 100). This lane confirmed by the LOCK FILE and `pgrep`, not by an mtime, that
+nothing owns that instance — and then could not write there (permission). It needs a session that
+can. Its staged `gameA/gameB` fixtures are already gone.
