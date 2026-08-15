@@ -199,6 +199,20 @@ typedef struct {
 	int32_t progObjSlot;    // +0xD4  object slot a STRENGTH plan aimed at (-1 = none this session)
 	int32_t progObjX;       // +0xD8  …its live currentCoords, map-local
 	int32_t progObjY;       // +0xDC
+	// --- PHASE 29 / lane F — the two defects phase 28 found live and did not fix, each with the
+	// mirror that says whether its fix FIRED. APPENDED, so every offset above is unchanged.
+	//   * planForced / planForcedN — DEFECT X2. `walk_plan` now screens the FROZEN router's path
+	//     for forced-movement tiles (fieldtrav_path_forced) and refuses the plan if it finds one.
+	//     Without the mirror a refusal is indistinguishable from "the router found nothing", which
+	//     is the same inference gap the phase-24 diagnoses had to stop making.
+	//   * progFaceEnter — DEFECT X1. 1 = the FACE step of the running program aims at a tile a step
+	//     would ENTER (a waterfall / a current, while surfing), i.e. the branch that turns without
+	//     stepping is the one in force. Restamped every FACE frame; 0 everywhere else.
+	// LOGGING ONLY; nothing reads them back.
+	int32_t planForced;     // +0xE0  step index of the first forced-movement tile in the last dry
+	                        //   plan, -1 = the path was clean (or no plan was screened)
+	int32_t planForcedN;    // +0xE4  cumulative dry plans REFUSED by the screen (per boot)
+	int32_t progFaceEnter;  // +0xE8  1 = the current FACE aims at an enterable tile
 } FieldDbg;
 extern FieldDbg g_fieldDbg;
 

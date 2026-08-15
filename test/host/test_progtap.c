@@ -26,6 +26,7 @@
 //   TEST 4  the window edge, both signs (a fall exactly FP_WHALF away is still climbable)
 //   TEST 5  the retarget fallback
 //   TEST 6  NULL / defensive inputs
+//   TEST 7  the COST DISCIPLINE — an unneeded read can never change the verdict   phase 29 / F
 #include <stdio.h>
 #include <string.h>
 #include "progtap.h"
@@ -182,6 +183,82 @@ int main(void) {
 		CHECK(progtap_gate(&o) == PT_GATE_FALL, "whalf=0 still admits a zero-distance landing");
 		o.topY = 6;
 		CHECK(progtap_gate(&o) == PT_GATE_REFUSE, "…and refuses anything further");
+	}
+
+	// ================================================================ TEST 7
+	// PHASE 29 / lane F — the phase-28 audit's O2. `touch.c` used to restate rule (2)'s predicate
+	// at its own call site as a cost gate, so a NARROWED rule 2 would have left the boulder read
+	// suppressed on the old condition and no mutation of this file could see it. The predicate
+	// moved here; what is graded is not that the two copies match (there is only one) but the
+	// property that makes a cost gate CORRECT:
+	//
+	//     a read the gate says it does not need can never change the gate's verdict.
+	//
+	// Swept over the same whole input space TEST 1 uses, so a future narrowing of rule (2) that
+	// forgets to widen `progtap_needs_strength` fails here rather than on a user's console.
+	printf("\nTEST 7 — the cost discipline: an unneeded read can never change the verdict\n");
+	{
+		int sweptW = 0, sweptS = 0;
+		for (int bits = 0; bits < 32; bits++) {
+			for (int py = 0; py <= 80; py += 20) {
+				for (int dy = -3; dy <= 3; dy++) {
+					PtObs o; memset(&o, 0, sizeof o);
+					o.whalf = WHALF; o.py = py;
+					o.goalIsWaterfall = (bits >> 0) & 1;
+					o.upward          = (bits >> 1) & 1;
+					o.surfing         = (bits >> 2) & 1;
+					o.waterfallUsable = (bits >> 3) & 1;
+					o.strengthTap     = (bits >> 4) & 1;
+					o.topY = o.goalIsWaterfall ? py + dy * WHALF : -1;
+
+					// (a) STRENGTH. If the gate does not need the read, touch.c leaves the field 0 —
+					// and the verdict must be the same as it would be with the read made.
+					if (!progtap_needs_strength(&o)) {
+						sweptS++;
+						PtObs a = o, b = o;
+						a.strengthTap = 0; b.strengthTap = 1;
+						CHECK(progtap_gate(&a) == progtap_gate(&b),
+						      "bits %02d py %d dy %d: strengthTap is declared unneeded but changes "
+						      "the verdict (%d vs %d)", bits, py, dy,
+						      progtap_gate(&a), progtap_gate(&b));
+					}
+
+					// (b) WATERFALL. Same property for the pair of reads rule (2) consumes.
+					if (!progtap_needs_waterfall(&o)) {
+						sweptW++;
+						for (int s = 0; s < 2; s++) for (int u = 0; u < 2; u++) {
+							PtObs a = o; a.surfing = s; a.waterfallUsable = u;
+							PtObs z = o; z.surfing = 0; z.waterfallUsable = 0;
+							CHECK(progtap_gate(&a) == progtap_gate(&z),
+							      "bits %02d py %d dy %d: surf/usable are declared unneeded but "
+							      "change the verdict (s%d u%d)", bits, py, dy, s, u);
+						}
+					}
+				}
+			}
+		}
+		CHECK(sweptS > 0 && sweptW > 0,
+		      "the sweep really exercised both suppressions (%d strength, %d waterfall)",
+		      sweptS, sweptW);
+
+		// The other half of a cost gate: it must not be trivially "always read". A gate that always
+		// answers 1 is correct and useless — it is a party walk on every ordinary tap.
+		PtObs f; memset(&f, 0, sizeof f);
+		f.whalf = WHALF; f.py = 20; f.goalIsWaterfall = 1; f.topY = 18;
+		CHECK(!progtap_needs_waterfall(&f) && !progtap_needs_strength(&f),
+		      "a tap ON a fall needs NEITHER expensive read — rule (1) decides it alone");
+		PtObs d; memset(&d, 0, sizeof d);
+		d.whalf = WHALF; d.py = 20; d.upward = 0;
+		CHECK(!progtap_needs_waterfall(&d), "a DOWNWARD tap never asks whether Waterfall is usable");
+		CHECK(progtap_needs_strength(&d), "…but it is still a candidate boulder tap");
+		PtObs w; memset(&w, 0, sizeof w);
+		w.whalf = WHALF; w.py = 20; w.upward = 1; w.surfing = 1; w.waterfallUsable = 1;
+		CHECK(progtap_needs_waterfall(&w), "an upward tap does ask");
+		CHECK(!progtap_needs_strength(&w),
+		      "…and once rule (2) has fired, the boulder scan is skipped — the saving that made "
+		      "this a cost gate in the first place");
+		CHECK(progtap_needs_waterfall(0) == 0 && progtap_needs_strength(0) == 0,
+		      "a NULL observation asks for nothing");
 	}
 
 	printf("\n%d checks, %d failures\n", g_checks, g_fails);

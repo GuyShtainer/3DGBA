@@ -42,6 +42,28 @@ int progtap_gate(const PtObs* o) {
 	return PT_GATE_SHIPPED;
 }
 
+// --- the COST DISCIPLINE, which is part of the rule and therefore lives with it ---------------
+// PHASE 29 / lane F (phase-28 audit O2). `touch.c` used to restate rule (2)'s predicate at its own
+// call site to decide whether the expensive `fieldtrav_strength_tap` read was needed. It changed
+// nothing — but it meant a NARROWED rule 2 (which audit O3 asked the next session to consider)
+// would leave touch.c suppressing the boulder read on the old condition, and no mutation of this
+// file could see it. So the "which reads does the gate actually need" question moved here, next to
+// the branches that answer it, and `test_progtap` grades the only property that matters: a read the
+// gate says it does not need must not be able to change the gate's verdict.
+int progtap_needs_waterfall(const PtObs* o) {
+	if (!o) return 0;
+	// Rule (1) short-circuits before rule (2) ever runs, and rule (2) tests `upward` first.
+	return (!o->goalIsWaterfall && o->upward) ? 1 : 0;
+}
+
+int progtap_needs_strength(const PtObs* o) {
+	if (!o) return 0;
+	// Rule (3) is reached only when (1) did not fire and (2) declined — the same expression rule (2)
+	// is written in, one line above it in this file.
+	if (o->goalIsWaterfall) return 0;
+	return (o->upward && o->surfing && o->waterfallUsable) ? 0 : 1;
+}
+
 int progtap_retargeted_goal(int wfRetarget, int goalX, int goalY, int* gx, int* gy) {
 	if (!wfRetarget || !gx || !gy) return 0;
 	*gx = goalX; *gy = goalY;

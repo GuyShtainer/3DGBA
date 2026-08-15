@@ -309,7 +309,10 @@ static void walk_reset(void) {
 // `poll --changed`, `see rec --with-state g_fieldDbg`). planSeq increments once per planning
 // ATTEMPT so a poll can latch on it. Deliberately non-static: the harness resolves it by name out
 // of 3DGBA.elf.
-FieldDbg g_fieldDbg = { 0 };
+// PHASE 29 / lane F: `planForced` is an INDEX, so its "nothing found" value is -1, not 0. Stated
+// at the definition (and re-stated at the all_reset memset) because a zeroed mirror that means
+// "refused at step 0" would be a false positive on the very first read of a fresh boot.
+FieldDbg g_fieldDbg = { .planForced = -1 };
 static void fdbg_plan(int px, int py, int mapG, int mapN, const FpPlan* pl) {
 	g_fieldDbg.px = px; g_fieldDbg.py = py; g_fieldDbg.mapGroup = mapG; g_fieldDbg.mapNum = mapN;
 	g_fieldDbg.goalX = pl->goalX; g_fieldDbg.goalY = pl->goalY;
@@ -475,6 +478,26 @@ static bool walk_plan(GbaCore* core, const GameProfile* p, int px, int py, int g
 	fdbg_plan(px, py, mapG, mapN, &pl);
 	fplog_push(core, 0);
 	if (!ok) return false;
+	// PHASE 29 / lane F — DEFECT X2, and SPEC-hm-waterfall §4.2's refusal applied where the FROZEN
+	// router's answer is consumed. `fieldpath` has no forced-movement table: a waterfall and each
+	// of the four currents is collision 0 and elevation-compatible with the water around it, so the
+	// tier-0 BFS plots a straight swim UP a fall and reports ARRIVED at a tile the player never
+	// reaches. Measured live (phase 28, Route 114): a fall tap with Waterfall unusable produced
+	// `plan pathLen=4 end=ARRIVED` with the player never leaving (12,13).
+	//
+	// This is the ONE place to fix it. Every leg of every route in this app is planned through this
+	// function — a tap, a re-plan, an excursion leg, a traversal program's hand-off — and the
+	// screen therefore covers the SHIPPED DEFAULT (`smartTraverse = 0`) as well as the tap gate's
+	// `gate == 2` fallback, which is exactly what §4.2 says is otherwise unreachable. The gate does
+	// NOT restate the rule: one implementation, one copy (the phase-28 audit's O2 lesson).
+	{
+		int forced = fieldtrav_path_forced(&bus, &m, px, py, pl.path, pl.pathLen);
+		g_fieldDbg.planForced = forced;
+		if (forced >= 0) {
+			g_fieldDbg.planForcedN++;
+			return false;   // refuse the whole plan: a route through a flush is not a route
+		}
+	}
 	s_mapW = w; s_mapH = h; s_mapPtr = ptr; s_mapG = mapG; s_mapN = mapN;
 	s_goalX = pl.goalX; s_goalY = pl.goalY;
 	s_appX = pl.approachX; s_appY = pl.approachY;
@@ -610,6 +633,14 @@ static u16 walk_update_inner(bool touching, bool newPress, bool gvalid, int gx, 
 					// so fall back to the EFFECTIVE goal fieldtrav resolved — the top of the column
 					// — and only if it really retargeted one. Otherwise: nothing, which is what the
 					// user sees today for an unreachable tap.
+					// PHASE 29 / lane F — DEFECT X2. This branch used to hand that top to the FROZEN
+					// router, which has no forced-movement table and answered with a 4-step swim UP
+					// the column, reporting ARRIVED from a player who never moved. The refusal is
+					// NOT restated here: `walk_plan` screens every path it returns
+					// (fieldtrav_path_forced), so the swim is refused at the one place every route
+					// in the app is planned — including the shipped default, where this gate does
+					// not run at all. If a route to the top exists that does not cross the fall, it
+					// still ships, which is the behaviour SPEC-hm-waterfall §4.2 asked for.
 					int rgx, rgy;
 					if (prog_retargeted_goal(&rgx, &rgy) &&
 					    walk_plan(core, p, px, py, rgx, rgy, mapG, mapN)) {
@@ -1104,16 +1135,19 @@ static int prog_tap_gate(GbaCore* core, const GameProfile* p, int px, int py, in
 	o.topY = o.goalIsWaterfall ? fieldtrav_waterfall_top(&bus, &m, *gx, *gy) : -1;
 	o.upward = (*gy < py) ? 1 : 0;
 	o.surfing = 0; o.waterfallUsable = 0; o.strengthTap = 0;
-	if (!o.goalIsWaterfall) {
+	// PHASE 29 / lane F (phase-28 audit O2): the cost discipline is `progtap.c`'s too now. This file
+	// no longer restates rule (2)'s predicate to decide what to read — it ASKS, so a narrowed rule
+	// and its read-suppression can never drift apart, and a mutation of the covered file moves both.
+	{
 		FtVariant var = ft_variant(p);
-		if (o.upward) {
+		if (progtap_needs_waterfall(&o)) {
 			o.surfing = prog_surfing(core, p) ? 1 : 0;
 			if (o.surfing) {
 				FtParty pty = prog_party(core, p);
 				o.waterfallUsable = (fieldtrav_usable(&bus, var, &pty) & (1u << FT_HM_WATERFALL)) ? 1 : 0;
 			}
 		}
-		if (!(o.upward && o.surfing && o.waterfallUsable)) {
+		if (progtap_needs_strength(&o)) {
 			FtParty pty = prog_party(core, p);
 			o.strengthTap = (fieldtrav_strength_tap(&bus, &m, var, &pty, *gx, *gy) >= 0) ? 1 : 0;
 		}
@@ -1282,6 +1316,30 @@ static u16 prog_update(const TouchSmart* sm, bool touching, bool newPress,
 	              ? (prog_on_waterfall(core, p) ? 1 : 0) : 0;
 	o.strengthOn  = (s_seq.phase == TPH_DONE && mv.hm == FT_HM_STRENGTH)
 	              ? (prog_strength_on(core, p) ? 1 : 0) : 0;
+	// PHASE 29 / lane F — DEFECT X1's one new observation, read in TPH_FACE only, for the same
+	// reason every other conditional read here is: it costs a map walk and exactly one phase
+	// consults it. "Would a step in the direction this interact faces ENTER the tile?" — which for
+	// every obstacle the FACE phase was written against (a Cut tree, a Smash rock, a boulder, the
+	// shore) is NO, and for a waterfall under a surfing player is YES. The predicate is the
+	// forced-movement family, because those are precisely the tiles that are collision 0 and
+	// therefore enterable while nothing about them is walkable: fieldtrav_is_waterfall +
+	// fieldtrav_is_current (fieldtrav.h, one citation block per engine). `surfing` is part of it —
+	// on FOOT the same tile is refused by the elevation half of the collision test, which is the
+	// bump that makes the Surf mount prompt work at all.
+	o.faceEnterable = 0;
+	if (s_seq.phase == TPH_FACE && mv.hm != FT_HM_NONE && mv.dir >= 0 && mv.dir < 4 &&
+	    prog_surfing(core, p)) {
+		static const int fdx[4] = { 1, -1, 0, 0 }, fdy[4] = { 0, 0, 1, -1 };   // touch.c s_keyDir order
+		int w, h; uint32_t ptr;
+		if (map_read(core, p, &w, &h, &ptr)) {
+			FpBus bus = { fp_r8, fp_r16, fp_r32, core };
+			FpMap m = { fp_engine(p), p->mapHeaderPath, p->mapObjects, ptr, w, h };
+			int b = fieldpath_behaviour_at(&bus, &m, px + fdx[mv.dir], py + fdy[mv.dir]);
+			o.faceEnterable = (fieldtrav_is_waterfall(m.engine, b) ||
+			                   fieldtrav_is_current(m.engine, b)) ? 1 : 0;
+		}
+	}
+	g_fieldDbg.progFaceEnter = o.faceEnterable;
 
 	ProgAct act;
 	progseq_step(&s_seq, &s_prog, &o, &act);
@@ -2262,6 +2320,7 @@ static uint32_t s_tLastRet = 0xFFFFFFFFu, s_tLastCurs = 0xFFFFFFFFu, s_tLastBeat
 
 void touch_log_reset(void) {
 	s_tLogN = 0; s_fpLogN = 0; memset(&g_fieldDbg, 0, sizeof g_fieldDbg);
+	g_fieldDbg.planForced = -1;    // an INDEX: "nothing found" is -1, and 0 would read as step 0
 	memset(&g_touchDbg, 0, sizeof g_touchDbg);
 	s_tWasTouch = false; s_tDrag = false;
 	s_tDownSx = s_tDownSy = 0;

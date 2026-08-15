@@ -63,6 +63,22 @@ typedef struct {
 // only walks the party for `waterfallUsable`/`strengthTap` when the earlier tests leave it open.
 int progtap_gate(const PtObs* o);
 
+// --- the cost discipline, owned by the file that owns the rule (PHASE 29 / lane F, audit O2) ---
+// The caller fills `PtObs` in cost order and asks these two before making the expensive reads:
+//   progtap_needs_waterfall — fill `surfing` + `waterfallUsable`? (a party walk + a flag read)
+//   progtap_needs_strength  — fill `strengthTap`?                 (a party walk + an object scan)
+// They are not a convenience: before phase 29 the same predicate was RESTATED in touch.c, so
+// narrowing rule (2) — which the phase-26 audit's O3 asked the next session to consider — would
+// have left the call site suppressing the boulder read on the old condition, invisibly to every
+// mutation of this file. The contract they must keep, and which `test_progtap` sweeps:
+//
+//     progtap_needs_X(o) == 0  =>  progtap_gate(o) is the same for BOTH values of X's fields.
+//
+// i.e. a read the gate says it does not need can never change the gate's verdict. Fields the
+// caller was told not to fill stay 0, which is what the sweep grades against.
+int progtap_needs_waterfall(const PtObs* o);
+int progtap_needs_strength(const PtObs* o);
+
 // The goal the LAST fieldtrav_plan actually resolved, and 1 only when it really moved it. The tap
 // handler needs it for one case — a fall the conditional planner DECLINED — where the raw tile must
 // not be handed to the dry router but the top of the column safely can be.
