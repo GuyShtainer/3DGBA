@@ -1101,6 +1101,11 @@ static int prog_plan(GbaCore* core, const GameProfile* p, int px, int py, int gx
 	g_fieldDbg.progUsable  = (int32_t)s_prog.usable;
 	g_fieldDbg.progEdges   = s_prog.nEdges;
 	g_fieldDbg.progSurf    = surfing ? 1 : 0;
+	// PHASE 26 / lane W: the tap and the destination, side by side. On a waterfall tap these
+	// DIFFER, and the difference is the retarget doing its job.
+	g_fieldDbg.progRetarget = s_prog.wfRetarget;
+	g_fieldDbg.progGoalX    = s_prog.goalX;
+	g_fieldDbg.progGoalY    = s_prog.goalY;
 	if (s_prog.outcome == FT_OUT_TIER0) return -1;         // dry paths win (SPEC H1.7)
 	if (!s_prog.ok) return 0;
 

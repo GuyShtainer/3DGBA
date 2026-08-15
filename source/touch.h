@@ -165,6 +165,14 @@ typedef struct {
 	int32_t runElig;        // +0xB8  the RUNG_* eligibility mask, restamped on every live re-test
 	                        //   (0x1F = all five gates open; any clear bit names the veto)
 	int32_t runFrames;      // +0xBC  frames on which B was actually injected (cumulative)
+	// --- PHASE 26 / lane W (WATERFALL). APPENDED, so every offset above is unchanged.
+	// A waterfall tap is the one route whose GOAL is not the tile the user touched: tapping a fall
+	// means "take me up it", and the plan aims at the tile the game's own ride ends on. Without
+	// this field the retarget can only be INFERRED from the arrival position, which is exactly the
+	// kind of inference the phase-24 diagnoses had to stop making. LOGGING ONLY.
+	int32_t progRetarget;   // +0xC0  1 = this plan's goal was retargeted off a waterfall tile
+	int32_t progGoalX;      // +0xC4  …and the goal it was retargeted TO (map-local), so the tap and
+	int32_t progGoalY;      // +0xC8    the destination can be compared in one read
 } FieldDbg;
 extern FieldDbg g_fieldDbg;
 
