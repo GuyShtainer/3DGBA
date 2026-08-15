@@ -1612,3 +1612,104 @@ Hygiene: two boots, both stopped via `azctl stop` (profile CLEAN, qt-config byte
 `clean-fixtures` run with ROM originals re-hashed untouched, `settings.bin` restored to sha256
 `85dd487e…` after a one-word `traverse` edit, `recent.bin` `72c100ad…` unchanged, no Azahar left
 running, instance **b** never touched, three captures — all hashed, all distinct.
+
+## D1 — FAM-MAP's SECOND ENGINE (FireRed) + row B7 finally VISITED
+
+Session 2026-08-15 (subagent, phase-25 lane D1). Worktree `.claude/worktrees/lane-d1-ph25`
+(branch `lane-d1-frmap`, based on `main` @ `7394be4`), Azahar **instance b** only. Full lane log:
+`docs/phase21-touch-census/LANE-D-FULL.md`.
+
+Lane B2 closed owing three things. Two are paid, one is not — named below rather than glossed.
+
+1. **FireRed's region map (B2's item 1) — PAID, and the answer was a struct field, not a
+   callback.** B2's census finding stands (ONE `CB2_RegionMap` serves the bag's TOWN MAP, the wall
+   map and the FLY map), but pokefirered's region map is a **separate implementation** whose own
+   `struct RegionMap` carries the mode at **+0x4796** (`REGIONMAP_TYPE_NORMAL 0 / _WALL 1 /
+   _FLY 2`), so it is read rather than inferred. New profile columns `rmVariant` / `rmCurPtr` /
+   `rmCbAlt` (appended — `PROFILES[]` is positional); BPRE gets `sRegionMap` **0x020399D4** +
+   `sMapCursor` **0x020399E4** (both EWRAM, byte-identical in `pokefirered.sym` and
+   `pokefirered_rev1.sym`) and the rev1/rev0 `CB2_RegionMap` pair 0x080C08C8 / 0x080C08B4. The
+   geometry that does NOT transplant (cells 0..21 / 0..14, `8·cell+36`, the fly-acceptance pair,
+   an on-screen CANCEL cell) is parameterised in a new `MapGeom`; what DOES transplant is
+   FireRed's input model, which is Emerald's — independent axis reads, a 4-frame slide that polls
+   nothing ⇒ one-frame press = exactly one cell, and never write the cursor.
+   **Live:** `ctx 14 GCTX_MAP`, `mapVariant 2`, `mapFrType 0`, `mapIsFly 0`, cursor opening on the
+   player's own cell (2,3) = INDIGO PLATEAU from the game's own layout table; two taps routed at
+   **exactly** the Chebyshev cost (7 and 10 presses), mapsec ids matching `KANTO_MAPSEC_START + n`
+   both times, and FireRed's drawn CANCEL button tapped to close the map (`mapCancels` 0→1) while
+   `mapFlies` stayed 0 throughout.
+2. **Row B7, the wall map (B2's item 2) — PAID: `VER-mech` → VERIFIED.** The `MB_REGION_MAP` tile
+   B2 could not locate is in **every Emerald Pokémon Center** at map cells (11,1)/(12,1). Finding
+   it needed no ROM scan: behaviour 133 in pret's 70 `metatile_attributes.bin` files → two
+   tilesets → the layouts' `map.bin` → five maps. Visited from lane A2's `emerald-lavaridge`
+   fixture (its start tile is one step from the door) and driven: a tap on **LITTLEROOT TOWN**
+   walked the cursor 8 presses (exact) and **emitted no A on a live `mapSecType` of 2
+   CITY_CANFLY** — the driver declining an A the GAME WOULD HAVE ACCEPTED, which is the half of
+   rule M2 that only this screen can prove. Hold = B closed it.
+3. **NOT paid: the FR Pokédex GRID (B2's item 3) is untouched**, and FireRed's `TYPE_FLY` and
+   `TYPE_WALL` variants are graded in the suite but never visited (the FLY one needs a Fly user in
+   the cart's party, which three party-menu attempts failed to find). Both are written up with a
+   one-boot plan in the lane log's "still owed".
+
+Suites at close, **18** re-run from this worktree: celiolink 1259 · control 6940 · diag 376 ·
+excseq 677 · **fieldpath 1808 (UNMODIFIED)** · fieldtrav 1210 · netlink 66 · peersprite 62078 ·
+presence 61376 · **profiles 2575** (+29, TEST 20) · progseq 877 · theme 83444 · tilt 1756 ·
+**touchgeom 706227** (+334 335, TEST 19) · trace_replay 58 (4 skips) · typography 1419 ·
+uigeom 18332 · uihit 1834 = **952 312 checks, 0 failures**. Every other count is unchanged.
+`make -j8` clean (3DGBA.3dsx 4 405 172 B). Hygiene: three boots, all stopped via `azctl stop`
+(each reporting profile CLEAN / qt-config byte-identical / ROM originals re-hashed untouched), no
+Azahar left running, instance `a` and port 24689 never touched, eight captures — all hashed, all
+distinct. **Two harness landmines banked** (gdbio resolves symbols from `REPO/3DGBA.elf`, so a
+worktree build needs `EMUTEST_ELF`; and a CTM movie ends in a modal dialog that pauses the
+emulator invisibly — make the movie longer than the session).
+
+## Phase-25 lane D2 — FAM-NAV (the PokéNav menus) + row H7, and a pacing law for the whole family
+
+Session 2026-08-15 (subagent), continuing lane D1 in the SAME worktree
+(`.claude/worktrees/lane-d1-ph25`) on a new branch **`lane-d2-ph25`** off D1's tip `e94b298`.
+Azahar **instance b** only. Full narrative: `LANE-D-FULL.md` Entries 5-11.
+
+**Two class-`FULL` rows landed, both live-proven; three families SPEC'd rather than half-landed.**
+
+1. **G1 — the PokéNav menus become FAM-NAV.** The census filed the PokéNav as "one cb2, sub-apps
+   internal", which is what makes it the first family here keyed on a **heap struct**:
+   `CB2_Pokenav` 0x081C7400 says only that the PokéNav is up, and `gPokenavResources` 0x0203CF40
+   → `currentMenuIndex` (+0x04) says which of fifteen sub-apps. v1 claims the **six MENU sub-apps
+   only** (index ≤ 5, a live `substructPtrs[1]` → `struct Pokenav_Menu`, an in-range menuType and
+   cursor); everything else keeps `GCTX_FULLUI`. **TOUCH-PLAN's own prescription for this row —
+   "cursor write + A" — is wrong**, and pokeemerald says so twice: A acts on `cursorPos` while the
+   highlight and the option description are driven by `currMenuItem` plus an event-driven slide,
+   so a write leaves a screen whose highlighted row is not the row A picks.
+   The genuinely new mechanic is that **the list WRAPS** (`UpdateMenuCursorPos` :464-487), so the
+   optimal route is a ring distance, not a difference — the first family member whose cost is not
+   `|dx|`.
+2. **The sub-state mirror TOUCH-PLAN 22.7 asked for, taken.** `g_touchDbg.navIdx` publishes
+   `currentMenuIndex` on **every** PokéNav frame, including the nine feature sub-apps FAM-NAV does
+   not claim. Live-read as **12** (ribbons list) and **5** (return-from-ribbons main menu) — rows
+   G2-G5 now have an identifier to key on, at zero behavioural risk.
+3. **H7 — the Pokéblock case, for ZERO new addresses.** Lane B2 had left Emerald's `cb2List`
+   empty; `pokeblock.c` builds a plain `ListMenuInit` list and `CB2_PokeblockMenu` 0x0813591C was
+   already census-[exact] in `cb2FullUi`, so one whitelist entry turned a `promo+substate` row
+   into a driven list. Live: `ctx` 12 / `listKind` 5 / `listBase` = gTasks+40·2+8, `lTotal` 4
+   matching the four rows on screen, tap → `lRow` 0→2 with the USE/TOSS/CANCEL popup.
+4. **THE PACING LAW (the lesson worth carrying).** The first live measurement broke the driver: a
+   two-row hop cost **three** presses and neither confirm was seen by the game. Cause, from pret:
+   `Task_Pokenav` parks in case 2 until a cursor move's looped task finishes (:449-457) and the
+   option slide alone is 4 frames — **a Gen-3 UI that animates a cursor stops polling input while
+   the animation runs**, so any inter-press gap or arrival delay chosen at a desk is a guess. Fixed
+   closed-loop on `cursorPos` itself plus a bounded confirm retry that stops the moment the game
+   acts, with the re-sends booked to their own counters so `navSteps` stays the exact ring
+   distance. Re-proof: five taps, ring costs 2+2+1, `navSteps` **5 exactly**, **two wraps** (one
+   caught mid-route with the cursor on row 4 and the target on row 3).
+5. **SPEC'd, not half-landed** (Entry 10): **Easy Chat** — FAM-NAV's shape transfers, the naming
+   keyboard's fixed column table does NOT, because the phrase row's slot positions are *measured
+   text* (`GetStringWidth` accumulated over the live phrase); **decoration placement** — no cb2
+   (task-detected under `CB2_Overworld`), diagonals rejected by a whole-mask compare, and the
+   engine exposes its own idle flag, so it can be closed-loop with no deadline; **contests H3/H9**
+   — unreachable, measured, and H1 re-filed as the D7 party choose-half gap.
+
+Gate: **18 suites, 0 failures, 1 287 089 checks** (profiles 2575→2746, touchgeom 706 227→1 040 833;
+`fieldpath` FROZEN and `git diff main` on it EMPTY). `make -j8` clean → `3DGBA.3dsx` 4 408 484 B.
+Azahar stopped clean (fixtures re-hashed untouched, profile restored byte-identically); instance
+`a` never touched. Seven commits on `lane-d2-ph25`; source changes are `2eca9c5`, `196816b`,
+`dc46795`.

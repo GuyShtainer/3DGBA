@@ -3,8 +3,10 @@
 //
 //   clang -std=c11 -Wall -Wextra -O2 -I source -I test/host test/host/test_profiles.c \
 //         source/gamestate.c source/presence_read.c source/presence.c source/peersprite.c \
-//         -o /tmp/tpr && /tmp/tpr
-//   (peersprite.c joined the link when presence_read.c grew its pspr_capture call — phase 20.)
+//         source/touchgeom.c -o /tmp/tpr && /tmp/tpr
+//   (peersprite.c joined the link when presence_read.c grew its pspr_capture call — phase 20;
+//    touchgeom.c joined in phase 25 lane D2, when game_read started asking the geometry layer for
+//    the PokéNav menu's live ROW COUNT rather than keeping a second copy of pret's table here.)
 //
 // WHY THIS SUITE EXISTS AND WHY IT IS NOT A TABLE COPY (SPEC-coop P4.6.2). The spec offered two
 // shapes: host-compile the real table, or copy it into the test and pin the copy with
@@ -35,6 +37,7 @@
 
 #include "gamestate.h"
 #include "presence_read.h"
+#include "touchgeom.h"   // navgeom_rows — the same live row count game_read validates against
 
 static int g_checks = 0, g_fails = 0;
 static void check(int ok, const char* fmt, ...) {
@@ -1261,16 +1264,20 @@ static void test_family24_map(void) {
 	}
 	CHECK(fly && wall, "both map cb2s remain in BPEE's cb2FullUi list — this slice re-CLASSIFIES "
 	      "two already-detected screens, it never makes one start or stop detecting");
-	// The named degradations, pinned so a later edit has to argue with the suite.
-	const char* zero[] = { "BPRE", "BPGE", "AXVE", "AXPE" };
-	for (unsigned i = 0; i < 4; i++) {
+	EQU(em->rmVariant, (uint32_t)GS_RMAP_EM, "BPEE names its ENGINE (phase 25 lane D1): Emerald "
+	    "runs the region map FAM-MAP was derived against");
+	CHECK(em->rmCurPtr == 0 && em->rmCbAlt == 0, "…and needs neither a second cursor pointer "
+	      "(its cursor lives inside sRegionMap) nor a rev-alternate (its two cb2s are distinct)");
+	// The named degradations that REMAIN after lane D1 paid FireRed's. BPRE has moved to TEST 20.
+	const char* zero[] = { "BPGE", "AXVE", "AXPE" };
+	for (unsigned i = 0; i < 3; i++) {
 		const GameProfile* q = prof(zero[i]);
 		if (!q) { CHECK(0, "%s row missing", zero[i]); continue; }
-		CHECK(q->rmPtr == 0 && q->rmFlyCb == 0 && q->rmWallCb == 0,
-		      "%s FAM-MAP columns are 0 — FR/LG: ONE cb2 serves both map screens (fly-vs-wall is "
-		      "not decidable from the callback) and no FRLG region-map struct pointer was "
-		      "resolved; RS: the ROM/statics ban. Named degradation: FAM-DLG keeps those screens",
-		      zero[i]);
+		CHECK(q->rmPtr == 0 && q->rmFlyCb == 0 && q->rmWallCb == 0 &&
+		      q->rmVariant == (uint32_t)GS_RMAP_NONE && q->rmCurPtr == 0 && q->rmCbAlt == 0,
+		      "%s FAM-MAP columns are ALL 0 — LG: its region map is FireRed's engine but its "
+		      "addresses are its own and copying FR's is the exact BPGE bug phase 22.0 undid; "
+		      "RS: the ROM/statics ban. Named degradation: FAM-DLG keeps those screens", zero[i]);
 	}
 
 	// --- behaviour through the real game_read ---------------------------------------------
@@ -1294,18 +1301,320 @@ static void test_family24_map(void) {
 		EQU(gs.ctx, GCTX_FULLUI, "a non-map FULLUI screen still classifies as GCTX_FULLUI");
 		CHECK(!gs.mapFly, "…and mapFly is 0 outside GCTX_MAP");
 	}
-	{   // FR: the same callback that would be a map elsewhere must NOT become GCTX_MAP here
+}
+
+
+// ============================================================================================
+// TEST 20 — PHASE 25 (lane D1): FAM-MAP's SECOND ENGINE, i.e. FIRERED's region map. Lane B2
+// shipped BPRE's map columns as explicit zeros and named what it owed: "FR's region-map struct
+// pointer + a fly-vs-wall discriminator". Its diagnosis was right — ONE CB2_RegionMap serves the
+// bag's TOWN MAP, the wall map AND the fly map — but the conclusion "therefore undecidable" was
+// not: pokefirered's region map is a SEPARATE implementation whose own struct carries the mode
+// (`sRegionMap->type` at +0x4796 = REGIONMAP_TYPE_NORMAL 0 / _WALL 1 / _FLY 2).
+//
+// Graded here, and every one of them is a property a wrong edit would break:
+//   (a) the four BPRE values, and the shape rules that make them fail-safe (two EWRAM pointers
+//       because both get DEREFERENCED, two ROM callbacks because both are compare-only);
+//   (b) the callback is still in cb2FullUi, so — exactly like lane B2's Emerald half — this
+//       re-CLASSIFIES an already-detected screen and can never make one stop detecting;
+//   (c) the rev pair: rmWallCb/rmCbAlt are the rev1/rev0 `CB2_RegionMap` values and must differ,
+//       while the two EWRAM pointers must NOT need alternates (they are rev-identical);
+//   (d) behaviour through the REAL game_read, all three modes, both revisions:
+//       type FLY -> GCTX_MAP + mapFly 1 · type WALL and type NORMAL -> GCTX_MAP + mapFly 0 ·
+//       and a NULL/garbage sRegionMap -> NOT GCTX_MAP at all but the screen's cb2FullUi
+//       fallback, i.e. the failure mode is "no upgrade", never a map driver running blind.
+static void test_family25_frmap(void) {
+	printf("TEST 20: phase-25 FAM-MAP second engine (FireRed region map)\n");
+	const GameProfile* fr = prof("BPRE");
+	if (!fr) { CHECK(0, "BPRE row missing"); return; }
+	// (a) the values
+	EQU(fr->rmVariant, (uint32_t)GS_RMAP_FR, "BPRE names pokefirered's engine, not Emerald's");
+	EQU(fr->rmPtr,    0x020399D4u, "BPRE rmPtr = sRegionMap (pokefirered_rev1.sym "
+	    "`020399d4 l 00000004`, identical in pokefirered.sym)");
+	EQU(fr->rmCurPtr, 0x020399E4u, "BPRE rmCurPtr = sMapCursor (`020399e4 l 00000004`) — FireRed "
+	    "keeps the cursor in its OWN allocation, which is why one pointer was never enough");
+	EQU(fr->rmWallCb, 0x080C08C8u, "BPRE rmWallCb = CB2_RegionMap rev1 (the user's cart)");
+	EQU(fr->rmCbAlt,  0x080C08B4u, "BPRE rmCbAlt = CB2_RegionMap rev0");
+	EQU(fr->rmFlyCb,  0u, "BPRE rmFlyCb = 0 — FireRed genuinely has no separate fly callback; the "
+	    "mode is struct state, so it is read as struct state");
+	// (b)/(c) the shape rules
+	CHECK((fr->rmPtr >> 24) == 0x02u && (fr->rmCurPtr >> 24) == 0x02u,
+	      "both FR map pointers are EWRAM — they are the values that get DEREFERENCED");
+	CHECK((fr->rmWallCb >> 24) == 0x08u && (fr->rmCbAlt >> 24) == 0x08u,
+	      "both FR map callbacks are ROM (compare-only, hence fail-safe)");
+	CHECK(fr->rmWallCb != fr->rmCbAlt, "the rev0/rev1 callbacks differ — the ONE FAM-MAP anchor "
+	      "that is a ROM address is the one that moved between revisions, which is why it is the "
+	      "only one with an alternate slot");
+	int seen = 0;
+	for (int i = 0; i < GS_N_FULLUI; i++) if (fr->cb2FullUi[i] == fr->rmWallCb) seen = 1;
+	CHECK(seen, "CB2_RegionMap is STILL in BPRE's cb2FullUi list — this slice re-classifies an "
+	      "already-detected screen (lane B2's property, held on the second engine)");
+	// (d) behaviour through the real game_read
+	static const struct { uint32_t cb2; const char* rev; } revs[] = {
+		{ 0x080C08C8u, "rev1" }, { 0x080C08B4u, "rev0" }
+	};
+	for (unsigned r = 0; r < 2; r++) {
+		GbaCore c; bus_reset(&c, "BPRE");
+		const GameProfile* p = profile_for(&c);
+		GameState gs;
+		const uint32_t RM = 0x02030000u;                       // a plausible heap block
+		bus_w32(&c, p->sb1ptr, 0x02025734u);
+		bus_w32(&c, p->mainCb2, revs[r].cb2 | 1u);
+		bus_w32(&c, p->rmPtr, RM);
+		bus_w8(&c, RM + GS_FR_RM_TYPE_OFF, GS_FR_RMTYPE_FLY);
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_MAP, "%s: CB2_RegionMap + type FLY resolves GCTX_MAP", revs[r].rev);
+		CHECK(gs.mapFly, "%s: …with mapFly = 1 — the ONE mode whose A confirms a destination "
+		      "(Task_FlyMap :3955 + MAPPERM_HAS_FLY_DESTINATIONS)", revs[r].rev);
+		bus_w8(&c, RM + GS_FR_RM_TYPE_OFF, GS_FR_RMTYPE_WALL);
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_MAP, "%s: type WALL is still GCTX_MAP (the cursor is still drivable)",
+		    revs[r].rev);
+		CHECK(!gs.mapFly, "%s: …with mapFly = 0, so the driver never arms an arrival A there",
+		      revs[r].rev);
+		bus_w8(&c, RM + GS_FR_RM_TYPE_OFF, GS_FR_RMTYPE_NORMAL);
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_MAP, "%s: type NORMAL (the bag's TOWN MAP) is GCTX_MAP too", revs[r].rev);
+		CHECK(!gs.mapFly, "%s: …and also gets no arrival A", revs[r].rev);
+	}
+	{   // the fail-safe: no live struct -> NOT GCTX_MAP, fall through to today's behaviour
 		GbaCore c; bus_reset(&c, "BPRE");
 		const GameProfile* p = profile_for(&c);
 		GameState gs;
 		bus_w32(&c, p->sb1ptr, 0x02025734u);
-		bus_w32(&c, p->mainCb2, 0x080C08C8u | 1u);            // FR CB2_RegionMap (census [exact])
+		bus_w32(&c, p->mainCb2, 0x080C08C8u | 1u);
+		bus_w32(&c, p->rmPtr, 0u);                             // sRegionMap NULL (freed / not yet)
 		game_read(&c, p, &gs);
-		CHECK(gs.ctx != GCTX_MAP, "BPRE's region map does NOT reach GCTX_MAP — with no anchors the "
-		      "zero columns can never match, which is the fail-safe the family is built on");
+		CHECK(gs.ctx != GCTX_MAP, "a NULL sRegionMap does NOT reach GCTX_MAP — the map driver is "
+		      "never given a screen it cannot read");
+		EQU(gs.ctx, GCTX_FULLUI, "…it falls through to the screen's cb2FullUi row, i.e. exactly "
+		    "the FAM-DLG behaviour it had before this slice: the failure mode is 'no upgrade'");
+		bus_w32(&c, p->rmPtr, 0x08001234u);                    // a ROM value where a struct belongs
+		game_read(&c, p, &gs);
+		CHECK(gs.ctx != GCTX_MAP, "…and so does a non-EWRAM sRegionMap");
+	}
+	{   // an UNLISTED callback with a perfectly good map struct is never claimed
+		GbaCore c; bus_reset(&c, "BPRE");
+		const GameProfile* p = profile_for(&c);
+		GameState gs;
+		const uint32_t RM = 0x02030000u;
+		bus_w32(&c, p->sb1ptr, 0x02025734u);
+		bus_w32(&c, p->rmPtr, RM);
+		bus_w8(&c, RM + GS_FR_RM_TYPE_OFF, GS_FR_RMTYPE_FLY);
+		bus_w32(&c, p->mainCb2, 0x08137F60u | 1u);             // FR summary screen (a FULLUI row)
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_FULLUI, "another FULLUI screen is untouched by the FR map arm, even with "
+		    "a live map struct sitting in RAM");
+		CHECK(!gs.mapFly, "…and mapFly stays 0 outside GCTX_MAP");
+	}
+	{   // EMERALD must be completely unaffected by the second engine
+		GbaCore c; bus_reset(&c, "BPEE");
+		const GameProfile* p = profile_for(&c);
+		GameState gs;
+		bus_w32(&c, p->sb1ptr, 0x02025734u);
+		bus_w32(&c, p->mainCb2, 0x08170274u | 1u);             // MCB2_FieldUpdateRegionMap
+		game_read(&c, p, &gs);
+		EQU(gs.ctx, GCTX_MAP, "EM's wall map still resolves GCTX_MAP after the FR arm landed");
+		CHECK(!gs.mapFly, "…still with mapFly = 0, and with NO sRegionMap deref required — the "
+		      "EM path must not acquire FireRed's liveness precondition");
 	}
 }
 
+
+// ============================================================================================
+// TEST 21 — PHASE 25 (lane D2): FAM-NAV, the PokéNav menus (TOUCH-PLAN G1). The census called
+// the PokéNav "one cb2, sub-apps internal", which is exactly why the interesting assertions are
+// about a HEAP STRUCT rather than a callback:
+//   (a) the two Emerald anchors, and the shape rules that make them fail-safe (the callback is
+//       ROM and compare-only; the pointer is EWRAM because it is the one value dereferenced);
+//   (b) CB2_Pokenav is STILL in cb2FullUi — this slice re-classifies a screen that already
+//       detected, it does not make a new one detect;
+//   (c) every other game is 0, INCLUDING Ruby/Sapphire, which DO have a PokéNav — the trap this
+//       row must not fall into;
+//   (d) behaviour through the REAL game_read: each of the six MENU sub-apps resolves
+//       GCTX_POKENAV with pnBase pointing at the live substruct, while each of the nine FEATURE
+//       sub-apps deliberately does NOT — and still publishes its index, which is the sub-state
+//       capture rows G2-G5 are waiting on;
+//   (e) the four fail-safes (NULL resources, non-EWRAM resources, NULL substruct, out-of-range
+//       menuType/cursor), each of which must land on GCTX_FULLUI = today's FAM-DLG behaviour.
+static void test_family25_pokenav(void) {
+	printf("TEST 21: phase-25 FAM-NAV (the PokéNav menus)\n");
+	const GameProfile* em = prof("BPEE");
+	if (!em) { CHECK(0, "BPEE row missing"); return; }
+
+	// (a) the values
+	EQU(em->pokenavCb,  0x081C7400u, "BPEE pokenavCb = CB2_Pokenav (pokeemerald.sym "
+	    "`081c7400 l 00000016`) — the ONE run loop for all fifteen sub-apps");
+	EQU(em->pokenavPtr, 0x0203CF40u, "BPEE pokenavPtr = gPokenavResources (`0203cf40 g 00000004` "
+	    "= a POINTER, so it is dereferenced, not compared)");
+	EQU(em->pokenavCbAlt, 0u, "BPEE pokenavCbAlt = 0 — Emerald ships one US revision");
+	CHECK((em->pokenavCb >> 24) == 0x08u, "the callback is ROM (compare-only => fail-safe)");
+	CHECK((em->pokenavPtr >> 24) == 0x02u, "the resources handle is EWRAM (it gets dereferenced)");
+
+	// (b) already-detected, only re-classified
+	int seen = 0;
+	for (int i = 0; i < GS_N_FULLUI; i++) if (em->cb2FullUi[i] == em->pokenavCb) seen = 1;
+	CHECK(seen, "CB2_Pokenav is STILL in BPEE's cb2FullUi list — the PokéNav already detected, "
+	      "so this slice can only change how a tap READS there");
+
+	// (c) every other row is an explicit zero — and RS is the one that had to be resisted
+	const char* zero[] = { "BPRE", "BPGE", "AXVE", "AXPE" };
+	for (unsigned i = 0; i < 4; i++) {
+		const GameProfile* q = prof(zero[i]);
+		if (!q) { CHECK(0, "%s row missing", zero[i]); continue; }
+		EQU(q->pokenavCb, 0u, "%s pokenavCb = 0", zero[i]);
+		EQU(q->pokenavCbAlt, 0u, "%s pokenavCbAlt = 0", zero[i]);
+		EQU(q->pokenavPtr, 0u, "%s pokenavPtr = 0", zero[i]);
+		CHECK(q->pokenavCb != em->pokenavCb && q->pokenavPtr != em->pokenavPtr,
+		      "%s did not inherit Emerald's PokéNav addresses — Ruby/Sapphire HAVE a PokéNav and "
+		      "it is pokeemerald's ANCESTOR (no Pokenav_Menu substruct at all), so a copy would "
+		      "be wrong about the address AND about the struct", zero[i]);
+	}
+
+	// --- (d) behaviour, through the real game_read -------------------------------------------
+	// One live layout reused by the cases below: resources at RES, the menu substruct at MENU.
+	const uint32_t RES = 0x02030000u, MENU = 0x02031000u;
+	#define PN_SETUP(cvar) \
+		GbaCore cvar; bus_reset(&cvar, "BPEE"); \
+		const GameProfile* pp = profile_for(&cvar); \
+		bus_w32(&cvar, pp->sb1ptr, 0x02025734u); \
+		bus_w32(&cvar, pp->mainCb2, 0x081C7400u | 1u); \
+		bus_w32(&cvar, pp->pokenavPtr, RES); \
+		bus_w32(&cvar, RES + GS_PN_SUBSTRUCT_OFF + 4u * GS_PN_SUB_MENU, MENU)
+
+	// The six MENU sub-apps: every one resolves GCTX_POKENAV, with the menuType that sub-app
+	// really installs (PokenavCallback_Init_* :99-165) and its cursor inside the live row count.
+	static const struct { uint32_t idx; int type; const char* name; } MENUS[] = {
+		{ 0, 2, "MAIN_MENU" },                    { 1, 2, "MAIN_MENU_CURSOR_ON_MAP" },
+		{ 2, 3, "CONDITION_MENU" },               { 3, 4, "CONDITION_SEARCH_MENU" },
+		{ 4, 2, "MAIN_MENU_CURSOR_ON_MATCH_CALL" }, { 5, 2, "MAIN_MENU_CURSOR_ON_RIBBONS" },
+	};
+	for (unsigned i = 0; i < sizeof MENUS / sizeof MENUS[0]; i++) {
+		PN_SETUP(c);
+		GameState gs;
+		bus_w32(&c, RES + GS_PN_MENUIDX_OFF, MENUS[i].idx);
+		bus_w32(&c, MENU + GS_PN_MENUTYPE_OFF, (uint32_t)MENUS[i].type);   // menuType u16 + cursorPos u16
+		game_read(&c, pp, &gs);
+		EQU(gs.ctx, GCTX_POKENAV, "sub-app %u (%s) is a MENU -> GCTX_POKENAV", MENUS[i].idx, MENUS[i].name);
+		EQU(gs.pnBase, MENU, "…with pnBase = the live struct Pokenav_Menu (%s)", MENUS[i].name);
+		EQU(gs.pnMenuIdx, (uint32_t)MENUS[i].idx, "…and the sub-app index published (%s)", MENUS[i].name);
+		EQU(gs.pnMenuType, (uint32_t)MENUS[i].type, "…and the menuType (%s)", MENUS[i].name);
+		EQU(gs.pnCursor, 0u, "…and the live cursorPos (%s)", MENUS[i].name);
+	}
+
+	// Every cursor row a real menu can hold is accepted; the first row PAST the live count is not.
+	for (int t = 0; t <= GS_PN_MENUTYPE_MAX; t++) {
+		int rows = navgeom_rows(t);
+		for (int cur = 0; cur <= rows; cur++) {
+			PN_SETUP(c);
+			GameState gs;
+			bus_w32(&c, RES + GS_PN_MENUIDX_OFF, 0u);
+			bus_w32(&c, MENU + GS_PN_MENUTYPE_OFF, (uint32_t)t | ((uint32_t)cur << 16));
+			game_read(&c, pp, &gs);
+			if (cur < rows) {
+				EQU(gs.ctx, GCTX_POKENAV, "menuType %d cursor %d (of %d rows) is drivable", t, cur, rows);
+				EQU(gs.pnCursor, (uint32_t)cur, "…and the cursor is published verbatim");
+			} else {
+				CHECK(gs.ctx != GCTX_POKENAV, "menuType %d cursor %d is PAST the last row (%d) — "
+				      "not claimed", t, cur, rows);
+				EQU(gs.ctx, GCTX_FULLUI, "…and it falls through to today's FAM-DLG behaviour");
+			}
+		}
+	}
+
+	// The nine FEATURE sub-apps: NOT claimed — and still published. That second half is the point:
+	// it is the substate capture the census staged for rows G2-G5 and never took.
+	for (uint32_t idx = GS_PN_MENU_IDX_MAX + 1; idx <= 14; idx++) {
+		PN_SETUP(c);
+		GameState gs;
+		bus_w32(&c, RES + GS_PN_MENUIDX_OFF, idx);
+		bus_w32(&c, MENU + GS_PN_MENUTYPE_OFF, 2u);
+		game_read(&c, pp, &gs);
+		CHECK(gs.ctx != GCTX_POKENAV, "feature sub-app %u is NOT claimed by FAM-NAV v1", idx);
+		EQU(gs.ctx, GCTX_FULLUI, "…it keeps the FAM-DLG default (tap=A / hold=B)");
+		EQU(gs.pnMenuIdx, idx, "…but its index IS published — the G2-G5 substate channel");
+		EQU(gs.pnBase, 0u, "…and pnBase stays 0, so no driver can run on it");
+	}
+
+	// The tutorial mode is MIRRORED, never special-cased: the screen still drives, and `pnMode`
+	// names the case where the game will refuse every option but MATCH CALL (:568, :256-283).
+	for (uint32_t mode = 0; mode <= 2; mode++) {
+		PN_SETUP(c);
+		GameState gs;
+		bus_w32(&c, RES + GS_PN_MENUIDX_OFF, 0u);
+		bus_w32(&c, RES + GS_PN_MODE_OFF, mode);
+		bus_w32(&c, MENU + GS_PN_MENUTYPE_OFF, 2u);
+		game_read(&c, pp, &gs);
+		EQU(gs.ctx, GCTX_POKENAV, "PokenavResources.mode %u still drives", mode);
+		EQU(gs.pnMode, mode, "…and the mode is published so the tutorial case is NAMED");
+	}
+
+	// --- (e) the fail-safes. Each is a state that really occurs (pre-init frames, the substruct
+	// freed on the way into a feature, a freed resources block) and each must land on FULLUI.
+	{	PN_SETUP(c); GameState gs;
+		bus_w32(&c, pp->pokenavPtr, 0u);                     // gPokenavResources NULL (freed / pre-init)
+		game_read(&c, pp, &gs);
+		CHECK(gs.ctx != GCTX_POKENAV, "a NULL gPokenavResources is never claimed");
+		EQU(gs.ctx, GCTX_FULLUI, "…it falls through to the cb2FullUi row — 'no upgrade', never blind");
+		EQU(gs.pnMenuIdx, (uint32_t)(int16_t)-1, "…and nothing is published from a NULL struct");
+	}
+	{	PN_SETUP(c); GameState gs;
+		bus_w32(&c, pp->pokenavPtr, 0x08001234u);            // a ROM value where a heap block belongs
+		game_read(&c, pp, &gs);
+		CHECK(gs.ctx != GCTX_POKENAV, "a non-EWRAM gPokenavResources is never claimed");
+		EQU(gs.ctx, GCTX_FULLUI, "…same FAM-DLG fallback");
+	}
+	{	PN_SETUP(c); GameState gs;
+		bus_w32(&c, RES + GS_PN_MENUIDX_OFF, 0u);
+		bus_w32(&c, RES + GS_PN_SUBSTRUCT_OFF + 4u * GS_PN_SUB_MENU, 0u);   // substruct freed
+		game_read(&c, pp, &gs);
+		CHECK(gs.ctx != GCTX_POKENAV, "a freed menu substruct is never claimed — this is the exact "
+		      "state Task_Pokenav leaves behind when it hands off to a feature (:465-466)");
+		EQU(gs.ctx, GCTX_FULLUI, "…FAM-DLG fallback");
+		EQU(gs.pnMenuIdx, 0u, "…the sub-app index is STILL published (the mirror does not need the "
+		    "substruct)");
+		EQU(gs.pnMenuType, (uint32_t)(int16_t)-1, "…but the menuType is honestly unknown");
+	}
+	{	PN_SETUP(c); GameState gs;
+		bus_w32(&c, RES + GS_PN_MENUIDX_OFF, 0u);
+		bus_w32(&c, MENU + GS_PN_MENUTYPE_OFF, 7u);          // a menuType the engine cannot produce
+		game_read(&c, pp, &gs);
+		CHECK(gs.ctx != GCTX_POKENAV, "an out-of-range menuType is never claimed");
+		EQU(gs.ctx, GCTX_FULLUI, "…FAM-DLG fallback");
+		EQU(gs.pnMenuType, (uint32_t)(int16_t)-1, "…and it is reported as unknown, not as 7");
+	}
+	{	PN_SETUP(c); GameState gs;
+		bus_w32(&c, RES + GS_PN_MENUIDX_OFF, 0u);
+		bus_w32(&c, MENU + GS_PN_MENUTYPE_OFF, 2u | (0xFFFFu << 16));   // cursorPos = -1
+		game_read(&c, pp, &gs);
+		CHECK(gs.ctx != GCTX_POKENAV, "a negative cursorPos is never claimed");
+		EQU(gs.ctx, GCTX_FULLUI, "…FAM-DLG fallback");
+	}
+	{	// an UNLISTED callback with a perfectly good PokéNav struct in RAM is never claimed
+		PN_SETUP(c); GameState gs;
+		bus_w32(&c, RES + GS_PN_MENUIDX_OFF, 0u);
+		bus_w32(&c, MENU + GS_PN_MENUTYPE_OFF, 2u);
+		bus_w32(&c, pp->mainCb2, 0x081BFAB4u | 1u);          // EM summary screen (another FULLUI row)
+		game_read(&c, pp, &gs);
+		EQU(gs.ctx, GCTX_FULLUI, "another FULLUI screen is untouched by the PokéNav arm, even with "
+		    "a live PokenavResources block sitting in RAM");
+		EQU(gs.pnMenuIdx, (uint32_t)(int16_t)-1, "…and the mirror stays silent off the PokéNav");
+	}
+	{	// FireRed must not acquire a PokéNav: same bytes in RAM, no anchors, no claim
+		GbaCore c; bus_reset(&c, "BPRE");
+		const GameProfile* q = profile_for(&c);
+		GameState gs;
+		bus_w32(&c, q->sb1ptr, 0x02025734u);
+		bus_w32(&c, q->mainCb2, 0x081C7400u | 1u);           // Emerald's PokéNav cb2, on FireRed
+		bus_w32(&c, 0x0203CF40u, RES);
+		bus_w32(&c, RES + GS_PN_SUBSTRUCT_OFF + 4u * GS_PN_SUB_MENU, MENU);
+		bus_w32(&c, MENU + GS_PN_MENUTYPE_OFF, 2u);
+		game_read(&c, q, &gs);
+		CHECK(gs.ctx != GCTX_POKENAV, "FireRed never resolves GCTX_POKENAV — it has no PokéNav, "
+		      "and the zero anchors are what make that true rather than an accident");
+	}
+	#undef PN_SETUP
+}
 
 // ============================================================================================
 // TEST 19 — PHASE 24 (lane B2): the DISCOVERED-LIST whitelist (GameProfile.cb2List) — the
@@ -1335,15 +1644,48 @@ static void test_family24_listcb2(void) {
 		CHECK(in, "cb2List[%d] 0x%08X is still in BPRE's cb2FullUi list — the whitelist changes "
 		      "how a tap READS, never whether the screen detects", i, fr->cb2List[i]);
 	}
-	const char* zero[] = { "BPEE", "BPGE", "AXVE", "AXPE" };
-	for (unsigned i = 0; i < 4; i++) {
+	const char* zero[] = { "BPGE", "AXVE", "AXPE" };
+	for (unsigned i = 0; i < 3; i++) {
 		const GameProfile* q = prof(zero[i]);
 		if (!q) { CHECK(0, "%s row missing", zero[i]); continue; }
 		int any = 0;
 		for (int j = 0; j < GS_N_LISTCB2; j++) if (q->cb2List[j]) any = 1;
-		CHECK(!any, "%s cb2List is all-0 (EM has neither screen and real anchors elsewhere; LG "
-		      "never harvested its own values and must NEVER inherit FR's; RS is banned)", zero[i]);
+		CHECK(!any, "%s cb2List is all-0 (LG never harvested its own values and must NEVER inherit "
+		      "FR's; RS is banned)", zero[i]);
 	}
+
+	// --- PHASE 25 (lane D2): EMERALD joins the whitelist, for the row the census had already
+	// filed and nobody had cashed — the POKéBLOCK CASE (TOUCH-PLAN H7). It is graded here rather
+	// than in its own test because the SAFETY argument is this mechanism's, not the screen's.
+	const GameProfile* em2 = prof("BPEE");
+	if (em2) {
+		EQU(em2->cb2List[0], 0x0813591Cu, "BPEE cb2List[0] = CB2_PokeblockMenu (H7)");
+		CHECK(em2->cb2List[1] == 0 && em2->cb2List[2] == 0 && em2->cb2List[3] == 0,
+		      "…and the three spare EM slots stay 0");
+		int in = 0;
+		for (int j = 0; j < GS_N_FULLUI; j++) if (em2->cb2FullUi[j] == em2->cb2List[0]) in = 1;
+		CHECK(in, "CB2_PokeblockMenu is STILL in BPEE's cb2FullUi list — the whitelist changes how "
+		      "a tap READS on that screen, never whether it detects");
+		CHECK(em2->lmDummyTask != 0, "…and Emerald carries the ListMenuDummyTask scan anchor, which "
+		      "is the ONLY thing this instantiation needs (zero new addresses — the point of it)");
+		// behaviour: the same three cases the FR half is graded on, on the EM row
+		GbaCore ce; bus_reset(&ce, "BPEE");
+		const GameProfile* pe = profile_for(&ce);
+		GameState ge;
+		bus_w32(&ce, pe->sb1ptr, 0x02025734u);
+		bus_w32(&ce, pe->mainCb2, 0x0813591Cu | 1u);        // the Pokéblock case is up
+		game_read(&ce, pe, &ge);
+		EQU(ge.ctx, GCTX_FULLUI, "EM: the case with NO live ListMenu keeps today's FAM-DLG behaviour");
+		put_task(&ce, pe, 3, pe->lmDummyTask | 1u, 1);
+		game_read(&ce, pe, &ge);
+		EQU(ge.ctx, GCTX_LIST, "EM: the case WITH a live ListMenu becomes a driven list");
+		EQU(ge.listKind, LK_FULLUI, "…as LK_FULLUI (discovered, not anchored)");
+		EQU(ge.listBase, pe->gTasksBase + 40u * 3u + 8u, "…with listBase = gTasks[3] + 8");
+		bus_w32(&ce, pe->mainCb2, 0x08170274u | 1u);        // MCB2_FieldUpdateRegionMap
+		game_read(&ce, pe, &ge);
+		EQU(ge.ctx, GCTX_MAP, "EM: another already-promoted screen is unaffected by the new entry, "
+		    "even with the same live ListMenu task in gTasks");
+	} else CHECK(0, "BPEE row missing");
 
 	// --- behaviour through the real game_read ---------------------------------------------
 	GbaCore c; bus_reset(&c, "BPRE");
@@ -1529,6 +1871,8 @@ int main(void) {
 	test_family24_map();         // phase 24 (lane B2) FAM-MAP region map / tap-to-fly
 	test_family24_listcb2();     // phase 24 (lane B2) discovered-list whitelist (FR E4/E5)
 	test_family25_inert();       // phase 25 (lane C1) INERT class: credits + FRLG quest log
+	test_family25_frmap();       // phase 25 (lane D1) FAM-MAP second engine (FireRed)
+	test_family25_pokenav();     // phase 25 (lane D2) FAM-NAV — the PokéNav menus
 	printf("\n=== %d checks, %d failures ===\n", g_checks, g_fails);
 	return g_fails ? 1 : 0;
 }

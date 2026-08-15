@@ -4,6 +4,12 @@
 #include <stdio.h>      // FILE / fprintf (the SD log dump)
 #include <sys/stat.h>   // mkdir (ensure the netlogs dir exists)
 #include "gamestate.h"
+// PHASE 25 (lane D2): the ONE fact game_read borrows from the geometry layer is the PokéNav menu's
+// live ROW COUNT (sLastCursorPositions[menuType]+1). It is deliberately not re-tabulated here:
+// test_profiles' own preamble argues that a second copy of a table is the exact bug class these
+// suites exist to catch, and touchgeom.h is pure C with no libctru, so this costs the host harness
+// one extra .c on the link line and nothing else.
+#include "touchgeom.h"
 
 #define BMON_MOVES_OFF 0x0C   // BattlePokemon.moves[] offset (4x u16)
 #define PM_TYPE_OFF    0x08   // gPartyMenu: low nibble menuType (0 field/1 battle), bits4-5 layout
@@ -143,10 +149,24 @@ static const GameProfile PROFILES[] = {
                mapSecId +0x000 u16, mapSecType +0x002 u8, cursorPosX +0x054 u16, cursorPosY
                +0x056 u16, zoomed +0x078 bool8. */
             0x0203A144u, 0x081248D4u, 0x08170274u,
-            /* phase 24 (lane B2) cb2List = 0: Emerald has no Berry Pouch / TM Case (berries live
-               in the bag, which has a REAL anchor), and every other EM list screen already has
-               one — a discovered list would be strictly worse. Explicit zeros (P3.5.2). */
-            { 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u },
+            /* phase 24 (lane B2) cb2List — the DISCOVERED-LIST whitelist. Lane B2 left this row
+               all-zero ("Emerald has no Berry Pouch / TM Case, and every other EM list screen
+               already has a real anchor"). PHASE 25 (lane D2) found the counter-example the
+               census had already filed and nobody had cashed: **the POKéBLOCK CASE**, TOUCH-PLAN
+               row H7, classed FULL/LIST and marked "promo+substate" — i.e. believed to need a new
+               anchor. It does not.
+                 0x0813591C CB2_PokeblockMenu  (pokeemerald.sym `0813591c l 0000001a`, and it IS
+                            the run loop: RunTasks/AnimateSprites/BuildOamBuffer/UpdatePaletteFade,
+                            src/pokeblock.c:488-495, SetMainCallback2'd at :614)
+               and the screen is a plain `ListMenuInit` list (:596) driven by `ListMenu_ProcessInput`
+               (:1025, :1074) whose task id lives in data[0] — so the P-D dummy-task scan finds it
+               with NO new address at all. The cb2 is ALREADY the ninth entry of this row's
+               cb2FullUi list above (census [exact]), so — exactly as on the FR half — this changes
+               how a tap READS on one screen and can never change whether a screen detects.
+               A case with no live ListMenu (the load frames) falls through to GCTX_FULLUI, i.e.
+               today's FAM-DLG behaviour: "no upgrade", never a wrong key. Three spare slots left
+               for the mailbox / move-relearner candidates the census still owes a live visit. */
+            { 0x0813591Cu, 0x00000000u, 0x00000000u, 0x00000000u },
             /* phase 25 (lane C1) cb2Inert — the CREDITS, detected and given nothing (TOUCH-PLAN
                L2). CB2_Credits 0x081754DC + CB2_StartCreditsSequence 0x08175620 (the multi-state
                starter set at hall_of_fame.c:781). VERIFIED-SYM on pokeemerald.sym, LIVE-UNREACHED
@@ -155,7 +175,25 @@ static const GameProfile PROFILES[] = {
                can only mean "no change". */
             { 0x081754DCu, 0x08175620u, 0x00000000u, 0x00000000u },
             /* phase 25 questLog = 0: Emerald has no quest log (an FRLG feature). */
-            0x00000000u },
+            0x00000000u,
+            /* PHASE 25 (lane D1) rmVariant/rmCurPtr/rmCbAlt — Emerald IS the engine FAM-MAP was
+               written against, so this row only has to NAME it: GS_RMAP_EM. Its cursor lives
+               inside the struct rmPtr already points at (cursorPosX/Y +0x054/+0x056), so no second
+               pointer; its two map screens are two distinct cb2s, so no rev-alternate slot is
+               needed for a shared one. Zero behaviour change to Emerald — pinned by test_profiles
+               TEST 18, which still drives the SAME EM fly/wall answers through the real game_read. */
+            GS_RMAP_EM, 0x00000000u, 0x00000000u,
+            /* PHASE 25 (lane D2) FAM-NAV — the PokéNav (TOUCH-PLAN G1). Both values re-read from
+               the local byte-matched pokeemerald.sym this session, never copied from a spec:
+                 081c7400 l 00000016 CB2_Pokenav        -> pokenavCb   (compare-only)
+                 0203cf40 g 00000004 gPokenavResources  -> pokenavPtr  (a POINTER — deref)
+               pokenavCbAlt = 0: Emerald ships one US revision.
+               CB2_Pokenav is ALREADY the eighth entry of this row's cb2FullUi list above (census
+               [exact]), so — exactly like storageCb and the FAM-MAP pair — this changes how a tap
+               on the PokéNav READS, never whether the screen detects at all. And it only claims
+               the six MENU sub-apps: the Hoenn map / Match Call / ribbons / condition graphs keep
+               GCTX_FULLUI, with their sub-app index mirrored for the lane that takes them. */
+            0x081C7400u, 0x00000000u, 0x0203CF40u },
   // BPRE ROM anchors: the PRIMARIES below are FR rev0 (correct for a rev0 cart); the REV1 values —
   // the user's cart — live in the phase-22.0 ALTERNATE block at the end of the row. newKeys was
   // 0x0303011E (a digit transposition, RS-REV2-VERIFICATION.md §7): gMain 0x030030F0
@@ -309,16 +347,18 @@ static const GameProfile PROFILES[] = {
                live-verified and the read is compare-only, so a wrong value could only ever
                DISABLE the field-dialog re-route, never mis-fire it. */
             0x03000F9Cu,
-            /* phase 24 (lane B2) FAM-MAP rmPtr/rmFlyCb/rmWallCb = 0, for a MEASURED reason rather
-               than an unfinished one: the census harvested ONE cb2 for BOTH FR map screens
-               (CB2_RegionMap 0x080C08C8 — "town map AND fly map, one loop, mode internal",
-               CB2-HARVEST.md), so `fly` — i.e. whether an arrival A confirms a destination or
-               CLOSES the map — is not decidable from the callback, and no pokefirered symbol map
-               was available this session to resolve FR's region-map struct pointer. Explicit
-               zeros (P3.5.2). Named degradation: the FR map keeps the shipped FAM-DLG default
-               (tap = A, hold = B, drag = one D-pad edge per 14 px), which already moves its
-               cursor. Owed: FR's region-map struct pointer + a fly-vs-wall discriminator. */
-            0x00000000u, 0x00000000u, 0x00000000u,
+            /* phase 24 (lane B2) left rmPtr/rmFlyCb/rmWallCb = 0 with an owed item: "FR's
+               region-map struct pointer + a fly-vs-wall discriminator". PHASE 25 (lane D1) pays it.
+                 rmPtr    0x020399D4  `020399d4 l 00000004 sRegionMap` (pokefirered_rev1.sym AND
+                          pokefirered.sym — EWRAM, byte-identical on both revisions). A POINTER:
+                          deref, then +0x4796 is `type` = REGIONMAP_TYPE_NORMAL/_WALL/_FLY, which
+                          is the discriminator B2 could not get from the callback.
+                 rmFlyCb  0           FireRed genuinely has no second callback — B2's census was
+                          right. The mode is struct state, so it is read as struct state.
+                 rmWallCb 0x080C08C8  `CB2_RegionMap` (rev1), the one run loop, matched here and
+                          then refined by the live `type` read. Already in cb2FullUi above.
+               The rev0 twin (0x080C08B4) rides in rmCbAlt at the end of this row. */
+            0x020399D4u, 0x00000000u, 0x080C08C8u,
             /* phase 24 (lane B2) cb2List — the DISCOVERED-LIST whitelist. Both values are census
                live-harvest [exact] (CB2-HARVEST.md FR rows E4/E5) and both are ALREADY in this
                row's cb2FullUi list above, so this cannot make a screen start or stop detecting:
@@ -342,7 +382,28 @@ static const GameProfile PROFILES[] = {
                revision-insensitive, so unlike every ROM anchor in this row it needs no alternate.
                game_read applies the game's own QL_IS_PLAYBACK_STATE test (2 or 3), never
                "non-zero": ordinary play sits at QL_STATE_RECORDING (1). */
-            0x0203ADFAu },
+            0x0203ADFAu,
+            /* PHASE 25 (lane D1) FAM-MAP for FIRERED — the three columns lane B2 shipped as
+               explicit zeros, with the discriminator it said was owed. B2's diagnosis was right
+               (ONE cb2 for all FR map screens) and its conclusion too pessimistic: FireRed's map
+               is a DIFFERENT ENGINE whose own struct names the mode.
+                 rmVariant GS_RMAP_FR   — pokefirered src/region_map.c, not pokeemerald's
+                 rmPtr     0x020399D4   `020399d4 l 00000004 sRegionMap` (POINTER; +0x4796 = type)
+                 rmCurPtr  0x020399E4   `020399e4 l 00000004 sMapCursor` (POINTER; x/y +0x00/+0x02,
+                                        selectedMapsec +0x14, selectedMapsecType +0x16)
+                 rmFlyCb   0            FireRed has no separate fly callback
+                 rmWallCb  0x080C08C8   `CB2_RegionMap` rev1 — the ONE run loop, and ALREADY in
+                                        this row's cb2FullUi list, so this changes how the screen
+                                        READS, never whether it detects (the B2 property)
+                 rmCbAlt   0x080C08B4   `CB2_RegionMap` rev0 — the one ROM value here, so it is the
+                                        one that needed an alternate
+               Both EWRAM pointers are BYTE-IDENTICAL in pokefirered.sym and pokefirered_rev1.sym
+               (checked this session), so only the callback is revision-sensitive. */
+            GS_RMAP_FR, 0x020399E4u, 0x080C08B4u,
+            /* PHASE 25 (lane D2) FAM-NAV = 0,0,0. FireRed has NO PokéNav — it is an RSE device,
+               and FRLG's nearest equivalent is the TOWN MAP key item, which lane D1 already
+               drives through FAM-MAP. Explicit zeros, not an omission. */
+            0x00000000u, 0x00000000u, 0x00000000u },
   // BPGE ROM anchors — REPLACED phase 22.0 (they were FireRed-rev0 values, wrong for EVERY
   // LeafGreen revision; battle/party/bag/menu detection was silently dead on LG). PRIMARIES are
   // now LG **rev1** — the user's cart is rev 1.1 — re-derived field-by-field from
@@ -475,7 +536,17 @@ static const GameProfile PROFILES[] = {
                EWRAM address in pokeleafgreen.sym, pokeleafgreen_rev1.sym, pokefirered.sym and
                pokefirered_rev1.sym (all four checked this session). LG's quest log replays on
                every CONTINUE exactly like FireRed's. VERIFIED-SYM, live-unverified on LG. */
-            0x0203ADFAu },
+            0x0203ADFAu,
+            /* PHASE 25 (lane D1) rmVariant = GS_RMAP_NONE, rmCurPtr/rmCbAlt = 0. LeafGreen runs
+               the SAME engine as FireRed (one binary family), and that is exactly why its
+               addresses are not copied: pokeleafgreen's own `sRegionMap`/`sMapCursor`/
+               `CB2_RegionMap` were not resolved in this lane, and inventing them from the FR row
+               is the precise failure this profile spent phase 22.0 undoing. Explicit zeros; LG
+               keeps the FAM-DLG default on its map. Owed: one LG harvest slice. */
+            GS_RMAP_NONE, 0x00000000u, 0x00000000u,
+            /* PHASE 25 (lane D2) FAM-NAV = 0,0,0 — LeafGreen has no PokéNav either (same engine
+               family as FireRed). Explicit zeros. */
+            0x00000000u, 0x00000000u, 0x00000000u },
 
   // ===================== Ruby / Sapphire (SPEC-coop §P3) =====================================
   // Every RAM value below is VERIFIED-SYM against pret's byte-matched `symbols` branch, all FOUR
@@ -680,7 +751,17 @@ static const GameProfile PROFILES[] = {
                its cb2 was never harvested and RS ROM values are not promoted from a sym map).
                questLog = 0 — the quest log is an FRLG feature, RS has none. Explicit zeros. */
             { 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u },
-            0x00000000u },
+            0x00000000u,
+            /* PHASE 25 (lane D1) rmVariant = GS_RMAP_NONE + zeros — the standing RS ROM/statics
+               ban. Ruby/Sapphire's region map is pokeemerald's ANCESTOR, not its twin, and no RS
+               address in this file is promoted from a sym map. Explicit zeros. */
+            GS_RMAP_NONE, 0x00000000u, 0x00000000u,
+            /* PHASE 25 (lane D2) FAM-NAV = 0,0,0. Ruby/Sapphire DO have a PokéNav — and that is
+               the trap. It is pokeemerald's ANCESTOR: pokeruby has no `struct Pokenav_Menu`
+               substruct model at all, so an Emerald address here would be wrong about the
+               ADDRESS and about the STRUCT. Plus the standing RS ROM/statics ban. Explicit
+               zeros; RS keeps whatever its own class lists give the screen. */
+            0x00000000u, 0x00000000u, 0x00000000u },
   // Pokemon Sapphire (US; same promotion rule — every value below was measured on SAPPHIRE
   // itself, live [exact] on pokesapphire_rev2.sym; LANE-B-RS.md §2 drift table + §3 solo smoke).
   { "AXPE", RS_PROFILE_BODY_RAM,
@@ -720,7 +801,17 @@ static const GameProfile PROFILES[] = {
                its cb2 was never harvested and RS ROM values are not promoted from a sym map).
                questLog = 0 — the quest log is an FRLG feature, RS has none. Explicit zeros. */
             { 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u },
-            0x00000000u },
+            0x00000000u,
+            /* PHASE 25 (lane D1) rmVariant = GS_RMAP_NONE + zeros — the standing RS ROM/statics
+               ban. Ruby/Sapphire's region map is pokeemerald's ANCESTOR, not its twin, and no RS
+               address in this file is promoted from a sym map. Explicit zeros. */
+            GS_RMAP_NONE, 0x00000000u, 0x00000000u,
+            /* PHASE 25 (lane D2) FAM-NAV = 0,0,0. Ruby/Sapphire DO have a PokéNav — and that is
+               the trap. It is pokeemerald's ANCESTOR: pokeruby has no `struct Pokenav_Menu`
+               substruct model at all, so an Emerald address here would be wrong about the
+               ADDRESS and about the STRUCT. Plus the standing RS ROM/statics ban. Explicit
+               zeros; RS keeps whatever its own class lists give the screen. */
+            0x00000000u, 0x00000000u, 0x00000000u },
   #undef RS_PROFILE_BODY_RAM
   #undef RS_PROFILE_BODY_TAIL
 };
@@ -798,6 +889,10 @@ bool game_read(GbaCore* c, const GameProfile* p, GameState* out) {
 	out->px = out->py = -1; out->actionCursor = out->moveCursor = -1; out->ctx = GCTX_NONE;
 	out->partyCount = out->partyLayout = out->battlersCount = -1;
 	out->mapGroup = out->mapNum = out->objX = out->objY = out->facing = -1;
+	// PHASE 25 (lane D2) FAM-NAV: -1 means "this frame is not a PokéNav frame", so a real 0
+	// (currentMenuIndex 0 == POKENAV_MAIN_MENU, menuType 0 == DEFAULT, cursorPos 0 == the top row,
+	// mode 0 == NORMAL) is never confused with "not read". pnBase stays 0 = no live menu struct.
+	out->pnMenuIdx = out->pnMenuType = out->pnCursor = out->pnMode = -1;
 	if (!c || !p) return false;
 	out->valid = true;
 
@@ -934,7 +1029,59 @@ bool game_read(GbaCore* c, const GameProfile* p, GameState* out) {
 		// map A confirms a destination, on the wall map A EXITS. A game with no anchors (0) never
 		// matches and keeps the shipped behaviour.
 		if (p->rmFlyCb && out->cb2 == p->rmFlyCb)  { out->ctx = GCTX_MAP; out->mapFly = true;  return true; }
-		if (p->rmWallCb && out->cb2 == p->rmWallCb) { out->ctx = GCTX_MAP; out->mapFly = false; return true; }
+		if (p->rmVariant != GS_RMAP_FR && p->rmWallCb && out->cb2 == p->rmWallCb) {
+			out->ctx = GCTX_MAP; out->mapFly = false; return true;
+		}
+		// PHASE 25 (lane D1): the FIRERED region map. B2's census finding stands — ONE callback
+		// serves the bag's TOWN MAP, the wall map and the FLY map — so the mode cannot come from
+		// the callback and is read from the LIVE struct instead: pokefirered `struct RegionMap`
+		// carries its own `type` (REGIONMAP_TYPE_NORMAL 0 / _WALL 1 / _FLY 2) at +0x4796, and
+		// `Task_FlyMap` (:3955) is the only mode that ever accepts an A.
+		//
+		// If the pointer is not a live EWRAM struct we deliberately do NOT claim GCTX_MAP and let
+		// the screen fall through to its cb2FullUi row — i.e. the failure mode is "no upgrade,
+		// keep today's FAM-DLG tap=A/hold=B", never a map driver running blind. Same rule the
+		// discovered-list whitelist follows a few lines below.
+		if (p->rmVariant == GS_RMAP_FR && p->rmWallCb &&
+		    (out->cb2 == p->rmWallCb || (p->rmCbAlt && out->cb2 == p->rmCbAlt))) {
+			uint32_t rmb = gbacore_read32(c, p->rmPtr);
+			if ((rmb >> 24) == 0x02) {
+				uint8_t ty = gbacore_read8(c, rmb + GS_FR_RM_TYPE_OFF);
+				out->ctx = GCTX_MAP; out->mapFly = (ty == GS_FR_RMTYPE_FLY); return true;
+			}
+		}
+		// PHASE 25 (lane D2): the POKENAV — TOUCH-PLAN G1, and the first family whose screen is
+		// identified by a HEAP STRUCT rather than a callback. CB2_Pokenav serves all fifteen
+		// sub-apps, so the callback only says "the PokéNav is up"; WHICH sub-app is
+		// gPokenavResources->currentMenuIndex, written by SetActivePokenavMenu (pokenav.c:518).
+		//
+		// The mirror is filled for EVERY PokéNav frame (that is the sub-state capture the census
+		// staged and never took, and it is what a later lane needs for rows G2-G5), but the ctx is
+		// claimed ONLY for the six MENU sub-apps with a live menu substruct and an in-range
+		// cursor. Anything else — a feature sub-app, a mid-init frame, a freed struct — falls
+		// through to the cb2FullUi loop below, where CB2_Pokenav already sits: the failure mode is
+		// "no upgrade, keep today's FAM-DLG tap=A/hold=B", never a driver running blind. Same
+		// shape as the FR region map above and the discovered-list whitelist below.
+		if (p->pokenavCb && p->pokenavPtr &&
+		    (out->cb2 == p->pokenavCb || (p->pokenavCbAlt && out->cb2 == p->pokenavCbAlt))) {
+			uint32_t res = gbacore_read32(c, p->pokenavPtr);        // gPokenavResources: deref
+			if ((res >> 24) == 0x02) {
+				uint32_t idx = gbacore_read32(c, res + GS_PN_MENUIDX_OFF);
+				out->pnMenuIdx = (idx <= 0x7FFF) ? (int16_t)idx : (int16_t)0x7FFF;
+				out->pnMode    = (int16_t)gbacore_read16(c, res + GS_PN_MODE_OFF);
+				uint32_t mh    = gbacore_read32(c, res + GS_PN_SUBSTRUCT_OFF + 4u * GS_PN_SUB_MENU);
+				if ((mh >> 24) == 0x02) {
+					int mt  = (int)gbacore_read16(c, mh + GS_PN_MENUTYPE_OFF);
+					int cur = (int16_t)gbacore_read16(c, mh + GS_PN_CURSOR_OFF);
+					out->pnMenuType = (mt <= GS_PN_MENUTYPE_MAX) ? (int16_t)mt : (int16_t)-1;
+					out->pnCursor   = (int16_t)cur;
+					int rows = navgeom_rows(mt);
+					if (idx <= GS_PN_MENU_IDX_MAX && rows > 0 && cur >= 0 && cur < rows) {
+						out->ctx = GCTX_POKENAV; out->pnBase = mh; return true;
+					}
+				}
+			}
+		}
 		if (task_active(c, p, p->dexTask)) {                        // EM dex LIST (task is unique
 			out->ctx = GCTX_LIST; out->listKind = LK_DEX;           //   to the list screen)
 			return true;
@@ -1019,7 +1166,8 @@ static const char* const GS_CTXN[] = {   // index = GameCtx; matches main.c's te
 	                                     //   14 and this table stopped at 13, so every region-map
 	                                     //   row in the gs ring and on the diag HUD printed "?".
 	                                     //   Reported, not silently fixed: see LANE-C-HARVEST.md.
-	"inert"                              // phase 25 (lane C1) INERT class (credits / QL playback)
+	"inert",                             // phase 25 (lane C1) INERT class (credits / QL playback)
+	"pknav"                              // phase 25 (lane D2) FAM-NAV — the PokéNav MENU screens
 };
 const char* gamestate_ctx_name(int ctx) {
 	return (ctx >= 0 && ctx < (int)(sizeof GS_CTXN / sizeof GS_CTXN[0])) ? GS_CTXN[ctx] : "?";

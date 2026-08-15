@@ -80,6 +80,14 @@ typedef struct {
 	bool     mapFly;          // GCTX_MAP: 1 = the FLY map, where an arrival A is a fly confirm;
 	                          //   0 = the field/wall map, where A CLOSES the screen (touchgeom.h
 	                          //   FAM-MAP rule M2), so the driver emits none there.
+	// --- phase 25 (lane D2), FAM-NAV. Appended; all-zero is inert because `pnBase` 0 makes the
+	// driver bail before it reads anything (a filler that forgets these cannot drive the screen).
+	uint32_t pnBase;          // GCTX_POKENAV: the live `struct Pokenav_Menu` (menuType +0x00,
+	                          //   cursorPos +0x02). 0 = no live menu -> the driver emits NOTHING.
+	int      pnMenuType;      // .menuType as game_read validated it (0..4) — picks the row
+	                          //   geometry AND the row count (touchgeom.h NAVGEOM)
+	int      pnMenuIdx;       // PokenavResources.currentMenuIndex, passed through for the debug
+	                          //   mirror only (game_read has already refused every value > 5)
 } TouchSmart;
 
 // --- PHASE 18 / SPEC-door T4.11: the gdb-readable route mirror (LOGGING ONLY) ------------------
@@ -276,6 +284,42 @@ typedef struct {
 	// a quest-log playback state (2 or 3) or, with qlState 0/1, the credits cb2 list. -1 = this
 	// game has no quest log (Emerald / RS) or the profile was unreadable. LOGGING ONLY.
 	int32_t  qlState;        // +0x104 raw GameProfile.questLog byte (gQuestLogState on FRLG)
+	// --- PHASE 25 / lane D1: FAM-MAP's SECOND ENGINE. APPENDED (every offset above is unchanged).
+	int32_t  mapVariant;     // +0x108 GameProfile.rmVariant as the driver resolved it: 0 none,
+	                         //        1 GS_RMAP_EM (pokeemerald), 2 GS_RMAP_FR (pokefirered).
+	                         //        -1 = rmap_read failed, which IS the diagnosis when a tap on
+	                         //        a map "does nothing" (bad pointer / struct not live yet).
+	int32_t  mapCancels;     // +0x10C arrivals that pressed A on FireRed's on-screen CANCEL button
+	int32_t  mapFrType;      // +0x110 FR only: the live sRegionMap->type (+0x4796) — 0 NORMAL /
+	                         //        1 WALL / 2 FLY. -1 on Emerald or when the read failed.
+	// --- PHASE 25 / lane D2: FAM-NAV (the PokéNav). APPENDED (every offset above is unchanged).
+	// Same split as every family channel here: the counters say what the DRIVER did, the live
+	// reads say what the GAME did. `navIdx` is filled on EVERY PokéNav frame — including the
+	// FEATURE sub-apps this family does NOT claim — which is precisely the sub-state capture
+	// TOUCH-PLAN 22.7 staged and never took, so rows G2-G5 become one gdb poll away. LOGGING ONLY.
+	int32_t  navIdx;         // +0x114 currentMenuIndex 0..14 (>=6 = a feature sub-app, ctx stays
+	                         //        FULLUI), -1 = this frame is not a PokéNav frame at all
+	int32_t  navType;        // +0x118 struct Pokenav_Menu.menuType 0..4, -1 = no live substruct
+	int32_t  navCur;         // +0x11C live .cursorPos, -1 = no live substruct
+	int32_t  navRows;        // +0x120 rows the geometry says this menuType has, -1 = unknown
+	int32_t  navMode;        // +0x124 PokenavResources.mode: 0 NORMAL, 1/2 = the Mr. Stone
+	                         //        TUTORIAL, where the game refuses every option but MATCH
+	                         //        CALL — the case is named rather than special-cased
+	int32_t  navTaps;        // +0x128 clean taps that armed an option row
+	int32_t  navSteps;       // +0x12C single-frame D-pad presses emitted (one per row crossed)
+	int32_t  navWraps;       // +0x130 of those, presses that took the SHORT WAY round the ring —
+	                         //        the number a non-wrapping navigator could never produce
+	int32_t  navArrive;      // +0x134 targets the live cursorPos actually reached
+	int32_t  navPicks;       // +0x138 arrivals that pressed A (every arrival here does)
+	int32_t  navHolds;       // +0x13C holds that became a B (back / exit)
+	int32_t  navTgt;         // +0x140 the armed target row (-1 = idle)
+	// The two counters that keep `navSteps` honest. The engine does not poll input while a cursor
+	// move's looped task runs (pokenav.c:449-457 + the 4-frame option slide), so a press or a
+	// confirm CAN be swallowed; the driver re-sends closed-loop and books the re-send here rather
+	// than inside navSteps/navPicks. navSteps therefore stays the EXACT ring distance, and a
+	// screen that started eating input shows up as a rising navRepress instead of hiding.
+	int32_t  navRepress;     // +0x144 D-pad presses re-sent because the cursor had not moved
+	int32_t  navRetry;       // +0x148 extra A pulses re-sent because the menu had not acted
 } TouchDbg;
 extern TouchDbg g_touchDbg;
 

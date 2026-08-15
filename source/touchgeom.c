@@ -248,25 +248,104 @@ int dlggeom_route(int ctx, int textDlg, int fieldLock) {
 // See touchgeom.h for the full pret derivation. Stateless like the rest of this file: touch.c owns
 // the armed target, the pacing gap and the arrival A.
 
-int mapgeom_hit(int gx, int gy, int* cx, int* cy) {
-	if (gx < MAPGEOM_X_MIN * 8 || gx >= (MAPGEOM_X_MAX + 1) * 8) return 0;
-	if (gy < MAPGEOM_Y_MIN * 8 || gy >= (MAPGEOM_Y_MAX + 1) * 8) return 0;
-	if (cx) *cx = gx >> 3;   // the exact inverse of the game's own 8*cursorPos + 4 cursor formula
-	if (cy) *cy = gy >> 3;
+// The two engines, as data. Every number is cited in touchgeom.h's table; nothing here is fitted.
+const MapGeom MAPGEOM_EM = {
+	MAPGEOM_X_MIN, MAPGEOM_X_MAX, MAPGEOM_Y_MIN, MAPGEOM_Y_MAX,   // 1..28 / 2..16
+	MAPGEOM_X_MIN * 8, MAPGEOM_Y_MIN * 8,                          // cell (1,2)'s left/top edge
+	MAPSECTYPE_CITY_CANFLY, MAPSECTYPE_BATTLE_FRONTIER,
+	-1, -1                                                         // Emerald draws no CANCEL button
+};
+const MapGeom MAPGEOM_FR = {
+	0, 21, 0, 14,          // MAP_WIDTH 22 / MAP_HEIGHT 15, and FireRed's cursor is 0-based
+	32, 32,                // cell (0,0)'s left/top edge: the sprite CENTRE is 8*0+36, so the cell
+	                       // owns [32,40) — the exact inverse of CreateMapCursor's own formula
+	2, 4,                  // MAPSECTYPE_VISITED / MAPSECTYPE_UNKNOWN (Task_FlyMap :3955)
+	MAPGEOM_FR_CANCEL_X, MAPGEOM_FR_CANCEL_Y
+};
+
+int mapgeom_hit_g(const MapGeom* g, int gx, int gy, int* cx, int* cy) {
+	if (!g) return 0;
+	int w = g->xMax - g->xMin + 1, h = g->yMax - g->yMin + 1;
+	if (gx < g->pxOrgX || gx >= g->pxOrgX + 8 * w) return 0;
+	if (gy < g->pxOrgY || gy >= g->pxOrgY + 8 * h) return 0;
+	if (cx) *cx = g->xMin + ((gx - g->pxOrgX) >> 3);   // the exact inverse of the engine's own
+	if (cy) *cy = g->yMin + ((gy - g->pxOrgY) >> 3);   // 8*cell + k cursor formula
 	return 1;
 }
 
-int mapnav_step(int curX, int curY, int tgtX, int tgtY) {
+int mapnav_step_g(const MapGeom* g, int curX, int curY, int tgtX, int tgtY) {
 	// Refuse to drive from or to a coordinate the engine cannot hold (a mid-init struct, a zoomed
 	// map, a bad pointer): emitting nothing is always safe, guessing is not.
-	if (curX < MAPGEOM_X_MIN || curX > MAPGEOM_X_MAX || curY < MAPGEOM_Y_MIN || curY > MAPGEOM_Y_MAX) return 0;
-	if (tgtX < MAPGEOM_X_MIN || tgtX > MAPGEOM_X_MAX || tgtY < MAPGEOM_Y_MIN || tgtY > MAPGEOM_Y_MAX) return 0;
+	if (!g) return 0;
+	if (curX < g->xMin || curX > g->xMax || curY < g->yMin || curY > g->yMax) return 0;
+	if (tgtX < g->xMin || tgtX > g->xMax || tgtY < g->yMin || tgtY > g->yMax) return 0;
 	int k = 0;
 	if (tgtX > curX) k |= MN_RIGHT;
 	else if (tgtX < curX) k |= MN_LEFT;
 	if (tgtY > curY) k |= MN_DOWN;
 	else if (tgtY < curY) k |= MN_UP;
 	return k;
+}
+
+int mapgeom_fly_ok(const MapGeom* g, int secType) {
+	return g && (secType == g->flyA || secType == g->flyB);
+}
+
+int mapgeom_hit(int gx, int gy, int* cx, int* cy) {
+	return mapgeom_hit_g(&MAPGEOM_EM, gx, gy, cx, cy);
+}
+
+int mapnav_step(int curX, int curY, int tgtX, int tgtY) {
+	return mapnav_step_g(&MAPGEOM_EM, curX, curY, tgtX, tgtY);
+}
+
+// ================= PHASE 25 / lane D2 — FAM-NAV: the PokéNav menus (G1) ========================
+// The derivation, with citations, is in touchgeom.h. This is a straight transcription of
+// sLastCursorPositions[]+1 and sPokenavMenuOptionLabelGfx[] — three numbers per menu type.
+static const struct { short rows, yStart, deltaY; } NAVGEOM[NAVGEOM_NTYPES] = {
+	{ 3, 42, 20 },   // POKENAV_MENU_TYPE_DEFAULT            map / condition / switch off
+	{ 4, 42, 20 },   // POKENAV_MENU_TYPE_UNLOCK_MC          + match call
+	{ 5, 42, 20 },   // POKENAV_MENU_TYPE_UNLOCK_MC_RIBBONS  + ribbons
+	{ 3, 56, 20 },   // POKENAV_MENU_TYPE_CONDITION          party / search / cancel
+	{ 6, 40, 16 },   // POKENAV_MENU_TYPE_CONDITION_SEARCH   cool..tough / cancel
+};
+
+int navgeom_rows(int menuType) {
+	if (menuType < 0 || menuType >= NAVGEOM_NTYPES) return 0;
+	return NAVGEOM[menuType].rows;
+}
+
+int navgeom_hit(int menuType, int gx, int gy, int* row) {
+	if (menuType < 0 || menuType >= NAVGEOM_NTYPES) return 0;
+	if (gx < NAVGEOM_X0 || gx >= NAVGEOM_X1) return 0;
+	int d = NAVGEOM[menuType].deltaY;
+	int top = NAVGEOM[menuType].yStart - d / 2;    // the top edge of row 0's band
+	if (gy < top) return 0;
+	int r = (gy - top) / d;
+	if (r >= NAVGEOM[menuType].rows) return 0;
+	if (row) *row = r;
+	return 1;
+}
+
+int navgeom_row_px(int menuType, int row, int* x, int* y) {
+	if (menuType < 0 || menuType >= NAVGEOM_NTYPES) return 0;
+	if (row < 0 || row >= NAVGEOM[menuType].rows) return 0;
+	// x: the centre of the tappable band, which is also inside the label graphic in both the
+	// selected and unselected positions. y: the sprite's own centre, straight off the table.
+	if (x) *x = (NAVGEOM_X0 + NAVGEOM_X1) / 2;
+	if (y) *y = NAVGEOM[menuType].yStart + NAVGEOM[menuType].deltaY * row;
+	return 1;
+}
+
+int navnav_step(int cur, int tgt, int rows) {
+	if (rows <= 0) return 0;
+	if (cur < 0 || cur >= rows || tgt < 0 || tgt >= rows) return 0;
+	if (cur == tgt) return 0;
+	// UpdateMenuCursorPos wraps in BOTH directions, so the cost of a route is a distance around a
+	// ring, not a difference. Going DOWN costs (tgt-cur) mod rows; going UP costs (cur-tgt) mod rows.
+	int down = ((tgt - cur) % rows + rows) % rows;
+	int up   = ((cur - tgt) % rows + rows) % rows;
+	return (down <= up) ? NAVNAV_DOWN : NAVNAV_UP;   // exact ties resolve DOWN, deterministically
 }
 
 // ========== PHASE 24 / lane A2 — the OWN-TILE GESTURE (D1) and WALK-vs-RUN (D2) ================

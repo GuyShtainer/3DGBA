@@ -3604,6 +3604,11 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 							// phase 24 (lane B2): which region map is up. 1 = the FLY map, where an
 							// arrival A is a fly confirm; 0 = the wall map, where A would CLOSE it.
 							sm.mapFly = gsr.mapFly;
+							// phase 25 (lane D2): FAM-NAV. pnBase is nonzero ONLY when game_read
+							// claimed GCTX_POKENAV, i.e. only when every guard passed, so it is
+							// both the driver's data and its own enable.
+							sm.pnBase = gsr.pnBase; sm.pnMenuType = gsr.pnMenuType;
+							sm.pnMenuIdx = gsr.pnMenuIdx;
 							sm.padKeys = to_gba_keys(kHeld);
 							sm.traverse = g_prefs.smartTraverse;
 							// cb2 is the touch-log fingerprint AND (phase 23) the FAM-DLG pager gate —
