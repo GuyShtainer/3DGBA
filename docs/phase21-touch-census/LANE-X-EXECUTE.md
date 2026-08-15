@@ -116,7 +116,8 @@ lands on a non-idle frame — `FieldGetPlayerInput` only reads buttons when
 constants, the gate or the plan.
 
 **Second half of the same defect, found on the way:** after YES the script runs
-`msgbox Text_MonUsedWaterfall, MSGBOX_DEFAULT` (`data/scripts/field_move_scripts.inc:192`) — the
+`msgbox Text_MonUsedWaterfall, MSGBOX_DEFAULT` (`data/scripts/field_move_scripts.inc:193` —
+corrected phase 29 / lane F, audit O5) — the
 "MILOTIC used WATERFALL." box **waits for a further A** before `dofieldeffect FLDEFF_USE_WATERFALL`
 runs (`EM-P28-W1i-used-waterfall.bottom.png`: the box up, the player still at (12,13), 500+ frames).
 A DONE phase that only waits for `currentMetatileBehavior` to stop being 0x13 would wait forever.
@@ -239,14 +240,16 @@ not this lane; every `EM-P28-*` capture hashes distinct.
 
 **19 host suites, 0 failures**, all built and run from this tree (project root as CWD):
 
-celiolink 1259 · control 6940 · diag 376 · excseq 677 · **fieldpath 1808 (FROZEN, byte-identical)** ·
+celiolink 1259 · control 6940 · diag 376 · **excseq 689** · **fieldpath 1808 (FROZEN, byte-identical)** ·
 **fieldtrav 3652** (3397 + TEST 24) · netlink 66 · peersprite 62078 · presence 61376 · profiles 2746 ·
 progseq 902 · **progtap 1405 (new)** · theme 83444 · tilt 1756 · touchgeom 1040833 · trace 58 (+4 loud
 SKIPs) · typography 1419 · uigeom 18332 · uihit 1834.
 
-> The 18 the audit counted were measured at `fb6d649`; this tree is `ba216e5` (phase 25 lane D
-> merged), which is why touchgeom reads 1040833 and profiles 2746 — the OVERNIGHT2 buildlog records
-> both jumps. The 19th is `test_progtap`.
+> The 18 the audit counted were measured at `fb6d649`; this branch sits on phase 27's `8897071`
+> (which already carries phase 25 lane D), which is why touchgeom reads 1040833, profiles 2746 and
+> excseq 689 — the OVERNIGHT2 buildlog records the first two jumps. The 19th suite is
+> `test_progtap`. *(Both corrections applied phase 29 / lane F, audit O6: the count read 677 — the
+> `ba216e5` number — and the base commit was named as `ba216e5`.)*
 
 `make -j8` clean → `3DGBA.3dsx`, no new warnings. **Dive mutation:** removing the new tier-order
 precondition costs **7** failures in `test_fieldtrav` (and inflates the check count, because the

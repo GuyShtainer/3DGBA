@@ -181,3 +181,89 @@ files. Lane W's commit `7e512bf` swept this lane's `fieldtrav.{c,h}` + `test_fie
 changes in with its own. Nothing was lost and the tree is green, but the DIVE implementation
 lives in a commit titled for Waterfall/Strength — future archaeology should start from this
 entry and SPEC-hm-dive.md, not from the commit subject.
+
+---
+
+## 2026-08-15 — PHASE 28 / lane X (recorded late; the phase had no entry — audit O8)
+
+Recorded here for the archaeology, from `LANE-X-EXECUTE.md` + `PHASE28-AUDIT.md`, because the
+build log is the one place the project keeps this and phase 28 skipped it.
+
+**Shipped:** `source/progtap.{c,h}` — the phase-26 tap gate lifted out of `touch.c` line for line
+(phase-26 audit O3), with `test/host/test_progtap.c` (1405 checks; the lane's 5 mutations bite
+388/19/44/295/2, and the auditor's 12 more all bite except one genuine semantic no-op). The DIVE
+tier-order precondition inside `fieldtrav_dive` (`usedK`-equivalent goal-leg lookup → `FT_OUT_TIER0`
+for anything the home mode already reaches), with `test_fieldtrav` TEST 24 as the real-cartridge
+repro; removing the guard costs 7 checks. Plus the F1/F2/F3/O4/O6/O7/O8 corrections and the two live
+mirrors `progLatch` / `progObjSlot,X,Y`.
+
+**The first LIVE EXECUTION in this family, and what it found.** W1 (Waterfall) ran on the user's own
+Emerald on emulator instance b. The PLANNER half is proven — a tap on Route 114's fall at (12,12)
+from (12,13) retargets to (12,9) and reports `PLANNED`/`FALLS` with the eligibility bit flipping
+across the HM teach — and the audit independently re-derived every one of those numbers from the
+cartridge bytes, host-side. The EXECUTOR half is live-DISPROVEN: `progAnswers = 0`, `progEnd =
+TIMEOUT`, 18 A presses, no prompt (defect **X1**), while one hand-driven `U` + `a` opens the game's
+own prompt from the same tile. A second defect was banked: with the HM unusable the tap hands the
+retargeted goal to the FROZEN router, which plans a 4-step swim UP the column and reports ARRIVED
+(defect **X2**). W2 (Strength) was NOT executed.
+
+**Gate:** 19 host suites, 0 failures. The lane reported `excseq 677`; the measured number at its own
+tree is **689** (audit O6/F3 — corrected in LANE-X-EXECUTE.md by phase 29 / lane F).
+
+**Both of the lane's load-bearing NEGATIVES were wrong**, and the audit measured both: Ever Grande's
+fly point is chosen by the region-map CELL you tap, not by badge count (`region_map.c:2007`), so the
+K=8 site was runnable; and the fixture save's registered item IS the Mach Bike (`registeredItem =
+259`), so "Magma Hideout is behind a Mach-Bike wall" named a wall that is not there. That is the
+sixth and seventh time this project has written off runnable work with an unmeasured negative.
+
+## 2026-08-15 — PHASE 29 / lane F: the two defects phase 28 found, FIXED
+
+**X1 — FACE turns instead of stepping.** The root cause is one clause, and it is now derived from
+the engine rather than from a symptom: `TPH_FACE`'s accept test required `s->frames >= 2` even when
+the avatar ALREADY faced the obstacle, so frame 1 always emitted a direction key — and
+`CheckMovementInputNotOnBike` (pokeemerald `src/field_player_avatar.c:588-596`) turns in place ONLY
+while the held direction differs from the direction being faced; otherwise it MOVES. Against a Cut
+tree that frame is a bump; against a waterfall (collision 0 / elevation 1, enterable while surfing)
+it is a step, and the phase-28 tap was planned at `progFacing = 2 (UP)` already. `ProgObs` gains
+`faceEnterable` (touch.c reads the faced tile's behaviour in TPH_FACE only, through
+`fieldtrav_is_waterfall` / `fieldtrav_is_current`, and only while surfing); on an enterable tile FACE
+accepts the moment the read says we face the target, so every key it emits is issued under the
+engine's own TURN_DIRECTION precondition. An UNREADABLE facing at an enterable tile now ends the
+program (`TPE_STALL`) instead of falling back to a blind fixed hold, which is the defect itself.
+The impassable path keeps `frames >= 2` verbatim — it is what four HMs were live-proven on.
+The second half of X1 needed no new code: `msgbox Text_MonUsedWaterfall, MSGBOX_DEFAULT`
+(`field_move_scripts.inc:193`) is advanced by the DONE phase's existing `TP_ADVANCE_EVERY` cadence;
+TEST 13 now grades it.
+
+**X2 — the frozen router's answer is SCREENED.** `fieldtrav_path_forced` walks a finished
+`FpPlan.path` and returns the index of the first step that enters a waterfall or a current;
+`walk_plan` refuses any plan it bites. That is SPEC-hm-waterfall §4.2's instruction applied on the
+caller side (the file is still frozen — `git diff source/fieldpath.{c,h}` is empty), at the ONE
+choke point every route in the app is planned through, so the SHIPPED DEFAULT is covered and not
+just the `gate == 2` fallback. The CURRENTS twin §4.1 named and left is fixed in the same phase:
+`fieldtrav_is_current` (0x50-0x53, read in all three engines' own headers) joins the waterfall in
+`transition()`. An unreadable behaviour is deliberately NOT a refusal.
+
+**O2** — the cost gate that `touch.c` mirrored moved into `progtap.c` as `progtap_needs_waterfall`
+/ `progtap_needs_strength`, and `test_progtap` TEST 7 grades the property that makes a cost gate
+correct rather than the fact that two copies agree: *a read the gate says it does not need can never
+change the gate's verdict.* Narrowing rule (2) without widening the gate now costs 76 checks.
+
+**Also:** TEST 24's tautology (`planned == 0 || planned > 0`) replaced with a real bookkeeping
+invariant, and its (d) case rewritten so the comment and the assertion describe the same thing —
+plus the unreachable-goal case it described, graded as a property against `fieldtrav_plan`'s own
+tier-0 verdict over the whole 25x25 window (0 disagreements). Citation drift: `:192` → `:193`,
+Ruby `:128` → `:126`, `:145` → `:147`, excseq 677 → 689, base commit `ba216e5` → `8897071`.
+
+**Banked, per audit O3:** `tools/emutest/fstate.py` — the g_fieldDbg reader and the scale-mode-aware
+tap calculator that phase 28 kept in a session scratchpad, now in the tree with the Aspect-fit
+landmine written at the top of the file.
+
+**Gate:** 19 host suites, 0 failures — progseq 902 → **924**, progtap 1405 → **5402**, fieldtrav
+3652 → **4199**; every other count unchanged. Mutation numbers in LANE-F-EXECUTOR.md §1/§2.
+`make -j8` clean. `source/fieldpath.{c,h}` byte-identical (frozen, rule 2).
+
+**NOT done: the live re-runs (W1 at K=8, W2).** Not "cannot" — measured: with a gdb client attached
+and resumed, the app freezes ~20 s into a GAME session on this machine, and the same freeze
+reproduces byte-for-byte on **phase 28's own binary**, so it is not this lane's change. Details,
+reproduction and the next session's shortest path in LANE-F-EXECUTOR.md §3.

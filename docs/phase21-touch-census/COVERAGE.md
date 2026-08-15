@@ -113,15 +113,26 @@ From the phase-18 T5 audit (`docs/phase18-crisp/SPEC-door.md:464-520`) — resid
 - **T5.3 Tall grass:** routes cross it; a wild encounter drops the route correctly, but nothing
   resumes it after the battle.
 - **T5.8 Forced-movement tiles** (ice, currents, spin, muddy slopes): walkable to the router, slide
-  the player, desync into a stall. **Partly mitigated since phase 26** (audit §6.9 asked for this
-  sync): `fieldtrav`'s SURF tier now refuses a waterfall as a transit tile (`transition()`, 5 checks
-  in `test_fieldtrav`), so the traversal layer no longer plots a swim up a fall. Still unmitigated:
-  the CURRENTS twin (0x50–0x53) inside the same tier, and — the one that bites at the shipped default
-  — the FROZEN `fieldpath` router, which still plots a swim up a fall whenever `smartTraverse` is 0,
-  because the containment lives in the tap gate and the tap gate only runs at level ≥ 1. **Phase 28 /
-  lane X measured that live** (Route 114, emulator): with Waterfall not yet usable, a tap on the fall
-  handed the retargeted goal to `fieldpath`, which planned a 4-step swim UP the column and reported
-  `end=ARRIVED` — while the player never moved (LANE-X-EXECUTE.md, defect X2).
+  the player, desync into a stall. **Waterfalls + currents are now mitigated in BOTH routers'
+  answers (phase 29 / lane F); ice, spin mats and muddy slopes are not.**
+  - phase 26: `fieldtrav`'s `transition()` refuses a WATERFALL as a transit tile in both modes, so
+    the traversal layer stopped plotting a swim up a fall (5 checks in `test_fieldtrav` TEST 22).
+  - phase 28 / lane X measured what was left, live (Route 114, emulator): with Waterfall not yet
+    usable, a tap on the fall handed the retargeted goal to the FROZEN `fieldpath`, which planned a
+    4-step swim UP the column and reported `end=ARRIVED` while the player never moved (defect **X2**,
+    LANE-X-EXECUTE.md §1.4) — the case that bites at the SHIPPED DEFAULT, where the tap gate does
+    not run at all.
+  - **phase 29 / lane F closed both halves.** (a) The CURRENTS twin (0x50–0x53) joined the waterfall
+    in the same `transition()` refusal — `fieldtrav_is_current`, read in all three engines' own
+    headers. (b) `walk_plan` (touch.c) now SCREENS every path the frozen router returns through
+    `fieldtrav_path_forced` and refuses the plan when it enters a waterfall or a current — at the one
+    choke point every route in the app is planned through, so the default is covered too.
+    `fieldpath.{c,h}` is still byte-identical to phase 18's `010a138`. Graded on the user's own
+    cartridge in `test_fieldtrav` TEST 25 (the phase-28 repro reproduced and then refused); the
+    live re-run is **still owed** (LANE-F-EXECUTOR.md §3 — the emulator's state channel wedged).
+  - Still unmitigated: ice (0x02), the secret-base spin/jump mats, and muddy slopes. None of them is
+    reachable by a surfing route, but all four are `sForcedMovementTestFuncs` entries and the same
+    screen would take them in one term each.
 - **T5.9 Connected maps:** behaviour reads outside the current map's bounds are refused
   (classification falls back to legacy) — pret has the identical limitation.
 - Bag: visible-rows-only select; no direct scroll-field write (deliberate — racy); no item-count
