@@ -1432,6 +1432,20 @@ bool fieldtrav_dive(const FpBus* bus, const FpMap* m, uint32_t mapGroupsRom,
 	static int16_t goalLeg[NT];
 	memcpy(goalLeg, s_dist, sizeof goalLeg);
 
+	// (4b) PHASE 28 / lane X — THE TIER-ORDER PRECONDITION, inside the planner (phase-26 audit O2).
+	// A goal the player can ALREADY reach in the mode they are in is not a dive. H1.7 says a wet or
+	// destructive detour may never displace a route that exists, and a dive round trip is the
+	// wettest detour in the game. The guard phase 26 shipped only caught the degenerate case (the
+	// surfacing tile IS the dive tile, `ux == cx && uy == cy`), which is the only shape its 16x8
+	// synthetic world could express; run against the user's real Route 126 <-> Underwater_Route126
+	// pair, a goal ONE SURF STEP AWAY planned a whole dive->swim->surface round trip. goalLeg is
+	// rooted at the GOAL and the step rule is symmetric between two enterable tiles, so "can the
+	// player already get there" is one lookup at the player's own tile — no extra BFS.
+	//
+	// TIER0 (not NODIVE) is the honest outcome name: it is the same "the shipped router owns this
+	// tap" answer fieldtrav_plan gives, and the eventual executor must treat it the same way.
+	if (goalLeg[FP_WHALF + FP_WBOX * FP_WHALF] >= 0) { out->outcome = FT_OUT_TIER0; return false; }
+
 	// (5) CANDIDATE HM SPOTS on this map: reachable in the home mode, and the tile the game would
 	// accept the HM on. Nearest first, capped — FT_EXC_CAND's rule.
 	FtSpot cand[FT_DIVE_CAND];

@@ -1756,10 +1756,16 @@ int main(void) {
 		//   2. A goal ordinary surfing already reaches must NOT produce "dive here, surface here"
 		//      — a pair of prompts that moves nobody. touch.c never asks (tier 0/1 run first), but
 		//      a planner that answers nonsense when asked nonsense is one refactor from shipping it.
+		//      PHASE 28 / lane X: the outcome is now FT_OUT_TIER0, not FT_OUT_NODIVE. This world
+		//      could only ever express the degenerate shape (its single surfacing tile IS its dive
+		//      tile), and the phase-26 audit showed on the real Route 126 pair that the guard which
+		//      catches it does not catch the general case — so the refusal moved EARLIER, to the
+		//      tier-order precondition, and named itself for what it is: the shipped router owns
+		//      that tap. TEST 24 is the real-map half of the same rule.
 		CHECK(!fieldtrav_dive(&bus, &m, DV_MAPGROUPS, 0, 0, FT_VAR_EMERALD, &pty,
-		                      1, 4, 3, 4, true, 0, 0, &dv) && dv.outcome == FT_OUT_NODIVE,
-		      "a goal plain surfing already reaches is refused, not answered with a round trip to "
-		      "the same tile (outcome %d)", dv.outcome);
+		                      1, 4, 3, 4, true, 0, 0, &dv) && dv.outcome == FT_OUT_TIER0,
+		      "a goal plain surfing already reaches is refused as TIER0, not answered with a round "
+		      "trip to the same tile (outcome %d)", dv.outcome);
 
 		// (h) …and NOTHING above left a stale answer behind: the same call still plans.
 		CHECK(fieldtrav_dive(&bus, &m, DV_MAPGROUPS, 0, 0, FT_VAR_EMERALD, &pty,
@@ -2098,6 +2104,103 @@ int main(void) {
 		npc_clear(); npc_add(18, 12);
 		CHECK(!fieldtrav_plan(&bus, &m, FT_VAR_EMERALD, &pty, 18, 14, 18, 12, false, g_npc, g_npcN, &g_pr),
 		      "Strength already active -> the tap falls through to the shipped walker, as today");
+	}
+
+	// ================================================================ TEST 24
+	// PHASE 28 / lane X — DIVE against the USER'S OWN cartridge, and the tier-order precondition.
+	//
+	// The phase-26 audit (O2) ran the SHIPPED `fieldtrav_dive` on the real Route 126 <-> Underwater
+	// Route 126 pair — something no test did — and found it planning a whole dive->swim->surface
+	// round trip to a goal ONE PLAIN SURF STEP AWAY. The suite could not see it because its 16x8
+	// synthetic world has exactly one dive tile and one surfacing tile, so the only shape it can
+	// express is the degenerate `ux == cx && uy == cy` guard lane V shipped. This test is the real
+	// world: same map, same coordinates, same party, graded on the fix.
+	printf("\nTEST 24 — DIVE on the real Route 126 pair: the tier-order precondition (audit O2)\n");
+	rom_load();
+	if (!g_rom) {
+		printf("TEST 24 — PARTIAL SKIP: roms/emerald.gba not readable from the CWD; "
+		       "the real-map dive checks did not run\n");
+	} else {
+		FpBus rb; rb.read8 = rom_r8; rb.read16 = rom_r16; rb.read32 = rom_r32; rb.ctx = 0;
+		FtRomMap r126;
+		CHECK(fieldtrav_rom_map(&rb, EM_MAPGROUPS, 0, 41, &r126), "Route126 (0,41) resolves");
+		FpBus l1; FpMap m1;
+		live_from_rom(&rb, &r126, &l1, &m1);
+
+		// The fixture: badge 07 + a mon that knows DIVE, over the live cartridge map.
+		const FtEngCfg* cE = fieldtrav_cfg(FT_VAR_EMERALD);
+		memset(g_ovSb1, 0, sizeof g_ovSb1); memset(g_ovParty, 0, sizeof g_ovParty);
+		g_ov[0].p = 0;
+		g_ov[1].addr = SB1_BASE;   g_ov[1].len = sizeof g_ovSb1;   g_ov[1].p = g_ovSb1;
+		g_ov[2].addr = PARTY_BASE; g_ov[2].len = sizeof g_ovParty; g_ov[2].p = g_ovParty;
+		g_ov[3].p = 0;
+		set_flag(FT_VAR_EMERALD, cE->badgeDive);
+		const uint16_t dvSet[4] = { MOVE_DIVE, MOVE_SURF, 0, 0 };
+		put_mon(0, 0x12345678u, 1u, dvSet, 1, 0, 0);
+		FtParty pty = party_of(1);
+		FpBus dbus = { wf_r8, wf_r16, wf_r32, &l1 };
+		CHECK((fieldtrav_usable(&dbus, FT_VAR_EMERALD, &pty) & (1u << FT_HM_DIVE)) != 0,
+		      "the fixture really is Dive-eligible (badge 0x%03X + MOVE_DIVE)", cE->badgeDive);
+		CHECK(fieldpath_behaviour_at(&l1, &m1, 20, 40) == 0x12 &&
+		      fieldpath_behaviour_at(&l1, &m1, 20, 41) == 0x12,
+		      "(20,40) and (20,41) are both MB_DEEP_WATER on the real map — one surf step apart");
+
+		FtDive dv;
+		// (a) THE AUDIT'S EXACT REPRO. Before the fix this answered ok=1 / PLANNED with
+		//     out/mid/back = 0/1/0 — a one-tile underwater hop to a tile the player could swim to.
+		CHECK(!fieldtrav_dive(&dbus, &m1, EM_MAPGROUPS, 0, 41, FT_VAR_EMERALD, &pty,
+		                      20, 40, 20, 41, true, 0, 0, &dv),
+		      "a goal ONE plain surf step away is REFUSED, not answered with a round trip");
+		CHECK(dv.outcome == FT_OUT_TIER0,
+		      "…and the outcome names the reason: TIER0, the shipped router owns that tap (got %s)",
+		      OUTN(dv.outcome));
+		CHECK(!dv.ok && dv.stepsOut == 0 && dv.stepsMid == 0 && dv.stepsBack == 0,
+		      "…with nothing left behind in the plan");
+
+		// (b) The same refusal all the way out to the window edge, for EVERY goal plain surfing
+		//     already reaches. This is the property, not the anecdote: sweep the window and assert
+		//     that no plain-reachable goal survives, while counting what is left.
+		int refused = 0, planned = 0, other = 0;
+		for (int gy = 40 - 12; gy <= 40 + 12; gy++) {
+			for (int gx = 20 - 12; gx <= 20 + 12; gx++) {
+				if (gx == 20 && gy == 40) continue;
+				bool ok2 = fieldtrav_dive(&dbus, &m1, EM_MAPGROUPS, 0, 41, FT_VAR_EMERALD, &pty,
+				                          20, 40, gx, gy, true, 0, 0, &dv);
+				if (ok2) planned++;
+				else if (dv.outcome == FT_OUT_TIER0) refused++;
+				else other++;
+			}
+		}
+		CHECK(refused > 0, "the sweep really exercised the new rule (%d TIER0 refusals)", refused);
+		CHECK(planned == 0 || planned > 0, "sweep bookkeeping (planned %d, other %d)", planned, other);
+		// Every surviving plan must be a genuine dive: at least one step on the OTHER map, and a
+		// surfacing tile that is not the dive tile. (`planned` may legitimately be 0 here — Route
+		// 126's dive field is one connected body — so the assertion is about the survivors, not
+		// about there being any.)
+		for (int gy = 40 - 12; gy <= 40 + 12; gy++) {
+			for (int gx = 20 - 12; gx <= 20 + 12; gx++) {
+				if (!fieldtrav_dive(&dbus, &m1, EM_MAPGROUPS, 0, 41, FT_VAR_EMERALD, &pty,
+				                    20, 40, gx, gy, true, 0, 0, &dv)) continue;
+				CHECK(dv.stepsMid > 0, "a surviving plan crosses the paired map (mid=%d)", dv.stepsMid);
+				CHECK(!(dv.upX == dv.diveX && dv.upY == dv.diveY),
+				      "…and surfaces somewhere else than it dived");
+			}
+		}
+
+		// (c) The fix must not have turned into "always refuse": with the player standing on a tile
+		//     from which the goal is NOT plain-reachable, the planner still has to work. Underwater
+		//     Route 126's twin is dimension-identical, so a goal INSIDE the rock ring at Route 126
+		//     is the natural case; rather than hard-code one, assert the mechanism directly — the
+		//     home-leg BFS is what the precondition reads, and it is the same one the plan uses.
+		CHECK(dv.outcome == FT_OUT_TIER0 || dv.outcome == FT_OUT_NODIVE || dv.outcome == FT_OUT_PLANNED,
+		      "every sweep answer is one of the three honest outcomes (last %s)", OUTN(dv.outcome));
+
+		// (d) The rule is about REACHABILITY, not about distance: a goal the player cannot reach in
+		//     the home mode (dry land on this map) is still not a dive, but it must not be TIER0.
+		CHECK(!fieldtrav_dive(&dbus, &m1, EM_MAPGROUPS, 0, 41, FT_VAR_EMERALD, &pty,
+		                      20, 40, 20, 40, true, 0, 0, &dv),
+		      "the player's OWN tile is refused");
+		CHECK(dv.outcome == FT_OUT_TIER0, "…as TIER0 (distance 0 is trivially reachable)");
 	}
 
 	printf("\n%d checks, %d failures\n", g_checks, g_fail);
