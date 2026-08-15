@@ -40,6 +40,7 @@
 //   TEST 8  the eligibility request (H1.6), and what a refusal does
 //   TEST 9  P1 SURF end to end: the phase trace the live run produced
 //   TEST 10 invariants, exhaustively: never a key after an end, never A while steering
+//   TEST 13 DEFECT X1 — an ENTERABLE faced tile is turned at, not stepped onto     phase 29 / F
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
@@ -716,6 +717,169 @@ static void test_strength(void) {
 	CHECK(t.a.end == TPE_TIMEOUT, "an activation that never lands times out");
 }
 
+// ---------------------------------------------------------------------------------------------
+// TEST 13 — DEFECT X1: an ENTERABLE faced tile must be TURNED at, never STEPPED onto
+// (phase 29 / lane F, from the phase-28 live run)
+// ---------------------------------------------------------------------------------------------
+// THE DEFECT, live: the Waterfall program planned perfectly (retarget (12,12) -> (12,9),
+// PLANNED/FALLS), then pressed A eighteen times at nothing. `progAnswers = 0`, `progEnd = TIMEOUT`,
+// while one hand-driven U + a opened the game's own prompt from the same tile in two frames. The
+// cause was two consecutive state reads: `f=47146 pos=(12,12)` (the player ON the waterfall) then
+// `f=47150 pos=(12,13)` (flushed back by the current). FACE had swum him onto the fall.
+//
+// This test does NOT re-assert our own rule. It runs the shipped sequencer against a MODEL of the
+// engine's own input path, transcribed at the lines that decide it:
+//
+//   pokeemerald src/field_player_avatar.c:340  PlayerStep -> TryInterruptObjectEventSpecialAnim
+//        (:353) returns TRUE while a held movement is unfinished -> the frame's input is DROPPED
+//   pokeemerald src/field_player_avatar.c:588-596  CheckMovementInputNotOnBike
+//        direction != GetPlayerMovementDirection() && runningState != MOVING -> TURN_DIRECTION
+//        else                                                                -> MOVING
+//   pokeemerald src/field_player_avatar.c:1027  PlayerTurnInPlace -> GetWalkInPlaceFastMovementAction
+//        -> InitMoveInPlace: SetObjectEventDirection FIRST (facing is readable immediately), then
+//           an 8-frame animation
+//
+// The assertion is the one the live run failed: **the avatar's tile never changes**. And the
+// ANTI-TEST is free — a run with `faceEnterable = 0` is exactly the pre-phase-29 executor (the
+// field did not exist), so the same model, the same map and the same program reproduce the swim.
+typedef struct {
+	int facing;      // the game's own codes: 1 D / 2 U / 3 L / 4 R
+	int anim;        // frames of held movement still running (input is dropped while > 0)
+	int x, y;        // the avatar's tile
+	int enterable;   // a step in the FACED direction would MOVE the avatar (a waterfall, surfing)
+	int steps;       // tiles actually walked — the defect's counter
+	int turns;       // turn-in-place animations started
+} Avatar;
+
+static void avatar_frame(Avatar* av, int heldDir) {
+	if (av->anim > 0) { av->anim--; return; }                 // :353 — the input never arrives
+	if (heldDir < 0) return;                                  // DIR_NONE -> NOT_MOVING (:590)
+	int want = progseq_face_of_dir(heldDir);
+	if (want != av->facing) {                                 // :592 TURN_DIRECTION
+		av->facing = want;                                    // SetObjectEventDirection, frame 1
+		av->anim = 8;                                         // WALK_IN_PLACE_FAST
+		av->turns++;
+		return;
+	}
+	// :594 MOVING — and on an enterable tile that is a STEP, not a bump.
+	if (av->enterable) {
+		static const int dx[4] = { 1, -1, 0, 0 }, dy[4] = { 0, 0, 1, -1 };
+		av->x += dx[heldDir]; av->y += dy[heldDir];
+		av->steps++;
+	}
+	av->anim = 16;
+}
+
+static void test_face_enterable(void) {
+	// Both entry facings, and both values of the new observation. dir U, because that is the only
+	// direction a waterfall edge is ever taken in.
+	for (int alreadyFacing = 0; alreadyFacing < 2; alreadyFacing++) {
+		for (int knows = 0; knows < 2; knows++) {
+			World w; w_init(&w);
+			prog_walk_then(&w.pr, 0, DIR_U, FT_HM_WATERFALL, -1);
+			w.o.surfing = 1;
+			Avatar av = { 0 };
+			av.enterable = 1;                                  // a fall tile, and we are afloat
+			av.facing = alreadyFacing ? progseq_face_of_dir(DIR_U) : progseq_face_of_dir(DIR_D);
+			av.x = w.o.px; av.y = w.o.py;
+			w.o.facing = av.facing;
+
+			int keyWhileFacing = 0;                            // key frames aimed where we ALREADY face
+			for (int i = 0; i < TP_FACE_BUDGET + 4 && w.s.on && w.s.phase <= TPH_FACE; i++) {
+				w.o.faceEnterable = knows;                     // what touch.c tells the sequencer
+				int faceBefore = w.o.facing;
+				w_step(&w);
+				if (w.a.keyDir >= 0 && faceBefore == progseq_face_of_dir(w.a.keyDir)) keyWhileFacing++;
+				avatar_frame(&av, w.a.keyDir);                 // ...and what the GAME does with it
+				w.o.facing = av.facing;                        // the next frame's read
+				w.o.px = av.x; w.o.py = av.y;
+			}
+			if (knows) {
+				CHECK(keyWhileFacing == 0,
+				      "X1 (facing=%d): no key is ever aimed at a direction the read already says we "
+				      "face — CheckMovementInputNotOnBike's MOVING branch, avoided (%d)",
+				      alreadyFacing, keyWhileFacing);
+				CHECK(w.keyFrames == av.turns,
+				      "X1 (facing=%d): every direction key FACE emitted produced a turn and nothing "
+				      "else (%d keys, %d turns)", alreadyFacing, w.keyFrames, av.turns);
+				CHECK(av.steps == 0,
+				      "X1 (facing=%d): the avatar is TURNED at the fall, never stepped onto it "
+				      "(%d steps)", alreadyFacing, av.steps);
+				CHECK(w.s.phase == TPH_A,
+				      "X1 (facing=%d): …and FACE still completes, so the A is still aimed",
+				      alreadyFacing);
+				CHECK(av.facing == progseq_face_of_dir(DIR_U),
+				      "X1 (facing=%d): facing UP when it hands over", alreadyFacing);
+				CHECK(av.turns == (alreadyFacing ? 0 : 1),
+				      "X1 (facing=%d): exactly the turns the engine needed (%d)",
+				      alreadyFacing, av.turns);
+			} else if (alreadyFacing) {
+				// THE ANTI-TEST. Pre-phase-29 there was no `faceEnterable`, so every FACE ran this
+				// path — and the live tap was planned at progFacing = 2 (UP) already.
+				CHECK(av.steps > 0,
+				      "ANTI-TEST: without the observation the same frame walks the player ONTO the "
+				      "fall — the phase-28 live failure, reproduced (%d steps)", av.steps);
+			}
+		}
+	}
+
+	// An impassable tile is untouched by any of this: the bump-in-place hold is what four HMs were
+	// live-proven on, so the `faceEnterable = 0` path must still emit the key on frame 1.
+	World c; w_init(&c); prog_walk_then(&c.pr, 0, DIR_U, FT_HM_CUT, 3);
+	c.o.facing = progseq_face_of_dir(DIR_U);
+	w_step(&c);                                    // WALK -> FACE
+	w_step(&c);
+	CHECK(c.s.phase == TPH_FACE && c.a.keyDir == DIR_U,
+	      "a CUT tree still gets the two-frame floor and its bump (phase %d, key %d)",
+	      c.s.phase, c.a.keyDir);
+	w_step(&c);
+	CHECK(c.s.phase == TPH_A, "…and still hands over on frame 2");
+
+	// The blind fallback is a FIXED hold, and a fixed hold onto an enterable tile IS the defect.
+	// With no facing to close the loop on there is no safe key, so the program says so.
+	World u; w_init(&u); prog_walk_then(&u.pr, 0, DIR_U, FT_HM_WATERFALL, -1);
+	u.o.facing = -1; u.o.surfing = 1;
+	w_step(&u);                                    // WALK -> FACE
+	u.o.faceEnterable = 1;
+	w_step(&u);
+	CHECK(u.a.end == TPE_STALL && u.a.keyDir < 0,
+	      "an UNREADABLE facing at an enterable tile ends the program rather than swimming blind "
+	      "(end %d, key %d)", u.a.end, u.a.keyDir);
+	// …while the same unreadable facing at an impassable tile keeps the old degrade.
+	World v; w_init(&v); prog_walk_then(&v.pr, 0, DIR_U, FT_HM_CUT, 3);
+	v.o.facing = -1;
+	w_run(&v, TP_FACE_FRAMES + 1);
+	CHECK(v.s.phase == TPH_A, "…and an unreadable facing at a TREE still degrades to the fixed hold");
+
+	// THE SECOND HALF OF X1: after YES the script is
+	//   msgbox Text_MonUsedWaterfall, MSGBOX_DEFAULT   (data/scripts/field_move_scripts.inc:193)
+	//   dofieldeffect FLDEFF_USE_WATERFALL             (:194)
+	// so the ride does not begin until a further A closes that box. DONE must keep pressing.
+	World d; w_init(&d); prog_walk_then(&d.pr, 0, DIR_U, FT_HM_WATERFALL, -1);
+	d.s.phase = TPH_DONE; d.s.frames = 0; d.o.surfing = 1;
+	int boxFrames = 90, aEdgesInBox = 0, lastA = 0;
+	for (int i = 0; i < boxFrames; i++) {           // the box is up; nothing has moved yet
+		w_step(&d);
+		if (d.a.pressA && !lastA) aEdgesInBox++;
+		lastA = d.a.pressA;
+	}
+	CHECK(aEdgesInBox >= boxFrames / TP_ADVANCE_EVERY,
+	      "DONE keeps advancing the 'used WATERFALL' box (%d edges in %d frames)",
+	      aEdgesInBox, boxFrames);
+	CHECK(d.s.on, "…and has not given up on a ride that has not started");
+	// …then the ride runs and ends on the game's own condition, from wherever the box left us.
+	for (int i = 0; i < 8; i++) { d.o.py -= 1; d.o.onWaterfall = 1; w_step(&d); }
+	CHECK(d.s.on && d.s.step == 0, "an 8-tile column is still ONE move while it is being climbed");
+	d.o.py -= 1; d.o.onWaterfall = 0;
+	// …allowing for the A-pulse: a phase entered with pulse frames owed drains them BEFORE it sees
+	// its next frame (progseq.c's deliberate ordering), so completion can lag by up to the pulse.
+	int endedAt = -1;
+	for (int i = 0; i < 6 && endedAt < 0; i++) { w_step(&d); if (d.a.end) endedAt = i; }
+	CHECK(d.a.end == TPE_ARRIVED, "…and the first non-waterfall tile ends it (end %d)", d.a.end);
+	CHECK(endedAt >= 0 && endedAt < 4,
+	      "…within the 3-frame A-pulse, not later (%d)", endedAt);
+}
+
 int main(void) {
 	test_abort_ladder();
 	test_walk();
@@ -728,6 +892,7 @@ int main(void) {
 	test_strength();
 	test_elig();
 	test_p1_surf_e2e();
+	test_face_enterable();
 	test_invariants();
 	printf("\n=== %d checks, %d failures ===\n", g_checks, g_fails);
 	return g_fails ? 1 : 0;

@@ -92,7 +92,13 @@ typedef struct {
 	                 //   ride is over exactly when it goes false — no frame count, no tile count.
 	int strengthOn;  // FlagGet(FLAG_SYS_USE_STRENGTH) — the ONLY proof a Strength activation
 	                 //   landed, because unlike Cut and Smash nothing on the map changes
-	                 //   (data/scripts/field_move_scripts.inc:145 `setflag FLAG_SYS_USE_STRENGTH`).
+	                 //   (data/scripts/field_move_scripts.inc:147 `setflag FLAG_SYS_USE_STRENGTH`).
+	// PHASE 29 / lane F — DEFECT X1. "The tile this interact FACES is one a step would ENTER."
+	// Read by touch.c in TPH_FACE only: the behaviour of (px,py) + the move's direction, tested
+	// with fieldtrav_is_waterfall / fieldtrav_is_current while the player is surfing. It defaults
+	// to 0 — "the tile is impassable" — which is the assumption the whole FACE phase was written
+	// on and which is true for every obstacle Cut, Rock Smash, Surf and Strength face.
+	int faceEnterable;
 } ProgObs;
 
 // --- what touch.c must DO about it ------------------------------------------------------------

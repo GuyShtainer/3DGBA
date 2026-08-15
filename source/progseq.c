@@ -93,9 +93,10 @@ void progseq_step(ProgSeq* s, const FtProgram* pr, const ProgObs* o, ProgAct* a)
 		// change mid-route, but a cheap honest re-read beats an assumption, and a FALSE here means
 		// we would have prompted something the game is about to refuse.
 		if (s->frames == 1) { a->needElig = 1; a->eligHm = mv.hm; }
-		// Hold the direction so the game turns the avatar to face the obstacle. The tile is
-		// impassable (that is the whole point), so this bumps in place — the game's own
-		// turn-to-face, not a step.
+		// Hold the direction so the game turns the avatar to face the obstacle. For a Cut tree, a
+		// Smash rock, a boulder or the shore, the tile is impassable (that is the whole point), so
+		// this bumps in place — the game's own turn-to-face, not a step. `o->faceEnterable` is the
+		// case where that assumption is FALSE; see the accept test below.
 		if (moved) {   // it was NOT impassable: the world moved under the plan -> re-plan
 			s->lpx = o->px; s->lpy = o->py;
 			a->replan = 1; return;
@@ -110,12 +111,52 @@ void progseq_step(ProgSeq* s, const FtProgram* pr, const ProgObs* o, ProgAct* a)
 		// the Route 117 cut tree did: plan correct, walk correct, five A presses, no dialog, and a
 		// hand-driven U+A at the same tile opened it instantly. So hold until the game says we face
 		// the obstacle. -1 (unreadable facing) degrades to the old fixed hold rather than hanging.
+		//
+		// PHASE 29 / lane F — **DEFECT X1, the one that live-disproved the Waterfall executor.**
+		// The `frames >= 2` term above makes FACE emit at least ONE direction frame even when the
+		// avatar ALREADY faces the obstacle. Against something impassable that frame is a bump and
+		// costs nothing; against a WATERFALL it is a STEP, and the engine says exactly why:
+		//
+		//   pokeemerald src/field_player_avatar.c:588-596 CheckMovementInputNotOnBike
+		//       else if (direction != GetPlayerMovementDirection() && runningState != MOVING)
+		//           return gPlayerAvatar.runningState = TURN_DIRECTION;   // turn in place
+		//       else
+		//           return gPlayerAvatar.runningState = MOVING;           // ...otherwise WALK
+		//
+		// i.e. the engine turns in place ONLY while the held direction differs from the direction
+		// it is already facing. Hold it once more and the very same key becomes a step — and a
+		// waterfall metatile is collision 0 / elevation 1, so while surfing there is nothing to
+		// stop it (`PlayerNotOnBikeMoving` -> `CheckForPlayerAvatarCollision` -> COLLISION_NONE).
+		// That is the whole of the live failure: the tap was planned at `progFacing = 2 (UP)`
+		// already, FACE frame 1 pressed UP anyway, the player swam ONTO the fall
+		// (`f=47146 pos=(12,12)`), `sForcedMovementTestFuncs[14]` -> `ForcedMovement_
+		// PushedSouthByCurrent` flushed him back (`f=47150 pos=(12,13)`), and from then on every A
+		// landed on a forced-movement frame, which `FieldGetPlayerInput` discards
+		// (src/field_control_avatar.c:94-100). 18 A presses, `progAnswers = 0`, TIMEOUT.
+		//
+		// The fix MIRRORS the engine's own turn-in-place path rather than inventing a cadence: on
+		// an enterable tile, a direction key is legal exactly while the read says we do not yet
+		// face it, so the moment the read says we DO, FACE is finished and emits nothing further.
+		// Every key frame is therefore issued under `direction != facingDirection`, which is
+		// CheckMovementInputNotOnBike's own TURN_DIRECTION precondition. (The turn sets facing on
+		// its first frame — `InitMoveInPlace` calls `SetObjectEventDirection` before the 8-frame
+		// animation — so the next read already shows it, and the remaining animation frames are
+		// ones the game ignores anyway, `TryInterruptObjectEventSpecialAnim` :353.)
+		//
+		// The impassable path keeps `frames >= 2` verbatim: it is what four HMs were live-proven
+		// on (phase 24 P2/P3, phase 25), and a bump is not a step.
 		{
 			int face = o->facing;
+			int want = progseq_face_of_dir(mv.dir);
 			int ok = (face < 0) ? (s->frames >= TP_FACE_FRAMES)
-			                    : (face == progseq_face_of_dir(mv.dir) && s->frames >= 2);
+			                    : (face == want && (s->frames >= 2 || o->faceEnterable));
 			if (ok) { s->phase = TPH_A; s->frames = 0; return; }
 			if (s->frames >= TP_FACE_BUDGET) { psq_end(s, a, TPE_STALL); return; }
+			// The blind fallback is a FIXED hold, and a fixed hold onto an enterable tile is the
+			// defect itself. With no facing to close the loop on there is no safe key to press, so
+			// say so instead of swimming: this ends the program at the fall's foot, where the
+			// player's own U + A still works, rather than starting a ride we cannot steer.
+			if (face < 0 && o->faceEnterable) { psq_end(s, a, TPE_STALL); return; }
 		}
 		a->keyDir = mv.dir;
 		return;
@@ -214,7 +255,7 @@ void progseq_step(ProgSeq* s, const FtProgram* pr, const ProgObs* o, ProgAct* a)
 			// PHASE 26 / lane W. Nothing on the map changes when Strength is activated — the
 			// boulder is still there, the player has not moved, no object slot deactivates. The
 			// only observable is the game's own latch (`setflag FLAG_SYS_USE_STRENGTH`,
-			// data/scripts/field_move_scripts.inc:145), which is exactly what the executor watches.
+			// data/scripts/field_move_scripts.inc:147), which is exactly what the executor watches.
 			//
 			// A Strength edge is a TERMINAL by construction (fieldtrav.c edge_at), so this step is
 			// the LAST one and `s->step++` runs it off the end into TPE_ARRIVED below. That is the
@@ -240,6 +281,14 @@ void progseq_step(ProgSeq* s, const FtProgram* pr, const ProgObs* o, ProgAct* a)
 		// correction as TPH_YESNO: `msgbox MSGBOX_DEFAULT` ends in `waitbuttonpress`, and textDlg
 		// is already false by then, so gating the advance on it left the field move announced and
 		// never performed (the mount is the NEXT script line).
+		//
+		// PHASE 29 / lane F — this is ALSO the second half of defect X1, and it needs no new code:
+		// Waterfall's script is `msgbox Text_MonUsedWaterfall, MSGBOX_DEFAULT` followed by
+		// `dofieldeffect FLDEFF_USE_WATERFALL` (data/scripts/field_move_scripts.inc:193-194), so
+		// the ride does not start until a further A closes that box. The cadence below is what
+		// presses it; the DONE completion test stays the game's own ride condition, inverted.
+		// The cost is measured, not assumed: see LANE-F §W1 for the live `progPhase = DONE` frame
+		// count against TP_DONE_BUDGET at K=3 and at K=8.
 		if ((s->frames % TP_ADVANCE_EVERY) == 0) s->aPulse = 3;
 		return;
 	}
