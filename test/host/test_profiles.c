@@ -1268,7 +1268,7 @@ static void test_family24_map(void) {
 	    "runs the region map FAM-MAP was derived against");
 	CHECK(em->rmCurPtr == 0 && em->rmCbAlt == 0, "…and needs neither a second cursor pointer "
 	      "(its cursor lives inside sRegionMap) nor a rev-alternate (its two cb2s are distinct)");
-	// The named degradations that REMAIN after lane D1 paid FireRed's. BPRE has moved to TEST 20.
+	// The named degradations that REMAIN after lane D1 paid FireRed's. BPRE has moved to TEST 22.
 	const char* zero[] = { "BPGE", "AXVE", "AXPE" };
 	for (unsigned i = 0; i < 3; i++) {
 		const GameProfile* q = prof(zero[i]);
@@ -1305,7 +1305,7 @@ static void test_family24_map(void) {
 
 
 // ============================================================================================
-// TEST 20 — PHASE 25 (lane D1): FAM-MAP's SECOND ENGINE, i.e. FIRERED's region map. Lane B2
+// TEST 22 — PHASE 25 (lane D1): FAM-MAP's SECOND ENGINE, i.e. FIRERED's region map. Lane B2
 // shipped BPRE's map columns as explicit zeros and named what it owed: "FR's region-map struct
 // pointer + a fly-vs-wall discriminator". Its diagnosis was right — ONE CB2_RegionMap serves the
 // bag's TOWN MAP, the wall map AND the fly map — but the conclusion "therefore undecidable" was
@@ -1324,7 +1324,7 @@ static void test_family24_map(void) {
 //       and a NULL/garbage sRegionMap -> NOT GCTX_MAP at all but the screen's cb2FullUi
 //       fallback, i.e. the failure mode is "no upgrade", never a map driver running blind.
 static void test_family25_frmap(void) {
-	printf("TEST 20: phase-25 FAM-MAP second engine (FireRed region map)\n");
+	printf("TEST 22: phase-25 FAM-MAP second engine (FireRed region map)\n");
 	const GameProfile* fr = prof("BPRE");
 	if (!fr) { CHECK(0, "BPRE row missing"); return; }
 	// (a) the values
