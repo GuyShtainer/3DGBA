@@ -1885,24 +1885,45 @@ static u16 map_update(const TouchSmart* sm, bool touching, bool newPress, bool g
 // PokéNav"), so there is no cell where the confirm means something the tap did not ask for.
 static int s_nvTgt = -1;                   // armed target row (-1 = idle)
 static int s_nvArm = 0, s_nvATick = 0, s_nvGap = 0, s_nvTotal = 0;
+static int s_nvWait = 0, s_nvFrom = -1;    // a D-pad press IN FLIGHT: frames left, cursor pressed from
+static int s_nvPend = 0, s_nvPendT = 0, s_nvPendType = -1;   // A retries left / countdown / latched menuType
 static int s_nvTick = 0; static bool s_nvDown = false, s_nvDrag = false, s_nvHeld = false;
 static int s_nvDownX = 0, s_nvDownY = 0;
 static int s_nvTaps = 0, s_nvSteps = 0, s_nvWraps = 0, s_nvArrive = 0, s_nvPicks = 0, s_nvHolds = 0;
+static int s_nvRepress = 0, s_nvRetry = 0;   // presses/A-pulses the ENGINE swallowed and we re-sent
 static void nav_reset(void) {
 	s_nvTgt = -1; s_nvArm = 0; s_nvATick = 0; s_nvGap = 0; s_nvTotal = 0;
+	s_nvWait = 0; s_nvFrom = -1; s_nvPend = 0; s_nvPendT = 0; s_nvPendType = -1;
 	s_nvTick = 0; s_nvDown = false; s_nvDrag = false; s_nvHeld = false;
-	// the six counters survive on purpose: they are the gdb proof channel (g_touchDbg +0x128..).
+	// the counters survive on purpose: they are the gdb proof channel (g_touchDbg +0x128..).
 }
 // One press per TWO frames, minimum: UpdateMenuCursorPos is JOY_NEW, so the key must be RELEASED
 // before the next edge can register. The gap is 3 to leave a frame of margin either side of the
 // engine's own input sampling, exactly as MAPNAV_GAP does for the region map's 4-frame slide.
-#define NAVNAV_GAP      3
-#define NAVNAV_A_DELAY  4    // arrival -> A. cursorPos is committed by the same function that
-                             // returns MOVE_CURSOR, so the read is already true when we see it;
-                             // the delay only lets the option description redraw before the pick.
-#define NAVNAV_TIMEOUT 240   // drop an unreached target (~4 s). The longest legal route is half a
-                             // 6-row ring = 3 presses x 4 frames, so this only fires on a screen
-                             // that stopped accepting input (a fade, a sub-app hand-off).
+// MEASURED, then fixed (emulator run 20260815-001057, Entry 7): the engine does not poll input
+// for the whole of a cursor move. `Task_Pokenav` case 3 hands a MOVE_CURSOR result to
+// `RunMainMenuLoopedTask` and parks in case 2 until that looped task finishes (pokenav.c:449-457),
+// and the option slide alone is 4 frames (`StartOptionSlide(..., 4)`, menu_handler_gfx.c:944-946)
+// before the description window is even redrawn. A fixed inter-press gap therefore GUESSES, and
+// the first measurement caught it doing so: a two-row hop cost THREE presses, one swallowed.
+//
+// So the pacing is closed-loop on the cursor, like everything else in this family: press, then
+// wait until `cursorPos` actually MOVES before pressing again. A press that has not landed after
+// NAVNAV_PRESS_WAIT frames is assumed swallowed and re-sent — counted separately (`navRepress`),
+// so `navSteps` stays the EXACT ring distance and a regression cannot hide inside it.
+#define NAVNAV_GAP        2   // mandatory RELEASED frames after any press: UpdateMenuCursorPos is
+                              // JOY_NEW, so two presses with no gap are one held key = one edge
+#define NAVNAV_PRESS_WAIT 40  // ...then this long for the cursor to move before assuming a swallow
+// The same problem applies to the confirm: an A that arrives while the last slide's looped task is
+// still running is never seen by HandleMainMenuInput. It is answered the same way — a bounded
+// retry that STOPS the moment the game acts (menuType changes, or the sub-app changes and
+// game_read stops claiming the screen at all, which resets this whole module).
+#define NAVNAV_A_DELAY 14
+#define NAVNAV_A_RETRY 14
+#define NAVNAV_A_TRIES  6
+#define NAVNAV_TIMEOUT 420   // drop an unreached target (~7 s). The longest legal route is half a
+                             // 6-row ring = 3 presses, so this only fires on a screen that stopped
+                             // accepting input (a fade, a sub-app hand-off).
 
 // Read the live menu. Returns 0 — and the caller then emits NOTHING — whenever the screen is not
 // a driveable menu, which is the same "no upgrade, never blind" contract rmap_read follows.
@@ -1956,7 +1977,20 @@ static u16 nav_update(const TouchSmart* sm, bool touching, bool newPress, bool g
 			int row;
 			if (navgeom_hit(ns.type, s_nvDownX, s_nvDownY, &row)) {
 				s_nvTgt = row; s_nvArm = 0; s_nvGap = 0; s_nvTotal = 0; s_nvTaps++;
+				s_nvWait = 0; s_nvFrom = -1; s_nvPend = 0;   // a new tap supersedes everything
 			}
+		}
+	}
+
+	// The confirm's bounded retry. It runs OUTSIDE the target logic because by the time it matters
+	// the target is already disarmed: the arrival consumed it. It ends the instant the menu
+	// mutates — and if the pick opened a FEATURE sub-app instead, game_read stops claiming the
+	// screen and nav_read's reset above has already cleared this.
+	if (s_nvPend > 0) {
+		if (ns.type != s_nvPendType) s_nvPend = 0;                 // the game ACTED on the A
+		else if (--s_nvPendT <= 0) {
+			s_nvPend--; s_nvPendT = NAVNAV_A_RETRY; s_nvRetry++;
+			s_nvATick = 1; return 1 << GBAKEY_A;
 		}
 	}
 
@@ -1965,19 +1999,30 @@ static u16 nav_update(const TouchSmart* sm, bool touching, bool newPress, bool g
 	if (ns.cur == s_nvTgt) {                            // live cursorPos == target
 		if (s_nvArm == 0) s_nvArm = NAVNAV_A_DELAY;
 		if (--s_nvArm > 0) return 0;
-		s_nvTgt = -1; s_nvArm = 0; s_nvArrive++;
+		s_nvTgt = -1; s_nvArm = 0; s_nvWait = 0; s_nvArrive++;
 		s_nvPicks++; s_nvATick = 1;
+		s_nvPend = NAVNAV_A_TRIES - 1; s_nvPendT = NAVNAV_A_RETRY; s_nvPendType = ns.type;
 		return 1 << GBAKEY_A;
 	}
 	s_nvArm = 0;                                        // moved off target mid-settle
-	if (s_nvGap > 0) { s_nvGap--; return 0; }
+	if (s_nvGap > 0) { s_nvGap--; return 0; }           // the mandatory released frame(s)
+	// Has the press we already sent landed? The cursor itself is the answer.
+	int fresh = 1;
+	if (s_nvWait > 0) {
+		if (ns.cur != s_nvFrom) s_nvWait = 0;           // it landed -> the next press is a new step
+		else if (--s_nvWait > 0) return 0;              // still in flight: press nothing
+		else fresh = 0;                                 // deadline: the engine swallowed it
+	}
 	int st = navnav_step(ns.cur, s_nvTgt, ns.rows);
 	if (!st) { nav_reset(); return 0; }
-	// A press is a WRAP when it moves AWAY from the target in plain-difference terms — i.e. only a
-	// navigator that knows the ring can produce it. Counting them is what makes the wrap provable
-	// from outside: no straight-line driver can ever bump this.
-	if ((st == NAVNAV_DOWN && s_nvTgt < ns.cur) || (st == NAVNAV_UP && s_nvTgt > ns.cur)) s_nvWraps++;
-	s_nvGap = NAVNAV_GAP; s_nvSteps++;
+	if (fresh) {
+		s_nvSteps++;
+		// A press is a WRAP when it moves AWAY from the target in plain-difference terms — i.e.
+		// only a navigator that knows the ring can produce it. Counting them is what makes the
+		// wrap provable from outside: no straight-line driver can ever bump this.
+		if ((st == NAVNAV_DOWN && s_nvTgt < ns.cur) || (st == NAVNAV_UP && s_nvTgt > ns.cur)) s_nvWraps++;
+	} else s_nvRepress++;
+	s_nvFrom = ns.cur; s_nvWait = NAVNAV_PRESS_WAIT; s_nvGap = NAVNAV_GAP;
 	return (st == NAVNAV_DOWN) ? (u16)(1 << GBAKEY_DOWN) : (u16)(1 << GBAKEY_UP);
 }
 
@@ -2200,7 +2245,7 @@ static void touch_dbg_stamp(const TouchSmart* sm, u16 ret) {
 	d->navIdx = d->navType = d->navCur = d->navRows = d->navMode = -1;
 	d->navTaps = s_nvTaps; d->navSteps = s_nvSteps; d->navWraps = s_nvWraps;
 	d->navArrive = s_nvArrive; d->navPicks = s_nvPicks; d->navHolds = s_nvHolds;
-	d->navTgt = s_nvTgt;
+	d->navTgt = s_nvTgt; d->navRepress = s_nvRepress; d->navRetry = s_nvRetry;
 	const GameProfile* p = sm->prof;
 	if (!sm->core || !p) return;
 	// PHASE 25 (lane C1): stamped immediately after the null check, i.e. ABOVE the GCTX_MAP /

@@ -305,6 +305,13 @@ typedef struct {
 	int32_t  navPicks;       // +0x138 arrivals that pressed A (every arrival here does)
 	int32_t  navHolds;       // +0x13C holds that became a B (back / exit)
 	int32_t  navTgt;         // +0x140 the armed target row (-1 = idle)
+	// The two counters that keep `navSteps` honest. The engine does not poll input while a cursor
+	// move's looped task runs (pokenav.c:449-457 + the 4-frame option slide), so a press or a
+	// confirm CAN be swallowed; the driver re-sends closed-loop and books the re-send here rather
+	// than inside navSteps/navPicks. navSteps therefore stays the EXACT ring distance, and a
+	// screen that started eating input shows up as a rising navRepress instead of hiding.
+	int32_t  navRepress;     // +0x144 D-pad presses re-sent because the cursor had not moved
+	int32_t  navRetry;       // +0x148 extra A pulses re-sent because the menu had not acted
 } TouchDbg;
 extern TouchDbg g_touchDbg;
 
