@@ -55,7 +55,14 @@ typedef enum {
 	//     not driving. GameProfile.questLog names the state instead of the screen.
 	// Dispatch: touch.c returns 0 keys for this ctx (and the tilt/presence/field gates, which all
 	// test ctx == GCTX_OVERWORLD, shut on it with zero gate-logic change).
-	GCTX_INERT
+	GCTX_INERT,
+	// --- phase 25 (lane D2): FAM-NAV — the PokéNav MENU screens (TOUCH-PLAN row G1, Emerald only).
+	// Appended, so every value above stays stable. Matched by cb2 == GameProfile.pokenavCb AND a
+	// live menu substruct AND a sub-app index in the MENU range, all BEFORE the cb2FullUi loop
+	// that already lists CB2_Pokenav — the same "more specific wins, degrade to the class" shape
+	// GCTX_NAMING / GCTX_STORAGE / GCTX_MAP use. PokéNav's FEATURE sub-apps (Hoenn map, Match
+	// Call, ribbons, condition graphs) deliberately do NOT get this ctx: they keep GCTX_FULLUI.
+	GCTX_POKENAV
 } GameCtx;
 
 // Which list screen GCTX_LIST resolved to (GameState.listKind; SPEC-family-lists §2/§3).
@@ -111,6 +118,36 @@ enum {
 #define GS_FR_RMTYPE_NORMAL 0   // the bag's TOWN MAP (has the region SWITCH + dungeon previews)
 #define GS_FR_RMTYPE_WALL   1   // a wall map read from the field
 #define GS_FR_RMTYPE_FLY    2   // the FLY destination picker — the only mode that accepts an A
+
+// PHASE 25 (lane D2) — FAM-NAV: the PokéNav (TOUCH-PLAN rows G1..G5, Emerald). ONE cb2 serves all
+// fifteen sub-apps, so the screen is identified by a HEAP STRUCT, not a callback — which is the
+// "substate read is the prerequisite" the census staged and never captured.
+//
+// `struct PokenavResources` (pokeemerald src/pokenav.c:17-25, size 0x5C — every field naturally
+// aligned, so the offsets are forced, not chosen):
+//   currentMenuCb1 u32 fnptr +0x00 · **currentMenuIndex u32 +0x04** · mode u16 +0x08 ·
+//   conditionSearchId u16 +0x0A · hasAnyRibbons bool32 +0x0C · substructPtrs[19] +0x10
+// `gPokenavResources` is itself a POINTER (EWRAM_DATA, :207), Alloc'd in CB2_InitPokeNav (:315)
+// and FREE_AND_SET_NULL'd in FreePokenavResources (:371) — so "is the PokéNav up" is a pointer test.
+#define GS_PN_MENUIDX_OFF   0x04   // currentMenuIndex = menuId - POKENAV_MENU_IDS_START
+#define GS_PN_MODE_OFF      0x08   // POKENAV_MODE_NORMAL 0 / _FORCE_CALL_READY 1 / _FORCE_CALL_EXIT 2
+#define GS_PN_SUBSTRUCT_OFF 0x10   // void *substructPtrs[POKENAV_SUBSTRUCT_COUNT == 19]
+#define GS_PN_SUB_MENU      1      // POKENAV_SUBSTRUCT_MAIN_MENU_HANDLER (include/pokenav.h:70)
+// The MENU sub-apps — the six entries that share ONE input handler and ONE substruct
+// (include/pokenav.h:117-134): 0 MAIN_MENU · 1 MAIN_MENU_CURSOR_ON_MAP · 2 CONDITION_MENU ·
+// 3 CONDITION_SEARCH_MENU · 4 MAIN_MENU_CURSOR_ON_MATCH_CALL · 5 MAIN_MENU_CURSOR_ON_RIBBONS.
+// 6..14 are the FEATURE sub-apps (region map, condition graphs, search results, match call,
+// ribbons list/summary): each has its own substruct and its own input model, so FAM-NAV v1 does
+// not claim them and they keep the GCTX_FULLUI default. The index is still MIRRORED for them.
+#define GS_PN_MENU_IDX_MAX  5
+// `struct Pokenav_Menu` (src/pokenav_menu_handler.c:8-16), at substructPtrs[GS_PN_SUB_MENU]:
+//   menuType u16 +0x00 · cursorPos s16 +0x02 · currMenuItem u16 +0x04 · helpBarIndex u16 +0x06 ·
+//   menuId u32 +0x08 · callback +0x0C
+#define GS_PN_MENUTYPE_OFF  0x00
+#define GS_PN_CURSOR_OFF    0x02
+#define GS_PN_CURITEM_OFF   0x04
+#define GS_PN_MENUTYPE_MAX  4      // POKENAV_MENU_TYPE_COUNT - 1 (DEFAULT/UNLOCK_MC/UNLOCK_MC_RIBBONS/
+                                   //   CONDITION/CONDITION_SEARCH)
 
 // Per-game RAM map (all absolute GBA bus addresses; EM=Emerald, FR=FireRed/LeafGreen).
 typedef struct {
@@ -554,6 +591,30 @@ typedef struct {
 	uint32_t rmVariant;
 	uint32_t rmCurPtr;
 	uint32_t rmCbAlt;
+	// --- PHASE 25 (lane D2) — FAM-NAV: the PokéNav menus (TOUCH-PLAN G1). Appended; PROFILES[] is
+	// POSITIONAL-initialised, so appending is again the only safe edit.
+	//
+	//   pokenavCb   CB2_Pokenav (ROM, compare-only). EM 0x081C7400 — pokeemerald.sym
+	//               `081c7400 l 00000016 CB2_Pokenav`, the single run loop SetMainCallback2'd by
+	//               both entry points (src/pokenav.c:328 CB2_InitPokeNav, :359 the tutorial one).
+	//               It is ALREADY in this row's cb2FullUi list (census [exact]), so this slice
+	//               cannot make a screen start detecting — it only upgrades one that already did.
+	//   pokenavPtr  gPokenavResources — a POINTER to deref (`0203cf40 g 00000004`). This is the
+	//               ONE dereferenced value, and every read off it is guarded: EWRAM bank on the
+	//               struct AND on the menu substruct, sub-app index <= GS_PN_MENU_IDX_MAX,
+	//               menuType <= GS_PN_MENUTYPE_MAX, cursorPos inside the live row count. A failed
+	//               guard claims NOTHING and the screen falls through to cb2FullUi = today's
+	//               FAM-DLG tap=A/hold=B. "No upgrade", never a driver running blind.
+	//
+	// BPRE/BPGE: 0 — FireRed and LeafGreen have no PokéNav at all (it is an RSE device); the
+	// nearest FRLG equivalent is the TOWN MAP key item, which FAM-MAP already drives. AXVE/AXPE:
+	// 0 — Ruby/Sapphire DO have a PokéNav, but they are under the ROM/statics address ban and
+	// their menu code differs from Emerald's (pokeruby has no `Pokenav_Menu` substruct model at
+	// all), so a copied Emerald address would be wrong twice over. NAMED degradation in all four:
+	// the PokéNav keeps whatever behaviour that game's class lists give it.
+	uint32_t pokenavCb;
+	uint32_t pokenavCbAlt;   // other revision (Emerald ships one US revision -> 0)
+	uint32_t pokenavPtr;
 } GameProfile;
 
 // One-pass snapshot of the live game.
@@ -608,6 +669,17 @@ typedef struct {
 	// / "why did it NOT go dead" is one gdb read instead of a theory (g_touchDbg.qlState). 0 when
 	// the game has no quest log. LOGGING ONLY — the ctx decision is made in game_read.
 	uint8_t  questLogState;
+	// PHASE 25 (lane D2) FAM-NAV. `pnBase` is the live `struct Pokenav_Menu` address and is the
+	// only one of these that drives touch — it is nonzero ONLY when ctx == GCTX_POKENAV, i.e. only
+	// when every guard passed. The other four are LOGGING/mirror values, and `pnMenuIdx` is filled
+	// on EVERY PokéNav frame including the FEATURE sub-apps this family does not claim — that
+	// mirror IS the sub-state capture TOUCH-PLAN 22.7 asked for, and it unblocks rows G2-G5 for a
+	// later lane at zero behavioural risk. -1 = "not a PokéNav frame" so a 0 is never ambiguous.
+	uint32_t pnBase;
+	int16_t  pnMenuIdx;    // currentMenuIndex (0..14), -1 if not PokéNav
+	int16_t  pnMenuType;   // struct Pokenav_Menu.menuType (0..4), -1 if no live menu substruct
+	int16_t  pnCursor;     // .cursorPos, -1 if no live menu substruct
+	int16_t  pnMode;       // PokenavResources.mode (0 normal / 1,2 = the Mr. Stone tutorial), -1
 } GameState;
 
 // Optional 3D-effect health, logged alongside the TOP game's row (pass NULL for the bottom game).

@@ -957,6 +957,126 @@ static void test_run_decide(void) {
 	CHECK(rungeom_eligible(RUNG_ALL) == 1, "...and emits one again on the very next tile");
 }
 
+// ============================================================================================
+// TEST 20 — FAM-NAV: the PokéNav menus (phase 25, lane D2). Two things need grading, and the
+// second is the one no earlier family could have caught:
+//   (a) the row geometry is the game's own table, and the column TILES with no dead gaps;
+//   (b) the navigator knows the list WRAPS — graded against an independent oracle that simulates
+//       pokeemerald's UpdateMenuCursorPos press by press, over every (menuType, from, to) triple.
+// ============================================================================================
+static void test_nav_geom(void) {
+	puts("TEST 20: FAM-NAV — the PokéNav menu rows, and a cursor that WRAPS");
+
+	// --- (a) the table, restated from pret so a silent edit to NAVGEOM fails here ------------
+	// rows = sLastCursorPositions[]+1 = {3,4,5,3,6}; yStart/deltaY = sPokenavMenuOptionLabelGfx.
+	static const struct { int rows, yStart, deltaY; } WANT[NAVGEOM_NTYPES] = {
+		{ 3, 42, 20 }, { 4, 42, 20 }, { 5, 42, 20 }, { 3, 56, 20 }, { 6, 40, 16 }
+	};
+	for (int t = 0; t < NAVGEOM_NTYPES; t++)
+		CHECK(navgeom_rows(t) == WANT[t].rows, "menuType %d has %d rows (got %d)",
+		      t, WANT[t].rows, navgeom_rows(t));
+	CHECK(navgeom_rows(-1) == 0 && navgeom_rows(NAVGEOM_NTYPES) == 0 && navgeom_rows(9999) == 0,
+	      "an out-of-range menuType has NO rows — which is the 'do not drive this screen' answer");
+
+	// The centre of every row round-trips through the hit test, and lands on the y the sprite
+	// constructor puts the label at.
+	for (int t = 0; t < NAVGEOM_NTYPES; t++) {
+		for (int r = 0; r < WANT[t].rows; r++) {
+			int x = -1, y = -1, row = -1;
+			CHECK(navgeom_row_px(t, r, &x, &y) == 1, "type %d row %d has a pixel centre", t, r);
+			CHECK(y == WANT[t].yStart + WANT[t].deltaY * r,
+			      "type %d row %d centre y = %d (got %d)", t, r,
+			      WANT[t].yStart + WANT[t].deltaY * r, y);
+			CHECK(navgeom_hit(t, x, y, &row) == 1 && row == r,
+			      "type %d row %d round-trips (got %d)", t, r, row);
+		}
+		CHECK(navgeom_row_px(t, WANT[t].rows, 0, 0) == 0, "type %d: row past the last has no centre", t);
+		CHECK(navgeom_row_px(t, -1, 0, 0) == 0, "type %d: a negative row has no centre", t);
+	}
+
+	// --- the FULL-SCREEN SWEEP, per menu type. Three properties at once: every hit is inside the
+	// x band, the rows TILE the column (no y inside the list misses, no y outside it hits), and
+	// the row a pixel resolves to is the one the pitch says it is.
+	for (int t = 0; t < NAVGEOM_NTYPES; t++) {
+		int top = WANT[t].yStart - WANT[t].deltaY / 2;
+		int bot = top + WANT[t].deltaY * WANT[t].rows;   // one past the last row's band
+		int hits = 0;
+		for (int gx = -8; gx < 248; gx++) {
+			for (int gy = -8; gy < 168; gy++) {
+				int row = -12345;
+				int hit = navgeom_hit(t, gx, gy, &row);
+				int inBand = (gx >= NAVGEOM_X0 && gx < NAVGEOM_X1 && gy >= top && gy < bot);
+				CHECK(hit == inBand, "type %d (%d,%d): hit=%d want=%d", t, gx, gy, hit, inBand);
+				if (hit) {
+					hits++;
+					CHECK(row == (gy - top) / WANT[t].deltaY,
+					      "type %d (%d,%d) -> row %d (want %d)", t, gx, gy, row,
+					      (gy - top) / WANT[t].deltaY);
+					CHECK(row >= 0 && row < WANT[t].rows, "type %d (%d,%d) row %d in range", t, gx, gy, row);
+				}
+			}
+		}
+		CHECK(hits == (NAVGEOM_X1 - NAVGEOM_X0) * WANT[t].deltaY * WANT[t].rows,
+		      "type %d: the band's area is exactly rows x pitch x width (got %d)", t, hits);
+	}
+	// An out-of-range menuType can never hit, anywhere on the screen — the guard the driver leans
+	// on when a menu mutates its own type mid-frame.
+	for (int gx = 0; gx < 240; gx += 7)
+		for (int gy = 0; gy < 160; gy += 5)
+			CHECK(navgeom_hit(NAVGEOM_NTYPES, gx, gy, 0) == 0 && navgeom_hit(-3, gx, gy, 0) == 0,
+			      "an unknown menuType never hits at (%d,%d)", gx, gy);
+
+	// --- (b) THE WRAP. The oracle is a transcription of pokeemerald's own cursor update
+	// (src/pokenav_menu_handler.c:464-487): DPAD_UP decrements and wraps to the last row, DPAD_DOWN
+	// increments and wraps to 0. Drive navnav_step against it for every start x target x menu type
+	// and require BOTH convergence and the RING-optimal press count, which for a wrapping list is
+	// min(down-distance, up-distance) — never the plain difference.
+	for (int t = 0; t < NAVGEOM_NTYPES; t++) {
+		int rows = WANT[t].rows;
+		for (int from = 0; from < rows; from++) {
+			for (int to = 0; to < rows; to++) {
+				int cur = from, presses = 0, guard = 0;
+				while (cur != to && guard++ < 64) {
+					int st = navnav_step(cur, to, rows);
+					CHECK(st == NAVNAV_UP || st == NAVNAV_DOWN,
+					      "type %d %d->%d: a step is UP or DOWN (got %d)", t, from, to, st);
+					if (st == NAVNAV_DOWN) { cur++; if (cur > rows - 1) cur = 0; }
+					else                   { cur--; if (cur < 0) cur = rows - 1; }
+					presses++;
+				}
+				int down = ((to - from) % rows + rows) % rows;
+				int up   = ((from - to) % rows + rows) % rows;
+				int best = down < up ? down : up;
+				CHECK(cur == to, "type %d: %d -> %d converges", t, from, to);
+				CHECK(presses == best,
+				      "type %d: %d -> %d costs %d presses, the RING optimum (got %d; the plain "
+				      "difference would be %d)", t, from, to, best, presses, down);
+				CHECK(presses <= rows / 2, "type %d: %d -> %d never costs more than half the ring", t, from, to);
+			}
+		}
+	}
+	// The specific case that separates a wrapping navigator from a straight-line one, named:
+	CHECK(navnav_step(4, 0, 5) == NAVNAV_DOWN,
+	      "5-row menu, bottom -> top: ONE press DOWN (wrap), not four UP");
+	CHECK(navnav_step(0, 4, 5) == NAVNAV_UP,
+	      "5-row menu, top -> bottom: ONE press UP (wrap), not four DOWN");
+	CHECK(navnav_step(0, 2, 5) == NAVNAV_DOWN, "...but a short hop still goes the direct way");
+	CHECK(navnav_step(0, 3, 6) == NAVNAV_DOWN,
+	      "6-row menu, an exact half-ring tie resolves DOWN, deterministically");
+	CHECK(navnav_step(3, 0, 6) == NAVNAV_DOWN, "...and the mirrored tie resolves DOWN too");
+
+	// Refusals. Every one of these is a state the driver can actually see (a menu caught mid
+	// re-init, a substruct read that landed on stale bytes), and the contract is EMIT NOTHING.
+	CHECK(navnav_step(0, 0, 5) == 0, "already there -> no press");
+	CHECK(navnav_step(-1, 2, 5) == 0, "a negative cursor -> no press");
+	CHECK(navnav_step(5, 2, 5) == 0, "a cursor past the last row -> no press");
+	CHECK(navnav_step(2, 5, 5) == 0, "a target past the last row -> no press");
+	CHECK(navnav_step(2, -1, 5) == 0, "a negative target -> no press");
+	CHECK(navnav_step(0, 1, 0) == 0, "a zero-row menu -> no press");
+	CHECK(navnav_step(0, 1, -4) == 0, "a negative row count -> no press");
+	CHECK(navnav_step(0, 1, 1) == 0, "a one-row menu: the only row is where we already are");
+}
+
 int main(void) {
 	test_colcount();
 	test_validity();
@@ -977,6 +1097,7 @@ int main(void) {
 	test_run_tile();
 	test_run_decide();
 	test_map_engines();          // phase 25 (lane D1) FAM-MAP second engine (FireRed)
+	test_nav_geom();             // phase 25 (lane D2) FAM-NAV — the PokéNav menus
 	printf("\n=== %d checks, %d failures ===\n", g_checks, g_fails);
 	return g_fails ? 1 : 0;
 }

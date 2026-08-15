@@ -3,8 +3,10 @@
 //
 //   clang -std=c11 -Wall -Wextra -O2 -I source -I test/host test/host/test_profiles.c \
 //         source/gamestate.c source/presence_read.c source/presence.c source/peersprite.c \
-//         -o /tmp/tpr && /tmp/tpr
-//   (peersprite.c joined the link when presence_read.c grew its pspr_capture call — phase 20.)
+//         source/touchgeom.c -o /tmp/tpr && /tmp/tpr
+//   (peersprite.c joined the link when presence_read.c grew its pspr_capture call — phase 20;
+//    touchgeom.c joined in phase 25 lane D2, when game_read started asking the geometry layer for
+//    the PokéNav menu's live ROW COUNT rather than keeping a second copy of pret's table here.)
 //
 // WHY THIS SUITE EXISTS AND WHY IT IS NOT A TABLE COPY (SPEC-coop P4.6.2). The spec offered two
 // shapes: host-compile the real table, or copy it into the test and pin the copy with
@@ -35,6 +37,7 @@
 
 #include "gamestate.h"
 #include "presence_read.h"
+#include "touchgeom.h"   // navgeom_rows — the same live row count game_read validates against
 
 static int g_checks = 0, g_fails = 0;
 static void check(int ok, const char* fmt, ...) {
@@ -1419,6 +1422,201 @@ static void test_family25_frmap(void) {
 
 
 // ============================================================================================
+// TEST 21 — PHASE 25 (lane D2): FAM-NAV, the PokéNav menus (TOUCH-PLAN G1). The census called
+// the PokéNav "one cb2, sub-apps internal", which is exactly why the interesting assertions are
+// about a HEAP STRUCT rather than a callback:
+//   (a) the two Emerald anchors, and the shape rules that make them fail-safe (the callback is
+//       ROM and compare-only; the pointer is EWRAM because it is the one value dereferenced);
+//   (b) CB2_Pokenav is STILL in cb2FullUi — this slice re-classifies a screen that already
+//       detected, it does not make a new one detect;
+//   (c) every other game is 0, INCLUDING Ruby/Sapphire, which DO have a PokéNav — the trap this
+//       row must not fall into;
+//   (d) behaviour through the REAL game_read: each of the six MENU sub-apps resolves
+//       GCTX_POKENAV with pnBase pointing at the live substruct, while each of the nine FEATURE
+//       sub-apps deliberately does NOT — and still publishes its index, which is the sub-state
+//       capture rows G2-G5 are waiting on;
+//   (e) the four fail-safes (NULL resources, non-EWRAM resources, NULL substruct, out-of-range
+//       menuType/cursor), each of which must land on GCTX_FULLUI = today's FAM-DLG behaviour.
+static void test_family25_pokenav(void) {
+	printf("TEST 21: phase-25 FAM-NAV (the PokéNav menus)\n");
+	const GameProfile* em = prof("BPEE");
+	if (!em) { CHECK(0, "BPEE row missing"); return; }
+
+	// (a) the values
+	EQU(em->pokenavCb,  0x081C7400u, "BPEE pokenavCb = CB2_Pokenav (pokeemerald.sym "
+	    "`081c7400 l 00000016`) — the ONE run loop for all fifteen sub-apps");
+	EQU(em->pokenavPtr, 0x0203CF40u, "BPEE pokenavPtr = gPokenavResources (`0203cf40 g 00000004` "
+	    "= a POINTER, so it is dereferenced, not compared)");
+	EQU(em->pokenavCbAlt, 0u, "BPEE pokenavCbAlt = 0 — Emerald ships one US revision");
+	CHECK((em->pokenavCb >> 24) == 0x08u, "the callback is ROM (compare-only => fail-safe)");
+	CHECK((em->pokenavPtr >> 24) == 0x02u, "the resources handle is EWRAM (it gets dereferenced)");
+
+	// (b) already-detected, only re-classified
+	int seen = 0;
+	for (int i = 0; i < GS_N_FULLUI; i++) if (em->cb2FullUi[i] == em->pokenavCb) seen = 1;
+	CHECK(seen, "CB2_Pokenav is STILL in BPEE's cb2FullUi list — the PokéNav already detected, "
+	      "so this slice can only change how a tap READS there");
+
+	// (c) every other row is an explicit zero — and RS is the one that had to be resisted
+	const char* zero[] = { "BPRE", "BPGE", "AXVE", "AXPE" };
+	for (unsigned i = 0; i < 4; i++) {
+		const GameProfile* q = prof(zero[i]);
+		if (!q) { CHECK(0, "%s row missing", zero[i]); continue; }
+		EQU(q->pokenavCb, 0u, "%s pokenavCb = 0", zero[i]);
+		EQU(q->pokenavCbAlt, 0u, "%s pokenavCbAlt = 0", zero[i]);
+		EQU(q->pokenavPtr, 0u, "%s pokenavPtr = 0", zero[i]);
+		CHECK(q->pokenavCb != em->pokenavCb && q->pokenavPtr != em->pokenavPtr,
+		      "%s did not inherit Emerald's PokéNav addresses — Ruby/Sapphire HAVE a PokéNav and "
+		      "it is pokeemerald's ANCESTOR (no Pokenav_Menu substruct at all), so a copy would "
+		      "be wrong about the address AND about the struct", zero[i]);
+	}
+
+	// --- (d) behaviour, through the real game_read -------------------------------------------
+	// One live layout reused by the cases below: resources at RES, the menu substruct at MENU.
+	const uint32_t RES = 0x02030000u, MENU = 0x02031000u;
+	#define PN_SETUP(cvar) \
+		GbaCore cvar; bus_reset(&cvar, "BPEE"); \
+		const GameProfile* pp = profile_for(&cvar); \
+		bus_w32(&cvar, pp->sb1ptr, 0x02025734u); \
+		bus_w32(&cvar, pp->mainCb2, 0x081C7400u | 1u); \
+		bus_w32(&cvar, pp->pokenavPtr, RES); \
+		bus_w32(&cvar, RES + GS_PN_SUBSTRUCT_OFF + 4u * GS_PN_SUB_MENU, MENU)
+
+	// The six MENU sub-apps: every one resolves GCTX_POKENAV, with the menuType that sub-app
+	// really installs (PokenavCallback_Init_* :99-165) and its cursor inside the live row count.
+	static const struct { uint32_t idx; int type; const char* name; } MENUS[] = {
+		{ 0, 2, "MAIN_MENU" },                    { 1, 2, "MAIN_MENU_CURSOR_ON_MAP" },
+		{ 2, 3, "CONDITION_MENU" },               { 3, 4, "CONDITION_SEARCH_MENU" },
+		{ 4, 2, "MAIN_MENU_CURSOR_ON_MATCH_CALL" }, { 5, 2, "MAIN_MENU_CURSOR_ON_RIBBONS" },
+	};
+	for (unsigned i = 0; i < sizeof MENUS / sizeof MENUS[0]; i++) {
+		PN_SETUP(c);
+		GameState gs;
+		bus_w32(&c, RES + GS_PN_MENUIDX_OFF, MENUS[i].idx);
+		bus_w32(&c, MENU + GS_PN_MENUTYPE_OFF, (uint32_t)MENUS[i].type);   // menuType u16 + cursorPos u16
+		game_read(&c, pp, &gs);
+		EQU(gs.ctx, GCTX_POKENAV, "sub-app %u (%s) is a MENU -> GCTX_POKENAV", MENUS[i].idx, MENUS[i].name);
+		EQU(gs.pnBase, MENU, "…with pnBase = the live struct Pokenav_Menu (%s)", MENUS[i].name);
+		EQU(gs.pnMenuIdx, (uint32_t)MENUS[i].idx, "…and the sub-app index published (%s)", MENUS[i].name);
+		EQU(gs.pnMenuType, (uint32_t)MENUS[i].type, "…and the menuType (%s)", MENUS[i].name);
+		EQU(gs.pnCursor, 0u, "…and the live cursorPos (%s)", MENUS[i].name);
+	}
+
+	// Every cursor row a real menu can hold is accepted; the first row PAST the live count is not.
+	for (int t = 0; t <= GS_PN_MENUTYPE_MAX; t++) {
+		int rows = navgeom_rows(t);
+		for (int cur = 0; cur <= rows; cur++) {
+			PN_SETUP(c);
+			GameState gs;
+			bus_w32(&c, RES + GS_PN_MENUIDX_OFF, 0u);
+			bus_w32(&c, MENU + GS_PN_MENUTYPE_OFF, (uint32_t)t | ((uint32_t)cur << 16));
+			game_read(&c, pp, &gs);
+			if (cur < rows) {
+				EQU(gs.ctx, GCTX_POKENAV, "menuType %d cursor %d (of %d rows) is drivable", t, cur, rows);
+				EQU(gs.pnCursor, (uint32_t)cur, "…and the cursor is published verbatim");
+			} else {
+				CHECK(gs.ctx != GCTX_POKENAV, "menuType %d cursor %d is PAST the last row (%d) — "
+				      "not claimed", t, cur, rows);
+				EQU(gs.ctx, GCTX_FULLUI, "…and it falls through to today's FAM-DLG behaviour");
+			}
+		}
+	}
+
+	// The nine FEATURE sub-apps: NOT claimed — and still published. That second half is the point:
+	// it is the substate capture the census staged for rows G2-G5 and never took.
+	for (uint32_t idx = GS_PN_MENU_IDX_MAX + 1; idx <= 14; idx++) {
+		PN_SETUP(c);
+		GameState gs;
+		bus_w32(&c, RES + GS_PN_MENUIDX_OFF, idx);
+		bus_w32(&c, MENU + GS_PN_MENUTYPE_OFF, 2u);
+		game_read(&c, pp, &gs);
+		CHECK(gs.ctx != GCTX_POKENAV, "feature sub-app %u is NOT claimed by FAM-NAV v1", idx);
+		EQU(gs.ctx, GCTX_FULLUI, "…it keeps the FAM-DLG default (tap=A / hold=B)");
+		EQU(gs.pnMenuIdx, idx, "…but its index IS published — the G2-G5 substate channel");
+		EQU(gs.pnBase, 0u, "…and pnBase stays 0, so no driver can run on it");
+	}
+
+	// The tutorial mode is MIRRORED, never special-cased: the screen still drives, and `pnMode`
+	// names the case where the game will refuse every option but MATCH CALL (:568, :256-283).
+	for (uint32_t mode = 0; mode <= 2; mode++) {
+		PN_SETUP(c);
+		GameState gs;
+		bus_w32(&c, RES + GS_PN_MENUIDX_OFF, 0u);
+		bus_w32(&c, RES + GS_PN_MODE_OFF, mode);
+		bus_w32(&c, MENU + GS_PN_MENUTYPE_OFF, 2u);
+		game_read(&c, pp, &gs);
+		EQU(gs.ctx, GCTX_POKENAV, "PokenavResources.mode %u still drives", mode);
+		EQU(gs.pnMode, mode, "…and the mode is published so the tutorial case is NAMED");
+	}
+
+	// --- (e) the fail-safes. Each is a state that really occurs (pre-init frames, the substruct
+	// freed on the way into a feature, a freed resources block) and each must land on FULLUI.
+	{	PN_SETUP(c); GameState gs;
+		bus_w32(&c, pp->pokenavPtr, 0u);                     // gPokenavResources NULL (freed / pre-init)
+		game_read(&c, pp, &gs);
+		CHECK(gs.ctx != GCTX_POKENAV, "a NULL gPokenavResources is never claimed");
+		EQU(gs.ctx, GCTX_FULLUI, "…it falls through to the cb2FullUi row — 'no upgrade', never blind");
+		EQU(gs.pnMenuIdx, (uint32_t)(int16_t)-1, "…and nothing is published from a NULL struct");
+	}
+	{	PN_SETUP(c); GameState gs;
+		bus_w32(&c, pp->pokenavPtr, 0x08001234u);            // a ROM value where a heap block belongs
+		game_read(&c, pp, &gs);
+		CHECK(gs.ctx != GCTX_POKENAV, "a non-EWRAM gPokenavResources is never claimed");
+		EQU(gs.ctx, GCTX_FULLUI, "…same FAM-DLG fallback");
+	}
+	{	PN_SETUP(c); GameState gs;
+		bus_w32(&c, RES + GS_PN_MENUIDX_OFF, 0u);
+		bus_w32(&c, RES + GS_PN_SUBSTRUCT_OFF + 4u * GS_PN_SUB_MENU, 0u);   // substruct freed
+		game_read(&c, pp, &gs);
+		CHECK(gs.ctx != GCTX_POKENAV, "a freed menu substruct is never claimed — this is the exact "
+		      "state Task_Pokenav leaves behind when it hands off to a feature (:465-466)");
+		EQU(gs.ctx, GCTX_FULLUI, "…FAM-DLG fallback");
+		EQU(gs.pnMenuIdx, 0u, "…the sub-app index is STILL published (the mirror does not need the "
+		    "substruct)");
+		EQU(gs.pnMenuType, (uint32_t)(int16_t)-1, "…but the menuType is honestly unknown");
+	}
+	{	PN_SETUP(c); GameState gs;
+		bus_w32(&c, RES + GS_PN_MENUIDX_OFF, 0u);
+		bus_w32(&c, MENU + GS_PN_MENUTYPE_OFF, 7u);          // a menuType the engine cannot produce
+		game_read(&c, pp, &gs);
+		CHECK(gs.ctx != GCTX_POKENAV, "an out-of-range menuType is never claimed");
+		EQU(gs.ctx, GCTX_FULLUI, "…FAM-DLG fallback");
+		EQU(gs.pnMenuType, (uint32_t)(int16_t)-1, "…and it is reported as unknown, not as 7");
+	}
+	{	PN_SETUP(c); GameState gs;
+		bus_w32(&c, RES + GS_PN_MENUIDX_OFF, 0u);
+		bus_w32(&c, MENU + GS_PN_MENUTYPE_OFF, 2u | (0xFFFFu << 16));   // cursorPos = -1
+		game_read(&c, pp, &gs);
+		CHECK(gs.ctx != GCTX_POKENAV, "a negative cursorPos is never claimed");
+		EQU(gs.ctx, GCTX_FULLUI, "…FAM-DLG fallback");
+	}
+	{	// an UNLISTED callback with a perfectly good PokéNav struct in RAM is never claimed
+		PN_SETUP(c); GameState gs;
+		bus_w32(&c, RES + GS_PN_MENUIDX_OFF, 0u);
+		bus_w32(&c, MENU + GS_PN_MENUTYPE_OFF, 2u);
+		bus_w32(&c, pp->mainCb2, 0x081BFAB4u | 1u);          // EM summary screen (another FULLUI row)
+		game_read(&c, pp, &gs);
+		EQU(gs.ctx, GCTX_FULLUI, "another FULLUI screen is untouched by the PokéNav arm, even with "
+		    "a live PokenavResources block sitting in RAM");
+		EQU(gs.pnMenuIdx, (uint32_t)(int16_t)-1, "…and the mirror stays silent off the PokéNav");
+	}
+	{	// FireRed must not acquire a PokéNav: same bytes in RAM, no anchors, no claim
+		GbaCore c; bus_reset(&c, "BPRE");
+		const GameProfile* q = profile_for(&c);
+		GameState gs;
+		bus_w32(&c, q->sb1ptr, 0x02025734u);
+		bus_w32(&c, q->mainCb2, 0x081C7400u | 1u);           // Emerald's PokéNav cb2, on FireRed
+		bus_w32(&c, 0x0203CF40u, RES);
+		bus_w32(&c, RES + GS_PN_SUBSTRUCT_OFF + 4u * GS_PN_SUB_MENU, MENU);
+		bus_w32(&c, MENU + GS_PN_MENUTYPE_OFF, 2u);
+		game_read(&c, q, &gs);
+		CHECK(gs.ctx != GCTX_POKENAV, "FireRed never resolves GCTX_POKENAV — it has no PokéNav, "
+		      "and the zero anchors are what make that true rather than an accident");
+	}
+	#undef PN_SETUP
+}
+
+// ============================================================================================
 // TEST 19 — PHASE 24 (lane B2): the DISCOVERED-LIST whitelist (GameProfile.cb2List) — the
 // mechanism that gives TOUCH-PLAN E4 (FR Berry Pouch) and E5 (FR TM Case) a real list driver
 // without a single new address. The properties that make it safe are the ones graded here:
@@ -1641,6 +1839,7 @@ int main(void) {
 	test_family24_listcb2();     // phase 24 (lane B2) discovered-list whitelist (FR E4/E5)
 	test_family25_inert();       // phase 25 (lane C1) INERT class: credits + FRLG quest log
 	test_family25_frmap();       // phase 25 (lane D1) FAM-MAP second engine (FireRed)
+	test_family25_pokenav();     // phase 25 (lane D2) FAM-NAV — the PokéNav menus
 	printf("\n=== %d checks, %d failures ===\n", g_checks, g_fails);
 	return g_fails ? 1 : 0;
 }

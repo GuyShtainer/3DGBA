@@ -299,6 +299,55 @@ int mapnav_step(int curX, int curY, int tgtX, int tgtY) {
 	return mapnav_step_g(&MAPGEOM_EM, curX, curY, tgtX, tgtY);
 }
 
+// ================= PHASE 25 / lane D2 — FAM-NAV: the PokéNav menus (G1) ========================
+// The derivation, with citations, is in touchgeom.h. This is a straight transcription of
+// sLastCursorPositions[]+1 and sPokenavMenuOptionLabelGfx[] — three numbers per menu type.
+static const struct { short rows, yStart, deltaY; } NAVGEOM[NAVGEOM_NTYPES] = {
+	{ 3, 42, 20 },   // POKENAV_MENU_TYPE_DEFAULT            map / condition / switch off
+	{ 4, 42, 20 },   // POKENAV_MENU_TYPE_UNLOCK_MC          + match call
+	{ 5, 42, 20 },   // POKENAV_MENU_TYPE_UNLOCK_MC_RIBBONS  + ribbons
+	{ 3, 56, 20 },   // POKENAV_MENU_TYPE_CONDITION          party / search / cancel
+	{ 6, 40, 16 },   // POKENAV_MENU_TYPE_CONDITION_SEARCH   cool..tough / cancel
+};
+
+int navgeom_rows(int menuType) {
+	if (menuType < 0 || menuType >= NAVGEOM_NTYPES) return 0;
+	return NAVGEOM[menuType].rows;
+}
+
+int navgeom_hit(int menuType, int gx, int gy, int* row) {
+	if (menuType < 0 || menuType >= NAVGEOM_NTYPES) return 0;
+	if (gx < NAVGEOM_X0 || gx >= NAVGEOM_X1) return 0;
+	int d = NAVGEOM[menuType].deltaY;
+	int top = NAVGEOM[menuType].yStart - d / 2;    // the top edge of row 0's band
+	if (gy < top) return 0;
+	int r = (gy - top) / d;
+	if (r >= NAVGEOM[menuType].rows) return 0;
+	if (row) *row = r;
+	return 1;
+}
+
+int navgeom_row_px(int menuType, int row, int* x, int* y) {
+	if (menuType < 0 || menuType >= NAVGEOM_NTYPES) return 0;
+	if (row < 0 || row >= NAVGEOM[menuType].rows) return 0;
+	// x: the centre of the tappable band, which is also inside the label graphic in both the
+	// selected and unselected positions. y: the sprite's own centre, straight off the table.
+	if (x) *x = (NAVGEOM_X0 + NAVGEOM_X1) / 2;
+	if (y) *y = NAVGEOM[menuType].yStart + NAVGEOM[menuType].deltaY * row;
+	return 1;
+}
+
+int navnav_step(int cur, int tgt, int rows) {
+	if (rows <= 0) return 0;
+	if (cur < 0 || cur >= rows || tgt < 0 || tgt >= rows) return 0;
+	if (cur == tgt) return 0;
+	// UpdateMenuCursorPos wraps in BOTH directions, so the cost of a route is a distance around a
+	// ring, not a difference. Going DOWN costs (tgt-cur) mod rows; going UP costs (cur-tgt) mod rows.
+	int down = ((tgt - cur) % rows + rows) % rows;
+	int up   = ((cur - tgt) % rows + rows) % rows;
+	return (down <= up) ? NAVNAV_DOWN : NAVNAV_UP;   // exact ties resolve DOWN, deterministically
+}
+
 // ========== PHASE 24 / lane A2 — the OWN-TILE GESTURE (D1) and WALK-vs-RUN (D2) ================
 // See touchgeom.h for the decision text and the pret citations. Stateless except for the caller-
 // owned OwnGest, which exists only because a gesture is a TIMELINE and a pure function of one

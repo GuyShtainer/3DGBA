@@ -1862,6 +1862,125 @@ static u16 map_update(const TouchSmart* sm, bool touching, bool newPress, bool g
 	return k;
 }
 
+// ============== FAM-NAV: the POKÉNAV MENUS (phase 25, lane D2) ================================
+// TOUCH-PLAN row G1. Shape-wise this is FAM-MAP with one axis: a tap arms a TARGET ROW and the
+// driver walks the game's own `cursorPos` there with single-frame D-pad presses chosen from the
+// LIVE read each frame, then presses A. What is new — and what makes a naive port measurably
+// worse — is that the list WRAPS (touchgeom.h navnav_step), so the route from the bottom row to
+// the top is ONE press up, not rows-1 presses down.
+//
+// Nothing is ever written. On this screen that rule has a sharper justification than anywhere
+// else in the family: A acts on `cursorPos`, but the HIGHLIGHT and the option DESCRIPTION are
+// driven by `currMenuItem` plus the gfx layer's own copy, and only `UpdateMenuCursorPos` moves
+// all three together. A RAM write would leave a screen whose highlighted row is not the row A
+// picks — a lie on screen, not merely a desynced sprite.
+//
+// Gestures: clean tap = go there and PICK · drag = the target follows the finger, cursor only,
+// no A (so you can read the option descriptions the way you read map names on FAM-MAP) ·
+// hold = B, which is BACK on the condition menus and EXIT on the main menu — the same verb the
+// screen already had as a bare GCTX_FULLUI.
+//
+// Unlike FAM-MAP, the arrival A is ALWAYS armed. Every row here is a labelled button whose label
+// says what A does, including `SWITCH OFF` (POKENAV_MENU_FUNC_EXIT — the game's own "close the
+// PokéNav"), so there is no cell where the confirm means something the tap did not ask for.
+static int s_nvTgt = -1;                   // armed target row (-1 = idle)
+static int s_nvArm = 0, s_nvATick = 0, s_nvGap = 0, s_nvTotal = 0;
+static int s_nvTick = 0; static bool s_nvDown = false, s_nvDrag = false, s_nvHeld = false;
+static int s_nvDownX = 0, s_nvDownY = 0;
+static int s_nvTaps = 0, s_nvSteps = 0, s_nvWraps = 0, s_nvArrive = 0, s_nvPicks = 0, s_nvHolds = 0;
+static void nav_reset(void) {
+	s_nvTgt = -1; s_nvArm = 0; s_nvATick = 0; s_nvGap = 0; s_nvTotal = 0;
+	s_nvTick = 0; s_nvDown = false; s_nvDrag = false; s_nvHeld = false;
+	// the six counters survive on purpose: they are the gdb proof channel (g_touchDbg +0x128..).
+}
+// One press per TWO frames, minimum: UpdateMenuCursorPos is JOY_NEW, so the key must be RELEASED
+// before the next edge can register. The gap is 3 to leave a frame of margin either side of the
+// engine's own input sampling, exactly as MAPNAV_GAP does for the region map's 4-frame slide.
+#define NAVNAV_GAP      3
+#define NAVNAV_A_DELAY  4    // arrival -> A. cursorPos is committed by the same function that
+                             // returns MOVE_CURSOR, so the read is already true when we see it;
+                             // the delay only lets the option description redraw before the pick.
+#define NAVNAV_TIMEOUT 240   // drop an unreached target (~4 s). The longest legal route is half a
+                             // 6-row ring = 3 presses x 4 frames, so this only fires on a screen
+                             // that stopped accepting input (a fade, a sub-app hand-off).
+
+// Read the live menu. Returns 0 — and the caller then emits NOTHING — whenever the screen is not
+// a driveable menu, which is the same "no upgrade, never blind" contract rmap_read follows.
+typedef struct { int type, cur, rows; } NavState;
+static int nav_read(const TouchSmart* sm, NavState* ns) {
+	if (!sm->core || !sm->pnBase) return 0;         // game_read refused it: nothing is claimed here
+	ns->rows = navgeom_rows(sm->pnMenuType);
+	if (ns->rows <= 0) return 0;
+	ns->type = sm->pnMenuType;
+	ns->cur  = (int16_t)gbacore_read16(sm->core, sm->pnBase + GS_PN_CURSOR_OFF);
+	if (ns->cur < 0 || ns->cur >= ns->rows) return 0;   // a mid-transition menu: never drive it
+	// The menuType is re-read LIVE rather than trusted from the snapshot, because the two condition
+	// menus mutate it IN PLACE (HandleMainMenuInput :218-222 sets menuType = CONDITION without any
+	// sub-app change), so a target armed against the old geometry must die the moment it changes.
+	int live = (int)gbacore_read16(sm->core, sm->pnBase + GS_PN_MENUTYPE_OFF);
+	if (live != ns->type) return 0;
+	return 1;
+}
+
+static u16 nav_update(const TouchSmart* sm, bool touching, bool newPress, bool gvalid,
+                      int gx, int gy) {
+	NavState ns;
+	if (!nav_read(sm, &ns)) { nav_reset(); return 0; }
+	if (s_nvATick > 0) { s_nvATick--; return 1 << GBAKEY_A; }   // finish the 2-frame confirm pulse
+
+	if (newPress && gvalid) {
+		s_nvDown = true; s_nvDrag = false; s_nvHeld = false; s_nvTick = 0;
+		s_nvDownX = gx; s_nvDownY = gy;
+	}
+	if (touching && s_nvDown) {
+		s_nvTick++;
+		if (gvalid && !s_nvDrag &&
+		    (abs(gx - s_nvDownX) > DLGGEOM_SLOP_PX || abs(gy - s_nvDownY) > DLGGEOM_SLOP_PX))
+			s_nvDrag = true;
+		if (s_nvDrag) {
+			int row;                                    // the target follows the finger, no pick
+			if (gvalid && navgeom_hit(ns.type, gx, gy, &row) && row != s_nvTgt) {
+				s_nvTgt = row; s_nvArm = 0; s_nvGap = 0; s_nvTotal = 0;
+			}
+		} else if (s_nvTick >= DLGGEOM_HOLD_FRAMES) {
+			if (!s_nvHeld) { s_nvHeld = true; s_nvHolds++; }
+			nav_reset(); s_nvDown = true; s_nvHeld = true;   // a hold cancels the route it armed
+			return 1 << GBAKEY_B;
+		}
+	}
+	if (!touching && s_nvDown) {
+		s_nvDown = false;
+		int wasDrag = s_nvDrag, wasHeld = s_nvHeld;
+		s_nvDrag = false; s_nvHeld = false; s_nvTick = 0;
+		if (!wasDrag && !wasHeld) {                     // a CLEAN tap = go there and pick
+			int row;
+			if (navgeom_hit(ns.type, s_nvDownX, s_nvDownY, &row)) {
+				s_nvTgt = row; s_nvArm = 0; s_nvGap = 0; s_nvTotal = 0; s_nvTaps++;
+			}
+		}
+	}
+
+	if (s_nvTgt < 0) return 0;
+	if (++s_nvTotal > NAVNAV_TIMEOUT) { nav_reset(); return 0; }
+	if (ns.cur == s_nvTgt) {                            // live cursorPos == target
+		if (s_nvArm == 0) s_nvArm = NAVNAV_A_DELAY;
+		if (--s_nvArm > 0) return 0;
+		s_nvTgt = -1; s_nvArm = 0; s_nvArrive++;
+		s_nvPicks++; s_nvATick = 1;
+		return 1 << GBAKEY_A;
+	}
+	s_nvArm = 0;                                        // moved off target mid-settle
+	if (s_nvGap > 0) { s_nvGap--; return 0; }
+	int st = navnav_step(ns.cur, s_nvTgt, ns.rows);
+	if (!st) { nav_reset(); return 0; }
+	// A press is a WRAP when it moves AWAY from the target in plain-difference terms — i.e. only a
+	// navigator that knows the ring can produce it. Counting them is what makes the wrap provable
+	// from outside: no straight-line driver can ever bump this.
+	if ((st == NAVNAV_DOWN && s_nvTgt < ns.cur) || (st == NAVNAV_UP && s_nvTgt > ns.cur)) s_nvWraps++;
+	s_nvGap = NAVNAV_GAP; s_nvSteps++;
+	return (st == NAVNAV_DOWN) ? (u16)(1 << GBAKEY_DOWN) : (u16)(1 << GBAKEY_UP);
+}
+
 // ===================== touch-event instrumentation log =======================
 // Decode a GBA key mask to a short string (bit order A0 B1 Sel2 St3 Right4 Left5 Up6 Down7 R8 L9).
 static void touch_keystr(uint16_t k, char* out, int cap) {
@@ -1894,6 +2013,10 @@ static void touch_cursor_addr(const TouchSmart* sm, uint32_t* addr, int* size) {
 	case GCTX_BAG:           if (sm->bagListTaskBase) { *addr = sm->bagListTaskBase + 26u; *size = 2; } break;
 	case GCTX_LIST:          if (sm->listBase) { *addr = sm->listBase + 26u; *size = 2; } break;   // 22.1 (LK_QTY/LK_DEX carry none; g_touchDbg covers them)
 	case GCTX_STORAGE:       if (p && p->stCursor) { *addr = p->stCursor + 1u; *size = 1; } break;   // 22.2 sCursorPosition
+	// PHASE 25 (lane D2) FAM-NAV: struct Pokenav_Menu.cursorPos, a SIGNED 16-bit field. The log's
+	// before/after pair therefore reads the exact value HandleMainMenuInput indexes sMenuItems[]
+	// with — i.e. "did the row the tap asked for become the row A will pick".
+	case GCTX_POKENAV:       if (sm->pnBase) { *addr = sm->pnBase + GS_PN_CURSOR_OFF; *size = 2; } break;
 	default: break;   // OVERWORLD / NONE / BATTLE_OTHER / NAMING: no single cursor addr -> key mask + g_touchDbg tell the story
 	}
 }
@@ -2070,6 +2193,14 @@ static void touch_dbg_stamp(const TouchSmart* sm, u16 ret) {
 	d->mapVariant = d->mapFrType = -1;
 	d->mapCancels = s_mpCancels;
 	d->qlState = -1;                     // PHASE 25: -1 = no quest log for this game / no profile
+	// PHASE 25 (lane D2) FAM-NAV. The counters are unconditional (they are cumulative proof); the
+	// five live reads default to -1 = "not a PokéNav frame", and are filled below for EVERY frame
+	// the PokéNav callback is up — the FEATURE sub-apps included, which is the whole point of the
+	// sub-state mirror.
+	d->navIdx = d->navType = d->navCur = d->navRows = d->navMode = -1;
+	d->navTaps = s_nvTaps; d->navSteps = s_nvSteps; d->navWraps = s_nvWraps;
+	d->navArrive = s_nvArrive; d->navPicks = s_nvPicks; d->navHolds = s_nvHolds;
+	d->navTgt = s_nvTgt;
 	const GameProfile* p = sm->prof;
 	if (!sm->core || !p) return;
 	// PHASE 25 (lane C1): stamped immediately after the null check, i.e. ABOVE the GCTX_MAP /
@@ -2086,6 +2217,26 @@ static void touch_dbg_stamp(const TouchSmart* sm, u16 ret) {
 				uint32_t rmb = gbacore_read32(sm->core, p->rmPtr);   // is the value that decides
 				if ((rmb >> 24) == 0x02)                             // whether mapIsFly is 1
 					d->mapFrType = (int32_t)gbacore_read8(sm->core, rmb + GS_FR_RM_TYPE_OFF);
+			}
+		}
+	}
+	// PHASE 25 (lane D2): the PokéNav sub-state mirror. Deliberately keyed on the CALLBACK and not
+	// on `ctx == GCTX_POKENAV`, because the values worth capturing are exactly the ones game_read
+	// refused to claim: currentMenuIndex >= 6 is a FEATURE sub-app (Hoenn map / condition graph /
+	// search results / Match Call / ribbons), and until now nothing on this machine could tell one
+	// from another. This is TOUCH-PLAN 22.7's "gdb-capture the pokenav state var across sub-app
+	// hops", and it costs three bus reads on one screen. LOGGING ONLY.
+	if (p->pokenavCb && p->pokenavPtr &&
+	    (sm->cb2 == p->pokenavCb || (p->pokenavCbAlt && sm->cb2 == p->pokenavCbAlt))) {
+		uint32_t res = gbacore_read32(sm->core, p->pokenavPtr);
+		if ((res >> 24) == 0x02) {
+			d->navIdx  = (int32_t)gbacore_read32(sm->core, res + GS_PN_MENUIDX_OFF);
+			d->navMode = (int32_t)gbacore_read16(sm->core, res + GS_PN_MODE_OFF);
+			uint32_t mh = gbacore_read32(sm->core, res + GS_PN_SUBSTRUCT_OFF + 4u * GS_PN_SUB_MENU);
+			if ((mh >> 24) == 0x02) {
+				d->navType = (int32_t)gbacore_read16(sm->core, mh + GS_PN_MENUTYPE_OFF);
+				d->navCur  = (int32_t)(int16_t)gbacore_read16(sm->core, mh + GS_PN_CURSOR_OFF);
+				d->navRows = navgeom_rows(d->navType);
 			}
 		}
 	}
@@ -2195,7 +2346,7 @@ static void mon_census_stamp(const TouchSmart* sm) {
 }
 
 // ================================ dispatch ==================================
-static void all_reset(void) { battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset(); dlg_reset(); prog_reset(); map_reset(); }
+static void all_reset(void) { battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset(); dlg_reset(); prog_reset(); map_reset(); nav_reset(); }
 
 u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, bool gvalid,
                  const TouchSmart* sm) {
@@ -2261,7 +2412,7 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 		break;
 	}
 	case GCTX_BATTLE_TARGET:
-		battle_reset(); walk_reset(); party_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset(); map_reset();
+		battle_reset(); walk_reset(); party_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset(); map_reset(); nav_reset();
 		if (newPress && gvalid) {
 			int pos = hit_battler(gx, gy);
 			if (pos >= 0) { int idx = battler_index_for_pos(sm, pos); if (idx >= 0) { s_tgt = idx; s_tgtTick = 0; } }
@@ -2269,7 +2420,7 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 		ret = select_pulse(sm->core, sm->prof ? sm->prof->multiCursor : 0, &s_tgt, &s_tgtTick);
 		break;
 	case GCTX_PARTY:
-		battle_reset(); walk_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset(); map_reset();
+		battle_reset(); walk_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset(); map_reset(); nav_reset();
 		if (newPress && gvalid) {
 			int slot = hit_party(gx, gy, sm->partyLayout);
 			if (slot == 7 || (slot >= 0 && slot < sm->partyCount)) { s_party = slot; s_partyTick = 0; }
@@ -2277,7 +2428,7 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 		ret = select_pulse(sm->core, sm->prof ? sm->prof->partyMenu + 0x09 : 0, &s_party, &s_partyTick);
 		break;
 	case GCTX_OVERWORLD:
-		battle_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset(); map_reset();
+		battle_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset(); map_reset(); nav_reset();
 		if (dlgOwns) {
 			// A script is talking (sFieldMessageBoxMode != 0). FAM-DLG owns the frame: tap = A
 			// (the box advances from ANYWHERE, not only from the player's own tile), hold = B,
@@ -2300,17 +2451,17 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 		                  sm->mapGroup, sm->mapNum, sm->core, sm->prof, sm->traverse);
 		break;
 	case GCTX_FIELDMENU:
-		battle_reset(); walk_reset(); party_reset(); target_reset(); list_reset(); naming_reset(); storage_reset(); map_reset();
+		battle_reset(); walk_reset(); party_reset(); target_reset(); list_reset(); naming_reset(); storage_reset(); map_reset(); nav_reset();
 		if (newPress && gvalid && sm->prof) { int i = hit_fieldmenu(sm->core, sm->prof, gx, gy); if (i >= 0) { s_fmenu = i; s_fmenuTick = 0; } }
 		ret = sm->prof ? fmenu_select(sm->core, sm->prof) : 0;
 		break;
 	case GCTX_BAG:
-		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); naming_reset(); storage_reset(); map_reset();
+		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); naming_reset(); storage_reset(); map_reset(); nav_reset();
 		if (s_lPrevKind != -2) { list_reset(); s_lPrevKind = -2; }   // arriving from another ctx/kind
 		ret = list_update(sm, sm->bagListTaskBase, LF_BAG, touching, newPress, gvalid, gx, gy);
 		break;
 	case GCTX_LIST:
-		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); naming_reset(); storage_reset(); map_reset();
+		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); naming_reset(); storage_reset(); map_reset(); nav_reset();
 		// a kind change (buy -> qty -> buy) mid-context resets the shared gesture state
 		if (s_lPrevKind != (int)sm->listKind) { list_reset(); s_lPrevKind = (int)sm->listKind; }
 		switch (sm->listKind) {
@@ -2326,21 +2477,29 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 		}
 		break;
 	case GCTX_NAMING:
-		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); storage_reset(); map_reset();
+		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); storage_reset(); map_reset(); nav_reset();
 		ret = naming_update(sm, touching, newPress, gvalid, gx, gy, sx, sy);
 		break;
 	case GCTX_STORAGE:
 		// fmenu state is deliberately NOT reset here: the storage popups delegate to the fmenu
 		// machinery (SPEC-family-grid G6) — storage_update owns its lifecycle.
-		battle_reset(); walk_reset(); party_reset(); target_reset(); list_reset(); naming_reset(); map_reset();
+		battle_reset(); walk_reset(); party_reset(); target_reset(); list_reset(); naming_reset(); map_reset(); nav_reset();
 		ret = storage_update(sm, touching, newPress, gvalid, gx, gy);
 		break;
 	// PHASE 24 (lane B2): FAM-MAP — the region map, and with it TAP-TO-FLY. Placed before the
 	// GCTX_FULLUI arm it was promoted out of: both map cb2s remain in cb2FullUi, so a game whose
 	// profile has no map anchors (FR/LG/RS today) still lands there and keeps tap=A/hold=B/drag.
 	case GCTX_MAP:
-		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset();
+		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset(); nav_reset();
 		ret = map_update(sm, touching, newPress, gvalid, gx, gy);
+		break;
+	// PHASE 25 (lane D2): FAM-NAV — the PokéNav MENUS. Placed with the other promoted-out-of-FULLUI
+	// families for the same reason: CB2_Pokenav stays in cb2FullUi, so a game with no PokéNav
+	// anchors (FR/LG/RS) or a FEATURE sub-app (Hoenn map / Match Call / ribbons / graphs, which
+	// game_read deliberately does not claim) lands there and keeps tap=A / hold=B / drag.
+	case GCTX_POKENAV:
+		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset(); map_reset();
+		ret = nav_update(sm, touching, newPress, gvalid, gx, gy);
 		break;
 	case GCTX_BATTLE_OTHER:
 		all_reset();
@@ -2352,7 +2511,7 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 	// here. FAM-DLG is what makes them usable: tap = A, hold = B, drag = D-pad (TITLE gets tap=A
 	// only — see dlg_update's allowB note).
 	case GCTX_FULLUI:
-		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset(); map_reset();
+		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset(); map_reset(); nav_reset();
 		ret = dlg_update(sm, touching, newPress, gvalid, gx, gy, 1);
 		break;
 	// --- PHASE 25 (lane C1): the INERT class. The `default` arm below would already return 0, but
@@ -2365,7 +2524,7 @@ u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, 
 		ret = 0;
 		break;
 	case GCTX_TITLE:
-		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset(); map_reset();
+		battle_reset(); walk_reset(); party_reset(); target_reset(); fmenu_reset(); list_reset(); naming_reset(); storage_reset(); map_reset(); nav_reset();
 		ret = dlg_update(sm, touching, newPress, gvalid, gx, gy, 0);
 		break;
 	default:

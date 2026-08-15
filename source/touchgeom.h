@@ -342,6 +342,67 @@ int mapnav_step_g(const MapGeom* g, int curX, int curY, int tgtX, int tgtY);
 // it would be noise indistinguishable from a bug.
 int mapgeom_fly_ok(const MapGeom* g, int secType);
 
+// ============== PHASE 25 / lane D2 — FAM-NAV: the PokéNav MENUS (TOUCH-PLAN G1) ================
+// One vertical column of option labels, and a cursor that WRAPS. Everything below is read off
+// pokeemerald, never off a screenshot.
+//
+// GEOMETRY. `CreateMenuOptionSprites` (src/pokenav_menu_handler_gfx.c:817-829) makes
+// MAX_POKENAV_MENUITEMS rows x NUM_OPTION_SUBSPRITES 4 sprites of SPRITE_SHAPE/SIZE(32x16), and
+// `DrawOptionLabelGfx` (:854-884) then places row i at `x = OPTION_DEFAULT_X 140`,
+// `y = yStart + deltaY*i`, with subsprite j offset `x2 = 32*j`. The SELECTED row slides to
+// `OPTION_SELECTED_X 130` (:34-35, :944-946). A 32x16 OAM's centre-to-corner is (-16,-8), so the
+// label spans GBA x [124,252) unselected / [114,242) selected — clipped by the 240-px screen.
+// Hence NAVGEOM_X0 below: the union, plus a lead-in, and everything to the right edge.
+//
+// The per-menuType table is `sPokenavMenuOptionLabelGfx` (:192-253) and the row COUNT is
+// `sLastCursorPositions[] = {2,3,4,2,5}` + 1 (src/pokenav_menu_handler.c:34-41):
+//
+//   | menuType                 | rows | yStart | deltaY | centres                    |
+//   |--------------------------|------|--------|--------|----------------------------|
+//   | 0 DEFAULT                |  3   |  42    |  20    | 42 62 82                   |
+//   | 1 UNLOCK_MC              |  4   |  42    |  20    | 42 62 82 102               |
+//   | 2 UNLOCK_MC_RIBBONS      |  5   |  42    |  20    | 42 62 82 102 122           |
+//   | 3 CONDITION              |  3   |  56    |  20    | 56 76 96                   |
+//   | 4 CONDITION_SEARCH       |  6   |  40    |  16    | 40 56 72 88 104 120        |
+//
+// Rows are hit-tested at the row PITCH (centre +/- deltaY/2), not at the 16-px sprite height:
+// that tiles the column with no dead gaps between adjacent options, while a tap above the first
+// row or below the last still misses cleanly. The option-description window is at tilemapTop 17
+// (y >= 136), so it is never inside the band.
+//
+// INPUT MODEL — and the one thing no earlier family had. `UpdateMenuCursorPos`
+// (src/pokenav_menu_handler.c:464-487) is JOY_NEW(DPAD_UP/DOWN) with NO auto-repeat, so one key
+// EDGE moves exactly one row (the driver must therefore RELEASE between presses), and the list
+// **WRAPS BOTH WAYS**: down past the last row lands on 0, up from 0 lands on the last. So the
+// shortest route from row 4 to row 0 of a 5-row menu is ONE press up, not four down —
+// `navnav_step` implements that, and it is the first family member whose optimal route is not
+// the straight-line distance.
+//
+// WHY THE CURSOR IS STILL NEVER WRITTEN (TOUCH-PLAN G1 says "cursor write + A"; the source says
+// no, twice): A acts on `cursorPos` (:212 `sMenuItems[menu->menuType][menu->cursorPos]`) while
+// the highlight and the description are driven by `currMenuItem` and the gfx layer's own
+// `gfx->cursorPos`, which only move when the handler RETURNS POKENAV_MENU_FUNC_MOVE_CURSOR
+// (gfx :891-946). A RAM write updates neither — it would leave a screen whose highlighted row is
+// not the row A picks. Same closed loop as FAM-MAP, for a sharper reason.
+#define NAVGEOM_X0        104   // left edge of the tappable band (label starts at 114 selected /
+                                //   124 not; the 10-px lead-in is slack, not a guess)
+#define NAVGEOM_X1        240   // ...to the screen edge
+#define NAVGEOM_NTYPES      5   // POKENAV_MENU_TYPE_COUNT
+// Rows for a menuType, or 0 if the type is out of range (which is itself the "do not drive this
+// screen" answer — a caller that gets 0 must emit nothing).
+int navgeom_rows(int menuType);
+// Which option row is at (gx,gy)? 1 + *row on a hit, 0 on a miss (outside the band, or below the
+// last live row). `menuType` out of range always misses.
+int navgeom_hit(int menuType, int gx, int gy, int* row);
+// The GBA-pixel centre of a row (for the debug mirror and for the tests' round trip).
+int navgeom_row_px(int menuType, int row, int* x, int* y);
+// One press towards `tgt` from `cur` on a `rows`-long WRAPPING list: NAVNAV_UP / NAVNAV_DOWN, or
+// 0 when already there or when any argument is out of range. Ties (exactly half way round an
+// even-length list) resolve DOWN, deterministically.
+#define NAVNAV_DOWN 1
+#define NAVNAV_UP   2
+int navnav_step(int cur, int tgt, int rows);
+
 // ========== PHASE 24 / lane A2 — the OVERWORLD OWN-TILE GESTURE (user decision D1) =============
 // docs/phase21-touch-census/DECISIONS-overworld-gestures.md §D1, verbatim: a TAP on the player's
 // own tile is START (the field menu) and fires on RELEASE; a HOLD on the player's own tile is

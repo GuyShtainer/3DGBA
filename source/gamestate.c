@@ -4,6 +4,12 @@
 #include <stdio.h>      // FILE / fprintf (the SD log dump)
 #include <sys/stat.h>   // mkdir (ensure the netlogs dir exists)
 #include "gamestate.h"
+// PHASE 25 (lane D2): the ONE fact game_read borrows from the geometry layer is the PokéNav menu's
+// live ROW COUNT (sLastCursorPositions[menuType]+1). It is deliberately not re-tabulated here:
+// test_profiles' own preamble argues that a second copy of a table is the exact bug class these
+// suites exist to catch, and touchgeom.h is pure C with no libctru, so this costs the host harness
+// one extra .c on the link line and nothing else.
+#include "touchgeom.h"
 
 #define BMON_MOVES_OFF 0x0C   // BattlePokemon.moves[] offset (4x u16)
 #define PM_TYPE_OFF    0x08   // gPartyMenu: low nibble menuType (0 field/1 battle), bits4-5 layout
@@ -162,7 +168,18 @@ static const GameProfile PROFILES[] = {
                pointer; its two map screens are two distinct cb2s, so no rev-alternate slot is
                needed for a shared one. Zero behaviour change to Emerald — pinned by test_profiles
                TEST 18, which still drives the SAME EM fly/wall answers through the real game_read. */
-            GS_RMAP_EM, 0x00000000u, 0x00000000u },
+            GS_RMAP_EM, 0x00000000u, 0x00000000u,
+            /* PHASE 25 (lane D2) FAM-NAV — the PokéNav (TOUCH-PLAN G1). Both values re-read from
+               the local byte-matched pokeemerald.sym this session, never copied from a spec:
+                 081c7400 l 00000016 CB2_Pokenav        -> pokenavCb   (compare-only)
+                 0203cf40 g 00000004 gPokenavResources  -> pokenavPtr  (a POINTER — deref)
+               pokenavCbAlt = 0: Emerald ships one US revision.
+               CB2_Pokenav is ALREADY the eighth entry of this row's cb2FullUi list above (census
+               [exact]), so — exactly like storageCb and the FAM-MAP pair — this changes how a tap
+               on the PokéNav READS, never whether the screen detects at all. And it only claims
+               the six MENU sub-apps: the Hoenn map / Match Call / ribbons / condition graphs keep
+               GCTX_FULLUI, with their sub-app index mirrored for the lane that takes them. */
+            0x081C7400u, 0x00000000u, 0x0203CF40u },
   // BPRE ROM anchors: the PRIMARIES below are FR rev0 (correct for a rev0 cart); the REV1 values —
   // the user's cart — live in the phase-22.0 ALTERNATE block at the end of the row. newKeys was
   // 0x0303011E (a digit transposition, RS-REV2-VERIFICATION.md §7): gMain 0x030030F0
@@ -368,7 +385,11 @@ static const GameProfile PROFILES[] = {
                                         one that needed an alternate
                Both EWRAM pointers are BYTE-IDENTICAL in pokefirered.sym and pokefirered_rev1.sym
                (checked this session), so only the callback is revision-sensitive. */
-            GS_RMAP_FR, 0x020399E4u, 0x080C08B4u },
+            GS_RMAP_FR, 0x020399E4u, 0x080C08B4u,
+            /* PHASE 25 (lane D2) FAM-NAV = 0,0,0. FireRed has NO PokéNav — it is an RSE device,
+               and FRLG's nearest equivalent is the TOWN MAP key item, which lane D1 already
+               drives through FAM-MAP. Explicit zeros, not an omission. */
+            0x00000000u, 0x00000000u, 0x00000000u },
   // BPGE ROM anchors — REPLACED phase 22.0 (they were FireRed-rev0 values, wrong for EVERY
   // LeafGreen revision; battle/party/bag/menu detection was silently dead on LG). PRIMARIES are
   // now LG **rev1** — the user's cart is rev 1.1 — re-derived field-by-field from
@@ -508,7 +529,10 @@ static const GameProfile PROFILES[] = {
                `CB2_RegionMap` were not resolved in this lane, and inventing them from the FR row
                is the precise failure this profile spent phase 22.0 undoing. Explicit zeros; LG
                keeps the FAM-DLG default on its map. Owed: one LG harvest slice. */
-            GS_RMAP_NONE, 0x00000000u, 0x00000000u },
+            GS_RMAP_NONE, 0x00000000u, 0x00000000u,
+            /* PHASE 25 (lane D2) FAM-NAV = 0,0,0 — LeafGreen has no PokéNav either (same engine
+               family as FireRed). Explicit zeros. */
+            0x00000000u, 0x00000000u, 0x00000000u },
 
   // ===================== Ruby / Sapphire (SPEC-coop §P3) =====================================
   // Every RAM value below is VERIFIED-SYM against pret's byte-matched `symbols` branch, all FOUR
@@ -717,7 +741,13 @@ static const GameProfile PROFILES[] = {
             /* PHASE 25 (lane D1) rmVariant = GS_RMAP_NONE + zeros — the standing RS ROM/statics
                ban. Ruby/Sapphire's region map is pokeemerald's ANCESTOR, not its twin, and no RS
                address in this file is promoted from a sym map. Explicit zeros. */
-            GS_RMAP_NONE, 0x00000000u, 0x00000000u },
+            GS_RMAP_NONE, 0x00000000u, 0x00000000u,
+            /* PHASE 25 (lane D2) FAM-NAV = 0,0,0. Ruby/Sapphire DO have a PokéNav — and that is
+               the trap. It is pokeemerald's ANCESTOR: pokeruby has no `struct Pokenav_Menu`
+               substruct model at all, so an Emerald address here would be wrong about the
+               ADDRESS and about the STRUCT. Plus the standing RS ROM/statics ban. Explicit
+               zeros; RS keeps whatever its own class lists give the screen. */
+            0x00000000u, 0x00000000u, 0x00000000u },
   // Pokemon Sapphire (US; same promotion rule — every value below was measured on SAPPHIRE
   // itself, live [exact] on pokesapphire_rev2.sym; LANE-B-RS.md §2 drift table + §3 solo smoke).
   { "AXPE", RS_PROFILE_BODY_RAM,
@@ -761,7 +791,13 @@ static const GameProfile PROFILES[] = {
             /* PHASE 25 (lane D1) rmVariant = GS_RMAP_NONE + zeros — the standing RS ROM/statics
                ban. Ruby/Sapphire's region map is pokeemerald's ANCESTOR, not its twin, and no RS
                address in this file is promoted from a sym map. Explicit zeros. */
-            GS_RMAP_NONE, 0x00000000u, 0x00000000u },
+            GS_RMAP_NONE, 0x00000000u, 0x00000000u,
+            /* PHASE 25 (lane D2) FAM-NAV = 0,0,0. Ruby/Sapphire DO have a PokéNav — and that is
+               the trap. It is pokeemerald's ANCESTOR: pokeruby has no `struct Pokenav_Menu`
+               substruct model at all, so an Emerald address here would be wrong about the
+               ADDRESS and about the STRUCT. Plus the standing RS ROM/statics ban. Explicit
+               zeros; RS keeps whatever its own class lists give the screen. */
+            0x00000000u, 0x00000000u, 0x00000000u },
   #undef RS_PROFILE_BODY_RAM
   #undef RS_PROFILE_BODY_TAIL
 };
@@ -839,6 +875,10 @@ bool game_read(GbaCore* c, const GameProfile* p, GameState* out) {
 	out->px = out->py = -1; out->actionCursor = out->moveCursor = -1; out->ctx = GCTX_NONE;
 	out->partyCount = out->partyLayout = out->battlersCount = -1;
 	out->mapGroup = out->mapNum = out->objX = out->objY = out->facing = -1;
+	// PHASE 25 (lane D2) FAM-NAV: -1 means "this frame is not a PokéNav frame", so a real 0
+	// (currentMenuIndex 0 == POKENAV_MAIN_MENU, menuType 0 == DEFAULT, cursorPos 0 == the top row,
+	// mode 0 == NORMAL) is never confused with "not read". pnBase stays 0 = no live menu struct.
+	out->pnMenuIdx = out->pnMenuType = out->pnCursor = out->pnMode = -1;
 	if (!c || !p) return false;
 	out->valid = true;
 
@@ -996,6 +1036,38 @@ bool game_read(GbaCore* c, const GameProfile* p, GameState* out) {
 				out->ctx = GCTX_MAP; out->mapFly = (ty == GS_FR_RMTYPE_FLY); return true;
 			}
 		}
+		// PHASE 25 (lane D2): the POKENAV — TOUCH-PLAN G1, and the first family whose screen is
+		// identified by a HEAP STRUCT rather than a callback. CB2_Pokenav serves all fifteen
+		// sub-apps, so the callback only says "the PokéNav is up"; WHICH sub-app is
+		// gPokenavResources->currentMenuIndex, written by SetActivePokenavMenu (pokenav.c:518).
+		//
+		// The mirror is filled for EVERY PokéNav frame (that is the sub-state capture the census
+		// staged and never took, and it is what a later lane needs for rows G2-G5), but the ctx is
+		// claimed ONLY for the six MENU sub-apps with a live menu substruct and an in-range
+		// cursor. Anything else — a feature sub-app, a mid-init frame, a freed struct — falls
+		// through to the cb2FullUi loop below, where CB2_Pokenav already sits: the failure mode is
+		// "no upgrade, keep today's FAM-DLG tap=A/hold=B", never a driver running blind. Same
+		// shape as the FR region map above and the discovered-list whitelist below.
+		if (p->pokenavCb && p->pokenavPtr &&
+		    (out->cb2 == p->pokenavCb || (p->pokenavCbAlt && out->cb2 == p->pokenavCbAlt))) {
+			uint32_t res = gbacore_read32(c, p->pokenavPtr);        // gPokenavResources: deref
+			if ((res >> 24) == 0x02) {
+				uint32_t idx = gbacore_read32(c, res + GS_PN_MENUIDX_OFF);
+				out->pnMenuIdx = (idx <= 0x7FFF) ? (int16_t)idx : (int16_t)0x7FFF;
+				out->pnMode    = (int16_t)gbacore_read16(c, res + GS_PN_MODE_OFF);
+				uint32_t mh    = gbacore_read32(c, res + GS_PN_SUBSTRUCT_OFF + 4u * GS_PN_SUB_MENU);
+				if ((mh >> 24) == 0x02) {
+					int mt  = (int)gbacore_read16(c, mh + GS_PN_MENUTYPE_OFF);
+					int cur = (int16_t)gbacore_read16(c, mh + GS_PN_CURSOR_OFF);
+					out->pnMenuType = (mt <= GS_PN_MENUTYPE_MAX) ? (int16_t)mt : (int16_t)-1;
+					out->pnCursor   = (int16_t)cur;
+					int rows = navgeom_rows(mt);
+					if (idx <= GS_PN_MENU_IDX_MAX && rows > 0 && cur >= 0 && cur < rows) {
+						out->ctx = GCTX_POKENAV; out->pnBase = mh; return true;
+					}
+				}
+			}
+		}
 		if (task_active(c, p, p->dexTask)) {                        // EM dex LIST (task is unique
 			out->ctx = GCTX_LIST; out->listKind = LK_DEX;           //   to the list screen)
 			return true;
@@ -1080,7 +1152,8 @@ static const char* const GS_CTXN[] = {   // index = GameCtx; matches main.c's te
 	                                     //   14 and this table stopped at 13, so every region-map
 	                                     //   row in the gs ring and on the diag HUD printed "?".
 	                                     //   Reported, not silently fixed: see LANE-C-HARVEST.md.
-	"inert"                              // phase 25 (lane C1) INERT class (credits / QL playback)
+	"inert",                             // phase 25 (lane C1) INERT class (credits / QL playback)
+	"pknav"                              // phase 25 (lane D2) FAM-NAV — the PokéNav MENU screens
 };
 const char* gamestate_ctx_name(int ctx) {
 	return (ctx >= 0 && ctx < (int)(sizeof GS_CTXN / sizeof GS_CTXN[0])) ? GS_CTXN[ctx] : "?";
