@@ -1,0 +1,251 @@
+<title>3DGBA Touch Roadmap</title>
+<style>
+  :root {
+    --bg:#EDEBE4; --panel:#FFFFFF; --panel2:#F6F3EC; --line:#DAD5CB;
+    --acc:#BE7A16; --acc-ink:#8A5A0F; --text:#241C33; --dim:#6E6784;
+    --good:#3E7A22; --bad:#B4331E; --info:#2F6BAE; --warn:#9A6B00;
+    --shadow:0 1px 2px rgba(36,28,51,.06), 0 8px 24px rgba(36,28,51,.07);
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg:#201830; --panel:#2A2042; --panel2:#241B38; --line:#3B2E60;
+      --acc:#F5D042; --acc-ink:#F5D042; --text:#F4F1FB; --dim:#B0A8C8;
+      --good:#7FC456; --bad:#E4796B; --info:#5E9BE0; --warn:#E0B44A;
+      --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg:#201830; --panel:#2A2042; --panel2:#241B38; --line:#3B2E60;
+    --acc:#F5D042; --acc-ink:#F5D042; --text:#F4F1FB; --dim:#B0A8C8;
+    --good:#7FC456; --bad:#E4796B; --info:#5E9BE0; --warn:#E0B44A;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:var(--sans);
+         line-height:1.55; -webkit-font-smoothing:antialiased; }
+  .wrap { max-width:940px; margin:0 auto; padding:clamp(24px,5vw,60px) clamp(16px,4vw,28px) 90px; }
+  .eyebrow { font-family:var(--mono); font-size:11px; letter-spacing:.18em; text-transform:uppercase;
+             color:var(--dim); margin:0 0 12px; }
+  h1 { font-size:clamp(28px,4.6vw,44px); line-height:1.06; letter-spacing:-.025em; margin:0 0 14px;
+       text-wrap:balance; font-weight:760; }
+  h1 em { font-style:normal; color:var(--acc); }
+  .lede { font-size:clamp(15px,1.8vw,18px); color:var(--dim); max-width:62ch; margin:0 0 30px; }
+  h2 { font-size:12.5px; font-family:var(--mono); letter-spacing:.16em; text-transform:uppercase;
+       color:var(--dim); margin:50px 0 6px; padding-bottom:9px; border-bottom:1px solid var(--line); }
+  h3 { font-size:15px; margin:26px 0 8px; }
+  p { max-width:68ch; }
+  .note { color:var(--dim); font-size:14.5px; margin:10px 0 22px; max-width:68ch; }
+  .note strong { color:var(--text); }
+
+  .stats { display:flex; flex-wrap:wrap; gap:10px; margin:0 0 8px; }
+  .stat { flex:1 1 140px; background:var(--panel); border:1px solid var(--line); border-radius:10px;
+          padding:13px 15px; box-shadow:var(--shadow); }
+  .stat b { display:block; font-family:var(--mono); font-size:24px; font-variant-numeric:tabular-nums;
+            letter-spacing:-.02em; line-height:1.15; }
+  .stat span { font-family:var(--mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase;
+               color:var(--dim); }
+  .s-good b { color:var(--good); } .s-acc b { color:var(--acc-ink); } .s-info b { color:var(--info); }
+  .s-bad b { color:var(--bad); }
+
+  .tblwrap { overflow-x:auto; margin:0 0 6px; }
+  table { width:100%; border-collapse:collapse; font-size:14.5px; min-width:520px; }
+  th, td { text-align:left; padding:10px 11px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { font-family:var(--mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase;
+       color:var(--dim); font-weight:400; }
+  td:first-child { font-weight:620; }
+  .st { font-family:var(--mono); font-size:9.5px; letter-spacing:.06em; text-transform:uppercase;
+        padding:3px 7px; border-radius:999px; border:1px solid; white-space:nowrap; display:inline-block; }
+  .st-live { color:var(--good); border-color:color-mix(in srgb,var(--good) 45%,transparent);
+             background:color-mix(in srgb,var(--good) 10%,transparent); }
+  .st-host { color:var(--warn); border-color:color-mix(in srgb,var(--warn) 45%,transparent);
+             background:color-mix(in srgb,var(--warn) 10%,transparent); }
+  .st-none { color:var(--dim); border-color:var(--line); }
+  .st-hw   { color:var(--info); border-color:color-mix(in srgb,var(--info) 45%,transparent);
+             background:color-mix(in srgb,var(--info) 10%,transparent); }
+  .st-blk  { color:var(--bad); border-color:color-mix(in srgb,var(--bad) 45%,transparent);
+             background:color-mix(in srgb,var(--bad) 10%,transparent); }
+
+  .tier { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px 18px;
+          margin:0 0 10px; box-shadow:var(--shadow); }
+  .tier-h { display:flex; align-items:baseline; gap:11px; flex-wrap:wrap; margin:0 0 6px; }
+  .tier-n { font-family:var(--mono); font-size:10.5px; letter-spacing:.14em; color:var(--acc-ink);
+            border:1px solid color-mix(in srgb,var(--acc) 40%,transparent); border-radius:999px;
+            padding:2px 9px; }
+  .tier-h h3 { margin:0; font-size:16px; }
+  .tier-why { color:var(--dim); font-size:13.5px; margin-left:auto; font-style:italic; }
+  .tier p { margin:6px 0 0; font-size:14.5px; color:var(--dim); }
+  .tier p strong { color:var(--text); }
+
+  .call { background:var(--panel2); border:1px solid var(--line); border-left:3px solid var(--acc);
+          border-radius:8px; padding:13px 16px; margin:16px 0; }
+  .call p { margin:0; font-size:14.5px; }
+  .call b { color:var(--acc-ink); }
+  ul { padding-left:19px; max-width:68ch; } li { margin:5px 0; font-size:14.5px; }
+  footer { margin-top:56px; padding-top:20px; border-top:1px solid var(--line); font-size:13px;
+           color:var(--dim); }
+  code { font-family:var(--mono); font-size:12.5px; background:var(--panel2); padding:1px 5px;
+         border-radius:4px; }
+</style>
+
+<div class="wrap">
+  <p class="eyebrow">3DGBA · Nintendo 3DS homebrew · touch roadmap · 15 Aug 2026</p>
+  <h1>What's done, what's left, and <em>what only you can test</em>.</h1>
+  <p class="lede">
+    Ninety-seven commits landed overnight across five phases. This is the reconciliation: every
+    touch family with an honest proof level, the order to finish them in, and the short list of
+    things no emulator can answer.
+  </p>
+
+  <div class="stats">
+    <div class="stat s-good"><b>25</b><span>families live-proven</span></div>
+    <div class="stat s-acc"><b>3</b><span>built, never run</span></div>
+    <div class="stat s-info"><b>1.29M</b><span>host checks · 19 suites</span></div>
+    <div class="stat s-bad"><b>1</b><span>blocker stopping proof</span></div>
+  </div>
+  <p class="note">
+    <strong>Proof levels are strict.</strong> <span class="st st-live">live</span> means driven in
+    the emulator with a read of the game's own state — not a screenshot.
+    <span class="st st-host">host</span> means pure-C tests only, never executed.
+    <span class="st st-none">none</span> means not started.
+    <span class="st st-hw">you</span> means only real hardware can answer it.
+  </p>
+
+  <h2>1 · Working today</h2>
+  <p class="note">
+    All of this is emulator-proven with a game-state read. None of it has been touched on real
+    hardware — see §4.
+  </p>
+  <div class="tblwrap"><table>
+    <tr><th>Area</th><th>What a finger does</th><th>Proof</th></tr>
+    <tr><td>Overworld</td><td>Tap to walk anywhere — real pathfinding over the game's collision, elevation and warp rules. Doors, arrow mats, NPCs, signs.</td><td><span class="st st-live">live</span></td></tr>
+    <tr><td>Gestures</td><td>Tap yourself = START, hold = SELECT. Tap near = walk, tap far = run.</td><td><span class="st st-live">live</span></td></tr>
+    <tr><td>HM traversal</td><td>Cut, Surf, Rock Smash — tap past the obstacle and it's used, then the route continues. Cross-map excursions (the Lavaridge hot spring through the Pokémon Centre).</td><td><span class="st st-live">live</span></td></tr>
+    <tr><td>Fly</td><td>Tap a town on the region map. Both engines, plus the wall map.</td><td><span class="st st-live">live</span></td></tr>
+    <tr><td>Dialogs</td><td>Tap to advance, hold = B, drag = D-pad, edge taps turn pages.</td><td><span class="st st-live">live</span></td></tr>
+    <tr><td>Battle</td><td>Action, move and target menus.</td><td><span class="st st-live">live</span></td></tr>
+    <tr><td>Lists</td><td>Bag, party, marts, Pokéblock case, FireRed's Berry Pouch and TM Case. Drag-scrolling throughout.</td><td><span class="st st-live">live</span></td></tr>
+    <tr><td>Naming keyboard</td><td>Typed by touch alone, including the case/page swap.</td><td><span class="st st-live">live</span></td></tr>
+    <tr><td>PC storage</td><td>The box grid — pick up, box arrows, shift, place. Used it to pull your Lugia out of box 8.</td><td><span class="st st-live">live</span></td></tr>
+    <tr><td>PokéNav</td><td>The menus, as a wrap-aware ring picker.</td><td><span class="st st-live">live</span></td></tr>
+    <tr><td>Co-op</td><td>Ruby + Sapphire on one console.</td><td><span class="st st-live">live</span></td></tr>
+  </table></div>
+
+  <h2>2 · Built but never executed</h2>
+  <p class="note">
+    These are implemented and graded by host tests, but the code has never actually run against a
+    game. Treat them as unproven.
+  </p>
+  <div class="tblwrap"><table>
+    <tr><th>Item</th><th>State</th><th>Proof</th></tr>
+    <tr><td>Waterfall</td><td>Planner proven live and re-derived from your cartridge bytes. Two executor bugs found and fixed; the ride itself has never completed under program control.</td><td><span class="st st-host">host</span></td></tr>
+    <tr><td>Strength</td><td>Terminal-only by design: tapping a boulder activates Strength, the router never pushes it for you. <strong>The safety property — that the boulder does not move — has never been measured.</strong></td><td><span class="st st-host">host</span></td></tr>
+    <tr><td>Dive</td><td>Correctly modelled as a map connection with identity coordinates, not a warp. Planner only — nothing can trigger it yet.</td><td><span class="st st-host">host</span></td></tr>
+  </table></div>
+
+  <h2>3 · The order to finish in</h2>
+
+  <div class="tier">
+    <div class="tier-h"><span class="tier-n">TIER 0</span><h3>The harness freeze</h3>
+      <span class="tier-why">blocks everything below</span></div>
+    <p>With a debugger attached the emulator freezes ~20 seconds into a game session. The decisive
+    test: <strong>the older binary freezes identically</strong>, so it isn't a code regression.
+    Until this is fixed, nothing new can be emulator-proven — which is why Waterfall and Strength
+    are stuck. <strong>This is the single highest-value thing to fix.</strong></p>
+  </div>
+
+  <div class="tier">
+    <div class="tier-h"><span class="tier-n">TIER 1</span><h3>Finish the HMs</h3>
+      <span class="tier-why">nearly done, high daily value</span></div>
+    <p>Run the Waterfall ride on the 8-tile Ever Grande fall — the only site that measures whether
+    one interaction carries you the whole column. Measure Strength's safety property. Then give
+    Dive an executor: it needs its own sequencer (own tile, no facing step, B to surface, map change
+    as the success gate).</p>
+  </div>
+
+  <div class="tier">
+    <div class="tier-h"><span class="tier-n">TIER 2</span><h3>Screens you touch constantly</h3>
+      <span class="tier-why">best value per hour</span></div>
+    <p><strong>Summary pages 3–4, Mart buy, Bag item sub-menu, Player PC, Mailbox, Move relearner,
+    Mail compose.</strong> Most are list-family variants, and the discovery probe means each is
+    roughly <em>one harvested screen id away</em> with no new addresses. This is the cheapest bulk
+    progress available.</p>
+  </div>
+
+  <div class="tier">
+    <div class="tier-h"><span class="tier-n">TIER 3</span><h3>Pokédex</h3>
+      <span class="tier-why">self-contained, big surface</span></div>
+    <p>Emerald's list, entry, size and search UI; all of FireRed's dex including its grid TOC. Large
+    but isolated — nothing else depends on it.</p>
+  </div>
+
+  <div class="tier">
+    <div class="tier-h"><span class="tier-n">TIER 4</span><h3>Word-grid text entry</h3>
+      <span class="tier-why">new family, not the keyboard</span></div>
+    <p>Easy Chat, Walda's phrase, Dewford trends. These pick <em>words from a grid</em>, so the
+    letter-keyboard driver doesn't transfer — check what actually carries over before writing code.</p>
+  </div>
+
+  <div class="tier">
+    <div class="tier-h"><span class="tier-n">TIER 5</span><h3>Contests, Frontier, minigames</h3>
+      <span class="tier-why">deep, gated, rarely used</span></div>
+    <p>Contest appeals and condition screens; Frontier Pass, Factory swap, Pyramid bag, Dome tree;
+    slots, roulette, Teachy TV, Fame Checker. Several are gated behind long in-game progression,
+    which is why they keep getting deferred — that's a budget problem, not a difficulty one.</p>
+  </div>
+
+  <div class="tier">
+    <div class="tier-h"><span class="tier-n">TIER 6</span><h3>Secret Base decoration</h3>
+      <span class="tier-why">the most touch-shaped thing left</span></div>
+    <p>Genuine drag-and-place. Deliberately last because it needs a secret base to exist before any
+    of it can be proven — but it's the screen that will feel best.</p>
+  </div>
+
+  <h2>4 · Only you can test this</h2>
+  <p class="note">
+    Every result above is Azahar. The emulator cannot speak for the physical panels, the real
+    digitiser, or two saturated cores at 804 MHz. <strong>The <code>.cia</code> is current as of
+    06:20 today</strong> and includes everything.
+  </p>
+  <div class="tblwrap"><table>
+    <tr><th>Test</th><th>Why it can't be answered here</th><th></th></tr>
+    <tr><td>Wireless trade, run #13</td><td>Owed since July. The trade and save work; the bug is the post-trade room exit. UDS latency and loss are hardware-only.</td><td><span class="st st-hw">you</span></td></tr>
+    <tr><td>Text size &amp; sharpness</td><td>You reported blur, it was fixed and measured on real framebuffers — but you last looked <em>before</em> the size increase. Compare our UI text against the GBA game's own text on the same screen.</td><td><span class="st st-hw">you</span></td></tr>
+    <tr><td>Touch accuracy and feel</td><td>Every tap so far was synthesized at exact pixels. Drag feel, tap precision and whether the hold threshold suits a real thumb are yours.</td><td><span class="st st-hw">you</span></td></tr>
+    <tr><td>Frame budget</td><td>Two emulated GBAs plus routing and the HD-2D passes, on core 2 at 804 MHz. Azahar does not model core contention.</td><td><span class="st st-hw">you</span></td></tr>
+    <tr><td>HM traversal in the hand</td><td>The cadences are counted in emulated frames. Real timing is the question.</td><td><span class="st st-hw">you</span></td></tr>
+    <tr><td>Audio</td><td>Needs Luma's dumped DSP firmware; never validated.</td><td><span class="st st-hw">you</span></td></tr>
+  </table></div>
+
+  <h2>5 · Waiting on your decision</h2>
+  <div class="call"><p><b>Traversal ships OFF.</b> <code>smartTraverse = 0</code>, so Surf, Cut,
+  Rock Smash and Waterfall do nothing on a fresh install. The reasoning was that a feature which
+  walks your character around and answers the game's own yes/no prompts shouldn't switch itself on.
+  You asked for the feature specifically — so: default On, On-without-cross-map-excursions, or
+  leave it Off and opt in?</p></div>
+  <div class="call"><p><b>Where should effort go?</b> The tier order above is my recommendation, but
+  if you'd rather have the Pokédex before the everyday menus, or want decoration placement early
+  because it's the most fun, say so and I'll reorder.</p></div>
+
+  <h2>6 · The honest caveat</h2>
+  <p class="note">
+    The plan document's own status column has drifted — it still lists the naming keyboard and PC
+    storage as outstanding when both have been proven for days. Lanes updated their own rows and not
+    others. <strong>The numbers on this page come from the lane reports and commits, not from that
+    column</strong>, which is why I could not quote you a clean "N screens left" earlier. Fixing that
+    bookkeeping is a small job and worth doing before the next push.
+  </p>
+  <p class="note">
+    One pattern worth carrying forward: eight times this project asserted something was
+    <em>unreachable</em> or <em>impossible</em> and was wrong — a credits sequence that replays on
+    every league clear, a machine that turned out to be one staircase away, an evolution trigger
+    sitting in a PC box nobody decoded. Positive claims were always earning live proof; negative
+    ones were being reasoned once and inherited. Those are now checked as hard as the claims.
+  </p>
+
+  <footer>
+    3DGBA — dual-GBA emulator for New Nintendo 3DS. 97 commits, 15 Aug 2026.
+    19 host suites, 1,290,973 checks, 0 failures. <code>3DGBA.cia</code> rebuilt 06:20.
+  </footer>
+</div>
