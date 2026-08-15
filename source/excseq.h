@@ -40,7 +40,9 @@ typedef struct {
 	int pendG, pendN;        // ...the map it must be walked on
 	int pendX, pendY;        // ...and the tile it walks to
 	int pendFrames;
-	int lastW, lastH;        // last backup-layout dims seen while waiting (the stability rule)
+	int lastW, lastH;        // last backup-layout dims seen while waiting (the stability rule).
+	                         //   INVARIANT (phase 27): every re-arm resets this to -1,-1, so a
+	                         //   pending leg can never be settled by dims read on a map it has left.
 } ExcSeq;
 
 // excseq_boundary()
@@ -63,6 +65,7 @@ int excseq_boundary_due(const ExcSeq* s, int mapG, int mapN);
 // tapped goal, both of which this struct already holds.
 // Returns EXC_B_ARMED (leg advanced, `leg` is the new one) or EXC_B_RESET (not the map we
 // predicted, or the excursion is over — the machine is now off).
+// Phase 27: an ARMED leg starts with NO dims history (see excseq.c `exc_forget_dims`).
 int excseq_boundary(ExcSeq* s, int mapG, int mapN, int dG, int dN, int wjX, int wjY);
 
 // One frame of "is the world ready for the armed leg yet". ALWAYS updates the dims history.
@@ -80,4 +83,5 @@ int excseq_home_done(ExcSeq* s, int walking);
 
 // The follow loop's layout check killed the route while an excursion is live: recoverable, because
 // the leg's target is still held. Re-arm it rather than throw away a route two doors along.
+// Phase 27: also forgets the dims history — the layout is what just changed.
 void excseq_layout_kill(ExcSeq* s);

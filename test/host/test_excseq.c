@@ -23,6 +23,12 @@
 // route is being followed) against the same STEP-warp trace and shows it misses the boundary. If
 // that ever stops failing, this suite has stopped testing anything.
 //
+// PHASE 27 (lane R). This suite found a FOURTH defect while covering the first three — the dims
+// history survived a leg boundary, so leg 2's first frame was settled by the previous map's
+// dimensions and planned on the wrong grid. Lane C2 pinned it (behaviour-preserving extraction);
+// it is now FIXED in `excseq_boundary` AND in `excseq_layout_kill` (the same-size-swap path, TEST
+// 7), and TESTs 6 and 7 assert the fixed behaviour instead of the residue.
+//
 // TEST NUMBERING
 //   TEST 1  arm / boundary / the map the plan predicted (and what a wrong map does)
 //   TEST 2  the STEP-warp watcher, vs the old in-the-follow-loop rule            fix a1cbdca
@@ -319,15 +325,15 @@ static void test_p4_excursion(void) {
 
 	// --- the town loads under the leg: the 2fa4976 sequence ---
 	//
-	// A RESIDUE THIS SUITE FOUND, pinned here rather than quietly fixed (phase 25 lane C2 is a
-	// behaviour-PRESERVING extraction, and changing this needs its own live P4 re-proof):
-	// `lastW/lastH` are NOT cleared by a leg boundary, and during leg 1's walk nothing updates them
-	// — so the first frame of leg 2 compares the PC's 14x9 against the 14x9 the PREVIOUS leg's
-	// settle recorded, calls that "stable", and plans on the old grid. What saves it is the OTHER
-	// half of 2fa4976: the follow loop's layout check kills that route a frame later and RE-ARMS
-	// the leg (TEST 7), and the retry then plans on the finished map. So the shipped machine still
-	// gets home — it just spends one BFS doing it. Named in the lane log; a one-line fix
-	// (clearing the dims history in excseq_boundary) is left to a lane that can re-prove P4 live.
+	// THE RESIDUE THIS SUITE FOUND, NOW FIXED (phase 27 lane R). Lane C2 pinned it as a defect
+	// rather than hiding it: `lastW/lastH` were not cleared by a leg boundary, and nothing updates
+	// them while a leg is being WALKED — so the first frame of leg 2 compared the town's dims
+	// against the 14x9 the PREVIOUS leg's settle had recorded, and when those agreed it called the
+	// world "stable" on the first frame it looked at and planned on the old grid. It cost one
+	// wasted BFS on every excursion (`planSeq 4 -> routeEnd 6 -> planSeq 5` in the live phase-25 P4).
+	// `excseq_boundary` now forgets the dims, so an armed leg must OBSERVE the world twice.
+	// This loop is the same trace as before; only the expected answer moved.
+	CHECK(s.lastW == -1 && s.lastH == -1, "THE FIX: arming a leg forgets the previous leg's dims");
 	planned = 0; first = -1;
 	int wastedOnOldGrid = 0;
 	for (int f = 0; f < 40 && !planned; f++) {
@@ -337,12 +343,15 @@ static void test_p4_excursion(void) {
 		if (got) { planned = 1; first = f; }
 	}
 	CHECK(planned == 1, "leg 2 is planned");
-	CHECK(first == 0, "and the residue is real: the stale dims history makes frame 0 look settled");
-	CHECK(wastedOnOldGrid == 1, "...so that first plan is drawn on the PC's grid, and will be killed");
+	CHECK(wastedOnOldGrid == 0, "and NOT on the Pokemon Center's grid — that plan no longer happens");
+	CHECK(first == EXC_SETTLE_EVERY,
+	      "...it waits for the town's own dims to hold still, then plans on the first cadence frame (frame %d)", first);
 
-	// The recovery, which is what the live run actually did: the layout check kills it, the leg
-	// re-arms, and the retry plans on the FINISHED map.
+	// The recovery path is still exercised, because the follow loop's layout check can still fire
+	// for a reason the boundary never saw (a script warp, a same-size swap): the leg re-arms and the
+	// retry plans on the FINISHED map.
 	excseq_layout_kill(&s);
+	CHECK(s.lastW == -1 && s.lastH == -1, "THE FIX, other site: a layout kill forgets the dims too");
 	CHECK(s.pend == 1 && s.leg == 2, "the layout kill re-armed leg 2 instead of dropping it");
 	planned = 0; first = -1;
 	for (int f = 0; f < 40 && !planned; f++) {
@@ -377,6 +386,18 @@ static void test_kill_and_home(void) {
 	CHECK(s.pend == 1 && s.pendFrames == 0, "a layout kill RE-ARMS the same leg");
 	CHECK(s.pendX == keepX && s.pendY == keepY, "...with the same target it was aiming at");
 	CHECK(s.on && s.leg == 1, "...and does not throw away an excursion that is two doors along");
+
+	// PHASE 27 — THE SAME-SIZE SWAP, which is why the layout kill forgets the dims as well.
+	// touch.c kills a route on `ptr != s_mapPtr || w != s_mapW || h != s_mapH`; the POINTER half is
+	// there because gBackupMapLayout is a fixed EWRAM buffer, so a map swap between two 14x9 rooms
+	// changes nothing but the pointer. With the dims history carried across the re-arm, the retry
+	// compared 14x9 against the 14x9 it had recorded on the map it just LEFT, called that stable,
+	// and planned on frame 0 of a world that was still loading — the TEST 6 defect by another door.
+	CHECK(s.lastW == -1 && s.lastH == -1, "a layout kill forgets the dims history");
+	CHECK(!would_plan(&s, PC_G, PC_N, 7, 1, 14, 9),
+	      "so the first frame after a SAME-SIZE swap is not settled...");
+	CHECK(would_plan(&s, PC_G, PC_N, 7, 1, 14, 9),
+	      "...and only the second read of the same dims is");
 	// On a dead machine it is a no-op (touch.c calls it unconditionally from the follow loop).
 	excseq_reset(&s);
 	excseq_layout_kill(&s);
