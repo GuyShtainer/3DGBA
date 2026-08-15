@@ -132,3 +132,51 @@ context — root cause = rev0 ROM anchors in the BPRE profile vs the user's rev1
 (and BPGE) ROM columns from the rev1 sym files before ANY FR touch mapping can work.
 Not-visited rows flagged honestly in VISITED (Sevii trip, player-PC item lists, doubles
 target select, mail, diploma, whiteout, chorded boot combos, 2P family).
+
+## 2026-08-15 — phase 26 lane V: HM **DIVE** derived + planned, FLASH settled shut
+Deliverable: `SPEC-hm-dive.md` (derivation, the map-transition verdict, the FRLG verdict,
+the FLASH finding, the design, the banked live-proof plan) + the pure planner in
+`source/fieldtrav.{c,h}` + TEST 20/21 in `test/host/test_fieldtrav.c`.
+
+**The verdict that shaped everything: Dive is neither a tile edge nor a warp — it is a MAP
+CONNECTION with an IDENTITY coordinate map.** `TrySetDiveWarp` (pokeemerald
+src/field_control_avatar.c:965-983) reads the player's OWN tile via `PlayerGetDestCoords` —
+not the tile in front — and `SetDiveWarp` (src/overworld.c:756-782) looks the destination up
+in `GetMapConnection(CONNECTION_DIVE|CONNECTION_EMERGE)`, then calls
+`SetWarpDestination(grp, num, WARP_ID_NONE, x, y)` with those same coordinates. There is no
+warp record and no destination coordinate anywhere: you dive at (x,y), you arrive at (x,y).
+Measured against pret's layout data, all seven Emerald pairs are dimension-identical and all
+3064 diveable surface tiles have a walkable underwater counterpart (0 exceptions).
+
+**FRLG: no Dive, confirmed four ways** — `ProcessPlayerFieldInput` has no dive/emerge hook;
+`TrySetDiveWarp` is `static` with zero call sites; `data/scripts/field_moves.inc:210` says
+`@ Unused leftover from R/S` in pret's own words; and FireRed has no underwater map among its
+425. `badgeDive` is therefore a NAMED ZERO with its own guard — the tempting wrong value,
+0x826, is FRLG's own badge07, i.e. this table's `badgeWaterfall`, so a Soul-Badge save would
+have read as dive-eligible. Ruby/Sapphire DO have Dive and get their own row (0x80D, off
+pokeruby's own flags.h, never arithmetic from Emerald — the c2a58db rule).
+
+**FLASH: not a traversal gate. Nothing implemented, and the question is closed.**
+`SetUpFieldMove_Flash` is a PARTY-MENU handler (fldeff_flash.c:72-91), its entire effect is
+`setflashlevel 1` (data/scripts/flash.inc:1-4), and `flashLevel` is consumed only by a
+scanline window radius and a battle transition type. `flashLevel`/`FLAG_SYS_USE_FLASH` appear
+ZERO times in fieldmap.c / field_player_avatar.c / field_control_avatar.c. Emerald's Registeel
+braille door is the one near-miss and is a party-menu puzzle, not a tile edge.
+
+Gate: 17 host suite binaries, 0 failures; `test_fieldtrav` 1210 -> 3397 checks (shared with
+lane W's Waterfall/Strength blocks; DIVE is TEST 20/21). `make -j8` clean, no new warnings.
+`source/fieldpath.{c,h}` byte-identical (frozen, rule 2). Mutation gate: 17 of 19 bite; the
+two that do not are named and explained in SPEC-hm-dive §8 rather than papered over.
+NO emulator was booted (phase 25 owns both instances) and `make cia` was not run.
+
+**Not shipped, deliberately: the executor + the tier wiring.** `touch.c`/`progseq.*`/`g_prefs`
+are untouched by this lane, so nothing can produce an FT_HM_DIVE step yet. A dive INTERACT is
+new sequencer behaviour (own tile, no FACE step, **B** to surface, and a MAP CHANGE as the
+success gate) and belongs on the excursion leg machine with its own frame-by-frame suite —
+not a blind batch written with no way to run it. §6/§7 of the spec are its brief.
+
+**Lane hazard worth recording:** lanes V and W ran in the SAME working tree on the same three
+files. Lane W's commit `7e512bf` swept this lane's `fieldtrav.{c,h}` + `test_fieldtrav.c`
+changes in with its own. Nothing was lost and the tree is green, but the DIVE implementation
+lives in a commit titled for Waterfall/Strength — future archaeology should start from this
+entry and SPEC-hm-dive.md, not from the commit subject.
