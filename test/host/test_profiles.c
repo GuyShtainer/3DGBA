@@ -1644,15 +1644,48 @@ static void test_family24_listcb2(void) {
 		CHECK(in, "cb2List[%d] 0x%08X is still in BPRE's cb2FullUi list — the whitelist changes "
 		      "how a tap READS, never whether the screen detects", i, fr->cb2List[i]);
 	}
-	const char* zero[] = { "BPEE", "BPGE", "AXVE", "AXPE" };
-	for (unsigned i = 0; i < 4; i++) {
+	const char* zero[] = { "BPGE", "AXVE", "AXPE" };
+	for (unsigned i = 0; i < 3; i++) {
 		const GameProfile* q = prof(zero[i]);
 		if (!q) { CHECK(0, "%s row missing", zero[i]); continue; }
 		int any = 0;
 		for (int j = 0; j < GS_N_LISTCB2; j++) if (q->cb2List[j]) any = 1;
-		CHECK(!any, "%s cb2List is all-0 (EM has neither screen and real anchors elsewhere; LG "
-		      "never harvested its own values and must NEVER inherit FR's; RS is banned)", zero[i]);
+		CHECK(!any, "%s cb2List is all-0 (LG never harvested its own values and must NEVER inherit "
+		      "FR's; RS is banned)", zero[i]);
 	}
+
+	// --- PHASE 25 (lane D2): EMERALD joins the whitelist, for the row the census had already
+	// filed and nobody had cashed — the POKéBLOCK CASE (TOUCH-PLAN H7). It is graded here rather
+	// than in its own test because the SAFETY argument is this mechanism's, not the screen's.
+	const GameProfile* em2 = prof("BPEE");
+	if (em2) {
+		EQU(em2->cb2List[0], 0x0813591Cu, "BPEE cb2List[0] = CB2_PokeblockMenu (H7)");
+		CHECK(em2->cb2List[1] == 0 && em2->cb2List[2] == 0 && em2->cb2List[3] == 0,
+		      "…and the three spare EM slots stay 0");
+		int in = 0;
+		for (int j = 0; j < GS_N_FULLUI; j++) if (em2->cb2FullUi[j] == em2->cb2List[0]) in = 1;
+		CHECK(in, "CB2_PokeblockMenu is STILL in BPEE's cb2FullUi list — the whitelist changes how "
+		      "a tap READS on that screen, never whether it detects");
+		CHECK(em2->lmDummyTask != 0, "…and Emerald carries the ListMenuDummyTask scan anchor, which "
+		      "is the ONLY thing this instantiation needs (zero new addresses — the point of it)");
+		// behaviour: the same three cases the FR half is graded on, on the EM row
+		GbaCore ce; bus_reset(&ce, "BPEE");
+		const GameProfile* pe = profile_for(&ce);
+		GameState ge;
+		bus_w32(&ce, pe->sb1ptr, 0x02025734u);
+		bus_w32(&ce, pe->mainCb2, 0x0813591Cu | 1u);        // the Pokéblock case is up
+		game_read(&ce, pe, &ge);
+		EQU(ge.ctx, GCTX_FULLUI, "EM: the case with NO live ListMenu keeps today's FAM-DLG behaviour");
+		put_task(&ce, pe, 3, pe->lmDummyTask | 1u, 1);
+		game_read(&ce, pe, &ge);
+		EQU(ge.ctx, GCTX_LIST, "EM: the case WITH a live ListMenu becomes a driven list");
+		EQU(ge.listKind, LK_FULLUI, "…as LK_FULLUI (discovered, not anchored)");
+		EQU(ge.listBase, pe->gTasksBase + 40u * 3u + 8u, "…with listBase = gTasks[3] + 8");
+		bus_w32(&ce, pe->mainCb2, 0x08170274u | 1u);        // MCB2_FieldUpdateRegionMap
+		game_read(&ce, pe, &ge);
+		EQU(ge.ctx, GCTX_MAP, "EM: another already-promoted screen is unaffected by the new entry, "
+		    "even with the same live ListMenu task in gTasks");
+	} else CHECK(0, "BPEE row missing");
 
 	// --- behaviour through the real game_read ---------------------------------------------
 	GbaCore c; bus_reset(&c, "BPRE");

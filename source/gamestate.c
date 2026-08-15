@@ -149,10 +149,24 @@ static const GameProfile PROFILES[] = {
                mapSecId +0x000 u16, mapSecType +0x002 u8, cursorPosX +0x054 u16, cursorPosY
                +0x056 u16, zoomed +0x078 bool8. */
             0x0203A144u, 0x081248D4u, 0x08170274u,
-            /* phase 24 (lane B2) cb2List = 0: Emerald has no Berry Pouch / TM Case (berries live
-               in the bag, which has a REAL anchor), and every other EM list screen already has
-               one — a discovered list would be strictly worse. Explicit zeros (P3.5.2). */
-            { 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u },
+            /* phase 24 (lane B2) cb2List — the DISCOVERED-LIST whitelist. Lane B2 left this row
+               all-zero ("Emerald has no Berry Pouch / TM Case, and every other EM list screen
+               already has a real anchor"). PHASE 25 (lane D2) found the counter-example the
+               census had already filed and nobody had cashed: **the POKéBLOCK CASE**, TOUCH-PLAN
+               row H7, classed FULL/LIST and marked "promo+substate" — i.e. believed to need a new
+               anchor. It does not.
+                 0x0813591C CB2_PokeblockMenu  (pokeemerald.sym `0813591c l 0000001a`, and it IS
+                            the run loop: RunTasks/AnimateSprites/BuildOamBuffer/UpdatePaletteFade,
+                            src/pokeblock.c:488-495, SetMainCallback2'd at :614)
+               and the screen is a plain `ListMenuInit` list (:596) driven by `ListMenu_ProcessInput`
+               (:1025, :1074) whose task id lives in data[0] — so the P-D dummy-task scan finds it
+               with NO new address at all. The cb2 is ALREADY the ninth entry of this row's
+               cb2FullUi list above (census [exact]), so — exactly as on the FR half — this changes
+               how a tap READS on one screen and can never change whether a screen detects.
+               A case with no live ListMenu (the load frames) falls through to GCTX_FULLUI, i.e.
+               today's FAM-DLG behaviour: "no upgrade", never a wrong key. Three spare slots left
+               for the mailbox / move-relearner candidates the census still owes a live visit. */
+            { 0x0813591Cu, 0x00000000u, 0x00000000u, 0x00000000u },
             /* phase 25 (lane C1) cb2Inert — the CREDITS, detected and given nothing (TOUCH-PLAN
                L2). CB2_Credits 0x081754DC + CB2_StartCreditsSequence 0x08175620 (the multi-state
                starter set at hall_of_fame.c:781). VERIFIED-SYM on pokeemerald.sym, LIVE-UNREACHED
