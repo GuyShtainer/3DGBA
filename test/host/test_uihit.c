@@ -143,15 +143,19 @@ static void t4_gesture(void) {
 	printf("T4  gesture — tap vs drag, one-way latch, reset\n");
 	UiGesture g; memset(&g, 0, sizeof g);
 	CHECK(uihit_gesture_step(&g, 1, 1, 0, 100, 100) == GEST_DOWN, "press must emit GEST_DOWN");
-	CHECK(uihit_gesture_step(&g, 0, 1, 0, 100, 105) == GEST_NONE, "5 px is under the threshold");
+	// PHASE 30 / H4: these pin the tap-vs-drag PROPERTY at whatever UIHIT_DRAG_PX is, not the
+	// number 6. They used to hard-code 5/6/7/10 px, so retuning the threshold for a finger (the
+	// hardware defect: a thumb tap drifts 8-14 px and was being read as a drag) failed five checks
+	// that were not actually about the threshold. A golden must pin the relation, not the constant.
+	CHECK(uihit_gesture_step(&g, 0, 1, 0, 100, 100 + UIHIT_DRAG_PX - 1) == GEST_NONE, "under the threshold is not a drag");
 	CHECK(uihit_gesture_step(&g, 0, 0, 1, 0, 0) == GEST_TAP, "release under threshold must tap");
-	CHECK(g.x == 100 && g.y == 105, "tap point must be the LAST VALID sample, got %d,%d", g.x, g.y);
+	CHECK(g.x == 100 && g.y == 100 + UIHIT_DRAG_PX - 1, "tap point must be the LAST VALID sample, got %d,%d", g.x, g.y);
 	CHECK(g.active == 0 && g.dragged == 0, "gesture must fully reset on release");
 
 	memset(&g, 0, sizeof g);
 	uihit_gesture_step(&g, 1, 1, 0, 100, 100);
-	CHECK(uihit_gesture_step(&g, 0, 1, 0, 100, 106) == GEST_NONE, "exactly 6 px is NOT a drag");
-	CHECK(uihit_gesture_step(&g, 0, 1, 0, 100, 107) == GEST_DRAG, "7 px must be a drag");
+	CHECK(uihit_gesture_step(&g, 0, 1, 0, 100, 100 + UIHIT_DRAG_PX) == GEST_NONE, "exactly the threshold is NOT a drag");
+	CHECK(uihit_gesture_step(&g, 0, 1, 0, 100, 100 + UIHIT_DRAG_PX + 1) == GEST_DRAG, "one px past the threshold must be a drag");
 	CHECK(uihit_gesture_step(&g, 0, 1, 0, 100, 100) == GEST_DRAG, "one-way latch: back at origin is still a drag");
 	CHECK(uihit_gesture_step(&g, 0, 0, 1, 0, 0) == GEST_NONE, "a drag must NOT emit a tap");
 	CHECK(g.dragged == 0 && g.active == 0, "reset after a drag");
@@ -159,7 +163,7 @@ static void t4_gesture(void) {
 	// Horizontal-only: the py-only-threshold regression (a swipe across a slot card was a "tap").
 	memset(&g, 0, sizeof g);
 	uihit_gesture_step(&g, 1, 1, 0, 100, 100);
-	CHECK(uihit_gesture_step(&g, 0, 1, 0, 110, 100) == GEST_DRAG, "horizontal 10 px must be a drag");
+	CHECK(uihit_gesture_step(&g, 0, 1, 0, 100 + UIHIT_DRAG_PX + 1, 100) == GEST_DRAG, "horizontal past the threshold must be a drag");
 	CHECK(uihit_gesture_step(&g, 0, 0, 1, 0, 0) == GEST_NONE, "horizontal drag must not tap");
 
 	// A release with no press at all is inert (the app's first frame).

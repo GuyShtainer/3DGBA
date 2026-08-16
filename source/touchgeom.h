@@ -69,7 +69,13 @@ typedef struct {
 #define LISTGEOM_DRAG_PX   14   // one UP/DOWN key edge per this many drag px (the shipped bag
                                 // constant — touch.c bag_update; ~1 row per row-height, L4)
 #define LISTGEOM_SWIPE_PX  30   // horizontal swipe threshold (bag pocket switch, L6)
-#define LISTGEOM_SLOP_PX    6   // tap-vs-drag one-way latch (UIHIT_DRAG_PX convention, L3)
+/* PHASE 30 — HARDWARE DEFECT H4. 6 px was a STYLUS threshold. A finger tap drifts while the
+ * contact patch grows and rolls, routinely 8-14 px, so most real taps crossed it and became
+ * DRAGS: on a dialog that emitted a D-pad direction instead of A (the user had to tap several
+ * times before one 'took'), and in a list it scrolled instead of selecting the row. Same shape
+ * as H1/H2 — a constant that is correct for a synthesized point and wrong for a thumb. 12 px is
+ * still far below a deliberate drag, which travels 30 px or more. */
+#define LISTGEOM_SLOP_PX    12   // tap-vs-drag one-way latch (UIHIT_DRAG_PX convention, L3)
 #define LISTGEOM_FLING_V    3   // release velocity (px/frame over the last 4 frames) above which
                                 // a drag becomes a fling-hold (L5)
 #define LISTGEOM_FLING_CAP 60   // fling hold cap, frames (L5; hardware-tune pending, spec Q1)
@@ -167,7 +173,13 @@ int stornav_step(int curArea, int curPos, int tgtArea, int tgtPos);
 //     class-wide. On a dialog, a tap near the screen edge MUST still be A — turning it into LEFT
 //     would read as "the box didn't advance". Only screens where LEFT/RIGHT is a real page/value
 //     verb opt in (v1: the summary screen and the options menu, both games).
-#define DLGGEOM_SLOP_PX      6   // tap-vs-drag one-way latch (the shared UIHIT_DRAG_PX convention)
+/* PHASE 30 — HARDWARE DEFECT H4. 6 px was a STYLUS threshold. A finger tap drifts while the
+ * contact patch grows and rolls, routinely 8-14 px, so most real taps crossed it and became
+ * DRAGS: on a dialog that emitted a D-pad direction instead of A (the user had to tap several
+ * times before one 'took'), and in a list it scrolled instead of selecting the row. Same shape
+ * as H1/H2 — a constant that is correct for a synthesized point and wrong for a thumb. 12 px is
+ * still far below a deliberate drag, which travels 30 px or more. */
+#define DLGGEOM_SLOP_PX      12   // tap-vs-drag one-way latch (the shared UIHIT_DRAG_PX convention)
 #define DLGGEOM_HOLD_FRAMES 30   // ~0.5 s at 60 fps before an unmoved finger becomes a held B
 #define DLGGEOM_DRAG_PX     14   // one D-pad edge per this many px of drag (the FAM-LIST cadence)
 #define DLGGEOM_EDGE_PX     44   // pager side-zone width, px (18% of the 240 px frame per side)
@@ -423,6 +435,33 @@ int navnav_step(int cur, int tgt, int rows);
 // "did not move" is the walker's existing press-vs-drag latch (touch.c owns the px comparison —
 // this module never sees pixels, only the boolean the caller already computes for the tap test).
 #define OWNGEOM_HOLD_FRAMES DLGGEOM_HOLD_FRAMES   /* 30 ~ 0.5 s at 60 fps — ONE hold in the app */
+
+/* PHASE 30 — HARDWARE DEFECT H3: START and SELECT could not be hit.
+ *
+ * D1's two verbs live on the player's OWN TILE, and "own tile" was tested as the exact 16x16 GBA
+ * tile the avatar stands on. Do the arithmetic in the units the FINGER works in and the bug is
+ * obvious: the bottom screen is 320x240 and the user runs the game at 1:1, so a GBA pixel IS a
+ * screen pixel and the whole target is 16x16 SCREEN PIXELS. A fingertip contact patch is ~40-50 px
+ * across. The user has to land within 8 px of the avatar's centre or the gesture silently becomes
+ * a walk route — which is exactly what they reported: "start and select doesnt work".
+ *
+ * Even at Aspect-fit (1.5x) it is only 24 px, still under half a fingertip. The emulator never saw
+ * it because a synthesized tap is a mathematical point placed at the tile centre.
+ *
+ * So the self test becomes a RADIUS about the avatar's tile centre rather than tile equality.
+ * 14 px is chosen, not fitted: it is the largest radius that still leaves an ADJACENT tile's own
+ * centre (16 px away) outside the self region, so "tap the tile next to me to step there" keeps
+ * working. That is the constraint the number has to satisfy; comfort is what is left over.
+ */
+#define OWNGEOM_SELF_R 14   /* GBA px from the avatar tile's centre that still counts as "self" */
+
+/* The avatar is always drawn at screen tile (7,5) — the camera centres it — so its tile centre in
+ * GBA pixels is fixed. Named here so touch.c and the host suite cannot drift apart. */
+#define OWNGEOM_SELF_CX (7 * 16 + 8)   /* 120 */
+#define OWNGEOM_SELF_CY (5 * 16 + 8)   /* 88  */
+
+/* True when a touch at (gx,gy) should be read as "on myself" rather than as a destination. */
+int owngeom_on_self(int gx, int gy);
 
 enum { OWNG_NONE = 0,   // nothing resolved this frame
        OWNG_START,      // release of a clean tap on the player's own tile -> START

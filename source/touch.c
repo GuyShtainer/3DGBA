@@ -540,7 +540,10 @@ static u16 walk_update_inner(bool touching, bool newPress, bool gvalid, int gx, 
 
 	if (newPress && gvalid) { s_downGx = gx; s_downGy = gy; s_downPx = px; s_downPy = py; s_touchFrames = 0; s_moved = false;
 	                          s_downMapG = mapG; s_downMapN = mapN; }
-	if (touching && gvalid) { s_touchFrames++; if (abs(gx - s_downGx) > 8 || abs(gy - s_downGy) > 8) s_moved = true; }
+	if (touching && gvalid) { s_touchFrames++;
+	                          /* H4: was 8 px — a stylus number. This gates the H1 steer promotion,
+	                             so a tap that drifted 9 px used to become a directional hold. */
+	                          if (abs(gx - s_downGx) > LISTGEOM_SLOP_PX || abs(gy - s_downGy) > LISTGEOM_SLOP_PX) s_moved = true; }
 
 	// No loaded overworld map (title / intro / main menu): a tap = A, a double-tap = START. No
 	// walking — and NOT decision D1 either: D1 is about the player's own TILE, and on a screen with
@@ -569,7 +572,9 @@ static u16 walk_update_inner(bool touching, bool newPress, bool gvalid, int gx, 
 	// claim a gesture, and it cancels any route in flight: pressing START while the avatar is
 	// walking somewhere you no longer want is the normal way to say "stop".
 	{
-		int onSelf = (s_downGx / 16 - 7) == 0 && (s_downGy / 16 - 5) == 0;
+		// PHASE 30 / H3: a radius about the avatar, not the exact tile — the tile is 16x16 SCREEN px
+		// at 1:1 and a fingertip is ~3x that, so START/SELECT were unhittable on hardware.
+		int onSelf = owngeom_on_self(s_downGx, s_downGy);
 		int ev = owngest_step(&s_own, touching ? 1 : 0, (newPress && gvalid) ? 1 : 0,
 		                      onSelf, s_moved ? 1 : 0);
 		if (ev == OWNG_SELECT)     { s_selPulse = 3;   g_fieldDbg.ownSelects++; }

@@ -31,7 +31,13 @@ int uihit_index(const UiRect* tbl, int n, int px, int py);
 // hit-tests (0,0) — REPORT D2 exactly. This machine consumes the raw point ONLY on the down/held
 // frames and latches it, so GEST_TAP always carries the last valid sample and the bug is
 // structurally unrepresentable.
-#define UIHIT_DRAG_PX 6      // same threshold touch.c:458 already uses for the same judgement
+/* PHASE 30 — HARDWARE DEFECT H4. 6 px was a STYLUS threshold. A finger tap drifts while the
+ * contact patch grows and rolls, routinely 8-14 px, so most real taps crossed it and became
+ * DRAGS: on a dialog that emitted a D-pad direction instead of A (the user had to tap several
+ * times before one 'took'), and in a list it scrolled instead of selecting the row. Same shape
+ * as H1/H2 — a constant that is correct for a synthesized point and wrong for a thumb. 12 px is
+ * still far below a deliberate drag, which travels 30 px or more. */
+#define UIHIT_DRAG_PX 12      // same threshold touch.c:458 already uses for the same judgement
 
 typedef struct {
 	int active;      // a touch is down

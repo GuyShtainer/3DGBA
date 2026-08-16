@@ -353,6 +353,17 @@ int navnav_step(int cur, int tgt, int rows) {
 // owned OwnGest, which exists only because a gesture is a TIMELINE and a pure function of one
 // frame cannot express "the release after a hold stays silent".
 
+// PHASE 30 / H3 — see the note in touchgeom.h. A RADIUS about the avatar's tile centre, not
+// tile equality: the exact tile is a 16x16 SCREEN-pixel target at 1:1 and a fingertip is ~3x
+// that. 14 px keeps an adjacent tile's own centre (16 px away) outside, so tapping the tile
+// next to you still steps there.
+int owngeom_on_self(int gx, int gy) {
+	int dx = gx - OWNGEOM_SELF_CX, dy = gy - OWNGEOM_SELF_CY;
+	if (dx < 0) dx = -dx;
+	if (dy < 0) dy = -dy;
+	return (dx <= OWNGEOM_SELF_R && dy <= OWNGEOM_SELF_R) ? 1 : 0;
+}
+
 int owngest_step(OwnGest* g, int touching, int newPress, int onSelf, int movedNow) {
 	if (!g) return OWNG_NONE;
 
