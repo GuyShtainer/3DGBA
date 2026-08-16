@@ -584,6 +584,26 @@ static u16 walk_update_inner(bool touching, bool newPress, bool gvalid, int gx, 
 	if (s_selPulse > 0)   { s_selPulse--;   return 1 << GBAKEY_SELECT; }
 
 	if (touching && gvalid) {                            // HOLD -> steer toward the touch (cancels a route)
+		// PHASE 30 — HARDWARE DEFECT H1. This arm used to fire on the FIRST frame of every touch,
+		// so it was not a HOLD at all: it was "any contact". The header two hundred lines up has
+		// always described the intended split ("QUICK TAP a tile -> route there; HOLD / SLIDE ->
+		// steer"), and the release handler below already implements the tap half against
+		// TAP_FRAMES — but nothing ever gated the steer half, so both halves ran on every tap.
+		//
+		// It never showed up in the emulator because a synthesized tap is 1-2 frames and the
+		// harness releases on a known frame. A human thumb on the real digitiser is ~5-9 frames,
+		// every one of which emitted a direction key AND ran `s_walking = false`, so a tap:
+		//   * walked the avatar a tile off the tile you pointed at, before the route was planned,
+		//   * cancelled any route already in flight, and
+		//   * made the screen behave as four directional quadrants (the `abs(ddx) > abs(ddy)`
+		//     split below) instead of a pointer — which is what a tap-to-walk UI must never do.
+		// The user reported exactly that, in those words, from hardware.
+		//
+		// The gate is the SAME pair the release handler uses to define a tap, so the two arms can
+		// no longer disagree: while a gesture could still turn out to be a tap, this arm emits
+		// nothing and cancels nothing. Movement past the slop promotes to a steer immediately,
+		// which keeps a deliberate slide responsive.
+		if (s_touchFrames <= TAP_FRAMES && !s_moved) return 0;
 		s_walking = false;
 		int ddx = gx / 16 - 7, ddy = gy / 16 - 5;
 		if (ddx == 0 && ddy == 0) return 0;              // on the player tile -> stand (tap-self handled on release)
@@ -2623,8 +2643,29 @@ static void all_reset(void) { battle_reset(); walk_reset(); party_reset(); targe
 
 u16 touch_update(TouchMode mode, bool touching, int sx, int sy, int gx, int gy, bool gvalid,
                  const TouchSmart* sm) {
+	// PHASE 30 — HARDWARE DEFECT H2. `newPress` used to be the literal FIRST frame of contact, and
+	// every one of the ten touch families latches its hit-test on it (party slot, list row, dex
+	// cell, storage cell, keyboard key, map cell, dialog zone, the walk anchor...). That made all
+	// of them share one weakness: on the real 3DS digitiser the first sample after contact is
+	// NOISY — the panel reports a position while the finger is still landing and the contact patch
+	// is still growing, so the reported point can sit several pixels from where the user believes
+	// they touched, and further out for a soft or angled press.
+	//
+	// The emulator could never show this: a synthesized touch is exact from its first frame, which
+	// is precisely why every one of these families passed its live proof and then missed on
+	// hardware. The user's report — "party menus miss where I hit", lists not selecting, "glitchy"
+	// — is one defect wearing ten costumes.
+	//
+	// Fix: settle first, THEN latch. `newPress` now fires on frame TOUCH_SETTLE of a contact and
+	// carries that frame's coordinates, so every family reads a settled point without any of them
+	// changing. The cost is one frame (~17 ms), which is below the threshold of perception and far
+	// cheaper than a mis-hit. A tap must last >= TOUCH_SETTLE frames to register; a human tap is
+	// ~5-9 frames on hardware, so the margin is large.
+	#define TOUCH_SETTLE 2
 	static bool wasTouching = false;
-	bool newPress = touching && !wasTouching;
+	static int  s_pressAge = 0;
+	if (touching) { if (!wasTouching) s_pressAge = 0; s_pressAge++; } else s_pressAge = 0;
+	bool newPress = touching && s_pressAge == TOUCH_SETTLE;
 	wasTouching = touching;
 
 	if (mode == TOUCH_PAD)   { all_reset(); return touching ? pad_keys(sx, sy) : 0; }
