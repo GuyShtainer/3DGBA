@@ -3,9 +3,40 @@
 > Living resume doc maintained by the `handoff` skill. The **Current status** and **Next steps**
 > sections are always kept current — start there to resume. The **Session log** grows downward,
 > newest first, and is never pruned.
-> Last updated: 2026-08-14 (phase 21 — TOUCH CENSUS COMPLETE: 143-screen catalog for all 5 games, 61 screens visited + photographed cb2-certain in the emulator, ~60 zero-guess fingerprints harvested, and the master touch plan written — `docs/phase21-touch-census/TOUCH-PLAN.md` + `REPORT.md`. Headline finds: the BPRE profile is rev0 and the user's cart is rev1 → ALL FireRed menu/battle touch silently dead (exact rev1 fixes harvested); undetected screens leak walk keys (the residual) — both CURED and COMMITTED on main (slice 22.0 landed 2026-08-14: a51c50d the GCTX_TITLE/GCTX_FULLUI promotion + dual-rev anchors, 305242f the LG-rev1 row + newKeys fix; test_profiles 546→1295, 14 suites 240,765 checks green, .3dsx+.cia rebuilt))
+> Last updated: 2026-08-17 (phases 24-30 — all 8 HMs accounted for, 6 planned by touch; the
+> census's broken rows closed; the FIRST REAL HARDWARE TEST of the touch layer found SIX
+> defects, four fixed, all one root cause. Earlier entry: 2026-08-14, phase 21 — TOUCH CENSUS COMPLETE: 143-screen catalog for all 5 games, 61 screens visited + photographed cb2-certain in the emulator, ~60 zero-guess fingerprints harvested, and the master touch plan written — `docs/phase21-touch-census/TOUCH-PLAN.md` + `REPORT.md`. Headline finds: the BPRE profile is rev0 and the user's cart is rev1 → ALL FireRed menu/battle touch silently dead (exact rev1 fixes harvested); undetected screens leak walk keys (the residual) — both CURED and COMMITTED on main (slice 22.0 landed 2026-08-14: a51c50d the GCTX_TITLE/GCTX_FULLUI promotion + dual-rev anchors, 305242f the LG-rev1 row + newKeys fix; test_profiles 546→1295, 14 suites 240,765 checks green, .3dsx+.cia rebuilt))
 
 ## Current status
+
+- **⚠️ THE ONE THING TO KNOW:** the touch layer was proven in the emulator, shipped, and then
+  **failed on the user's first real hardware test in six ways**. Four are fixed (`f7216e2`,
+  `98aff5a`); **none of the fixes has been hardware-tested yet.** Every defect was a constant tuned
+  against a *synthesized* tap — see `docs/ROADMAP-touch.html` and the learn skill's
+  `references/touch-ui-on-real-hardware.md`, which exists because of this session.
+  1. **H1** the steer arm had no threshold — it fired on the FIRST frame of any contact, so a tap
+     (5-9 frames on hardware) emitted direction keys and cancelled its own route. This is what the
+     user described as "a transparent overlay splitting the screen into 4 sections".
+  2. **H2** all ten touch families hit-test on the press edge, i.e. the noisiest digitiser sample.
+     Now settles 2 frames first (`TOUCH_SETTLE`), in one place, so no family changed.
+  3. **H3** START/SELECT were **unhittable**: "own tile" was the exact 16x16 GBA tile = 16x16
+     SCREEN px at the user's 1:1 scale, against a ~45 px fingertip. Now a 14 px radius
+     (`owngeom_on_self`) — the largest that leaves an adjacent tile's centre selectable.
+  4. **H4** three tap-vs-drag thresholds all at 6 px (a stylus number) plus the walk arm's 8. A
+     finger drifts 8-14 px, so most taps became DRAGS — which emit a D-pad direction instead of A.
+     That is the reported "several taps before the dialog advances" and "lists scroll instead of
+     select". All four now 12 px.
+  5. **NOT FIXED — the game's own main menu** (Continue/New Game/Option/Mystery Gift) has no
+     per-row tapping because **no main-menu cursor address has ever been harvested** (`GameProfile`
+     has `startCursor` for the field menu and nothing for this screen). A harvest, not a tweak.
+  6. **NOT A CODE DEFECT — Lavaridge/HMs did nothing because `smartTraverse` was 0.** A test lane
+     left it at 1; I restored the shipped default and the user then tested. Now set to **2** in
+     their emulator profile. **The shipped default is still 0 = Off, and that decision is theirs.**
+
+- **The next hardware round is instrumented:** the app already writes every touch event to
+  `sdmc:/cias/netlogs/3DGBA_touch_*.txt` (raw + GBA coords, ctx, hit, cursor before/after, injected
+  keys) on quit-through-the-menu. Ask for that file rather than iterating blind on geometry.
+
 
 - **Repo / branch:** `/Users/guyshtainer/VSCodeProjects/3ds-toolkit/projects/3DGBA` / `main` — pushed: no (local only; this sub-tool is its own git repo; the toolkit git-ignores `projects/`).
 - **Goal:** A New-3DS homebrew that runs **two Gen-3 Pokémon GBA games at once** (one per screen) on embedded mGBA (`libmgba`, two `mCore`s), joined by an **emulated GBA link cable**. **Flagship of the current arc (M3): a real cable-club TRADE between two consoles over UDS wireless.** (Earlier landed/parked tracks: a touchscreen smart-pointer on the real game UI; stereoscopic 3D depth / Octopath HD-2D — see the older session log.)
@@ -54,6 +85,16 @@
 - **COMMITTED / UNCOMMITTED (corrected 2026-08-04):** the state-F/Celio wireless work (runs #1–#10), the entire UI redesign (assets.*, theme.*, ui.*, the composited screens), the **phase-13 diagnostics layer** (`19375eb`) and the **phase-14 tilt** (`ae35079`) are all **committed** on `main` — the older "everything is uncommitted" note was stale. **Uncommitted right now = phase 15, the phase-16 E5 fix pass + sweep, and ALL of phase 17.** Phase 17 adds: `source/uigeom.{c,h}`, `source/uihit.{c,h}`, `test/host/test_uigeom.c`, `test/host/test_uihit.c`, `test/host/test_theme.c`, `test/host/ctr_shim.h`, `docs/phase17-uifix/`, plus modifications to `main.c`, `rompicker.{c,h}`, `assets.{c,h}`, `theme.{c,h}`, `touch.{c,h}`, `ui.{c,h}`, `wireless.c`, `tools/build_assets.sh` and one harness fixture movie. Older note: **phase 15 only:** the new files `source/presence.{c,h}`, `presence_read.{c,h}`, `presence_art.{c,h}`, `presence_ui.{c,h}`, `gbatext.{c,h}`, `fieldgate.h`, `test/host/test_presence.c`, `docs/phase15-presence/`, plus modifications to `main.c`, `gamestate.{c,h}`, `diag.{c,h}`, `assets.{c,h}`, `ui.{c,h}`, `tilt.{c,h}`, `test/host/test_diag.c` and `test/host/test_tilt.c`. Nothing is **pushed** (still local-only). Commit/push is gated on the user asking (CLAUDE.md) + the release-prep checklist (Next steps).
 
 ## Next steps (resume here)
+
+0. **HARDWARE RETEST of the four touch fixes — blocks everything touch.** `3DGBA.cia` rebuilt
+   2026-08-17 10:33. Wipe `sdmc:/cias/netlogs/` first, then exercise: tap-to-walk vs
+   hold-to-steer, tap-self=START / hold-self=SELECT, an NPC dialog (should advance once per tap,
+   mashable), a party slot, a list row and its USE/TOSS popup. Quit through the menu; read the log.
+0b. **Harvest the main-menu cursor** so Continue/New Game/Option become tappable rows (defect 5).
+0c. **The emulator freezes ~20 s into a session with gdb attached.** Reproduces on the OLDER binary,
+   so it is not a code regression. It blocks every remaining emulator proof, including the Waterfall
+   ride and the Strength safety negative. Highest-value non-feature fix on the board.
+
 
 0. **PHASE 22 — implement the touch master plan (`docs/phase21-touch-census/TOUCH-PLAN.md`).** The census (phase 21) is done and banked: CATALOG.md (143 rows), VISITED-emerald/-firered (61 screens live-certain), CB2-HARVEST.md (~60 [exact] fingerprints), COVERAGE.md (the audit), per-family contact sheets in `evidence/sheets/`, and three ready specs (SPEC-family-keyboard / -lists / -traversal). Slice order: **22.0 DONE (2026-08-14, commits a51c50d + 305242f)** — GCTX_TITLE/GCTX_FULLUI promoted (40 [exact] cb2s), 13 rev-alternate anchor columns (FR rev0+rev1 both detect; BPGE re-pointed to LG rev1 with LG rev0 alternates; newKeys typo fixed) — un-deads ALL FireRed touch and stops walk-key leaks on ~40 screens; VERIFY-IN-EMULATOR items: the 7 sym-derived FR-rev1 alts + all 26 BPGE values (the LG delta pass) → 22.1 naming keyboard → 22.2 generic list driver → 22.3 PC boxes (tap-tap-move) → 22.4 tap-to-fly → 22.5 summary/pages → 22.6 HM+warp traversal → 22.7 PokeNav/Frontier-Pass substates → 22.8 minigames. **First get the user's answers to TOUCH-PLAN.md §4 (10 open questions: 2P scope, drag-and-drop vs tap-tap, swipe vs arrows, hold=B, slots policy, RS/LG lane timing…).** RS/LG parallel lane is paper-unblocked (RS rev2 rows verified; LG fixes ready). Emulator-first per house method; hw sign-off items accumulate on the run-#13 checklist.
 1. **EYEBALL the UI on real hardware (`3DGBA.cia` **2026-08-09 13:11**).** Most of what this item used to ask for is now verified in the emulator by `tools/emutest` and photographed in `docs/phase17-uifix/BEFORE-AFTER.md` (+ the shareable gallery — see Related docs): the game-select pill reads correctly, every picker touch target responds, d-pad reaches them all with a rounded focus ring, and drag-scroll works. What an emulator CANNOT settle, and what this item now means: (a) does the touch screen feel right under a real stylus/thumb — especially the drag-vs-tap threshold and the virtual-gamepad key sizes; (b) do the baked fonts and plate art read correctly on the physical panels (subpixel/backlight differ from a captured PNG); (c) does the UI hold 60fps with two GBA cores actually running (the emulator does not model core-2 contention); (d) the 3D slider — stereo fusion of the HUD/chips is unjudgeable off-device. A photo of anything wrong is still the fastest path.
@@ -323,6 +364,55 @@ Iterate in **Azahar** (Citra successor). **Sign off only on real New 3DS** — 3
 ---
 
 ## Session log
+
+### Session — 2026-08-17
+
+**Phases 24-30, 97+ commits.** Reconciliation published at `docs/ROADMAP-touch.html`
+(artifact `claude.ai/code/artifact/42f0b9ca-b9ac-4638-b202-6ba0d133ef28`).
+
+**Touch coverage.** All ten of the census's BROKEN rows closed — one root cause: the classifier
+could not NAME those screens, so the generic safe default never ran. New `GCTX_INERT` class for
+screens that must be detected and deliberately silent (credits). Two screens previously written off
+as unreachable were reached (battle records on Pokemon Center 2F; the evolution scene, via a box
+Sandshrew one Rare Candy from evolving). FireRed's region map landed as its own engine (the mode is
+a struct FIELD at +0x4796, not a callback), plus the Emerald wall map, FAM-NAV (PokeNav — the first
+family whose optimal route is a RING distance, because the list wraps) and the Pokeblock case.
+
+**All 8 HMs accounted for** (`SPEC-hm-waterfall.md`, `SPEC-hm-dive.md`): Cut/Surf/Rock Smash/Fly
+live-proven; **Waterfall** implemented (multi-tile — one interaction climbs the whole column) with
+its planner live-proven and its **executor live-DISPROVEN**, then fixed; **Strength** settled as
+terminal-only (activate, never push — a boulder is a puzzle); **Dive** correctly modelled as a MAP
+CONNECTION with identity coordinates, planner only, no executor; **Flash** deliberately excluded
+with citations (it changes no tile's walkability).
+
+**`touch.c` got real coverage by extraction, not by token tests:** `progseq.{c,h}`, `excseq.{c,h}`,
+`progtap.{c,h}`, line-for-line, so the shipped executor IS the tested code. 19 suites, ~1.29M
+checks. The new suites immediately found a residual bug the lanes had missed.
+
+**A Ruby/Sapphire correctness bug, proven on the user's own carts.** Gen 3 has THREE flag
+numberings, not two; RS was inheriting Emerald's, so badge reads landed inside `SaveBlock1.vars[]`.
+On the user's 614-hour Ruby the old rail read **zero** badges (card shows 8/8); on Sapphire the
+fixed rail returns `0x7F`, matching the card bit-for-bit including *which* badge is missing — which
+a garbage read could not do.
+
+**Then the first real hardware test of touch, and it failed in six ways** (see Current status).
+Four fixed the same day. This is the session's most valuable output: it produced the learn-skill
+reference `touch-ui-on-real-hardware.md`, because the failures were not in the features but in every
+constant the features rested on.
+
+**Process, all earned the hard way:**
+- The **negative-claim failure** recurred **eight** times, twice inside the phase created to cure
+  it. Positive claims earn live proof; negative ones were reasoned once and inherited. Now audited
+  as hard as claims, and banked in the learn skill.
+- **`tools/closeout.sh`** added — stale `.cia`, work stranded on a lane branch, frozen-file drift,
+  ROMs in history, live emulators, staged fixtures, duplicate captures. Each had been caught by
+  audit *after* a phase was declared done, more than once. Its first run found two more.
+- **A golden must pin the relation, not the constant** — five `test_uihit` checks hard-coded 6 px
+  and broke on a deliberate hardware retune; rewritten relative to `UIHIT_DRAG_PX`.
+- A duplicate-capture alarm I raised was **false** (companion frames from the undriven second game);
+  the real check hashes only the subject frame. One genuine duplicate underneath.
+
+
 
 ### Session — 2026-08-13/14 — PHASE 21: THE TOUCH CENSUS — every screen in all 5 games catalogued, 61 photographed cb2-certain, the master touch plan written (no touch implemented — the plan IS the deliverable)
 
