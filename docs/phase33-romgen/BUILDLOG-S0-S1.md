@@ -50,3 +50,11 @@
 - Role array shape for S2/S3: `RgRoles{data, off[id-1], total}`, `rg_roles_of(r, layoutId)`; one byte per cell, row major.
 - Deviation: "lamp branch" invariant 6 is asserted by structure (signpost, no event, one blocked side whose cell is WALL,
   south open) since the test cannot see which branch fired; that holds for 2 Rustboro cells.
+
+## 2026-10-06 S1.2 rg_regions (VXR5) + round trip
+- Built: `source/romgen/rg_regions.{h,c}` (`rg_regions_write(w, r, out, cap)`; out=NULL sizes it), `test_romgen_regions.c`.
+- Test: 23 checks synthetic (random roles 0..10 forced into every cell, a NULL layout entry absent from the file, size
+  query, too-small buffer, absent id / out-of-range cell => FLOOR, and four negatives the vendored `voxel_regions.c` must reject:
+  bad magic, descending ids, role byte 11, truncated file). 474 checks with the real ROM: regions.bin = 330 791 bytes
+  (= 8 + 12 x 442 + 325 479), every one of the 325 479 cells agrees through the VENDORED parser.
+- Test files are written to mkdtemp dirs under /tmp and removed; nothing ROM-derived lands in the repo.
