@@ -38,6 +38,7 @@ typedef struct {
 	// feedback
 	int         fbRegion, fbItem, fbTimer;
 	int         lastAbort;     // PABORT_* of the last ended sequence (on-device diagnostics)
+	int         fieldRun;      // consecutive PCTX_FIELD frames (the top-hold capture waits for 30)
 } PanelUi;
 
 #define PANELUI_SETTLE   2     // == touch.c TOUCH_SETTLE: hit-test the settled point, never the edge
@@ -61,7 +62,10 @@ u16  panelui_update(PanelUi* u, const GameProfile* gp, const GameState* gs, cons
 
 // Top screen holds the last field frame: a full-screen menu is open outside battle.
 bool panelui_hold_top(const PanelUi* u);
-// The field frame may be captured into the hold texture this frame.
+// The field frame may be captured into the hold texture this frame: the field has been stable for
+// PANELUI_HOLD_SETTLE frames. A START selection fades to black while the game still reads as the
+// field, so capturing on every field frame held a BLACK frame (emulator run p32-panel, 2026-10-05).
+#define PANELUI_HOLD_SETTLE 30
 bool panelui_is_field(const PanelUi* u);
 
 // Draws the whole bottom screen (the scene is already begun and cleared). `frame` = the game's

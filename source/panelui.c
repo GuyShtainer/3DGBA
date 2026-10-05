@@ -169,6 +169,7 @@ u16 panelui_update(PanelUi* u, const GameProfile* gp, const GameState* gs, const
 	    gs->ctx == GCTX_BATTLE_TARGET || gs->ctx == GCTX_BATTLE_OTHER) u->inBattle = true;
 	else if (gs->ctx == GCTX_OVERWORLD || gs->ctx == GCTX_TITLE)    u->inBattle = false;
 	u->ctx = map_ctx(u, gp, gs);
+	u->fieldRun = (u->ctx == PCTX_FIELD) ? (u->fieldRun < 1000 ? u->fieldRun + 1 : 1000) : 0;
 	if (u->ctx == PCTX_START) panel_read_start(&bus, &u->addrs, &u->list);
 
 	// The battle panel: singles only. In a double battle the second mon's turn would show the
@@ -215,7 +216,9 @@ u16 panelui_update(PanelUi* u, const GameProfile* gp, const GameState* gs, const
 bool panelui_hold_top(const PanelUi* u) {
 	return u && u->ok && !u->inBattle && (u->ctx == PCTX_MENU || u->ctx == PCTX_POKENAV_MAIN);
 }
-bool panelui_is_field(const PanelUi* u) { return u && u->ok && u->ctx == PCTX_FIELD; }
+bool panelui_is_field(const PanelUi* u) {
+	return u && u->ok && u->ctx == PCTX_FIELD && u->fieldRun >= PANELUI_HOLD_SETTLE;
+}
 
 // ---- drawing ------------------------------------------------------------------------------------
 static u32 rgba_to_c2d(uint32_t c) {
