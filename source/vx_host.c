@@ -85,7 +85,7 @@ static void Rebind(GbaCore *top)
 
 bool vx_host_candidate(GbaCore *top, bool userOn, bool isN3DS, bool linkAny)
 {
-    if (!userOn || !isN3DS || linkAny || top == NULL)
+    if (!userOn || (!isN3DS && !VX_DEV_FORCE_OVERLAY) || linkAny || top == NULL)   /* dev switch: the emulator harness pins an Old 3DS */
         return false;
     if (top != sBound)
         Rebind(top);
