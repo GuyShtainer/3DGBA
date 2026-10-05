@@ -12,6 +12,7 @@ embedding mGBA for *this* tool.
 | `link-cable-lockstep.md` | in-process lockstep SIO linking the two cores; the threading catch; cadence | ✅ verified vs source |
 | `audio-mixer.md` | solo/mixed/split mixer policy; draining the unfocused core | ✅ verified vs source |
 | `gen3-ram-touch.md` | Gen-3 live-RAM addresses (player x/y, battle flag, action cursor) for game-aware touch | ✅ verified vs pret sym maps |
+| `voxel-diorama-reference.md` | the voxel-diorama 3D-overworld ecosystem (DramaticShape mod, pokeemerald-multiplatform's C renderer); local archives in `projects/_reference/`; how it maps to a citro3d port | ✅ source-read 2026-08-31 |
 
 All three were verified against mGBA **master** source on 2026-06-03. They cite exact
 symbols and upstream files — **pin a known mGBA commit** before implementing, as line
