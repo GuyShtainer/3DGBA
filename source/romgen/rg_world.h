@@ -32,6 +32,9 @@ static inline uint32_t rg_rd32(const uint8_t *p)
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
+/* Progress callback shared by the generators: done of total units (layouts). */
+typedef void (*RgProgressFn)(void *ctx, unsigned done, unsigned total);
+
 typedef struct { int16_t x, y; } RgCell;
 
 typedef struct RgTileset {

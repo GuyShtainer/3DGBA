@@ -34,3 +34,19 @@
   events, 533 sign events`; `--time` prints 2.0 ms for the world open on the PC.
 - Device: `source/romgen` added to SOURCES and `rg_%.o : CFLAGS += -ffp-contract=off` in the Makefile; `make -j8` green
   (rg_art.o, rg_world.o compile under devkitARM with no warnings). Not wired into the app (S4).
+
+## 2026-10-06 S1.1 rg_roles
+- Built: `source/romgen/rg_roles.{h,c}` (port of voxel_cells.Layout.role_at, houses/lamps/free_post/is_signpost, global
+  post_metatiles; MIT header), `RgProgressFn` typedef added to rg_world.h, `test/host/test_romgen_roles.c`.
+- Tests: 39 checks synthetic (one hand-built layout per branch: water/ledge/floor/stair, lone foliage is no post, horizontal and
+  vertical fences, cliff vs shelf, fence needs in-map neighbours, lone drawing = signpost, cover is no post, sign event,
+  wall-backed post carried by post_metatiles incl. across layouts of the same tileset ADDRESS and NOT a twin tileset, house
+  flood limits 5 columns / 7 rows / foliage stop, indoor layouts have no signposts, lamp branch vs plain wall, reversed pair
+  order = identical bytes). 656 013 checks with the real ROM: invariants 1-9 of SPEC 7.2 all pass.
+- Real-ROM role census (325 479 cells): floor 91 520, water 67 644, ledge 1 054, stair 2 182, wall 4 639, tree 22 401,
+  prop 0, shelf 86 733, fence 7 197, cliff 41 746, signpost 363. Rustboro: 26 signposts, 20 without a sign event, 2 via the
+  lamp branch. Route 104: 3 of its 5 sign events stand open on three sides and all 3 are SIGNPOST. Littleroot's four signs,
+  the wall-backed (7,8) and (12,8) included, are SIGNPOST.
+- Role array shape for S2/S3: `RgRoles{data, off[id-1], total}`, `rg_roles_of(r, layoutId)`; one byte per cell, row major.
+- Deviation: "lamp branch" invariant 6 is asserted by structure (signpost, no event, one blocked side whose cell is WALL,
+  south open) since the test cannot see which branch fired; that holds for 2 Rustboro cells.
