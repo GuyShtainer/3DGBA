@@ -50,7 +50,11 @@ x: 0                    240 244          316
 - **Top screen while a full-screen menu is open** (`GCTX_PARTY, BAG, FULLUI, LIST, STORAGE, MAP,
   POKENAV, NAMING` outside battle): holds the **last field frame** (or the last voxel frame when
   track V is on), dimmed 15%, with the live menu only on the bottom — Zallax's model. Setting
-  `panelHoldTop` (default on). In battle the top stays live.
+  `panelHoldTop` (default on). In battle the top stays live. **As built:** the hold frame is captured
+  only after 30 stable field frames — a START selection fades to black while the game still reads
+  as the field, and capturing every field frame held the black fade (emulator run, 2026-10-05).
+  The setting itself is not built; the hold is always on in Panel mode. Screens the game-state
+  reader does not classify as full-screen UI (the Battle Frontier pass) keep a live top.
 
 ## T2. The column — opening a START entry, closed-loop
 
@@ -82,9 +86,10 @@ current `GameState`; emits a GBA key mask; no RAM writes beyond what smart touch
 
 1. `ctx == OVERWORLD`, `!fieldLock`, START menu not up → press **START** (one frame), wait.
 2. START menu up (`startCb == startCbInput`, the existing detector) → read count + actions; find
-   the index `i` of the wanted action. Absent → abort (button was dimmed anyway). Move the cursor
-   with **D-pad presses** (DOWN/UP, one per 2 frames, re-reading `startCursor` each step — no
-   cursor write), then **A** once `startCursor == i`.
+   the index `i` of the wanted action. Absent → abort (button was dimmed anyway). **As built:** write
+   the cursor (`sMenu.cursorPos` + the START mirror, exactly smart touch's shipped `fmenu_select`
+   writes) on tick 0, then write again and press **A** on tick 1. (The D-pad stepping first drafted
+   here was replaced: the cursor write is the hardware-proven idiom and needs no per-step waits.)
 3. MAP only: wait for `ctx == POKENAV` with `pnMenuIdx == 0` and `pnCursor` valid; move to cursor
    0; **A**.
 4. From a **full-screen menu or the START menu showing another entry**: press **B** (one per 8
