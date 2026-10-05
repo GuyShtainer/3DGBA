@@ -20,7 +20,7 @@
 // value becomes the panel in single-game mode for a supported Gen-3 game (main.c tmEff). touch.c
 // treats it like OFF; panelui.c drives touch_update(TOUCH_SMART) itself.
 typedef enum { TOUCH_OFF = 0, TOUCH_PAD = 1, TOUCH_SMART = 2, TOUCH_PANEL = 3 } TouchMode;
-extern const char* const TOUCH_NAMES[3];   // "Off" / "Gamepad" / "Smart"
+extern const char* const TOUCH_NAMES[4];   // "Off" / "Gamepad" / "Smart" / "Panel" — indexed by EVERY TouchMode
 
 // Live state of the bottom game the SMART pointer reacts to (filled from gamestate.c + main).
 typedef struct {

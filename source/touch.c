@@ -17,7 +17,7 @@
 #include "excseq.h"    // phase 25 / audit O2: the excursion leg machine (pure C, host-tested)
 #include "progtap.h"   // phase 28 / audit O3: the tap gate's decision (pure C, host-tested)
 
-const char* const TOUCH_NAMES[3] = { "Off", "Gamepad", "Smart" };
+const char* const TOUCH_NAMES[4] = { "Off", "Gamepad", "Smart", "Panel" };   // [TOUCH_PANEL]: the single-game hint indexes tmEff
 
 // PHASE 24 / lane B1: touchgeom.c must host-compile without gamestate.h (which pulls gbacore.h and
 // with it libctru), so DLGGEOM_CTX_FIELD mirrors the enum value. Pin the two together HERE, the
