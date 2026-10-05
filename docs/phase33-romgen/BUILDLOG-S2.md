@@ -18,3 +18,22 @@
     two-layer form; the lower-only form is added when a caller needs it, S2.6 room_check).
   - Uncompressed tilesets decode `min(avail, 16384)` bytes (S0 rule), so "a tile past the data" in a synthetic fixture needs a
     compressed tileset (exact length). Noted for later fixtures.
+
+## 2026-10-06 S2.2 geometry kernel + checks
+- Built: `rg_geom.{h,c}` (mesh with interned tags and per-triangle cached tag flags, clip, triangulate, tile_pieces, Strip,
+  strip_face, Prism incl. Proj cuts / Strip / Tile edges / caps, HipRoof, Frustum, Vault, Walls, Card, Facet, PlainWall,
+  Decal, Cylinder, Lifted, chunked part list; `rg_pysum`, floor-div helpers, stable merge sort) and `rg_bcheck.{h,c}`
+  (double-depth Raster, ortho check, density check); `test/host/test_romgen_geom.c`. Relief and Mound stay for S2.5.
+- Tests: 585 checks, 0 failures (ASan/UBSan). pysum compensated vs naive vectors (0.1x10 = 1.0, 1e100+1-1e100 = 1.0),
+  nearbyint(2.5)==2, floor div/mod, stable sort, clip/triangulate (both windings, L shape area), tile_pieces order and flip
+  and s0, Raster tie keeps first / nearer wins / alpha 127 vs 128 / colour int(255*0.72)==183, a projected wall prism = 0/0/0
+  and empty density, a shifted uv gives wrong>0, doubled u is listed, clamp cuts, every part type emits with exact counts
+  (vault 18, cylinder 46), projected parts = art, hip and frustum and every Strip variant pass the density check
+  (which validates the port of strip_face / segments / wrap / tail).
+- Decisions / deviations:
+  - `RgExact` lives in `rg_bcheck.h` (the spec put it in rg_bspecs.h) so rg_bcheck needs no dependency on the specs table.
+  - `rg_density_check` keeps the spec's `art` parameter but ignores it (upstream's density_check does not use it).
+  - `rg_clip` takes `nc` (live coordinates) and copies whole `RgPt`s for kept vertices; only cut vertices are zero-filled
+    beyond `nc`. Callers never read past `nc`.
+  - `Card.art` is held inside the part (`RgCard.art`), so `rg_part_emit(part, mesh)` drops the spec's separate `art` argument.
+  - Python `sum()` over mixed int/float items is modelled as double (ints are exact in double at these magnitudes).
