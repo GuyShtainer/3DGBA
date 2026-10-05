@@ -58,3 +58,23 @@
   bad magic, descending ids, role byte 11, truncated file). 474 checks with the real ROM: regions.bin = 330 791 bytes
   (= 8 + 12 x 442 + 325 479), every one of the 325 479 cells agrees through the VENDORED parser.
 - Test files are written to mkdtemp dirs under /tmp and removed; nothing ROM-derived lands in the repo.
+
+## 2026-10-06 S1.3 rg_signs (VXS2) + round trip
+- Built: `source/romgen/rg_signs.{h,c}` (cutout_mask, metatile_mask, head_mask, head_ground, record list, VXS2 writer; MIT
+  header), `test/host/test_romgen_signs.c`.
+- Tests: 51 checks synthetic (cutout ring/hole/open ring/border pixels/empty; head_mask: popcount 16 rejected, 14 allowed, width
+  15 rejected, 208 pixels rejected, 104 accepted, no 8-connected seed rejected, empty upper layer; head_ground: exact match,
+  tie keeps the first inserted, most frequent wins, y+2 fallback, off-map -> 0; end to end: post columns 3/4 and 11/12 give mask
+  0x1818 on every row, a lamp's lantern gives head rows 8..15 = 0x00FF with headGround = the floor metatile; indoor copy gives no
+  record; records sorted (layout, y, x); round trip through the VENDORED voxel_sign.c + voxel_regions.c: IsCell, HeadGround).
+  1751 checks with the real ROM: 363 records, signposts.bin = 26 144 bytes, strictly sorted, all in outdoor layouts, 20 with a
+  lantern (17 in Rustboro), every record round-trips through the vendored consumers.
+- **SPEC ERRORS found (recorded, not silently changed):**
+  1. SPEC 7.4 says on the real ROM "every record's `rows` is non-zero". Measured: 4 of 363 records have an all-zero mask:
+     layout 2 (39,44) m=824, layout 36 (23,76) m=578, layout 30 (16,0) m=791, layout 46 (52,9) m=268, all signposts with no
+     sign event whose lower layer draws only colours the walkable neighbours also draw and with an empty upper layer.
+     The upstream algorithm (`metatile_mask`, smask:47-52) produces exactly that, so the faithful port keeps them. The consumer
+     then holds a sign cell whose mask draws nothing (IsCell true, emits no voxels). Pinned as `zeroRows == 4` in the test.
+     Decision for Guy / S5 review: drop them from the file or keep upstream-faithful behaviour.
+  2. SPEC 5.5 says "35 u16, no padding" for the consumer's record: it is 36 u16 = 72 bytes (3 + 16 + 16 + 1), which is what the
+     same spec's "72*count" and the upstream `struct.pack("<HHH16H16HH")` say. The writer uses 72.
