@@ -253,18 +253,24 @@ static const struct Tileset *InternTileset(uint32_t addr)
     }
     else
         tilesBytes = Clip(tiles, 512u * TILE_SIZE_4BPP);
-    ts = Alloc(sizeof(*ts));
-    if (ts == NULL)
-        return NULL;
-    ts->isCompressed = raw[0];
-    ts->isSecondary = raw[1];
-    ts->tiles = RomPtr(tiles, 1);
-    ts->palettes = RomU16Array(pal, 16u * 16u * 2u);
-    ts->metatiles = RomU16Array(meta, (size_t)NUM_METATILES_IN_PRIMARY * 16u);
-    ts->metatileAttributes = RomU16Array(attr, (size_t)NUM_METATILES_IN_PRIMARY * 2u);
-    ts->gbaAddr = addr;
-    if (ts->palettes == NULL || ts->metatiles == NULL || ts->metatileAttributes == NULL)
-        return NULL; /* arena bytes are leaked until set_rom; a rejected tileset is rare */
+    {
+        const u16 *palP = RomU16Array(pal, 16u * 16u * 2u);
+        const u16 *metaP = RomU16Array(meta, (size_t)NUM_METATILES_IN_PRIMARY * 16u);
+        const u16 *attrP = RomU16Array(attr, (size_t)NUM_METATILES_IN_PRIMARY * 2u);
+
+        if (palP == NULL || metaP == NULL || attrP == NULL)
+            return NULL;
+        ts = Alloc(sizeof(*ts));
+        if (ts == NULL)
+            return NULL;
+        ts->isCompressed = raw[0];
+        ts->isSecondary = raw[1];
+        ts->tiles = RomPtr(tiles, 1);
+        ts->palettes = palP;
+        ts->metatiles = metaP;
+        ts->metatileAttributes = attrP;
+        ts->gbaAddr = addr;
+    }
     RegisterSize(ts->tiles, (uint32_t)tilesBytes);
     RegisterSize(ts->palettes, (uint32_t)Clip(pal, 512u));
     RegisterSize(ts->metatiles, (uint32_t)Clip(meta, (size_t)NUM_METATILES_IN_PRIMARY * 16u));
@@ -292,17 +298,22 @@ static const struct MapLayout *InternLayout(uint32_t addr)
     sec = InternTileset(Rd32(raw + 0x14));
     if (prim == NULL || sec == NULL)
         return NULL;
-    lay = Alloc(sizeof(*lay));
-    if (lay == NULL)
-        return NULL;
-    lay->width = w;
-    lay->height = h;
-    lay->border = RomU16Array(Rd32(raw + 8), 8);
-    lay->map = RomU16Array(Rd32(raw + 0xC), (size_t)w * (size_t)h * 2u);
-    lay->primaryTileset = prim;
-    lay->secondaryTileset = sec;
-    if (lay->border == NULL || lay->map == NULL)
-        return NULL;
+    {
+        const u16 *border = RomU16Array(Rd32(raw + 8), 8);
+        const u16 *map = RomU16Array(Rd32(raw + 0xC), (size_t)w * (size_t)h * 2u);
+
+        if (border == NULL || map == NULL)
+            return NULL;
+        lay = Alloc(sizeof(*lay));
+        if (lay == NULL)
+            return NULL;
+        lay->width = w;
+        lay->height = h;
+        lay->border = border;
+        lay->map = map;
+        lay->primaryTileset = prim;
+        lay->secondaryTileset = sec;
+    }
     return InternPut(addr, K_LAYOUT, lay) ? lay : NULL;
 }
 
@@ -311,6 +322,7 @@ static const struct MapEvents *InternEvents(uint32_t addr)
     struct MapEvents *ev = InternFind(addr, K_EVENTS);
     const uint8_t *raw;
     unsigned objCount, bgCount;
+    size_t mark;
 
     if (ev != NULL)
         return ev;
@@ -321,6 +333,7 @@ static const struct MapEvents *InternEvents(uint32_t addr)
     bgCount = raw[3];
     if (objCount > MAX_OBJECT_TEMPLATES)
         return NULL;
+    mark = sArenaUsed;
     ev = Alloc(sizeof(*ev));
     if (ev == NULL)
         return NULL;
@@ -330,7 +343,10 @@ static const struct MapEvents *InternEvents(uint32_t addr)
         struct ObjectEventTemplate *dst = Alloc(sizeof(*dst) * objCount);
 
         if (src == NULL || dst == NULL)
+        {
+            sArenaUsed = mark;
             return NULL;
+        }
         for (unsigned i = 0; i < objCount; ++i)
             dst[i].graphicsId = src[i * 0x18u + 1u];
         ev->objectEvents = dst;
@@ -342,7 +358,10 @@ static const struct MapEvents *InternEvents(uint32_t addr)
         struct BgEvent *dst = Alloc(sizeof(*dst) * bgCount);
 
         if (src == NULL || dst == NULL)
+        {
+            sArenaUsed = mark;
             return NULL;
+        }
         for (unsigned i = 0; i < bgCount; ++i)
         {
             const uint8_t *e = src + i * GBA_ROM_BGEVENT_STRIDE;
@@ -364,6 +383,7 @@ static const struct MapConnections *InternConnections(uint32_t addr)
     const uint8_t *raw, *src;
     struct MapConnection *dst;
     uint32_t count, kept = 0;
+    size_t mark;
 
     if (cs != NULL)
         return cs;
@@ -374,10 +394,16 @@ static const struct MapConnections *InternConnections(uint32_t addr)
     if (count < 1 || count > MAX_CONNECTIONS)
         return NULL;
     src = RomPtr(Rd32(raw + 4), (size_t)count * GBA_ROM_CONNECTION_STRIDE);
+    if (src == NULL)
+        return NULL;
+    mark = sArenaUsed;
     cs = Alloc(sizeof(*cs));
     dst = Alloc(sizeof(*dst) * count);
-    if (src == NULL || cs == NULL || dst == NULL)
+    if (cs == NULL || dst == NULL)
+    {
+        sArenaUsed = mark;
         return NULL;
+    }
     for (uint32_t i = 0; i < count; ++i)
     {
         const uint8_t *e = src + i * GBA_ROM_CONNECTION_STRIDE;
@@ -420,14 +446,18 @@ static bool DecodeHeader(const uint8_t *raw, uint32_t gbaAddr, struct MapHeader 
 static const struct MapHeader *InternHeader(uint32_t addr)
 {
     struct MapHeader *hd = InternFind(addr, K_HEADER);
+    struct MapHeader tmp;
     const uint8_t *raw;
 
     if (hd != NULL)
         return hd;
     raw = RomPtr(addr, GBA_MAP_HEADER_BYTES);
-    hd = raw != NULL ? Alloc(sizeof(*hd)) : NULL;
-    if (hd == NULL || !DecodeHeader(raw, addr, hd))
+    if (raw == NULL || !DecodeHeader(raw, addr, &tmp))
         return NULL;
+    hd = Alloc(sizeof(*hd));
+    if (hd == NULL)
+        return NULL;
+    *hd = tmp;
     return InternPut(addr, K_HEADER, hd) ? hd : NULL;
 }
 
