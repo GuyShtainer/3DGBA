@@ -37,3 +37,24 @@
     beyond `nc`. Callers never read past `nc`.
   - `Card.art` is held inside the part (`RgCard.art`), so `rg_part_emit(part, mesh)` drops the spec's separate `art` argument.
   - Python `sum()` over mixed int/float items is modelled as double (ints are exact in double at these magnitudes).
+
+## S2.3 - Littleroot house end to end
+
+Added: `rg_bspecs.{h,c}` (RgSpec, `rg_littleroot_house`, spec rows 1-2 only, of 34), `rg_buildings.{h,c}` (build_models for
+direct specs, cell_heights, cell_footprints, find_placements, placement_patches, pack_atlas, texel_offset, VXB7 writer),
+`test_romgen_buildings.c`.
+
+Results (real ROM): both houses 614 triangles, gate ortho 0/0/0 and empty density list; heights 31/49/61/49 per row, all in
+1..255; placements (10,2,4) and (10,13,4); meshes identical except plaster-column u (shifted by exactly 56, to 1e-9, since the
+fractional u sums are not bit-exact). 2-model buildings.bin = 154296 bytes (1 page, 3684 vertices, 1 mask); one house alone =
+77184 bytes. Both round-trip through VoxelBuildings_Init (PageOf/CellAt).
+
+Deviations / decisions:
+- `RgSpec.rect` is int16 (not u8); `RgExact` lives in rg_bcheck.h.
+- `rg_cell_footprints` returns maskOf[] plus an `RgMaskSet` (dedup, first-seen order).
+- `RgErr` gained RG_ERR_TOO_BIG and RG_ERR_BUILDINGS (field-width overflow guard).
+- The writer recomputes everything for the sizing pass (out == NULL), no caching.
+- Variants table fixed at 0 (arrives S2.5-S2.6); `Card.art` is held inside the part; `rg_cell_image` allocates its output.
+- Python int vs float `sum()` caveat: sums go through rg_pysum (compensated), area sums are float in upstream too.
+- Synthetic coverage is numerics only (texel_offset, pack_atlas); the end-to-end proof is the real-ROM run. A synthetic
+  fixture world with masks is not yet written (mask paths are exercised with 1 mask on the real ROM).

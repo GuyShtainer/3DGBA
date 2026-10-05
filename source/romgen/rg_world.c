@@ -71,6 +71,8 @@ const char *rg_err_str(RgErr e)
     case RG_ERR_TILESET: return "tileset unreadable";
     case RG_ERR_NOMEM: return "out of memory";
     case RG_ERR_CANCELLED: return "cancelled";
+    case RG_ERR_TOO_BIG: return "a buildings.bin field overflows its width";
+    case RG_ERR_BUILDINGS: return "building model or atlas not representable";
     }
     return "?";
 }

@@ -20,7 +20,9 @@ typedef enum {
     RG_ERR_MAP_GROUPS,
     RG_ERR_TILESET,
     RG_ERR_NOMEM,
-    RG_ERR_CANCELLED
+    RG_ERR_CANCELLED,
+    RG_ERR_TOO_BIG,              /* a buildings.bin field would overflow its width */
+    RG_ERR_BUILDINGS             /* a model or atlas the format cannot hold */
 } RgErr;
 
 /* Explicit little-endian reads: no casts, so host and device agree. */
