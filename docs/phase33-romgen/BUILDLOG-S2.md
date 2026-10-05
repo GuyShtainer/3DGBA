@@ -112,3 +112,11 @@ Deviations / decisions:
   at least one covered cell per model.
 - Not run: upstream's lambda `exact` for kits (`kit_house_exact`) is stored as the two literal tables for 64 and 80.
 Open: none for S2.4. Next: S2.5 (components, kit, props); `rg_flat_block` unit branch gets its real-ROM gate there.
+
+## 2026-10-06 — S2.4 visual check in the emulator (PASS)
+
+- 14-model `buildings.bin` (1,247,008 B, same as the test) on the emulator SD; app log: `14 models on 30 pages,
+  63 placements, 14928 vertices`.
+- `evidence/s24-littleroot-lab.png`: Birch's lab is now a 3D model (raised roof + rooftop dome, front wall).
+- `evidence/s24-oldale-center.png`: Oldale Pokémon Center as a 3D model (curved roof, Poké Ball crest, P.C sign)
+  next to an Oldale house. Both match Zallax's sheet.
