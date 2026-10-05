@@ -50,6 +50,7 @@ static u32 dim_color(u32 c, float f);   // fwd (defined near run_splash)
 #include "gbatext.h"       // ...and the Gen-3 charmap -> UTF-8 decoder the card + nameplate share
 #include "warp_shbin.h"   // M2 grid-warp vertex shader (generated from source/warp.v.pica)
 #include "tilt_shbin.h"   // phase 14 tilt vertex shader (generated from source/tilt.v.pica)
+#include "vx_host.h"      // phase 32 voxel overworld glue (SPEC-port 5)
 
 #define WORKER_STACKSIZE (512 * 1024)   // mGBA runFrame has deep call chains; 32KB overflows
 #define FRAME_TICKS      4481520ULL    // SYSCLOCK_ARM11 / (16756991/280095) -> 59.826 fps real-time cap
@@ -86,6 +87,7 @@ typedef struct {
 	volatile bool wantWait;   // lockstep asked this core to park (set in onSleep)
 	LightEvent    waitEv;     // peer signals this to un-park us (onWake)
 	volatile bool paused;     // X freezes the focused game (unlinked play only)
+	bool          ovMasked;   // phase 32: the frame last uploaded from this core was rendered masked
 } EmuInstance;
 
 static volatile bool g_quit = false;
@@ -710,6 +712,12 @@ static void upload_frame(EmuInstance* e) {
 		GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGB565) |
 		GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB565) |
 		GX_TRANSFER_OUT_TILED(1) | GX_TRANSFER_FLIP_VERT(0));
+	// Phase 32 (SPEC-port 6.6): the mask a core renders with only changes in the parked window right
+	// before a kick, so its state HERE is exactly the state the frame just uploaded was rendered with.
+	// A masked frame also feeds the BG0 overlay texture (keyed backdrop -> alpha 0). Voxel off: one
+	// pointer compare, no state touched.
+	e->ovMasked = vx_host_masked(e->core);
+	if (e->ovMasked) vx_host_overlay_upload(e->fb, GBA_FB_STRIDE);
 }
 
 // ---- Phase 32 track T: the touch PANEL's top-hold (SPEC-touch-panel T1) ----
@@ -1290,6 +1298,7 @@ _Static_assert(GCTX_OVERWORLD == TILT_CTX_FIELD, "tilt.h TILT_CTX_FIELD drifted 
 // space this file blits. Both are pinned here so a drift is a compile error, not a mis-placed
 // avatar.
 _Static_assert(GCTX_OVERWORLD == FIELD_CTX_OVERWORLD, "fieldgate.h drifted from GameCtx");
+_Static_assert(GCTX_FIELDMENU == VOX_CTX_FIELDMENU, "tilt.h VOX_CTX_FIELDMENU drifted from GameCtx");
 _Static_assert(GBA_W == PRES_FRAME_W && GBA_H == PRES_FRAME_H,
                "presence frame space must BE the GBA frame (SPEC-data §0.3)");
 
@@ -2445,6 +2454,17 @@ static void render_game(EmuInstance* e, C3D_RenderTarget* screen, C3D_RenderTarg
 	}
 }
 
+// Phase 32 (SPEC-port 5.2 step 4): the BG0 overlay at the GBA image's on-screen rect for `mode`, the same
+// sx/sy/centring render_game uses, so text lands where the player is used to it. Alpha 0 shows the world.
+static void vx_overlay_quad(C3D_RenderTarget* screen, int mode, bool smooth) {
+	const float screenW = 400.0f, screenH = 240.0f;
+	float sx, sy;
+	if (mode == SCALE_1X)           { sx = sy = 1.0f; }
+	else if (mode == SCALE_STRETCH) { sx = screenW / GBA_W; sy = screenH / GBA_H; }
+	else { float f = (screenW / GBA_W < screenH / GBA_H) ? screenW / GBA_W : screenH / GBA_H; sx = sy = f; }
+	vx_host_draw_overlay(screen, (screenW - GBA_W * sx) / 2.0f, (screenH - GBA_H * sy) / 2.0f, sx, sy, smooth);
+}
+
 // ---- Settings persistence (sdmc:/3DGBA/settings.bin) --------------------
 #define SETTINGS_PATH  "sdmc:/3DGBA/settings.bin"
 #define SETTINGS_MAGIC 0x33424744u   // 'DGB3'
@@ -2478,13 +2498,21 @@ typedef struct {
 	                      // versioning, so every file a pre-phase-15 build wrote still loads.
 	// --- phase 22.2 (appended; files that end at `presence` still load, traverse stays 0 = Off) ---
 	s32 traverse;         // g_prefs.smartTraverse, 0..SMART_TRAVERSE_LEVELS-1 (SPEC-traversal T4.1)
+	// --- phase 32 (appended; files that end at `traverse` still load, the voxel pair stays at its
+	// defaults: OFF / 40 deg / 100 %). NO magic bump, same ladder rule as every phase since 14. ---
+	s32 voxel;            // g_prefs.voxel, 0/1 (SPEC-port 8.1)
+	s32 voxPitch;         // g_prefs.voxPitch, 0..4
+	s32 voxZoom;          // g_prefs.voxZoom, 0..3
 } Settings;
 // SPEC-integration I7.6: test/host/test_tilt.c TEST 6 replicates this layout (main.c cannot be
 // host-compiled), so pin the two together. If a field is inserted anywhere above, these fire and
 // the test's copy must be updated in the same edit — the alternative is a silently-shifted
 // offsetof ladder that mis-loads every older settings file. offsetof(tilt) staying 23 across the
 // phase-15 append IS the proof that the change is backward-compatible (SPEC-avatar A6.3.2).
-_Static_assert(sizeof(Settings)             == 26 * sizeof(s32), "Settings grew/shrank — sync test_tilt TEST 6");
+_Static_assert(sizeof(Settings)             == 29 * sizeof(s32), "Settings grew/shrank — sync test_tilt TEST 6");
+_Static_assert(offsetof(Settings, voxZoom)  == 28 * sizeof(s32), "Settings.voxZoom moved — sync test_tilt TEST 6");
+_Static_assert(offsetof(Settings, voxPitch) == 27 * sizeof(s32), "Settings.voxPitch moved — sync test_tilt TEST 6");
+_Static_assert(offsetof(Settings, voxel)    == 26 * sizeof(s32), "Settings.voxel moved — sync test_tilt TEST 6");
 _Static_assert(offsetof(Settings, traverse) == 25 * sizeof(s32), "Settings.traverse moved — sync test_tilt TEST 6");
 _Static_assert(offsetof(Settings, presence) == 24 * sizeof(s32), "Settings.presence moved — sync test_tilt TEST 6");
 _Static_assert(offsetof(Settings, tilt)     == 23 * sizeof(s32), "Settings.tilt moved — sync test_tilt TEST 6");
@@ -2518,8 +2546,9 @@ static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, int* 
 	// PRE-TRAVERSE full struct — exactly what every phase-15..22.1 build wrote — and lenNew is the
 	// new sizeof. Same no-magic-bump rule: the ladder is the version.
 	size_t lenPres  = offsetof(Settings, traverse);   // includes presence (pre-traverse)
-	size_t lenNew   = sizeof s;                       // + traverse
-	if ((n != lenNew && n != lenPres && n != lenTilt && n != lenPad && n != lenOld && n != lenVivid && n != lenLight && n != lenBloom && n != lenDof)
+	size_t lenTrav  = offsetof(Settings, voxel);      // includes traverse (pre-voxel) — what every phase-22.2..31 build wrote
+	size_t lenNew   = sizeof s;                       // + the phase-32 voxel triple
+	if ((n != lenNew && n != lenTrav && n != lenPres && n != lenTilt && n != lenPad && n != lenOld && n != lenVivid && n != lenLight && n != lenBloom && n != lenDof)
 	    || s.magic != SETTINGS_MAGIC) return;      // tolerate older files
 	scaleMode[0] = ((unsigned)s.scaleMode[0]) % 3;
 	scaleMode[1] = ((unsigned)s.scaleMode[1]) % 3;
@@ -2555,7 +2584,13 @@ static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, int* 
 	// Modulo for the same reason tiltLevel uses it: a corrupt/negative word must land inside the
 	// ladder, never index a label table out of range. Older files leave it 0 = Off (T4.1's
 	// shipped default), so no existing user's tap behaviour changes on upgrade.
-	if (n >= lenNew) g_prefs.smartTraverse = ((unsigned)s.traverse) % SMART_TRAVERSE_LEVELS;
+	if (n >= lenTrav) g_prefs.smartTraverse = ((unsigned)s.traverse) % SMART_TRAVERSE_LEVELS;
+	// Phase 32: modulo like tiltLevel/padEdge so a corrupt word can never index the label ladders out of range.
+	if (n >= lenNew) {
+		g_prefs.voxel    = s.voxel != 0;
+		g_prefs.voxPitch = ((unsigned)s.voxPitch) % 5;
+		g_prefs.voxZoom  = ((unsigned)s.voxZoom) % 4;
+	}
 	theme_apply(g_prefs.theme, g_prefs.customBaseHue, g_prefs.customAccentHue, g_prefs.customContrast);
 }
 
@@ -2568,7 +2603,8 @@ static void settings_save(const int scaleMode[2], const bool smooth[2], bool swa
 	               g_prefs.gameMode, g_prefs.padColor, g_prefs.padEdge,
 	               g_prefs.tiltLevel,     // phase 14, I4.9: appended, so the file grew by 4 B
 	               presenceOn,            // phase 15, A6.3.3: appended, another 4 B
-	               g_prefs.smartTraverse };   // phase 22.2, T4.1: appended last, another 4 B
+	               g_prefs.smartTraverse,     // phase 22.2, T4.1: appended, another 4 B
+	               g_prefs.voxel, g_prefs.voxPitch, g_prefs.voxZoom };   // phase 32, SPEC-port 8.2: appended last (12 B)
 	FILE* f = fopen(SETTINGS_PATH, "wb");
 	if (!f) return;
 	fwrite(&s, 1, sizeof s, f);
@@ -2618,6 +2654,7 @@ enum {
 	ACT_TILT,                             // phase 14 HD-2D diorama tilt (PK_SEG, 4 rungs) — I4.7
 	ACT_PRESENCE,                         // phase 15 co-op presence (PK_TOG, 2 states) — A6.1.4
 	ACT_TRAVERSE,                         // phase 22.2 HM routing (PK_SEG, 3 rungs) — T4.1
+	ACT_VOXEL, ACT_VOXPITCH, ACT_VOXZOOM, // phase 32 voxel overworld (PK_TOG + two PK_SEG) — SPEC-port 8.3
 };
 static const char* const MENU_TAB_NAMES[6] = { "SESSION", "DISPLAY", "AUDIO", "ENHANCE", "LINK", "TOUCH" };
 static const char* const PAD_EDGE_NAMES[3] = { "Round", "Soft", "Sharp" };
@@ -2632,6 +2669,10 @@ static const char* const TRAVERSE_NAMES[SMART_TRAVERSE_LEVELS] = { "Off", "HM", 
 // on OUR ladder without claiming an absolute. One table, three consumers: the pause seg, the
 // standalone-settings seg, and the status line — so the three can never drift apart.
 static const char* const TILT_NAMES[TILT_LEVELS] = { "Off", "Low", "Mid", "Max" };
+// Phase 32 (SPEC-port 8.1). Plain digits: the unit rides the caption, not the rungs (a degree sign is not
+// known to be in the baked label faces, and a missing glyph in a 26 px rung is worse than a caption).
+static const char* const VOX_PITCH_NAMES[5] = { "34", "37", "40", "43", "46" };
+static const char* const VOX_ZOOM_NAMES[4]  = { "90", "100", "110", "120" };
 
 enum { PK_TOG, PK_SEG, PK_STEP, PK_BTN, PK_SWATCH };
 // PHASE 17 / SPEC-layout L8.3 (sweep D19). `ov` is the label for a row the PLATE does not bake.
@@ -2708,7 +2749,13 @@ static const PCtl PT_ENHANCE[] = {
   // "Vivid mode" instead of as the tilt row's own heading. The row drops two pixels: caption ink
   // 187..195 (3 rows clear above, 4 below), seg 200..225, and menu_draw_chrome's band still owns
   // y >= 226. contentH is 226 either way, so maxScroll stays 0 and nothing else on the tab moves.
-  {PK_SEG,ACT_TILT,4, 140,200,170,26,"DIORAMA · TILT",OV_SECTION_TIGHT} };
+  {PK_SEG,ACT_TILT,4, 140,200,170,26,"DIORAMA · TILT",OV_SECTION_TIGHT},
+  // PHASE 32 / SPEC-port 8.3: ENHANCE is full, so the voxel rows go BELOW the tilt row and the tab
+  // scrolls (the content panel is a viewport since phase 17; uihit_content_h derives the extent from
+  // this table). contentH 362 -> maxScroll 136. ANGLE/ZOOM are dimmed + not hit-testable while VOXEL 3D is off.
+  {PK_TOG,ACT_VOXEL,0, 276,250,34,18,"VOXEL 3D",OV_ROW},
+  {PK_SEG,ACT_VOXPITCH,5, 140,290,170,26,"3D ANGLE · DEG",OV_SECTION_TIGHT},
+  {PK_SEG,ACT_VOXZOOM,4, 140,336,170,26,"3D ZOOM · %",OV_SECTION_TIGHT} };
 // Phase 15 adds the CO-OP row (SPEC-avatar A6.1). It goes on LINK, not ENHANCE, because ENHANCE is
 // measurably full: its five baked toggles end at y=188, the tilt seg takes y198..224 and the status
 // hint sits at y=231 — SEVEN pixels left, and phase 14's open question O6 (new plate art for a 6th
@@ -2756,7 +2803,7 @@ static const PCtl* const PTABS[6] = { PT_SESSION, PT_DISPLAY, PT_AUDIO, PT_ENHAN
 // A6.1.1: LINK goes 6 -> 7 for the phase-15 CO-OP row, and it is the SAME silent trap.
 // A6.1.1 again for phase 22.2: TOUCH goes 5 -> 6 for the HM-ROUTES row, and forgetting it is the
 // SAME silent trap (the draw loop and the hit-test loop are both `for (i < nPd)`).
-static const int PTABN[6] = { 3, 6, 4, 6, 7, 6 };
+static const int PTABN[6] = { 3, 6, 4, 9, 7, 6 };   // phase 32: ENHANCE 6 -> 9 (the voxel rows) — the SAME silent trap
 static const char* const PT_PLATE[6] = { "pause-bot-session","pause-bot-display","pause-bot-audio",
                                          "pause-bot-enhance","pause-bot-link","pause-bot-touch" };
 
@@ -3056,6 +3103,9 @@ static int menu_layout(int tab, MenuW* out) {
 		PUSH(W_TOGGLE, ACT_LIGHT, 0, 0);
 		PUSH(W_TOGGLE, ACT_VIVID, 0, 0);
 		PUSH(W_SEG,    ACT_TILT,  0, 0);   // phase 14 (I4.5 — bookkeeping; see the note at the top)
+		PUSH(W_TOGGLE, ACT_VOXEL, 0, 0);   // phase 32 (SPEC-port 8.3 — bookkeeping)
+		PUSH(W_SEG,    ACT_VOXPITCH, 0, 0);
+		PUSH(W_SEG,    ACT_VOXZOOM,  0, 0);
 		break;
 	case 4:   // LINK
 		PUSH(W_TOGGLE, ACT_LINK, 0, 0);
@@ -3137,12 +3187,13 @@ static void draw_paused_summary(C2D_TextBuf buf, const char* nameTop, const char
 		// solid accent fills with ink text, and with the old ui_fill those fills rendered as
 		// crosses whose side nubs the longer labels overflowed (sweep D6). One colour per pill now:
 		// the role colour when on, g_ui.dim when off.
-		const char* labs[9]; u32 col[9]; int n = 0;
+		const char* labs[10]; u32 col[10]; int n = 0;
 		#define PILL(L, ON, C) do { labs[n] = (L); col[n] = (ON) ? (C) : g_ui.dim; n++; } while (0)
 		PILL("3D", s3d, THEME_GAME_B); PILL("DoF", dof, g_ui.acc); PILL("Bloom", bloom, g_ui.acc);
 		PILL("Light", light, g_ui.acc);
 		PILL("Tilt", g_prefs.tiltLevel > 0, g_ui.acc);   // right after Light: the enhance pills stay grouped
 		if (vivid) PILL("Vivid", 1, g_ui.acc);
+		if (g_prefs.voxel) PILL("Voxel", 1, g_ui.acc);   // phase 32: pause screen answers "is voxel on" (pref only: voxTop is false while paused)
 		PILL(touchMode == 2 ? "Smart" : (touchMode == 1 ? "Pad" : "Touch Off"), touchMode != 0, THEME_GAME_A);
 		// A6.4.3: so the pause screen answers "is co-op on" without opening the LINK tab. It sits
 		// beside the link pill because that is where the control lives (A6.1.3).
@@ -3157,8 +3208,10 @@ static void draw_paused_summary(C2D_TextBuf buf, const char* nameTop, const char
 		// with the LONGEST variant of every dynamic label ("Touch Off", "Wireless"). The pill BOX
 		// grows 15 -> 17 to hold the taller cell; it stays anchored at y=129 so the row does not
 		// move, and the label is centred by ink (L3.2.7) rather than by the old hand-typed +3.
-		float pw[9], tw = 0.0f;
-		for (int i = 0; i < n; i++) { pw[i] = assets_text_w(buf, TXT_CHIP, labs[i]) + PILL_PAD; tw += pw[i] + PILL_GAP; }
+		// phase 32: a tenth pill (Voxel, only while on) would overflow 400 px at the nine-pill padding, so it tightens.
+		const float padX = n > 9 ? PILL_PAD - 4.0f : PILL_PAD;
+		float pw[10], tw = 0.0f;
+		for (int i = 0; i < n; i++) { pw[i] = assets_text_w(buf, TXT_CHIP, labs[i]) + padX; tw += pw[i] + PILL_GAP; }
 		float x = (400.0f - tw) / 2.0f;
 		for (int i = 0; i < n; i++) {
 			ui_border_round(x, PILL_Y, pw[i], PILL_H, col[i], 1.0f, 5.0f);
@@ -3389,6 +3442,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	// the longest expansion. Every existing toast is far shorter, so nothing else changes.
 	char toast[64] = "";
 	int  toastTimer = 0;
+	int  voxStatusTimer = 0;   // phase 32: frames left of the VOXEL 3D hint-band status (SPEC-port 8.4)
+	bool voxTop = false;          // phase 32: the voxel gate for THIS iteration's top screen (parked window)
+	bool voxWorldReady = false;   // phase 32: CtrVoxel_Update succeeded on the previous rendered frame (SPEC-port 6.6)
 
 	// HUD (menu-toggleable): per-screen game label + FPS + clock + battery.
 	int  hudMode = 3;   // per-screen HUD/fps bitmask: 1=top 2=bottom
@@ -3427,6 +3483,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	while (aptMainLoop()) {
 		if (!g_appActive) { svcSleepThread(16 * 1000 * 1000); continue; }   // backgrounded: don't hog the cores
 		u64 wfStart = svcGetSystemTick();
+		voxTop = false;   // phase 32: recomputed in the parked window below; false in every menu iteration
 		g_renderSeq++;   // D1 render loop-seq (one store; SPEC D1.3)
 		hidScanInput();
 		u32 kDown = hidKeysDown();
@@ -3570,6 +3627,10 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					if (emuA.core) upload_frame(&emuA); if (emuB.core) upload_frame(&emuB);
 					workersRunning = false;
 				}
+				// Phase 32: the menu is the only way into a link, and a link has no parked window to
+				// change the mask in. Unmask HERE (workers are parked or not running), keeping the already
+				// uploaded masked frame on screen (world + overlay) until the next real upload.
+				vx_host_mask(emuA.core, false); vx_host_mask(emuB.core, false);
 			} else {
 				// PIPELINE: finish the PREVIOUS frame (started last iteration, ran during the render) and
 				// snapshot it. We render N-1 while N computes -> render isn't chained to the slower core,
@@ -3654,7 +3715,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 						tk = panelui_update(&s_pui, gp, &gsr, &sm, touching, tp.px, tp.py, to_gba_keys(kHeld),
 						                    linkOn || netOn || wlOn, &mreq);
 						if (mreq) s_panelMenuReq = true;
-						if (panelui_is_field(&s_pui)) hold_capture(&emuA);
+						if (panelui_is_field(&s_pui) && !vx_host_masked(emuA.core)) hold_capture(&emuA);   // phase 32: never hold a masked (keyed) frame
 					} else if (tmEff == TOUCH_SMART) {   // game-aware touch works even during a link (benign EWRAM race)
 						gvalid = touch_to_gba(tp.px, tp.py, scaleMode[1], &gx, &gy);
 						GbaCore* botCore = swapped ? emuA.core : emuB.core;
@@ -3750,6 +3811,42 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 							tiltSnap[sc].textDlg  = gsFor2[sc]->textDlg ? 1 : 0;
 							tiltSnap[sc].px       = (int16_t)gsFor2[sc]->px;
 						}
+					}
+					{   // ---- phase 32: the VOXEL snapshot + gate + overlay-mask decision (SPEC-port 3.2, 5.1, 6.6) ----
+						// Parked window: both workers have been waited (or a link is on, in which case the
+						// candidate is false and nothing below touches a core). Read-only copies of the top
+						// core's memory; the decode and everything after C3D_FrameBegin read the COPY.
+						// Voxel off => vx_host_candidate returns false at its first test, the mask calls are
+						// no-ops, and no game memory is read: the frame is byte-identical to today's.
+						EmuInstance* vxTopE = swapped ? &emuB : &emuA;
+						EmuInstance* vxBotE = swapped ? &emuA : &emuB;
+						const bool vxLink = linkOn || netOn || wlOn;
+						const bool vxCand = vx_host_candidate(vxTopE->core, g_prefs.voxel != 0, isN3DS, vxLink);
+						if (vxCand) {
+							const bool vxInit = vx_host_init_ok();
+#if VX_DEV_FORCE_OVERLAY
+							voxTop = vxInit;   // dev switch: no data/world, exercise the mask + overlay chain only
+#else
+							VoxGateIn vg;
+							vg.userOn   = 1;          vg.isBPEE = 1;  vg.dataOk = 1;   // all folded into vxCand
+							vg.isN3DS   = isN3DS ? 1 : 0;
+							vg.menuOpen = 0;          vg.linkAny = 0;
+							vg.ok       = tiltSnap[0].ok;
+							vg.ctx      = tiltSnap[0].ctx;
+							vg.sb1Valid = tiltSnap[0].sb1Valid;
+							vg.fsStarved = (fsOn && (swapped ? (focused ^ 1) : focused) != 0) ? 1 : 0;
+							vg.snapValid = vxInit && vx_host_snapshot(vxTopE->core) ? 1 : 0;
+							vg.cb2      = vx_host_cb2();
+							vg.initOk   = vxInit ? 1 : 0;
+							voxTop = voxel_gate(&vg) != 0;
+#endif
+							vx_host_mask(vxTopE->core,
+							             vx_overlay_want(voxTop, vxInit, VX_DEV_FORCE_OVERLAY ? true : voxWorldReady));
+						} else {
+							voxTop = false;
+							vx_host_mask(vxTopE->core, false);
+						}
+						vx_host_mask(vxBotE->core, false);   // the screen swap can leave a stale mask on the other core
 					}
 					{   // ---- phase 15 slice M1: co-op presence, fill + publish (SPEC-data D6.4) ----
 						// Two POD fills and two publishes, in the window where both workers are parked
@@ -4102,7 +4199,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 				const PCtl* PT = PTABS[menuTab]; int nP = PTABN[menuTab];
 				if (menuRow >= nP) menuRow = 0;
 				// The ONE rect table for this tab: hit-tested below, drawn from the same numbers.
-				UiRect mrect[8]; int nRect = pctl_rects(PT, nP, mrect, 8);
+				UiRect mrect[12]; int nRect = pctl_rects(PT, nP, mrect, 12);
 				int contentH  = uihit_content_h(mrect, nRect);
 				int maxScroll = uihit_max_scroll(contentH);
 				if (menuScroll > maxScroll) menuScroll = maxScroll;
@@ -4133,7 +4230,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 						if (menuGest.x < 86) { int t2 = (menuGest.y - 8) / 30; if (t2 < 0) t2 = 0; if (t2 > 5) t2 = 5;
 						                       if (t2 != menuTab) { menuTab = t2; menuRow = 0; menuScroll = 0;
 						                                            PT = PTABS[menuTab]; nP = PTABN[menuTab];
-						                                            nRect = pctl_rects(PT, nP, mrect, 8);
+						                                            nRect = pctl_rects(PT, nP, mrect, 12);
 						                                            contentH = uihit_content_h(mrect, nRect);
 						                                            maxScroll = uihit_max_scroll(contentH); } }
 						else {
@@ -4157,6 +4254,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					menuScroll = uihit_follow_rect(menuScroll, mrect[menuRow], maxScroll);
 				int act = PT[menuRow].act;
 				int pkind = PT[menuRow].kind;
+				if (!g_prefs.voxel && (act == ACT_VOXPITCH || act == ACT_VOXZOOM)) { segSet = -1; adj = 0; }   // phase 32: dimmed = not hit-testable
 				if (pkind == PK_SEG && (segSet >= 0 || adj)) {
 					int cur, n = PT[menuRow].nseg;
 					// I4.6 — THE TRAP: both of these switches end in `default:` reading/WRITING
@@ -4168,6 +4266,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 						case ACT_AUDIOMODE: cur=audioMode; break; case ACT_TOUCHMODE: cur=touchMode; break;
 						case ACT_TILT: cur=g_prefs.tiltLevel; break;
 						case ACT_TRAVERSE: cur=g_prefs.smartTraverse; break;   // phase 22.2 (T4.1)
+						case ACT_VOXPITCH: cur=g_prefs.voxPitch; break; case ACT_VOXZOOM: cur=g_prefs.voxZoom; break;   // phase 32
 						default: cur=g_prefs.padEdge; break; }
 					cur = (segSet >= 0) ? segSet : ((cur + adj + n) % n);
 					switch (act) { case ACT_SCALE_TOP: scaleMode[0]=cur; break; case ACT_SCALE_BOT: scaleMode[1]=cur; break;
@@ -4175,6 +4274,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 						case ACT_AUDIOMODE: audioMode=cur; audio_reset_stream(); break; case ACT_TOUCHMODE: touchMode=cur; break;
 						case ACT_TILT: g_prefs.tiltLevel=cur; break;
 						case ACT_TRAVERSE: g_prefs.smartTraverse=cur; break;   // phase 22.2 (T4.1)
+						case ACT_VOXPITCH: g_prefs.voxPitch=cur; break; case ACT_VOXZOOM: g_prefs.voxZoom=cur; break;   // phase 32
 						default: g_prefs.padEdge=cur; break; }
 					// I4.14: name the two things a player cannot see from the row itself — that the
 					// effect is overworld-only (PHASE.md invariant 5), and that an Old 3DS keeps the
@@ -4188,6 +4288,12 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 				else if (pkind == PK_STEP && adj) {
 					int* v = (act == ACT_VOLA) ? &volA : &volB;
 					*v += adj * 32; if (*v < 0) *v = 0; else if (*v > 256) *v = 256;
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
+					activate = false;
+				}
+				else if (activate && act == ACT_VOXEL) {   // phase 32 (SPEC-port 8.3)
+					g_prefs.voxel = !g_prefs.voxel;
+					voxStatusTimer = 180;                                    // the hint band shows vx_status for ~3 s (8.4)
 					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
 					activate = false;
 				}
@@ -4529,6 +4635,12 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			// Footer: last action result, or a controls cheat-sheet when idle.
 			snprintf(statusTxt, sizeof statusTxt, "%s",
 			         status[0] ? status : "L/R tab  A select  B resume  (or tap)");
+			// Phase 32 (SPEC-port 8.4): while the VOXEL 3D row has focus, or for 3 s after it is toggled,
+			// the hint band says why the world is (not) drawing.
+			if (menuTab == 3 && PTABS[3][menuRow < PTABN[3] ? menuRow : 0].act == ACT_VOXEL) voxStatusTimer = voxStatusTimer > 1 ? voxStatusTimer : 1;
+			if (voxStatusTimer > 0)
+				snprintf(statusTxt, sizeof statusTxt, "%s", vx_host_status(g_prefs.voxel != 0, isN3DS,
+				         linkOn || netOn || wlOn, (swapped ? &emuB : &emuA)->core));
 		} else {
 			if (single)
 				snprintf(hintBuf, sizeof hintBuf, "3D on top · %s · START+SELECT = menu", TOUCH_NAMES[tmEff]);
@@ -4556,7 +4668,19 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		const C2D_ImageTint* topTint = (focScreen == 0) ? NULL : &dimTint;
 		const C2D_ImageTint* botTint = (focScreen == 1) ? NULL : &dimTint;
 
+		const u64 vxFrameTick = svcGetSystemTick();   // phase 32: handed to CtrVoxel_AfterSubmit after C3D_FrameEnd
 		C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
+
+		// ---- phase 32: which frame is this? (SPEC-port 5.1/5.2/6.6) ----
+		// The uploaded image is one iteration old; ovMasked says whether the core rendered it with the
+		// overlay mask. A world is drawn when the gate wants one OR the frame on screen was masked (the
+		// closing frame after the gate drops, and every menu frame that keeps the last masked image).
+		const bool vxTopMasked = topG->core && topG->ovMasked;
+		bool voxReady = false;
+		if (voxTop || vxTopMasked) voxReady = vx_host_frame_update(g_prefs.voxPitch, g_prefs.voxZoom);
+		voxWorldReady = voxReady;
+		const VxFrameKind vxKind = vx_overlay_frame_kind(vxTopMasked, voxReady);
+		const bool voxDraw = vxKind != VX_FRAME_FLAT;   // top screen = world (or black) + BG0 overlay, not render_game
 
 		// top screen (sharp-bilinear two-pass when applicable). render_game leaves `top` bound.
 		float slider3d = osGet3DSliderState();
@@ -4603,8 +4727,10 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			// TEST 19 pins the sequence.
 			gi.touchActive   = (touchMode != TOUCH_OFF) ? 1 : 0;
 			gi.stereoEngaged = pop3d ? 1 : 0;                    // G10 — top only; stereo wins
+			const int vxBaseLvl = gi.userLevel;
 			for (int sc = 0; sc < 2; sc++) {                     // 0 = top, 1 = bottom (SCREEN)
 				gi.screen   = sc;
+				gi.userLevel = (sc == 0 && voxTop) ? 0 : vxBaseLvl;   // phase 32 (SPEC-port 5.4): voxel wins the top; the tween parks at 0
 				gi.ok       = tiltSnap[sc].ok;                   // G5 — unmapped game => never tilt
 				gi.ctx      = tiltSnap[sc].ctx;                  // G6 — GCTX_OVERWORLD only
 				gi.sb1Valid = tiltSnap[sc].sb1Valid;             // G7 — CtlIn.fieldValid's predicate
@@ -4820,7 +4946,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		}
 
 		// THE invariant-1 check, once per screen: level > 0 OR angle > 0 (tween included).
-		bool tiltTop = tilt_active(&tiltTw[0]);
+		bool tiltTop = tilt_active(&tiltTw[0]) && !voxDraw;   // phase 32 (SPEC-port 5.4): mutually exclusive with the voxel top
 		bool tiltBot = tilt_active(&tiltTw[1]);
 		TiltView tiltVw, tiltVwB;                 // built only when engaged: a tilt-off frame pays nothing
 		if (tiltTop) tilt_view_init(&tiltVw,  tiltTw[0].ang * TILT_DEG2RAD,
@@ -4833,8 +4959,8 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		// are excluded. They cannot co-occur with a SETTLED tilt anyway (G10 above, plus every one
 		// of them requires s3dOn) — but they DO overlap during the 250 ms tween-out after the 3D
 		// slider comes up, which is exactly the frame R4.0.1 is about.
-		bool popPass = pop3d && !tiltTop;
-		bool uipop = s3dOn && depth3d.nui > 0 && topG->core && !tiltTop;   // BG0 panels pop in ANY context
+		bool popPass = pop3d && !tiltTop && !voxDraw;
+		bool uipop = s3dOn && depth3d.nui > 0 && topG->core && !tiltTop && !voxDraw;   // BG0 panels pop in ANY context
 		// Text-aware DoF: kill a band's blur the moment text/UI shows under it (BG0 scan + RAM
 		// signals), ease back in afterwards (fast-out ~3 frames, slow-in ~12 -> no flicker).
 		dofLvlTop += (depth3d.overworld && !depth3d.textTop) ? 0.08f : -0.34f;
@@ -4843,10 +4969,10 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		if (dofLvlBot > 1.0f) dofLvlBot = 1.0f; else if (dofLvlBot < 0.0f) dofLvlBot = 0.0f;
 		bloomLvl += (depth3d.overworld && !depth3d.textTop && !depth3d.textBot) ? 0.08f : -0.34f;
 		if (bloomLvl > 1.0f) bloomLvl = 1.0f; else if (bloomLvl < 0.0f) bloomLvl = 0.0f;
-		bool dofPass = s3dOn && !vividOn && dofOn && dofTgtA && depth3d.overworld && topG->core && (dofLvlTop > 0.01f || dofLvlBot > 0.01f) && !tiltTop;
+		bool dofPass = s3dOn && !vividOn && dofOn && dofTgtA && depth3d.overworld && topG->core && (dofLvlTop > 0.01f || dofLvlBot > 0.01f) && !tiltTop && !voxDraw;
 		bool bloomPass = s3dOn && !vividOn && bloomOn && bloomTgt && dofTgtA && depth3d.overworld && topG->core
-		              && focScreen == 0 && bloomLvl > 0.01f && !tiltTop;   // focused top only (study budget rule)
-		bool litPass = s3dOn && !vividOn && lightOn && depth3d.overworld && topG->core && !tiltTop;   // time-of-day grade
+		              && focScreen == 0 && bloomLvl > 0.01f && !tiltTop && !voxDraw;   // focused top only (study budget rule)
+		bool litPass = s3dOn && !vividOn && lightOn && depth3d.overworld && topG->core && !tiltTop && !voxDraw;   // time-of-day grade
 		LightEnv lenv; if (litPass) { time_t _tt = time(NULL); struct tm* _lt = localtime(&_tt);
 			lenv = light_for_hour(_lt ? _lt->tm_hour + _lt->tm_min / 60.0f : 12.0f); }
 		if (dofPass || bloomPass) dof_prepare(&topG->tex, dofTgtA);   // shared half-res copy (DoF + bloom source)
@@ -4867,7 +4993,10 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		int trSlab = (topMod == 0xFFFFFFFFu) ? 0 : 1;
 		TiltDraw tiltTL = { &tiltVw, topMod,      0,      -1 };
 		TiltDraw tiltTR = { &tiltVw, 0xFFFFFFFFu, trSlab,  0 };
-		if (render_game_gate(topG, top, clrBg))
+		if (voxDraw) {   // phase 32: the voxel world fills the whole 400x240; BG0 (text, menus) is laid over it
+			vx_host_draw_world(top, 0.0f);   // P4 will pass the per-eye offset; P3 draws the same mono world to both eyes
+			vx_overlay_quad(top, scaleMode[0], smooth[0]);
+		} else if (render_game_gate(topG, top, clrBg))
 			render_game(topG, top, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], topTint, clrBg,
 			            tiltTop ? &tiltTL : NULL);
 		if (popPass) {   // M2: continuous grid warp (stretch, no tile tears); quad-warp fallback if no shader
@@ -4890,6 +5019,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		// game g ^ 1, so the live cell for the peer drawn on this screen is s_psprCell[g ^ 1]. Get
 		// this backwards and each screen shows its OWN trainer standing next to itself, which looks
 		// entirely plausible and is wrong.
+		if (!voxDraw)   // phase 32 (SPEC-port 5.4): presence anchors are GBA-pixel space, wrong over a 3D camera
 		presence_draw_screen(top, &presOut[presTopGame], &presSt[presTopGame].rec[0], &presPose[presTopGame],
 		                     1, scaleMode[0], 400.0f, 240.0f, tiltTop ? &tiltVw : NULL, topTint, &presCh[0],
 		                     &s_psprCell[presTopGame ^ 1]);
@@ -5109,7 +5239,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 
 		// top RIGHT eye = the SAME (top) game -> single-game stereoscopic depth. Player pops forward
 		// (positive disparity). (Per-eye dual-game retired; can return later as a menu toggle.)
-		if (render_game_gate(topG, topR, clrBg))
+		if (voxDraw) {   // phase 32: the same mono world for the right eye (per-eye stereo is P4); skipped when the 3D slider is down
+			if (slider3d > 0.03f) { vx_host_draw_world(topR, 0.0f); vx_overlay_quad(topR, scaleMode[0], smooth[0]); }
+		} else if (render_game_gate(topG, topR, clrBg))
 			render_game(topG, topR, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], NULL, clrBg,
 			            tiltTop ? &tiltTR : NULL);
 		if (popPass) {
@@ -5125,6 +5257,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		// disparity), and A2.6.2: with the identical NULL tint the left eye's `topTint` becomes at
 		// this call site. Both eyes therefore agree pixel for pixel except for the game image's own
 		// per-eye pops, which is what "the avatar sits on the screen plane" means.
+		if (!voxDraw)
 		presence_draw_screen(topR, &presOut[presTopGame], &presSt[presTopGame].rec[0], &presPose[presTopGame],
 		                     1, scaleMode[0], 400.0f, 240.0f, tiltTop ? &tiltVw : NULL, NULL, &presCh[0],
 		                     &s_psprCell[presTopGame ^ 1]);   // same cell, both eyes (A2.8)
@@ -5261,7 +5394,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			// The content panel is a VIEWPORT (§I2.4): the plate scrolls WITH its controls, because
 			// the section captions ("SCALE · TOP", …) are baked into it — scrolling one without the
 			// other would tear every label off its row.
-			UiRect drect[8]; int nDr = pctl_rects(PTd, nPd, drect, 8);
+			UiRect drect[12]; int nDr = pctl_rects(PTd, nPd, drect, 12);
 			int dContentH = uihit_content_h(drect, nDr), dMaxScroll = uihit_max_scroll(dContentH);
 			if (menuScroll > dMaxScroll) menuScroll = dMaxScroll;
 			menu_draw_plate(PT_PLATE[menuTab], menuScroll);
@@ -5278,7 +5411,8 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					switch (c->act) { case ACT_SWAP: on=swapped; break; case ACT_FS: on=fsOn; break; case ACT_MUTE: on=muted; break;
 						case ACT_3D: on=s3dEnabled; break; case ACT_DOF: on=dofOn; break; case ACT_BLOOM: on=bloomOn; break;
 						case ACT_LIGHT: on=lightOn; break; case ACT_VIVID: on=vividOn; break; case ACT_LINK: on=linkOn; break;
-						case ACT_NETLINK: on=netOn; break; case ACT_PRESENCE: on=presenceOn; break; }   // A6.2 site 2
+						case ACT_NETLINK: on=netOn; break; case ACT_PRESENCE: on=presenceOn; break;
+						case ACT_VOXEL: on=g_prefs.voxel; break; }   // A6.2 site 2; phase 32
 					assets_toggle(on, x, y);
 					if (sel) sel_ring(x, y, w, h, h * 0.5f, 2.0f);
 					break;
@@ -5294,8 +5428,11 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 						case ACT_AUDIOMODE:o=S_AUD;cur=audioMode;break;case ACT_TOUCHMODE:o=S_TCH;cur=touchMode;break;
 						case ACT_TILT:o=TILT_NAMES;cur=g_prefs.tiltLevel;break;   // phase 14 (I4.6 label table)
 						case ACT_TRAVERSE:o=TRAVERSE_NAMES;cur=g_prefs.smartTraverse;break;   // phase 22.2 (T4.1)
+						case ACT_VOXPITCH:o=VOX_PITCH_NAMES;cur=g_prefs.voxPitch;break; case ACT_VOXZOOM:o=VOX_ZOOM_NAMES;cur=g_prefs.voxZoom;break;   // phase 32
 						default:o=S_EDG;cur=g_prefs.padEdge;break;}
 					assets_seg(txtBuf, x, y, w, h, o, c->nseg, cur, g_ui.ink, g_art.dim);
+					if (!g_prefs.voxel && (c->act == ACT_VOXPITCH || c->act == ACT_VOXZOOM))   // phase 32: dimmed row
+						ui_fill(x - 2.0f, y - 2.0f, w + 4.0f, h + 4.0f, (g_ui.bg & 0x00FFFFFFu) | 0xB4000000u, 6.0f);
 					if (sel) sel_ring(x, y, w, h, ui_seg_radius(h), 0.0f);
 					break;
 				}
@@ -5367,10 +5504,12 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 
 		{ float wms = (svcGetSystemTick() - wfStart) * 1000.0f / SYSCLOCK_ARM11; if (wms > worstMs) worstMs = wms; }
 		C3D_FrameEnd(0);
+		if (voxDraw) vx_host_after_submit(vxFrameTick);   // phase 32: chunk/atlas builds in what is left of the frame
 		// Real-time cap to the 3DS LCD refresh (the rate audio is matched to): freed-up CPU must not run
 		// the games + audio faster than 60fps. Only waits when UNDER budget, so heavy frames are untouched.
 		while (svcGetSystemTick() - wfStart < FRAME_TICKS) svcSleepThread(100000);
 		if (toastTimer > 0) toastTimer--;
+		if (voxStatusTimer > 0) voxStatusTimer--;
 	}
 
 	// teardown this session's workers + cores; reset g_quit for the next session
@@ -5413,6 +5552,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	audio_thread_stop();   // workers joined -> nothing pumps the rings; safe to stop audio + free them
 	if (linkOn) { gbacore_link_detach(emuA.core); gbacore_link_detach(emuB.core); }
 	if (netOn)  { gbacore_net_detach(emuA.core);  gbacore_net_detach(emuB.core);  }
+	vx_host_reset();   // phase 32: drop the ROM interning + mask mirror before the cores go
 	teardown_core(&emuA);
 	teardown_core(&emuB);
 	gbalink_destroy(link);
@@ -5490,7 +5630,7 @@ static void run_settings(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextB
 		if (k & KEY_R) { ti = (ti + 1) % SET_TABS; row = 0; scroll = 0; }
 		tab = TABS[ti]; PT = PTABS[tab]; nP = PTABN[tab];
 		if (row >= nP) row = 0;
-		UiRect srect[8]; int nSr = pctl_rects(PT, nP, srect, 8);
+		UiRect srect[12]; int nSr = pctl_rects(PT, nP, srect, 12);
 		int contentH = uihit_content_h(srect, nSr), maxScroll = uihit_max_scroll(contentH);
 		if (scroll > maxScroll) scroll = maxScroll;
 		int rowWas = row;
@@ -5530,12 +5670,13 @@ static void run_settings(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextB
 		if (row != rowWas && row < nSr) scroll = uihit_follow_rect(scroll, srect[row], maxScroll);
 		tab = TABS[ti]; PT = PTABS[tab]; nP = PTABN[tab];
 		if (row >= nP) row = 0;
-		nSr = pctl_rects(PT, nP, srect, 8);
+		nSr = pctl_rects(PT, nP, srect, 12);
 		contentH = uihit_content_h(srect, nSr); maxScroll = uihit_max_scroll(contentH);
 		if (scroll > maxScroll) scroll = maxScroll;
 		g_menuDiag.frame++; g_menuDiag.tab = tab; g_menuDiag.row = row;
 		g_menuDiag.scroll = scroll; g_menuDiag.maxScroll = maxScroll; g_menuDiag.contentH = contentH;
 		int act = PT[row].act, pk = PT[row].kind;
+		if (!g_prefs.voxel && (act == ACT_VOXPITCH || act == ACT_VOXZOOM)) { segSet = -1; adj = 0; }   // phase 32: dimmed = not hit-testable
 		if (pk == PK_SEG && (segSet >= 0 || adj)) {
 			int cur, ns = PT[row].nseg;
 			// I4.6: the same `default: ... = g_prefs.padEdge` trap as the pause menu, twice more.
@@ -5543,12 +5684,14 @@ static void run_settings(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextB
 				case ACT_FILTER: cur=smooth[0]; break; case ACT_HUD: cur=hudMode; break; case ACT_AUDIOMODE: cur=audioMode; break;
 				case ACT_TOUCHMODE: cur=touchMode; break; case ACT_TILT: cur=g_prefs.tiltLevel; break;
 				case ACT_TRAVERSE: cur=g_prefs.smartTraverse; break;   // phase 22.2 (T4.1)
+				case ACT_VOXPITCH: cur=g_prefs.voxPitch; break; case ACT_VOXZOOM: cur=g_prefs.voxZoom; break;   // phase 32
 				default: cur=g_prefs.padEdge; break; }
 			cur = (segSet >= 0) ? segSet : ((cur + adj + ns) % ns);
 			switch (act) { case ACT_SCALE_TOP: scaleMode[0]=cur; break; case ACT_SCALE_BOT: scaleMode[1]=cur; break;
 				case ACT_FILTER: smooth[0]=smooth[1]=cur; break; case ACT_HUD: hudMode=cur; break; case ACT_AUDIOMODE: audioMode=cur; break;
 				case ACT_TOUCHMODE: touchMode=cur; break; case ACT_TILT: g_prefs.tiltLevel=cur; break;
 				case ACT_TRAVERSE: g_prefs.smartTraverse=cur; break;   // phase 22.2 (T4.1)
+				case ACT_VOXPITCH: g_prefs.voxPitch=cur; break; case ACT_VOXZOOM: g_prefs.voxZoom=cur; break;   // phase 32
 				default: g_prefs.padEdge=cur; break; }
 			SETSAVE();
 		} else if (pk == PK_STEP && adj) { int* v = (act==ACT_VOLA)?&volA:&volB; *v += adj*32; if(*v<0)*v=0; if(*v>256)*v=256; SETSAVE(); }
@@ -5563,6 +5706,7 @@ static void run_settings(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextB
 			case ACT_3D: s3dEnabled=!s3dEnabled; break; case ACT_DOF: dofOn=!dofOn; break; case ACT_BLOOM: bloomOn=!bloomOn; break;
 			case ACT_LIGHT: lightOn=!lightOn; break; case ACT_VIVID: vividOn=!vividOn; break;
 			case ACT_PRESENCE: presenceOn=!presenceOn; break;   // A6.2 site 3 (see the note below)
+			case ACT_VOXEL: g_prefs.voxel=!g_prefs.voxel; break;   // phase 32
 			case ACT_PREVIEW_PAD: touchMode=TOUCH_PAD; break; case ACT_PREVIEW_SMART: touchMode=TOUCH_SMART; break;
 			default: break; }
 			SETSAVE();
@@ -5605,7 +5749,7 @@ static void run_settings(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextB
 			switch (c->kind) {
 			case PK_TOG: { int on=0; switch(c->act){case ACT_SWAP:on=swapped;break;case ACT_FS:on=fsOn;break;case ACT_MUTE:on=muted;break;
 				case ACT_3D:on=s3dEnabled;break;case ACT_DOF:on=dofOn;break;case ACT_BLOOM:on=bloomOn;break;case ACT_LIGHT:on=lightOn;break;
-				case ACT_VIVID:on=vividOn;break;case ACT_PRESENCE:on=presenceOn;break;}   // A6.2 site 4
+				case ACT_VIVID:on=vividOn;break;case ACT_PRESENCE:on=presenceOn;break;case ACT_VOXEL:on=g_prefs.voxel;break;}   // A6.2 site 4; phase 32
 				assets_toggle(on,x,y); if(sel) sel_ring(x,y,w,h,h*0.5f,2.0f); break; }
 			case PK_SEG: { static const char* const A[3]={"1:1","Aspect-fit","Stretch"};static const char* const F[2]={"Sharp","Smooth"};
 				static const char* const H[4]={"off","top","bottom","both"};static const char* const M[3]={"Solo","Mixed","Split"};
@@ -5614,6 +5758,7 @@ static void run_settings(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextB
 				case ACT_FILTER:o=F;cur=smooth[fsd];break;case ACT_HUD:o=H;cur=hudMode;break;case ACT_AUDIOMODE:o=M;cur=audioMode;break;
 				case ACT_TOUCHMODE:o=T;cur=touchMode;break;case ACT_TILT:o=TILT_NAMES;cur=g_prefs.tiltLevel;break;
 				case ACT_TRAVERSE:o=TRAVERSE_NAMES;cur=g_prefs.smartTraverse;break;   // phase 22.2 (T4.1)
+				case ACT_VOXPITCH:o=VOX_PITCH_NAMES;cur=g_prefs.voxPitch;break; case ACT_VOXZOOM:o=VOX_ZOOM_NAMES;cur=g_prefs.voxZoom;break;   // phase 32
 				default:o=E;cur=g_prefs.padEdge;break;}
 				assets_seg(txtBuf,x,y,w,h,o,c->nseg,cur,g_ui.ink,g_art.dim); if(sel) sel_ring(x,y,w,h,ui_seg_radius(h),0.0f); break; }
 			case PK_STEP: { int v=(c->act==ACT_VOLA)?volA:volB; assets_fill9("fill-secondary-r8",x,y+2,20,h-4,7.0f);
@@ -5645,7 +5790,7 @@ static void run_settings(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextB
 			// Daylight), and it needs no per-widget "disabled" variant of art that does not exist.
 			// It is drawn here rather than instead of the widget so the row still reads as a real
 			// control that is currently unavailable, not as a hole in the layout.
-			if (set_row_live_only(c->act))
+			if (set_row_live_only(c->act) || (!g_prefs.voxel && (c->act == ACT_VOXPITCH || c->act == ACT_VOXZOOM)))
 				ui_fill(x - 2.0f, y - 2.0f, w + 4.0f, h + 4.0f,
 				        (g_ui.bg & 0x00FFFFFFu) | 0xB4000000u, 6.0f);
 		}

@@ -563,6 +563,7 @@ typedef struct {
 	int32_t tilt;                                                         // phase 14 (I4.9)
 	int32_t presence;                                                     // phase 15 (A6.3)
 	int32_t traverse;                                                     // phase 22.2 (T4.1)
+	int32_t voxel, voxPitch, voxZoom;                                     // phase 32 (SPEC-port 8.2)
 } RefSettings;
 // The ladder size, mirrored from theme.h. theme.h cannot be included here (it opens with
 // <citro2d.h> unless the THEME_HOST_SHIM is in play, and tilt.c is header-free by design), so the
@@ -570,7 +571,10 @@ typedef struct {
 // which is the same contract the RefSettings mirror itself carries: if theme.h changes and this
 // does not, the tests are testing a fiction, so the number lives here in exactly one place.
 #define SMART_TRAVERSE_LEVELS 3   // theme.h: 0 Off / 1 HM / 2 HM+Via
-_Static_assert(sizeof(RefSettings)             == 26 * sizeof(int32_t), "mirror drifted from main.c Settings");
+_Static_assert(sizeof(RefSettings)             == 29 * sizeof(int32_t), "mirror drifted from main.c Settings");
+_Static_assert(offsetof(RefSettings, voxZoom)  == 28 * sizeof(int32_t), "mirror drifted from main.c Settings");
+_Static_assert(offsetof(RefSettings, voxPitch) == 27 * sizeof(int32_t), "mirror drifted from main.c Settings");
+_Static_assert(offsetof(RefSettings, voxel)    == 26 * sizeof(int32_t), "mirror drifted from main.c Settings");
 _Static_assert(offsetof(RefSettings, traverse) == 25 * sizeof(int32_t), "mirror drifted from main.c Settings");
 _Static_assert(offsetof(RefSettings, presence) == 24 * sizeof(int32_t), "mirror drifted from main.c Settings");
 _Static_assert(offsetof(RefSettings, tilt)     == 23 * sizeof(int32_t), "mirror drifted from main.c Settings");
@@ -598,13 +602,23 @@ static int ref_settings_load4(size_t n, uint32_t magic, int32_t tiltWord, int32_
 	const size_t lenPad   = offsetof(RefSettings, tilt);       // pre-tilt full struct
 	const size_t lenTilt  = offsetof(RefSettings, presence);   // pre-presence full struct (phase 14)
 	const size_t lenPres  = offsetof(RefSettings, traverse);   // pre-traverse full struct (phase 15..22.1)
+	const size_t lenTrav  = offsetof(RefSettings, voxel);      // pre-voxel full struct (phase 22.2..31)
 	const size_t lenNew   = sizeof(RefSettings);
-	if ((n != lenNew && n != lenPres && n != lenTilt && n != lenPad && n != lenOld && n != lenVivid
+	if ((n != lenNew && n != lenTrav && n != lenPres && n != lenTilt && n != lenPad && n != lenOld && n != lenVivid
 	     && n != lenLight && n != lenBloom && n != lenDof) || magic != 0x33424744u) return 0;
 	if (outAcceptedRedesign) *outAcceptedRedesign = (n >= lenPad);
 	if (n >= lenTilt && outTilt)     *outTilt     = (int)(((unsigned)tiltWord) % TILT_LEVELS);
 	if (n >= lenPres && outPresence) *outPresence = (presenceWord != 0) ? 1 : 0;
-	if (n >= lenNew  && outTrav)     *outTrav     = (int)(((unsigned)travWord) % SMART_TRAVERSE_LEVELS);
+	if (n >= lenTrav && outTrav)     *outTrav     = (int)(((unsigned)travWord) % SMART_TRAVERSE_LEVELS);
+	return 1;
+}
+// Phase 32: the voxel triple rides the newest rung only; every modulo mirrors main.c (% 2 as != 0, % 5, % 4).
+static int ref_settings_load_vox(size_t n, uint32_t magic, int32_t vox, int32_t pitch, int32_t zoom,
+                                 int* oVox, int* oPitch, int* oZoom) {
+	if (!ref_settings_load4(n, magic, 0, 0, 0, NULL, NULL, NULL, NULL)) return 0;
+	if (n >= sizeof(RefSettings)) {
+		*oVox = vox != 0; *oPitch = (int)(((unsigned)pitch) % 5); *oZoom = (int)(((unsigned)zoom) % 4);
+	}
 	return 1;
 }
 
@@ -614,21 +628,24 @@ static void test_settings_and_tier(void) {
 
 	// -- (a) the offsetof ladder is strictly increasing, and each rung IS a shipped sizeof --------
 	{
-		const size_t rung[9] = {
+		const size_t rung[10] = {
 			offsetof(RefSettings, dof), offsetof(RefSettings, bloom), offsetof(RefSettings, light),
 			offsetof(RefSettings, vivid), offsetof(RefSettings, theme), offsetof(RefSettings, tilt),
-			offsetof(RefSettings, presence), offsetof(RefSettings, traverse), sizeof(RefSettings)
+			offsetof(RefSettings, presence), offsetof(RefSettings, traverse), offsetof(RefSettings, voxel),
+			sizeof(RefSettings)
 		};
-		for (int i = 1; i < 9; i++)
+		for (int i = 1; i < 10; i++)
 			CHECK(rung[i] > rung[i - 1], "length rung %d (%u) must exceed rung %d (%u)\n",
 			      i, (unsigned)rung[i], i - 1, (unsigned)rung[i - 1]);
 		// I4.10's / A6.3's whole backward-compatibility claim in two lines: the length a PRE-PHASE-15
 		// build wrote is exactly the new struct's offsetof(presence), and the length a PRE-TILT build
 		// wrote is offsetof(tilt) — so BOTH still match a rung.
-		CHECK(offsetof(RefSettings, traverse) == sizeof(RefSettings) - sizeof(int32_t),
-		      "the pre-traverse full struct must be exactly one s32 shorter than the new one\n");
-		CHECK(sizeof(RefSettings) - offsetof(RefSettings, traverse) == 4,
-		      "the phase-22.2 growth is 4 bytes, i.e. ONE appended word (no magic bump needed)\n");
+		CHECK(offsetof(RefSettings, voxel) == sizeof(RefSettings) - 3 * sizeof(int32_t),
+		      "the pre-voxel full struct must be exactly three s32 shorter than the new one (phase 32)\n");
+		CHECK(offsetof(RefSettings, traverse) + sizeof(int32_t) == offsetof(RefSettings, voxel),
+		      "the phase-22.2 word is still the LAST word of the pre-voxel struct (append-only)\n");
+		CHECK(offsetof(RefSettings, voxZoom) == sizeof(RefSettings) - sizeof(int32_t),
+		      "the voxel triple is the tail of the struct\n");
 		CHECK(offsetof(RefSettings, traverse) - offsetof(RefSettings, presence) == 4,
 		      "...and phase 15's word is still exactly where it was (append-only)\n");
 		CHECK(offsetof(RefSettings, presence) - offsetof(RefSettings, tilt) == 4,
@@ -717,6 +734,32 @@ static void test_settings_and_tier(void) {
 			                         NULL, NULL, NULL, &got) == 1, "traverse %d file loads\n", lv);
 			CHECK(got == lv, "traverse %d round-trips through the file (got %d)\n", lv, got);
 		}
+	}
+
+	// -- (b4) phase 32: the voxel triple (SPEC-port 8.2). Defaults OFF / 40 deg (idx 2) / 100 % (idx 1);
+	//         a corrupt word must land inside 0..1 / 0..4 / 0..3; and every file written before this
+	//         build (including the phase-22.2..31 full struct) must leave all three at their defaults.
+	{
+		const int32_t nasty[10] = { 0, 1, 2, 3, 4, 5, -1, 12345, INT32_MAX, INT32_MIN };
+		for (int i = 0; i < 10; i++) {
+			int v = -7, p = -7, z = -7;
+			CHECK(ref_settings_load_vox(sizeof(RefSettings), 0x33424744u, nasty[i], nasty[i], nasty[i], &v, &p, &z) == 1,
+			      "voxel word %ld: the file still loads\n", (long)nasty[i]);
+			CHECK(v == 0 || v == 1, "voxel word %ld maps to 0/1 (got %d)\n", (long)nasty[i], v);
+			CHECK(p >= 0 && p < 5, "voxPitch word %ld maps into 0..4 (got %d)\n", (long)nasty[i], p);
+			CHECK(z >= 0 && z < 4, "voxZoom word %ld maps into 0..3 (got %d)\n", (long)nasty[i], z);
+		}
+		int v = 0, p = 2, z = 1;   // the shipped defaults
+		CHECK(ref_settings_load_vox(offsetof(RefSettings, voxel), 0x33424744u, 1, 4, 3, &v, &p, &z) == 1,
+		      "a PRE-VOXEL (phase 22.2..31) file is still accepted - no magic bump\n");
+		CHECK(v == 0 && p == 2 && z == 1, "...and leaves VOXEL OFF / 40 deg / 100 %% at their defaults\n");
+		CHECK(ref_settings_load_vox(offsetof(RefSettings, traverse), 0x33424744u, 1, 4, 3, &v, &p, &z) == 1 &&
+		      v == 0 && p == 2 && z == 1, "a pre-traverse file likewise leaves the voxel triple at its defaults\n");
+		CHECK(ref_settings_load_vox(sizeof(RefSettings), 0x33424744u, 1, 4, 3, &v, &p, &z) == 1 &&
+		      v == 1 && p == 4 && z == 3, "a file written by THIS build round-trips VOXEL on / idx 4 / idx 3\n");
+		int trav = -1;
+		CHECK(ref_settings_load4(offsetof(RefSettings, voxel), 0x33424744u, 0, 0, 2, NULL, NULL, NULL, &trav) == 1 && trav == 2,
+		      "...and the pre-voxel file STILL carries its traverse word (the rung moved, the pref did not)\n");
 	}
 
 	// -- (c) the modulo maps EVERY s32 into the ladder, so a corrupt word can never index out ----

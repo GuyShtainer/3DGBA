@@ -32,7 +32,7 @@ static int s_artId = THEME_INDIGO;
 // zero-fill so each one is a visible decision: tiltLevel 0 = Off (phase 14, hardware-unproven
 // effect), smartTraverse 0 = Off (phase 22.2, SPEC-family-traversal T4.1 — a feature that MOVES
 // the player and answers the game's own yes/no prompts does not switch itself on for everyone).
-UiPrefs g_prefs = { THEME_INDIGO, 205, 168, 14, 0, 0, 0, /* tiltLevel */ 0, /* smartTraverse */ 0 };
+UiPrefs g_prefs = { THEME_INDIGO, 205, 168, 14, 0, 0, 0, /* tiltLevel */ 0, /* smartTraverse */ 0, /* voxel */ 0, /* voxPitch */ 2, /* voxZoom */ 1 };
 
 const char* const THEME_NAMES[THEME_PRESET_COUNT] = {
 	"Indigo + Gold", "Midnight OLED", "Daylight", "Per-game Duo", "Retro Purple", "Custom",

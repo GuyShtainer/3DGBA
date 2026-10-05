@@ -138,5 +138,7 @@ void*    gbacore_mem_block(GbaCore* c, unsigned region, size_t* size);
 // BG0-only render with the backdrop keyed to 0x0020 (needs patches/mgba-backdrop-key.patch in
 // libmgba). Parked-window only; applies to the next rendered frame.
 void     gbacore_set_overlay_mode(GbaCore* c, bool on);
+// DISPCNT, BLDCNT, BLDALPHA, BLDY from mGBA's I/O shadow (read-only, parked window).
+bool     gbacore_io_shadow(GbaCore* c, uint16_t out[4]);
 
 void     gbacore_destroy(GbaCore* c);

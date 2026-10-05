@@ -1382,6 +1382,18 @@ void gbacore_set_overlay_mode(GbaCore* g, bool on) {
 	GBAVideoSoftwareRendererSetBackdropKey((struct GBAVideoSoftwareRenderer*)gba->video.renderer, on);
 }
 
+// Display registers from mGBA's I/O shadow (BLDY is write-only on hardware: a bus read returns open bus).
+bool gbacore_io_shadow(GbaCore* g, uint16_t out[4]) {
+	if (!g || !g->core) return false;
+	struct GBA* gba = (struct GBA*)g->core->board;
+	if (!gba) return false;
+	out[0] = gba->memory.io[GBA_REG_DISPCNT >> 1];
+	out[1] = gba->memory.io[GBA_REG_BLDCNT >> 1];
+	out[2] = gba->memory.io[GBA_REG_BLDALPHA >> 1];
+	out[3] = gba->memory.io[GBA_REG_BLDY >> 1];
+	return true;
+}
+
 void gbacore_destroy(GbaCore* g) {
 	if (!g) return;
 	if (g->core) {

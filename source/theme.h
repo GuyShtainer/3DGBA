@@ -71,6 +71,11 @@ typedef struct {
 	// unaffected. Persisted through the size-tolerant Settings append, so a settings file written
 	// before this field loads fine and leaves it 0.
 	int smartTraverse;
+	// Phase 32 (SPEC-port 8): the voxel overworld. voxel ships OFF (invariant 1: an upgrade changes no
+	// existing user's frame); voxPitch indexes {34,37,40,43,46} deg (default 2), voxZoom {90,100,110,120}% (default 1).
+	int voxel;
+	int voxPitch;
+	int voxZoom;
 } UiPrefs;
 #define SMART_TRAVERSE_LEVELS 3
 
