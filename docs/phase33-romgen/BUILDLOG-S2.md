@@ -139,3 +139,10 @@ also with `RG_PYSUM_COMPENSATED=0`. `make -C tools/romgen` and the device `make 
 Deviations: (A2) layouts iterate by id where upstream sorts by name; affects only model order / `_n` suffix; `propTies` = 0 on this
 ROM so the tie-break divergence never fires. Committed as one commit (the pieces share files, so per-sub-step green splits were not practical).
 Open: none. Not yet checked visually in Azahar, and on-device memory for 219 page-models is unmeasured.
+
+## 2026-10-06 — S2.5 visual check in the emulator (PASS)
+
+- Full S2.5 `buildings.bin` (3,479,644 B, = the test) on the emulator SD; app log: `67 models on 68 pages,
+  2362 placements, 40254 vertices`, no VRAM/page errors logged.
+- `evidence/s25-rustboro.png`: Rustboro Center + Mart, street lamps (props, with cast shadows) and a stone kit
+  building all stand as 3D models. Verified by the lead: expand 417/0, buildings 4387/0 with the ROM.
