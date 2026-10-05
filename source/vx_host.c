@@ -11,7 +11,7 @@
 #include "voxel/vx_data.h"
 #include "voxel/vx_snapshot.h"
 
-#define VX_MIN_VRAM (2816u * 1024u)   /* chunk mesh 1536K + building pages 768K + one atlas, SPEC 4.7 */
+#define VX_MIN_VRAM (1024u * 1024u)   /* after the 768K surface: CtrVoxel_Init sizes its atlases/mesh to what is left */
 #define OV_TEX 256u
 #define OV_W 240u
 #define OV_H 160u
@@ -29,6 +29,13 @@ static C3D_Tex sOvTex;
 static u16 *sOvBuf;
 static FILE *sLog;
 static bool sWorldReady;
+/* The world's logical surface and the bloom target, as Emerald3DS composes them (3ds_video.c:3804-3817):
+ * the world is drawn into a 512x256 RGBA8 VRAM texture with a 16-bit depth buffer, then blitted to the
+ * screen with the HD-2D tilt-shift and bloom on top. */
+static C3D_Tex sSurface;
+static C3D_RenderTarget *sLogical;
+static C3D_Tex sBloomTex;
+static C3D_RenderTarget *sBloom;
 
 static void LogSink(int channel, const char *line)
 {
@@ -123,7 +130,20 @@ bool vx_host_init_ok(void)
     {
         sInitTried = true;
         vx_gx_install_probe();
-        if (vramSpaceFree() >= VX_MIN_VRAM || VX_DEV_FORCE_OVERLAY)
+        /* The surface first, before the voxel atlases take VRAM (upstream order). */
+        if (C3D_TexInitVRAM(&sSurface, 512, 256, GPU_RGBA8))
+        {
+            C3D_TexSetFilter(&sSurface, GPU_NEAREST, GPU_NEAREST);
+            C3D_TexSetWrap(&sSurface, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+            sLogical = C3D_RenderTargetCreateFromTex(&sSurface, GPU_TEXFACE_2D, 0, GPU_RB_DEPTH16);
+        }
+        if (sLogical != NULL && C3D_TexInitVRAM(&sBloomTex, 128, 64, GPU_RGB565))   /* not fatal: no bloom */
+        {
+            C3D_TexSetFilter(&sBloomTex, GPU_LINEAR, GPU_LINEAR);
+            C3D_TexSetWrap(&sBloomTex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+            sBloom = C3D_RenderTargetCreateFromTex(&sBloomTex, GPU_TEXFACE_2D, 0, -1);
+        }
+        if (sLogical != NULL && (vramSpaceFree() >= VX_MIN_VRAM || VX_DEV_FORCE_OVERLAY))
             sInitOk = CtrVoxel_Init();
 #if VX_DEV_FORCE_OVERLAY
         sInitOk = true;
@@ -214,24 +234,160 @@ bool vx_host_warming_up(void)
     return sInitOk && CtrVoxel_IsWarmingUp();
 }
 
-void vx_host_draw_world(C3D_RenderTarget *t, float eye)
+/* ---- the Emerald3DS voxel compositor (3ds_video.c:4356-4560, MIT, Copyright (c) Dust Zallax; adapted) ---- */
+#define DIORAMA_TOP 100    /* rows blurred at the top */
+#define DIORAMA_BOTTOM 56  /* ... and at the bottom */
+#define BLOOM_W (CTR_GAME_WIDTH / 4)
+#define BLOOM_H (CTR_GAME_HEIGHT / 4)
+#define BLOOM_THRESHOLD 0.85f
+
+static void SurfaceFilter(GPU_TEXTURE_FILTER_PARAM filter)
 {
-    C2D_TargetClear(t, C2D_Color32(0, 0, 0, 0xFF));
-    if (sWorldReady)
+    /* Batched draws sample with the state at the flush: flush first, and rebind. */
+    C2D_Flush();
+    C3D_TexSetFilter(&sSurface, filter, filter);
+    C3D_TexBind(0, &sSurface);
+}
+
+static void BlendNormal(void)
+{
+    C2D_Flush();
+    C3D_AlphaTest(true, GPU_GREATER, 0);
+    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_ONE, GPU_ZERO);
+}
+
+/* HD-2D diorama: the tilt-shift of a miniature. The camera looks north, so the top of the screen is the
+ * distance and the bottom the nearest ground; both bands are two copies of the surface drawn half a texel
+ * off either way with bilinear filtering, fading from the focus band to the edge. */
+static void DioramaTap(int y0, int rows, bool top, float dx, float dy, float alpha)
+{
+    const Tex3DS_SubTexture region = { CTR_GAME_WIDTH - 2, (u16)rows,
+        (1.0f + dx) / 512.0f, 1.0f - (y0 + dy) / 256.0f,
+        (1.0f + dx + CTR_GAME_WIDTH - 2) / 512.0f, 1.0f - (y0 + dy + rows) / 256.0f };
+    C2D_ImageTint tint;
+
+    C2D_AlphaImageTint(&tint, 0.0f);
+    if (top)
+        C2D_TopImageTint(&tint, C2D_Color32f(1.0f, 1.0f, 1.0f, alpha), 0.0f);
+    else
+        C2D_BottomImageTint(&tint, C2D_Color32f(1.0f, 1.0f, 1.0f, alpha), 0.0f);
+    C2D_DrawImageAt((C2D_Image){ &sSurface, &region }, 1, y0, 0, &tint, 1, 1);
+}
+
+static void Diorama(void)
+{
+    SurfaceFilter(GPU_LINEAR);
+    DioramaTap(0, DIORAMA_TOP, true, 0.5f, 0.5f, 0.67f);
+    DioramaTap(0, DIORAMA_TOP, true, -0.5f, -0.5f, 0.50f);
+    DioramaTap(CTR_GAME_HEIGHT - DIORAMA_BOTTOM, DIORAMA_BOTTOM, false, 0.5f, 0.5f, 0.60f);
+    DioramaTap(CTR_GAME_HEIGHT - DIORAMA_BOTTOM, DIORAMA_BOTTOM, false, -0.5f, -0.5f, 0.45f);
+    SurfaceFilter(GPU_NEAREST);
+}
+
+/* Bloom: the surface at a quarter size into a small target keeping only what is brighter than the
+ * threshold ((colour - t) x 4 in texenv 4, which citro2d leaves free), then stretched back and added. */
+static void BloomPrepare(void)
+{
+    const Tex3DS_SubTexture logical = { CTR_GAME_WIDTH, CTR_GAME_HEIGHT, 0, 1,
+        CTR_GAME_WIDTH / 512.0f, 1 - CTR_GAME_HEIGHT / 256.0f };
+    unsigned th = (unsigned)(BLOOM_THRESHOLD * 255.0f + 0.5f);
+    C3D_TexEnv *env;
+
+    C2D_TargetClear(sBloom, C2D_Color32(0, 0, 0, 255));
+    C2D_SceneBegin(sBloom);
+    C2D_ViewReset();
+    SurfaceFilter(GPU_LINEAR);
+    C3D_AlphaTest(false, GPU_ALWAYS, 0);
+    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
+    env = C3D_GetTexEnv(4);
+    C3D_TexEnvInit(env);
+    C3D_TexEnvSrc(env, C3D_RGB, GPU_PREVIOUS, GPU_CONSTANT, GPU_CONSTANT);
+    C3D_TexEnvFunc(env, C3D_RGB, GPU_SUBTRACT);
+    C3D_TexEnvScale(env, C3D_RGB, GPU_TEVSCALE_4);
+    C3D_TexEnvColor(env, 0xFF000000u | th << 16 | th << 8 | th);
+    C2D_DrawImageAt((C2D_Image){ &sSurface, &logical }, 0, 0, 0, NULL, 0.25f, 0.25f);
+    C2D_Flush();
+    C3D_TexEnvInit(C3D_GetTexEnv(4));
+    SurfaceFilter(GPU_NEAREST);
+}
+
+static void BloomCompose(float strength)
+{
+    const Tex3DS_SubTexture region = { BLOOM_W, BLOOM_H, 0, 1, BLOOM_W / 128.0f, 1 - BLOOM_H / 64.0f };
+    C2D_ImageTint tint;
+
+    C2D_Flush();
+    C3D_AlphaTest(false, GPU_ALWAYS, 0);
+    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE, GPU_ZERO, GPU_ONE);
+    C2D_AlphaImageTint(&tint, strength);
+    C2D_DrawImageAt((C2D_Image){ &sBloomTex, &region }, 0, 0, 0, &tint, 4.0f, 4.0f);
+    C2D_Flush();
+}
+
+/* The dark of a cave: a soft ring of shadow round the player, over the world, under the game's text. */
+static void Gloom(void)
+{
+    float x, y, size, amount;
+    const C3D_Tex *tex = CtrVoxel_Gloom(&x, &y, &size, &amount);
+    C2D_ImageTint tint;
+    unsigned alpha;
+
+    if (tex == NULL || amount <= 0.0f)
+        return;
     {
+        const Tex3DS_SubTexture whole = { tex->width, tex->height, 0.0f, 1.0f, 1.0f, 0.0f };
+        alpha = (unsigned)(amount * 255.0f + 0.5f);
+        BlendNormal();
+        C2D_PlainImageTint(&tint, C2D_Color32(0, 0, 0, alpha > 255 ? 255 : alpha), 1.0f);
+        C2D_DrawImageAt((C2D_Image){ (C3D_Tex *)tex, &whole }, x - size * 0.5f, y - size * 0.5f, 0,
+                        &tint, size / tex->width, size / tex->height);
         C2D_Flush();
-        CtrVoxel_Draw(t, eye);
     }
-    /* citro2d restore (the tilt_draw_image escape pattern): the world binds its own program,
-     * attributes, texenv, depth test and cull; hand the pipeline back the way citro2d expects it. */
+}
+
+void vx_host_draw_world(C3D_RenderTarget *t, float eye, bool blur, bool bloomOn)
+{
+    const Tex3DS_SubTexture logical = { CTR_GAME_WIDTH, CTR_GAME_HEIGHT, 0, 1,
+        CTR_GAME_WIDTH / 512.0f, 1 - CTR_GAME_HEIGHT / 256.0f };
+    float bloom;
+
+    if (!sWorldReady || sLogical == NULL)
+    {
+        C2D_TargetClear(t, C2D_Color32(0, 0, 0, 0xFF));
+        C2D_SceneBegin(t);
+        return;
+    }
+    /* C2D_TargetClear clears colour and depth, which the 3D pass needs. */
+    C2D_Flush();
+    C2D_TargetClear(sLogical, C2D_Color32(0, 0, 0, 0xFF));
+    CtrVoxel_Draw(sLogical, eye);
+    C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
+    C3D_FrameSplit(0);
+
+    /* Back to the 2D compositor, which assumes its own program and no depth. */
     C2D_Prepare();
-    C3D_DepthTest(false, GPU_GEQUAL, GPU_WRITE_ALL);
+    C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
     C3D_CullFace(GPU_CULL_NONE);
-    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA,
-                   GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);
     C3D_FragOpMode(GPU_FRAGOPMODE_GL);
     C3D_FogGasMode(GPU_NO_FOG, GPU_PLAIN_DENSITY, false);
+    bloom = (bloomOn && sBloom != NULL) ? CtrVoxel_Bloom() : 0.0f;
+    if (bloom > 0.005f)
+        BloomPrepare();
+    C2D_TargetClear(t, C2D_Color32(0, 0, 0, 0xFF));
     C2D_SceneBegin(t);
+    C2D_ViewReset();
+    BlendNormal();
+    C2D_DrawImageAt((C2D_Image){ &sSurface, &logical }, 0, 0, 0, NULL, 1, 1);
+    if (blur)
+        Diorama();
+    if (bloom > 0.005f)
+        BloomCompose(bloom);
+    Gloom();
+    C2D_Flush();
+    /* Hand citro2d back its usual blend for the overlay and HUD. */
+    C3D_AlphaTest(false, GPU_ALWAYS, 0);
+    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA,
+                   GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);
 }
 
 void vx_host_draw_overlay(C3D_RenderTarget *t, float x, float y, float sx, float sy, bool smooth)

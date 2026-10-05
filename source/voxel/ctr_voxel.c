@@ -76,9 +76,10 @@
  * because the viewport covers the whole texture. */
 #define VOXEL_SURFACE_W 512.0f
 #define VOXEL_SURFACE_H 256.0f
-/* 3DGBA: 1 = CtrVoxel_Draw targets the screen itself (no 512x256 offscreen surface). */
+/* 3DGBA: 1 = CtrVoxel_Draw targets the screen itself (no 512x256 offscreen surface). 0 (default) =
+ * the upstream logical surface, which vx_host composes with the tilt-shift + bloom. */
 #ifndef VOXEL_DIRECT_SCREEN
-#define VOXEL_DIRECT_SCREEN 1
+#define VOXEL_DIRECT_SCREEN 0
 #endif
 /* 3DGBA: tiles of eye separation at a full 3D slider (about 4 px per eye two player-distances away). */
 #define VOXEL_IOD_FULL 0.6f

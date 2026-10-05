@@ -33,7 +33,9 @@ void vx_host_overlay_upload(const uint16_t *fb565, unsigned stride);
 /* Render side (inside C3D_FrameBegin..End). */
 bool vx_host_frame_update(int pitchIdx, int zoomIdx);   /* after C3D_FrameBegin; true = a world is ready */
 bool vx_host_warming_up(void);
-void vx_host_draw_world(C3D_RenderTarget *t, float eye);   /* clear + world + citro2d state restored */
+/* World into the logical surface, then surface -> t with the HD-2D tilt-shift (blur) and bloom (Emerald3DS
+ * compositor); citro2d state restored. eye: signed 3D slider (left < 0), 0 = mono. */
+void vx_host_draw_world(C3D_RenderTarget *t, float eye, bool blur, bool bloomOn);
 void vx_host_draw_overlay(C3D_RenderTarget *t, float x, float y, float sx, float sy, bool smooth);
 void vx_host_after_submit(uint64_t frameBeginTick);
 const char *vx_host_status(bool userOn, bool isN3DS, bool linkAny, GbaCore *top);
