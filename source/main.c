@@ -34,6 +34,7 @@
 static u32 dim_color(u32 c, float f);   // fwd (defined near run_splash)
 #include "gamestate.h"
 #include "touch.h"
+#include "panelui.h"   // phase 32 track T: the single-game touch panel
 #include "audio.h"
 #include "netlink.h"
 #include "wireless.h"
@@ -711,6 +712,72 @@ static void upload_frame(EmuInstance* e) {
 		GX_TRANSFER_OUT_TILED(1) | GX_TRANSFER_FLIP_VERT(0));
 }
 
+// ---- Phase 32 track T: the touch PANEL's top-hold (SPEC-touch-panel T1) ----
+// While a full-screen menu is open outside battle, the top screen keeps the LAST FIELD FRAME and
+// the live menu runs on the bottom (Zallax's model). The field frame is copied into its own
+// texture on every field frame with the same transfer upload_frame uses; the render swaps it in.
+static C3D_Tex s_holdTex;
+static bool    s_holdInit = false, s_holdValid = false;
+static PanelUi s_pui;
+static bool    s_panelMenuReq = false;   // the panel's MENU chip, consumed by next frame's menu gate
+
+static void hold_capture(EmuInstance* e) {
+	if (!e->core) return;
+	if (!s_holdInit) {
+		if (!C3D_TexInit(&s_holdTex, 256, 256, GPU_RGB565)) return;   // no hold: the top stays live
+		C3D_TexSetFilter(&s_holdTex, GPU_NEAREST, GPU_NEAREST);
+		s_holdInit = true;
+	}
+	GSPGPU_FlushDataCache(e->fb, GBA_FB_STRIDE * GBA_H * sizeof(u16));
+	C3D_SyncDisplayTransfer(
+		(u32*)e->fb,         GX_BUFFER_DIM(GBA_FB_STRIDE, GBA_H),
+		(u32*)s_holdTex.data, GX_BUFFER_DIM(256, 256),
+		GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGB565) |
+		GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB565) |
+		GX_TRANSFER_OUT_TILED(1) | GX_TRANSFER_FLIP_VERT(0));
+	s_holdValid = true;
+}
+
+// The TouchSmart every SMART caller fills from one game's GameState (phase 32: shared by the
+// bottom-screen SMART path and the single-game touch panel, which drive the SAME smart families).
+static void smart_fill(TouchSmart* smp, GbaCore* c, const GameProfile* gp, const GameState* g, u32 kHeld) {
+	smp->valid = g->valid; smp->ctx = g->ctx;
+	smp->actionCursor = g->actionCursor; smp->moveCursor = g->moveCursor;
+	smp->px = g->px; smp->py = g->py;
+	smp->mapGroup = g->mapGroup; smp->mapNum = g->mapNum;   // SPEC-door T4.6 route kill-switch
+	for (int i = 0; i < 4; i++) smp->moveValid[i] = g->moveValid[i];
+	smp->core = c; smp->actionAddr = gp->actionCursor; smp->moveAddr = gp->moveCursor;
+	smp->prof = gp;
+	smp->partyCount = g->partyCount; smp->partyLayout = g->partyLayout;
+	smp->battlersCount = g->battlersCount; smp->absentMask = g->absentMask;
+	for (int i = 0; i < 4; i++) smp->battlerPos[i] = g->battlerPos[i];
+	smp->bagListTaskBase = g->bagListTaskBase;
+	smp->listBase = g->listBase; smp->listKind = g->listKind;   // phase 22.1 list family
+	// phase 22.2 TRAVERSAL: the three passthroughs the HM sequencer needs.
+	// textDlg is gamestate's existing sFieldMessageBoxMode read (no new
+	// address); padKeys is the SAME to_gba_keys(kHeld) mapping the physical
+	// pad uses, so "the player touched the controls" is one comparison and
+	// the additive seam yields to them; traverse is the persisted pref.
+	smp->textDlg = g->textDlg;
+	// phase 24 (lane B1): sLockFieldControls — the signal that hands a FIELD
+	// DIALOG to FAM-DLG instead of the walker (touchgeom.h dlggeom_route).
+	// textDlg above only covers the frames the text is still PRINTING.
+	smp->fieldLock = g->fieldLock;
+	// phase 24 (lane B2): which region map is up. 1 = the FLY map, where an
+	// arrival A is a fly confirm; 0 = the wall map, where A would CLOSE it.
+	smp->mapFly = g->mapFly;
+	// phase 25 (lane D2): FAM-NAV. pnBase is nonzero ONLY when game_read
+	// claimed GCTX_POKENAV, i.e. only when every guard passed, so it is
+	// both the driver's data and its own enable.
+	smp->pnBase = g->pnBase; smp->pnMenuType = g->pnMenuType;
+	smp->pnMenuIdx = g->pnMenuIdx;
+	smp->padKeys = to_gba_keys(kHeld);
+	smp->traverse = g_prefs.smartTraverse;
+	// cb2 is the touch-log fingerprint AND (phase 23) the FAM-DLG pager gate —
+	// compare-only against GameProfile.cb2Pager; ctxResolved/nTask stay LOGGING-ONLY.
+	smp->cb2 = g->cb2; smp->ctxResolved = g->ctxResolved; smp->nTask = g->nTask;
+	for (int i = 0; i < 8; i++) smp->taskFp[i] = g->taskFp[i];
+}
 // ---- Scaling modes (v0.6): live-cycled with ZR ----
 enum { SCALE_1X, SCALE_FIT, SCALE_STRETCH };
 static const char* SCALE_NAMES[] = { "1:1", "Aspect-fit", "Stretch" };
@@ -3369,6 +3436,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		u16 ckA = 0, ckB = 0;   // D4 script-injected keys, per GAME SLOT (A = p1, B = p2)
 		TouchSmart sm = { 0 };   // bottom game live state for SMART touch
 		int tmEff = (single && touchMode == TOUCH_SMART) ? TOUCH_PAD : touchMode;   // SMART needs a bottom-screen game
+		// Phase 32 track T: in single-game mode the "Smart" setting is the PANEL for a supported
+		// Gen-3 game (SPEC-touch-panel T0); any other game keeps the gamepad substitution above.
+		if (single && touchMode == TOUCH_SMART && panelui_bind(&s_pui, emuA.core)) tmEff = TOUCH_PANEL;
 
 		// HUD stats: FPS (0.5s window) + battery (throttled).
 		fpsFrames++;
@@ -3490,6 +3560,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 				hidTouchRead(&ctp);
 				chipTap = touch_menu_chip(tmEff, ctp.px, ctp.py) != 0;
 			}
+			if (s_panelMenuReq) { chipTap = true; s_panelMenuReq = false; }   // the panel's MENU chip (released last frame)
 			if ((touchMode == TOUCH_OFF && (kDown & KEY_TOUCH)) || combo || chipTap) {
 				menuOpen = true; menuSel = 0; menuTab = 0; menuRow = 0; menuScroll = 0; status[0] = '\0';
 				if (!linkOn && !netOn && !wlOn && workersRunning) {   // finish the in-flight frame before pausing into the menu
@@ -3573,51 +3644,25 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					}
 #endif
 					int gx = -1, gy = -1; bool gvalid = false;
-					if (tmEff == TOUCH_SMART) {   // game-aware touch works even during a link (benign EWRAM race)
+					if (tmEff == TOUCH_PANEL) {   // phase 32 track T: the single game, through the panel
+						const GameProfile* gp = profile_for(emuA.core);
+						GameState gsr;
+						bool ok = gp && game_read(emuA.core, gp, &gsr);
+						if (ok) smart_fill(&sm, emuA.core, gp, &gsr, kHeld);
+						else    memset(&gsr, 0, sizeof gsr);
+						bool mreq = false;
+						tk = panelui_update(&s_pui, gp, &gsr, &sm, touching, tp.px, tp.py, to_gba_keys(kHeld),
+						                    linkOn || netOn || wlOn, &mreq);
+						if (mreq) s_panelMenuReq = true;
+						if (panelui_is_field(&s_pui)) hold_capture(&emuA);
+					} else if (tmEff == TOUCH_SMART) {   // game-aware touch works even during a link (benign EWRAM race)
 						gvalid = touch_to_gba(tp.px, tp.py, scaleMode[1], &gx, &gy);
 						GbaCore* botCore = swapped ? emuA.core : emuB.core;
 						const GameProfile* gp = profile_for(botCore);
 						GameState gsr;
-						if (game_read(botCore, gp, &gsr)) {
-							sm.valid = gsr.valid; sm.ctx = gsr.ctx;
-							sm.actionCursor = gsr.actionCursor; sm.moveCursor = gsr.moveCursor;
-							sm.px = gsr.px; sm.py = gsr.py;
-							sm.mapGroup = gsr.mapGroup; sm.mapNum = gsr.mapNum;   // SPEC-door T4.6 route kill-switch
-							for (int i = 0; i < 4; i++) sm.moveValid[i] = gsr.moveValid[i];
-							sm.core = botCore; sm.actionAddr = gp->actionCursor; sm.moveAddr = gp->moveCursor;
-							sm.prof = gp;
-							sm.partyCount = gsr.partyCount; sm.partyLayout = gsr.partyLayout;
-							sm.battlersCount = gsr.battlersCount; sm.absentMask = gsr.absentMask;
-							for (int i = 0; i < 4; i++) sm.battlerPos[i] = gsr.battlerPos[i];
-							sm.bagListTaskBase = gsr.bagListTaskBase;
-							sm.listBase = gsr.listBase; sm.listKind = gsr.listKind;   // phase 22.1 list family
-							// phase 22.2 TRAVERSAL: the three passthroughs the HM sequencer needs.
-							// textDlg is gamestate's existing sFieldMessageBoxMode read (no new
-							// address); padKeys is the SAME to_gba_keys(kHeld) mapping the physical
-							// pad uses, so "the player touched the controls" is one comparison and
-							// the additive seam yields to them; traverse is the persisted pref.
-							sm.textDlg = gsr.textDlg;
-							// phase 24 (lane B1): sLockFieldControls — the signal that hands a FIELD
-							// DIALOG to FAM-DLG instead of the walker (touchgeom.h dlggeom_route).
-							// textDlg above only covers the frames the text is still PRINTING.
-							sm.fieldLock = gsr.fieldLock;
-							// phase 24 (lane B2): which region map is up. 1 = the FLY map, where an
-							// arrival A is a fly confirm; 0 = the wall map, where A would CLOSE it.
-							sm.mapFly = gsr.mapFly;
-							// phase 25 (lane D2): FAM-NAV. pnBase is nonzero ONLY when game_read
-							// claimed GCTX_POKENAV, i.e. only when every guard passed, so it is
-							// both the driver's data and its own enable.
-							sm.pnBase = gsr.pnBase; sm.pnMenuType = gsr.pnMenuType;
-							sm.pnMenuIdx = gsr.pnMenuIdx;
-							sm.padKeys = to_gba_keys(kHeld);
-							sm.traverse = g_prefs.smartTraverse;
-							// cb2 is the touch-log fingerprint AND (phase 23) the FAM-DLG pager gate —
-							// compare-only against GameProfile.cb2Pager; ctxResolved/nTask stay LOGGING-ONLY.
-							sm.cb2 = gsr.cb2; sm.ctxResolved = gsr.ctxResolved; sm.nTask = gsr.nTask;
-							for (int i = 0; i < 8; i++) sm.taskFp[i] = gsr.taskFp[i];
-						}
+						if (game_read(botCore, gp, &gsr)) smart_fill(&sm, botCore, gp, &gsr, kHeld);
 					}
-					tk = touch_update(tmEff, touching, tp.px, tp.py, gx, gy, gvalid, &sm);
+					if (tmEff != TOUCH_PANEL) tk = touch_update(tmEff, touching, tp.px, tp.py, gx, gy, gvalid, &sm);
 				}
 				{   // stereoscopic depth: TOP game overworld state + on-screen OAM rects (cores parked)
 					GbaCore* topCore = swapped ? emuB.core : emuA.core;
@@ -4248,7 +4293,8 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 				}
 				else if (menuSel == 3) {                         // Touch mode (off / gamepad / smart)
 					touchMode = (touchMode + 1) % 3;
-					snprintf(status, sizeof status, "Touch: %s", TOUCH_NAMES[touchMode]);
+					snprintf(status, sizeof status, "Touch: %s",
+					         (single && touchMode == TOUCH_SMART) ? "Panel" : TOUCH_NAMES[touchMode]);
 					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
 				}
 				else if (menuSel == 4) {                         // Frameskip (unfocused game)
@@ -4496,6 +4542,12 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		// Map games to screens. Scale/filter stay tied to the SCREEN; focus/input to the GAME.
 		EmuInstance* topG = swapped ? &emuB : &emuA;
 		EmuInstance* botG = swapped ? &emuA : &emuB;
+		// Phase 32 track T (SPEC-touch-panel T1): a full-screen menu on the panel shows on the
+		// bottom; the top HOLDS the last field frame. The texture is swapped for the top draws only
+		// and swapped back before the bottom screen, which shows the live menu.
+		bool holdSwap = tmEff == TOUCH_PANEL && !menuOpen && s_holdValid && panelui_hold_top(&s_pui);
+		C3D_Tex liveTexA = emuA.tex;
+		if (holdSwap) emuA.tex = s_holdTex;
 		int focScreen = swapped ? (focused ^ 1) : focused;   // screen showing the focused game
 
 		// Active-game cue: dim the UNFOCUSED game toward black; focused stays full.
@@ -5079,6 +5131,8 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		if (litPass) light_pass(topR, &depth3d, scaleMode[0], &lenv);
 		if (menuOpen) draw_paused_summary(txtBuf, topName, botName, s3dEnabled, dofOn, bloomOn, lightOn, vividOn, touchMode, linkOn, netOn, wlOn, presenceOn);
 
+		if (holdSwap) emuA.tex = liveTexA;   // the bottom draws the LIVE frame
+
 		// bottom screen (+ menu overlay when open). render_game leaves `bot` bound.
 		// Phase 14 slice T3: the bottom screen tilts too — but ONLY while every touch mode is off
 		// (rule G9), which is SPEC-integration §3.2's decision (b) SUPPRESSION, chosen over (a)
@@ -5176,6 +5230,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			if (tmEff == TOUCH_PAD || tmEff == TOUCH_SMART) {
 				touch_draw(tmEff, tk, &sm, txtBuf);
 			}
+			if (tmEff == TOUCH_PANEL) panelui_draw(&s_pui, emuA.everUploaded ? &emuA.tex : NULL, txtBuf);
 #if TOUCH_DIAG_HUD
 			if (tmEff == TOUCH_SMART && sm.valid) {   // developer readout, off by default (L6.2)
 				// Phase 22.2: gamestate_ctx_name replaces a local 9-entry table that had silently

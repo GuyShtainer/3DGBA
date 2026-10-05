@@ -16,7 +16,10 @@
 #include "gamestate.h"   // GameCtx
 #include "fieldtrav.h"   // phase 24: FtCensus (the party/PC mon mirror below)
 
-typedef enum { TOUCH_OFF = 0, TOUCH_PAD = 1, TOUCH_SMART = 2 } TouchMode;
+// TOUCH_PANEL (phase 32 track T) is never STORED: the persisted setting stays 0..2 and the "Smart"
+// value becomes the panel in single-game mode for a supported Gen-3 game (main.c tmEff). touch.c
+// treats it like OFF; panelui.c drives touch_update(TOUCH_SMART) itself.
+typedef enum { TOUCH_OFF = 0, TOUCH_PAD = 1, TOUCH_SMART = 2, TOUCH_PANEL = 3 } TouchMode;
 extern const char* const TOUCH_NAMES[3];   // "Off" / "Gamepad" / "Smart"
 
 // Live state of the bottom game the SMART pointer reacts to (filled from gamestate.c + main).

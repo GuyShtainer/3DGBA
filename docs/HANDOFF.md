@@ -296,6 +296,7 @@ clang -std=c11 -Wall -Wextra -O2 -I source test/host/test_diag.c                
 clang -std=c11 -Wall -Wextra -O0 -g -I source test/host/test_control.c             -o /tmp/tcl && /tmp/tcl  # 6897
 clang -std=c11 -Wall -Wextra -O2 -I source test/host/test_trace_replay.c           -o /tmp/tr  && /tmp/tr   # 58 (+4 loud SKIPs)
 clang -std=c11 -Wall -Wextra -O2 -I source test/host/test_tilt.c                   -o /tmp/tt  && /tmp/tt   # 1694  (phase 14)
+clang -std=c11 -Wall -Wextra -O2 -I source test/host/test_panel.c source/panel.c source/gbatext.c -o /tmp/tpanel && /tmp/tpanel   # 195145 (phase 32 touch panel)
 ```
 Total **10343 checks, 0 failures**. A suite that *drops* checks is as much a regression as one that
 fails: the counts above are the gate.
