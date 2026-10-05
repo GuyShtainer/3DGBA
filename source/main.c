@@ -3829,7 +3829,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 #else
 							VoxGateIn vg;
 							vg.userOn   = 1;          vg.isBPEE = 1;  vg.dataOk = 1;   // all folded into vxCand
-							vg.isN3DS   = isN3DS ? 1 : 0;
+							vg.isN3DS   = (isN3DS || VX_DEV_ALLOW_O3DS) ? 1 : 0;
 							vg.menuOpen = 0;          vg.linkAny = 0;
 							vg.ok       = tiltSnap[0].ok;
 							vg.ctx      = tiltSnap[0].ctx;
@@ -4994,7 +4994,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		TiltDraw tiltTL = { &tiltVw, topMod,      0,      -1 };
 		TiltDraw tiltTR = { &tiltVw, 0xFFFFFFFFu, trSlab,  0 };
 		if (voxDraw) {   // phase 32: the voxel world fills the whole 400x240; BG0 (text, menus) is laid over it
-			vx_host_draw_world(top, 0.0f);   // P4 will pass the per-eye offset; P3 draws the same mono world to both eyes
+			vx_host_draw_world(top, s3dOn ? -slider3d : 0.0f);   // left eye (citro3d convention: left = -iod); mono when 3D is off
 			vx_overlay_quad(top, scaleMode[0], smooth[0]);
 		} else if (render_game_gate(topG, top, clrBg))
 			render_game(topG, top, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], topTint, clrBg,
@@ -5239,8 +5239,8 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 
 		// top RIGHT eye = the SAME (top) game -> single-game stereoscopic depth. Player pops forward
 		// (positive disparity). (Per-eye dual-game retired; can return later as a menu toggle.)
-		if (voxDraw) {   // phase 32: the same mono world for the right eye (per-eye stereo is P4); skipped when the 3D slider is down
-			if (slider3d > 0.03f) { vx_host_draw_world(topR, 0.0f); vx_overlay_quad(topR, scaleMode[0], smooth[0]); }
+		if (voxDraw) {   // phase 32: the right-eye world (off-axis, zero parallax at the player); skipped when the 3D slider is down
+			if (slider3d > 0.03f) { vx_host_draw_world(topR, s3dOn ? +slider3d : 0.0f); vx_overlay_quad(topR, scaleMode[0], smooth[0]); }
 		} else if (render_game_gate(topG, topR, clrBg))
 			render_game(topG, topR, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], NULL, clrBg,
 			            tiltTop ? &tiltTR : NULL);

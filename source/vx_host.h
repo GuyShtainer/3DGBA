@@ -42,6 +42,11 @@ void vx_host_reset(void);
 
 /* Dev switch: -DVX_DEV_FORCE_OVERLAY=1 forces the candidate/gate path on without data so the mask +
  * overlay chain can be seen in the emulator without a voxel pak (the frame is then overlay over black). */
+/* Dev switch: -DVX_DEV_ALLOW_O3DS=1 lifts only the New-3DS gate, so the emulator harness (which pins
+ * an Old 3DS for movie sync) renders the real world. Never on in a release build. */
+#ifndef VX_DEV_ALLOW_O3DS
+#define VX_DEV_ALLOW_O3DS 0
+#endif
 #ifndef VX_DEV_FORCE_OVERLAY
 #define VX_DEV_FORCE_OVERLAY 0
 #endif

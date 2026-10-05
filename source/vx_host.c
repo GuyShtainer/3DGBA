@@ -77,7 +77,9 @@ static void Rebind(GbaCore *top)
         vx_sha1(rom, sz, sha);   /* once per ROM bind: ~0.5 s on ARM11, only when voxel is switched on */
         vx_data_set_rom_sha1(sha);
     }
-    sDataOk = vx_data_status() == VXD_OK_PAK || vx_data_status() == VXD_OK_LOOSE;
+    /* VXD_NONE is fine: the vendored world builds from the ROM alone (level terrain, extruded
+     * houses). Only data that is present but wrong for this ROM or damaged blocks it. */
+    sDataOk = vx_data_status() != VXD_WRONG_ROM && vx_data_status() != VXD_BAD_PAK;
 #if VX_DEV_FORCE_OVERLAY
     sDataOk = true;
 #endif
@@ -85,7 +87,7 @@ static void Rebind(GbaCore *top)
 
 bool vx_host_candidate(GbaCore *top, bool userOn, bool isN3DS, bool linkAny)
 {
-    if (!userOn || (!isN3DS && !VX_DEV_FORCE_OVERLAY) || linkAny || top == NULL)   /* dev switch: the emulator harness pins an Old 3DS */
+    if (!userOn || (!isN3DS && !VX_DEV_FORCE_OVERLAY && !VX_DEV_ALLOW_O3DS) || linkAny || top == NULL)   /* dev switches: the emulator harness pins an Old 3DS */
         return false;
     if (top != sBound)
         Rebind(top);
@@ -261,18 +263,18 @@ const char *vx_host_status(bool userOn, bool isN3DS, bool linkAny, GbaCore *top)
 
     if (top != sBound && userOn)
         Rebind(top);
-    if (!isN3DS) return "Voxel 3D: needs a New 3DS";
+    if (!isN3DS && !VX_DEV_ALLOW_O3DS) return "Voxel 3D: needs a New 3DS";
     if (top == NULL || !sBpee) return "Voxel 3D: Emerald only";
     if (linkAny) return "Voxel 3D: paused during link";
     switch (vx_data_status())
     {
-    case VXD_NONE: return "Voxel 3D: data missing - see README";
     case VXD_WRONG_ROM: return "Voxel 3D: data is for a different ROM";
     case VXD_BAD_PAK: return "Voxel 3D: data damaged";
     default: break;
     }
     if (sInitTried && !sInitOk) return "Voxel 3D: not enough video memory";
-    snprintf(buf, sizeof buf, "Voxel 3D: %s", sInitOk ? CtrVoxel_Status() : "ready");
+    snprintf(buf, sizeof buf, "Voxel 3D: %s%s", sInitOk ? CtrVoxel_Status() : "ready",
+             vx_data_status() == VXD_NONE ? " (basic, no data pak)" : "");
     return buf;
 }
 

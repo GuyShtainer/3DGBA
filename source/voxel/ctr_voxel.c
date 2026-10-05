@@ -76,6 +76,12 @@
  * because the viewport covers the whole texture. */
 #define VOXEL_SURFACE_W 512.0f
 #define VOXEL_SURFACE_H 256.0f
+/* 3DGBA: 1 = CtrVoxel_Draw targets the screen itself (no 512x256 offscreen surface). */
+#ifndef VOXEL_DIRECT_SCREEN
+#define VOXEL_DIRECT_SCREEN 1
+#endif
+/* 3DGBA: tiles of eye separation at a full 3D slider (about 4 px per eye two player-distances away). */
+#define VOXEL_IOD_FULL 0.6f
 
 /* ── GPU vertex format ──────────────────────────────────────────────────────
  *
@@ -692,11 +698,20 @@ static float sLeadX, sLeadZ;
  * surface (FitToLogicalSurface), which the frustum must not see. */
 static void FitToLogicalSurface(C3D_Mtx *mtx);
 
+/* 3DGBA: the per-eye interocular distance for the fitted (drawn) projection, in tiles; 0 = mono.
+ * Set by CtrVoxel_Draw; the frustum and the picture-tile projection stay mono. */
+static float sEyeIod;
+
 static void CameraMatrices(C3D_Mtx *projection, C3D_Mtx *view, bool fit)
 {
-    Mtx_Persp(projection, C3D_AngleFromDegrees(sCamera.fov),
-              (float)CTR_GAME_WIDTH / (float)CTR_GAME_HEIGHT,
-              VOXEL_NEAR, VOXEL_FAR, false);
+    if (fit && sEyeIod != 0.0f)   /* 3DGBA: off-axis stereo, zero parallax at the player */
+        Mtx_PerspStereo(projection, C3D_AngleFromDegrees(sCamera.fov),
+                        (float)CTR_GAME_WIDTH / (float)CTR_GAME_HEIGHT, VOXEL_NEAR, VOXEL_FAR, sEyeIod,
+                        sCamera.distance / cosf(C3D_AngleFromDegrees(sCamera.pitch)), false);
+    else
+        Mtx_Persp(projection, C3D_AngleFromDegrees(sCamera.fov),
+                  (float)CTR_GAME_WIDTH / (float)CTR_GAME_HEIGHT,
+                  VOXEL_NEAR, VOXEL_FAR, false);
     if (fit)
         FitToLogicalSurface(projection);
     Mtx_LookAt(view,
@@ -4552,6 +4567,16 @@ const char *CtrVoxel_Status(void)
  */
 static void FitToLogicalSurface(C3D_Mtx *mtx)
 {
+#if VOXEL_DIRECT_SCREEN
+    /* 3DGBA draws straight onto the 400x240 top-screen target, which the 3DS stores turned a quarter
+     * (240x400): no sub-rectangle, just the turn Mtx_PerspTilt/Mtx_OrthoTilt apply (x' = y, y' = -x). */
+    for (int i = 0; i < 4; ++i)
+    {
+        float x = mtx->r[0].c[i];
+        mtx->r[0].c[i] = mtx->r[1].c[i];
+        mtx->r[1].c[i] = -x;
+    }
+#else
     float sx = CTR_GAME_WIDTH / VOXEL_SURFACE_W;
     float tx = sx - 1.0f;
     float sy = CTR_GAME_HEIGHT / VOXEL_SURFACE_H;
@@ -4562,6 +4587,7 @@ static void FitToLogicalSurface(C3D_Mtx *mtx)
         mtx->r[0].c[i] = sx * mtx->r[0].c[i] + tx * mtx->r[3].c[i];
         mtx->r[1].c[i] = sy * mtx->r[1].c[i] + ty * mtx->r[3].c[i];
     }
+#endif
 }
 
 static void SetModelView(const C3D_Mtx *view, int worldX, int worldZ)
@@ -5679,8 +5705,8 @@ void CtrVoxel_Draw(C3D_RenderTarget *target, float eyeOffset)
 
     sBloomStrength = 0.0f;
 
-    /* Stereoscopy is V8; the first milestone renders one eye. */
-    (void)eyeOffset;
+    /* 3DGBA: eyeOffset is the signed 3D slider (left eye < 0, right eye > 0; 0 = mono). */
+    sEyeIod = eyeOffset * VOXEL_IOD_FULL;
     sGloomAmount = 0.0f;
     sOwnsFog = false;
     if (!sReady || sDrawCount == 0)
