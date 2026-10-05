@@ -128,7 +128,7 @@ void rg_unit3(const double v[3], double out[3]);       /* vb:648 _unit */
 /* ---- parts ---- */
 
 typedef enum { RG_P_PRISM, RG_P_HIPROOF, RG_P_FRUSTUM, RG_P_VAULT, RG_P_WALLS, RG_P_LIFTED, RG_P_CARD,
-               RG_P_FACET, RG_P_PLAINWALL, RG_P_DECAL, RG_P_CYLINDER } RgPartKind;
+               RG_P_FACET, RG_P_PLAINWALL, RG_P_DECAL, RG_P_CYLINDER, RG_P_FOUNTAIN_TOP, RG_P_JET } RgPartKind;
 
 typedef enum { RG_EM_NONE = 0, RG_EM_PROJ, RG_EM_STRIP, RG_EM_TILE } RgEdgeKind;
 typedef struct RgEdgeMat { RgEdgeKind kind; RgProj proj; RgStrip strip; RgTile tile; } RgEdgeMat;
@@ -182,6 +182,12 @@ typedef struct RgCylinder {      /* vb:1474 */
     unsigned sides;
 } RgCylinder;
 
+/* sp:552-577: the fountain's own parts. FountainTop = a flat polygon (x, z) at height h, projected (the rim and
+ * water) plus the side quads the drawing never shows; Jet = a standing projected plane at depth z. */
+#define RG_FTOP_PTS 8
+typedef struct RgFountainTop { double poly[RG_FTOP_PTS][2]; unsigned nPoly; double h; } RgFountainTop;
+typedef struct RgJet { double x0, x1, z, y0, y1; } RgJet;
+
 #define RG_NAME_LEN 48
 typedef struct RgPart {
     RgPartKind kind;
@@ -198,6 +204,8 @@ typedef struct RgPart {
         RgPlainWall plain;
         RgDecal decal;
         RgCylinder cyl;
+        RgFountainTop ftop;
+        RgJet jet;
     } u;
 } RgPart;
 

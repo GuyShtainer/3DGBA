@@ -1321,6 +1321,41 @@ static bool emit_cylinder(const RgCylinder *c, const char *name, RgMesh *m)
     return !m->failed;
 }
 
+static bool emit_fountain_top(const RgFountainTop *f, RgMesh *m)
+{
+    unsigned i, n = f->nPoly;
+    double h = f->h;
+    uint16_t top, side;
+    double rev[RG_FTOP_PTS][3];
+
+    if (n < 4 || n > RG_FTOP_PTS)
+        return false;
+    top = rg_mesh_tag(m, "fountain.top");
+    side = rg_mesh_tag(m, "fountain.side~proj");
+    for (i = 0; i < n; i++) {
+        const double *p = f->poly[n - 1 - i];     /* reversed(self.poly) */
+        rev[i][0] = p[0]; rev[i][1] = h; rev[i][2] = p[1];
+    }
+    proj_face(m, rev, n, RG_SHADE_ART, top);
+    for (i = 2; i + 1 < n; i++) {
+        const double *a = f->poly[i], *b = f->poly[(i + 1) % n];
+        double quad[4][3] = {{a[0], -1, a[1]}, {b[0], -1, b[1]}, {b[0], h, b[1]}, {a[0], h, a[1]}};
+
+        proj_face(m, quad, 4, 0.7, side);
+    }
+    return !m->failed;
+}
+
+static bool emit_jet(const RgJet *j, const char *name, RgMesh *m)
+{
+    char tg[RG_TAG_LEN];
+    double quad[4][3] = {{j->x0, j->y0, j->z}, {j->x1, j->y0, j->z}, {j->x1, j->y1, j->z}, {j->x0, j->y1, j->z}};
+
+    tag_cat(tg, name, "~proj");
+    proj_face(m, quad, 4, RG_SHADE_ART, rg_mesh_tag(m, tg));
+    return !m->failed;
+}
+
 /* ---- dispatch ------------------------------------------------------------------------------ */
 
 bool rg_part_emit(const RgPart *p, RgMesh *m)
@@ -1336,6 +1371,8 @@ bool rg_part_emit(const RgPart *p, RgMesh *m)
     case RG_P_PLAINWALL: return emit_plain(&p->u.plain, p->name, m);
     case RG_P_DECAL: return emit_decal(&p->u.decal, p->name, m);
     case RG_P_CYLINDER: return emit_cylinder(&p->u.cyl, p->name, m);
+    case RG_P_FOUNTAIN_TOP: return emit_fountain_top(&p->u.ftop, m);
+    case RG_P_JET: return emit_jet(&p->u.jet, p->name, m);
     case RG_P_LIFTED: {
         RgMesh inner;
         unsigned i;

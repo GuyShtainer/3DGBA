@@ -33,4 +33,23 @@ extern const unsigned rg_spec_count;
 /* sp:46-96 littleroot_house(plaster_x). Appends [ground_floor, roof_lo, storey, roof_hi]. */
 bool rg_littleroot_house(const RgSpec *s, int plasterX, int unused, RgPartList *out);
 
+/* S2.4 direct builders (sp:101-577). Each appends its parts in upstream list order. */
+bool rg_littleroot_lab(const RgSpec *s, int a0, int a1, RgPartList *out);       /* sp:101 */
+bool rg_pokemon_center(const RgSpec *s, int a0, int a1, RgPartList *out);       /* sp:164, crown = true */
+bool rg_poke_mart(const RgSpec *s, int a0, int a1, RgPartList *out);            /* sp:164, crown = false */
+bool rg_oldale_house(const RgSpec *s, int a0, int a1, RgPartList *out);         /* sp:204 */
+bool rg_briney_house(const RgSpec *s, int a0, int a1, RgPartList *out);         /* sp:243 */
+bool rg_flower_shop(const RgSpec *s, int a0, int a1, RgPartList *out);          /* sp:292 */
+bool rg_kit_house(const RgSpec *s, int width, int a1, RgPartList *out);         /* sp:327, arg0 = width px */
+bool rg_gym(const RgSpec *s, int a0, int a1, RgPartList *out);                  /* sp:367 */
+bool rg_devon(const RgSpec *s, int a0, int a1, RgPartList *out);                /* sp:507 */
+bool rg_fountain(const RgSpec *s, int a0, int a1, RgPartList *out);             /* sp:534 */
+/* sp:482 flat_part. roof = {fixed, repeat, tail} (each a row pair), cornice, brick and rim = art rects. */
+bool rg_flat_part(RgPartList *out, const char *name, double x0, double x1, double front, double back,
+                  const double roof[3][2], const double cornice[2], double facade_top, const double brick[4],
+                  const double rim[4], bool west, bool east);
+/* sp:408 flat_block; unit = NULL or {ux0, ux1, t0, t1, t2}. Used by stone_block/olive_block (S2.5). */
+bool rg_flat_block(RgPartList *out, double width, double height, const double roof[3][2], const double cornice[2],
+                   double facade_top, const double *unit);
+
 #endif

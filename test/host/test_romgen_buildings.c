@@ -138,6 +138,54 @@ static void TestPackAtlas(void)
     rg_img_free(&a); rg_img_free(&b); rg_img_free(&c); rg_img_free(&d);
 }
 
+/* ---- synthetic: the S2.4 builders that need no ROM ---- */
+static void TestSyntheticParts(void)
+{
+    RgPartList pl;
+    RgMesh m;
+    unsigned i, nproj = 0, njet = 0, ntop = 0;
+    static const double roof[3][2] = {{7, 39}, {7, 11}, {0, 7}}, corn[2] = {39, 48};
+    static const double unit[5] = {40, 60, 1, 16, 31};
+
+    /* fountain: basin walls 3x2 + top fan 6 + sides 5x2 + bowl cylinder 46 + jet 2 = 70 triangles, all projected
+     * except the basin's straight walls and the cylinder's far side */
+    rg_parts_init(&pl);
+    rg_mesh_init(&m);
+    CHECK(rg_fountain(NULL, 0, 0, &pl) && pl.n == 4 && rg_parts_emit(&pl, &m) && !m.failed);
+    CHECK(m.n == 70);
+    for (i = 0; i < m.n; i++) {
+        const char *nm = m.names[m.t[i].tag];
+        if (!strcmp(nm, "jet~proj")) njet++;
+        if (!strcmp(nm, "fountain.top")) ntop++;
+        if (!strcmp(nm, "fountain.side~proj")) { nproj++; CHECK(m.t[i].shade == 0.7 && (m.t[i].flags & RG_TAG_PROJ)); }
+    }
+    CHECK(njet == 2 && ntop == 6 && nproj == 10);
+    rg_mesh_free(&m);
+    rg_parts_free(&pl);
+
+    /* flat_block: a plain block is [body, roof]; with a roof unit [body, roof_w, roof_u, roof_e, unit] */
+    rg_parts_init(&pl);
+    rg_mesh_init(&m);
+    CHECK(rg_flat_block(&pl, 64, 96, roof, corn, 48, NULL) && pl.n == 2 && rg_parts_emit(&pl, &m) && !m.failed && m.n > 0);
+    rg_mesh_free(&m);
+    rg_parts_free(&pl);
+    rg_parts_init(&pl);
+    rg_mesh_init(&m);
+    CHECK(rg_flat_block(&pl, 96, 96, roof, corn, 48, unit) && pl.n == 5 && rg_parts_emit(&pl, &m) && !m.failed && m.n > 0);
+    rg_mesh_free(&m);
+    rg_parts_free(&pl);
+
+    /* every direct row has a builder, a layout pin and exact rects inside its art */
+    for (i = 0; i < rg_spec_count; i++) {
+        const RgSpec *sp = &rg_specs[i];
+        unsigned k;
+        CHECK(sp->kind == RG_SPEC_DIRECT && sp->parts && sp->layoutId && sp->layoutFnv && sp->nExact > 0 && sp->nGround > 0);
+        for (k = 0; k < sp->nExact; k++)
+            CHECK(sp->exact[k].x0 >= 0 && sp->exact[k].y0 >= 0 && sp->exact[k].x1 <= sp->rect[2] * 16 &&
+                  sp->exact[k].y1 <= sp->rect[3] * 16 && sp->exact[k].x0 < sp->exact[k].x1 && sp->exact[k].y0 < sp->exact[k].y1);
+    }
+}
+
 /* ---- the real ROM: the two Littleroot houses ---- */
 static void RoundTrip(const uint8_t *buf, size_t n, unsigned layoutId, int cx, int cy, int *cellOk, int *gotPage)
 {
@@ -171,7 +219,7 @@ static void TestRealRom(void)
     unsigned i, f, nf1, nf2;
     size_t sz, sz1;
     int cellOk, page;
-    uint8_t hts[25];
+    uint8_t hts[256];
 
     if (!path || !(fp = fopen(path, "rb"))) { sSkips++; printf("SKIP real-ROM buildings (set ROMGEN_ROM)\n"); return; }
     fseek(fp, 0, SEEK_END); n = ftell(fp); fseek(fp, 0, SEEK_SET);
@@ -181,19 +229,38 @@ static void TestRealRom(void)
     CHECK(rg_world_open(&w, rom, (size_t)n) == RG_OK);
     CHECK(rg_layout_fnv(&w.layouts[9]) == 0xEFE99674u);
     CHECK(rg_build_models(&w, rg_specs, rg_spec_count, &ms) == RG_OK);
-    CHECK(ms.n == 2 && ms.skipped == 0);
-    printf("littleroot: tris %u / %u\n", ms.m[0].mesh.n, ms.m[1].mesh.n);
+    CHECK(ms.n == rg_spec_count && ms.n == 14 && ms.skipped == 0);
+    CHECK(rg_layout_fnv(&w.layouts[0]) == 0xCA6DFAA0u && rg_layout_fnv(&w.layouts[2]) == 0x6FFC5818u &&
+          rg_layout_fnv(&w.layouts[3]) == 0xA55404CFu && rg_layout_fnv(&w.layouts[10]) == 0x52C922B6u &&
+          rg_layout_fnv(&w.layouts[19]) == 0x157E3492u);
+    /* the gate for all 14 direct models: ortho 0/0/0, density empty, heights in 1..255 over the rect */
     for (i = 0; i < ms.n; i++) {
         RgOrthoResult o;
-        unsigned bad = 99;
+        unsigned bad = 99, cells = (unsigned)ms.m[i].w * ms.m[i].h;
         CHECK(rg_model_gate(&ms.m[i], &o, &bad));
         CHECK(o.wrong == 0 && o.missing == 0 && o.extra == 0 && bad == 0);
-        CHECK(ms.m[i].w == 5 && ms.m[i].h == 5);
-        CHECK(rg_cell_heights(&ms.m[i], hts));
-        for (f = 0; f < 25; f++) CHECK(hts[f] >= 1 && hts[f] <= 255);
-        printf("house %u heights:", i);
-        for (f = 0; f < 25; f++) printf(" %u", hts[f]);
-        printf("\n");
+        CHECK(ms.m[i].mesh.n > 0 && !ms.m[i].mesh.failed);
+        if (i < 2) CHECK(ms.m[i].w == 5 && ms.m[i].h == 5);
+        CHECK(cells <= sizeof(hts) && rg_cell_heights(&ms.m[i], hts));
+        {   /* 0 = nothing stands over the cell (a back row the model does not reach); inside the spec's match rows
+             * (and for the houses, everywhere) a cell must be covered */
+            const RgSpec *sp = ms.m[i].spec;
+            unsigned r0 = sp->matchRows[0], r1 = sp->matchRows[1] ? (unsigned)sp->matchRows[1] : ms.m[i].h, zeros = 0, any = 0;
+            for (f = 0; f < cells; f++) {
+                unsigned row = f / ms.m[i].w;
+                if (hts[f] == 0) zeros++; else any++;
+                if (i < 2 || (sp->matchRows[1] && row >= r0 && row < r1)) CHECK(hts[f] >= 1);
+            }
+            CHECK(any > 0);
+            printf("%-20s zero-height cells %u of %u\n", sp->name, zeros, cells);
+        }
+        printf("%-20s tris %5u  gate %u/%u/%u dens %u  cells %ux%u\n", ms.m[i].spec->name, ms.m[i].mesh.n, o.wrong,
+               o.missing, o.extra, bad, ms.m[i].w, ms.m[i].h);
+        if (i < 2) {
+            printf("house %u heights:", i);
+            for (f = 0; f < 25; f++) printf(" %u", hts[f]);
+            printf("\n");
+        }
     }
     /* the meshes differ only in the plaster-column u */
     CHECK(ms.m[0].mesh.n == ms.m[1].mesh.n);
@@ -213,31 +280,78 @@ static void TestRealRom(void)
     printf("littleroot: u same %u, u shifted %u\n", nf1, nf2);
     CHECK(nf2 > 0);
 
-    memset(&pl, 0, sizeof(pl));
-    CHECK(rg_find_placements(&w, &ms.m[0], &pl) == RG_OK);
-    {   int has24 = 0; for (i = 0; i < pl.n; i++) { printf("m0 placement layout %u (%d,%d) ground %03X odd %u\n", pl.p[i].layout, pl.p[i].px, pl.p[i].py, pl.p[i].ground, pl.p[i].nOdd);
-        if (pl.p[i].layout == 10 && pl.p[i].px == 2 && pl.p[i].py == 4) has24 = 1; } CHECK(has24); }
-    rg_placements_free(&pl);
-    memset(&pl, 0, sizeof(pl));
-    CHECK(rg_find_placements(&w, &ms.m[1], &pl) == RG_OK);
-    {   int has = 0; for (i = 0; i < pl.n; i++) { printf("m1 placement layout %u (%d,%d)\n", pl.p[i].layout, pl.p[i].px, pl.p[i].py);
-        if (pl.p[i].layout == 10 && pl.p[i].px == 13 && pl.p[i].py == 4) has = 1; } CHECK(has); }
-    rg_placements_free(&pl);
+    /* placements of every model: its own reference position is always found; the Center also turns up in Oldale
+     * (layout 11), the gym in Petalburg (1) and Rustboro (4) */
+    {
+        unsigned totalPl = 0;
+        int centerPetal = 0, centerOldale = 0, gymL1 = 0, gymL4 = 0, gymRL1 = 0, gymRL4 = 0;
 
+        for (i = 0; i < ms.n; i++) {
+            const RgSpec *sp = ms.m[i].spec;
+            unsigned k;
+            int own = 0;
+
+            memset(&pl, 0, sizeof(pl));
+            CHECK(rg_find_placements(&w, &ms.m[i], &pl) == RG_OK);
+            printf("%-20s placements %u:", sp->name, pl.n);
+            for (k = 0; k < pl.n; k++) {
+                printf(" L%u(%d,%d)", pl.p[k].layout, pl.p[k].px, pl.p[k].py);
+                if (pl.p[k].layout == sp->layoutId && pl.p[k].px == sp->rect[0] && pl.p[k].py == sp->rect[1]) own = 1;
+                if (!strcmp(sp->name, "pokemon_center")) {
+                    if (pl.p[k].layout == 1) centerPetal = 1;
+                    if (pl.p[k].layout == 11) centerOldale = 1;
+                }
+                if (!strcmp(sp->name, "gym")) { if (pl.p[k].layout == 1) gymL1 = 1; if (pl.p[k].layout == 4) gymL4 = 1; }
+                if (!strcmp(sp->name, "gym_rustboro")) { if (pl.p[k].layout == 1) gymRL1 = 1; if (pl.p[k].layout == 4) gymRL4 = 1; }
+            }
+            printf("\n");
+            CHECK(own);
+            totalPl += pl.n;
+            rg_placements_free(&pl);
+        }
+        CHECK(centerPetal && centerOldale);
+        /* the gym is placed in layout 1 (by `gym`) and layout 4 (by `gym_rustboro`): Rustboro's copy has its own roof and
+         * flanks, so the Petalburg model does not match there and vice versa (separate refs) */
+        CHECK(gymL1 && gymRL4 && !gymL4 && !gymRL1);
+        printf("total placements over %u models: %u\n", ms.n, totalPl);
+    }
+
+    /* the whole direct-spec file, through the vendored consumer */
     memset(&st, 0, sizeof(st));
     sz = rg_buildings_write(&w, &ms, NULL, 0, &st);
     CHECK(sz > 0 && st.err == RG_OK);
     buf = (uint8_t *)malloc(sz);
     CHECK(buf && rg_buildings_write(&w, &ms, buf, sz, &st) == sz);
-    printf("buildings.bin (2 models): %zu bytes, %u pages, %u vertices, %u placements, %u masks\n", sz, st.pages, st.vertices, st.placements, st.masks);
-    CHECK(memcmp(buf, "VXB7", 4) == 0 && st.placements == 2 && st.models == 2);
+    printf("buildings.bin (%u models): %zu bytes, %u pages, %u vertices, %u placements, %u masks\n", ms.n, sz, st.pages,
+           st.vertices, st.placements, st.masks);
+    CHECK(memcmp(buf, "VXB7", 4) == 0 && st.models == ms.n && st.placements > 0);
     CHECK(sz % 4 == 0);
-    RoundTrip(buf, sz, 10, 2, 4, &cellOk, &page);
-    CHECK(cellOk && page == 0);
-    RoundTrip(buf, sz, 10, 13, 4, &cellOk, &page);
-    CHECK(cellOk && page == 0);
-    RoundTrip(buf, sz, 10, 8, 10, &cellOk, &page);
-    CHECK(!cellOk);
+    {   /* every model's reference cell resolves through VoxelBuildings_PageOf / CellAt */
+        VoxelMapInstance inst;
+        int g = -1, ok;
+        float top = 0.0f;
+
+        EnterTemp();
+        WriteFile("voxel/buildings.bin", buf, sz);
+        CHECK(VoxelBuildings_Init());
+        for (i = 0; i < ms.n; i++) {
+            const RgSpec *sp = ms.m[i].spec;
+
+            memset(&inst, 0, sizeof(inst));
+            inst.layoutId = sp->layoutId;
+            CHECK(VoxelBuildings_PageOf(&inst) >= 0);
+            ok = VoxelBuildings_CellAt(&inst, sp->rect[0] + sp->rect[2] / 2, sp->rect[1] + sp->rect[3] - 1, &g, &top) ? 1 : 0;
+            CHECK(ok && g >= 0 && top > 0.0f);
+        }
+        {   /* a cell far from any building */
+            memset(&inst, 0, sizeof(inst));
+            inst.layoutId = 10;
+            CHECK(!VoxelBuildings_CellAt(&inst, 8, 10, &g, &top));
+        }
+        CHECK(VoxelBuildings_MaxTop() > 0.0f);
+        VoxelBuildings_Shutdown();
+        LeaveTemp();
+    }
 
     one = ms; one.n = 1;
     memset(&st1, 0, sizeof(st1));
@@ -246,11 +360,9 @@ static void TestRealRom(void)
     CHECK(sz1 > 0 && buf1 && rg_buildings_write(&w, &one, buf1, sz1, &st1) == sz1);
     printf("buildings.bin (house 1 only): %zu bytes, %u placements\n", sz1, st1.placements);
     RoundTrip(buf1, sz1, 10, 2, 4, &cellOk, &page);
-    CHECK(cellOk);
-    RoundTrip(buf1, sz1, 10, 13, 4, &cellOk, &page);
-    CHECK(cellOk || 1);
-    /* the structural parse of the 2-model file */
-    CHECK(U16(buf + 4) >= 1 && U16(buf + 6) == 2);
+    CHECK(cellOk && page == 0);
+    /* the structural parse of the file */
+    CHECK(U16(buf + 4) >= 1 && U16(buf + 6) == ms.n);
     {   unsigned np = U16(buf + 4), pg;
         for (pg = 0; pg < np; pg++) {
             const uint8_t *e = buf + 24 + 8u * pg;
@@ -269,6 +381,7 @@ int main(void)
 {
     TestTexelOffset();
     TestPackAtlas();
+    TestSyntheticParts();
     TestRealRom();
     printf("test_romgen_buildings: %d checks, %d failures, %d skipped\n", sChecks, sFails, sSkips);
     return sFails != 0;
