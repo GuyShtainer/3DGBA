@@ -18,7 +18,7 @@ include $(DEVKITARM)/3ds_rules
 #---------------------------------------------------------------------------------
 TARGET		:=	3DGBA
 BUILD		:=	build
-SOURCES		:=	source source/voxel
+SOURCES		:=	source source/voxel source/romgen
 DATA		:=	data
 INCLUDES	:=	include
 
@@ -184,6 +184,9 @@ $(OUTPUT).elf	:	$(OFILES)
 %.shbin.o %_shbin.h : %.shbin
 	@echo $(notdir $<)
 	@$(bin2o)
+
+# romgen (phase 33) compares floating-point thresholds: no FMA contraction, so host and device agree.
+rg_%.o : CFLAGS += -ffp-contract=off
 
 -include $(DEPENDS)
 

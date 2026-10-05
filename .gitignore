@@ -59,3 +59,6 @@ test/fixtures/dio_*
 *.pak
 voxel/*.bin
 !data/voxel_trees.bin
+
+# phase 33: host romgen CLI build output
+tools/romgen/build/
