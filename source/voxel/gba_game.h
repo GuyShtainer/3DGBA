@@ -87,9 +87,9 @@ typedef uint32_t GbaPtr;
 
 /* ---- Raw offsets the adapter decodes with ----------------------------------------------- */
 /* Verified in SPEC-data / diodump (rows marked V) or measured on a running ROM by
- * tools/voxel/probe_ram.lua (rows marked M, see docs/phase32-voxel/BUILDLOG-P2.md). */
+ * tools/voxel/probe_ram.c + probe_check.py and ROM accessor immediates (see docs/phase32-voxel/BUILDLOG-P2.md). */
 #define GBA_OFF_MAIN_CALLBACK2 0x04u        /* V */
-#define GBA_OFF_MAIN_FLAGS 0x439u           /* M: bit 1 = in battle */
+#define GBA_OFF_MAIN_FLAGS 0x439u           /* V (FreeRestoreBattleData clears bit 1): bit 1 = in battle */
 #define GBA_MAIN_INBATTLE_BIT 0x02u
 #define GBA_OFF_SB1_POSX 0x00u              /* V */
 #define GBA_OFF_SB1_POSY 0x02u              /* V */
@@ -108,9 +108,9 @@ typedef uint32_t GbaPtr;
 #define GBA_OFF_MH_MAPTYPE 0x17u            /* V */
 #define GBA_MAP_HEADER_BYTES 0x1Cu
 #define GBA_OBJECT_EVENT_STRIDE 0x24u
-#define GBA_OFF_OE_FLAGS0 0x00u             /* bit0 active, bit1 singleMovement, bit6 heldMovement (M) */
+#define GBA_OFF_OE_FLAGS0 0x00u             /* bit0 active, bit1 singleMovement, bit6 heldMovement (V: ROM tests 0x42 / bit 6) */
 #define GBA_OFF_OE_FLAGS1 0x01u             /* bit5 invisible (V) */
-#define GBA_OFF_OE_FLAGS2 0x02u             /* bit0 isPlayer (V), bit1 hasReflection (M) */
+#define GBA_OFF_OE_FLAGS2 0x02u             /* bit0 isPlayer (V), bit1 hasReflection (V: ROM tests mask 0x20001) */
 #define GBA_OFF_OE_SPRITE_ID 0x04u          /* V */
 #define GBA_OFF_OE_GFX_ID 0x05u             /* V */
 #define GBA_OFF_OE_ELEVATION 0x0Bu          /* V low nibble */
@@ -125,34 +125,36 @@ typedef uint32_t GbaPtr;
 #define GBA_SPRITE_STRIDE 0x44u
 #define GBA_SPRITE_COUNT 65u
 #define GBA_OFF_SP_OAM 0x00u                /* V */
-#define GBA_OFF_SP_TEMPLATE 0x14u           /* M */
+#define GBA_OFF_SP_TEMPLATE 0x14u           /* V: ROM pointers in live sprites */
 #define GBA_OFF_SP_X 0x20u                  /* V */
 #define GBA_OFF_SP_Y 0x22u
 #define GBA_OFF_SP_X2 0x24u
 #define GBA_OFF_SP_Y2 0x26u
 #define GBA_OFF_SP_C2C_X 0x28u
 #define GBA_OFF_SP_C2C_Y 0x29u
-#define GBA_OFF_SP_DATA 0x2Eu               /* M */
+#define GBA_OFF_SP_DATA 0x2Eu               /* V: data[0] = object id on field sprites */
 #define GBA_OFF_SP_FLAGS 0x3Eu              /* V: bit0 inUse, bit1 coordOffsetEnabled, bit2 invisible */
-#define GBA_OFF_SP_SUBPRIORITY 0x43u        /* M */
-#define GBA_OFF_FADE_Y_WORD 0x04u           /* M: y = (u16 at +4 >> 6) & 31 */
-#define GBA_OFF_FADE_ACTIVE_WORD 0x06u      /* M: active = bit 15 of the u16 at +6 */
+#define GBA_OFF_SP_SUBPRIORITY 0x43u        /* V: last byte of the 0x44 struct */
+#define GBA_OFF_FADE_Y_WORD 0x04u           /* V (BeginNormalPaletteFade): y = (u16 at +4 >> 6) & 31 */
+#define GBA_OFF_FADE_ACTIVE_WORD 0x06u      /* V: active = bit 15 of the u16 at +6 */
 #define GBA_PALETTE_FADE_BYTES 0x0Cu
 #define GBA_PLTT_BYTES 0x400u
 
-/* Weather block (gWeather) field offsets, measured by probe_ram.lua. */
-#define GBA_OFF_WEATHER_CURR 0x0Cu
-#define GBA_OFF_WEATHER_PALSTATE 0x0Eu
-#define GBA_OFF_WEATHER_EVA 0x16u
-#define GBA_OFF_WEATHER_FOGH 0x2Cu
-#define GBA_OFF_WEATHER_FOGD 0x2Du
+/* Weather block (gWeather) field offsets, measured by ROM accessor immediates: read from the immediates of the
+ * ROM's weather accessors (GetCurrentWeather 0x6D0, the fade-in test 0x6C6, the blend-coefficient
+ * setter 0x730 (a u16; its low byte is read), the two fog init routines 0x6FB / 0x724). */
+#define GBA_OFF_WEATHER_CURR 0x6D0u
+#define GBA_OFF_WEATHER_PALSTATE 0x6C6u
+#define GBA_OFF_WEATHER_EVA 0x730u
+#define GBA_OFF_WEATHER_FOGH 0x6FBu
+#define GBA_OFF_WEATHER_FOGD 0x724u
 
 /* ROM-side objects (decoded by the adapter, interned). */
 #define GBA_ROM_MAPLAYOUT_BYTES 24u
 #define GBA_ROM_TILESET_BYTES 24u
 #define GBA_ROM_CONNECTION_STRIDE 12u
 #define GBA_ROM_BGEVENT_STRIDE 12u
-#define GBA_ROM_GFXINFO_SIZE_OFF 0x06u     /* M(rom) */
+#define GBA_ROM_GFXINFO_SIZE_OFF 0x06u     /* V(rom) */
 #define GBA_ROM_GFXINFO_WIDTH_OFF 0x08u
 #define GBA_ROM_GFXINFO_HEIGHT_OFF 0x0Au
 #define GBA_ROM_GFXINFO_IMAGES_OFF 0x1Cu
@@ -195,7 +197,7 @@ typedef uint32_t GbaPtr;
 #define CONNECTION_EMERGE 6
 
 /* Weather ids and palette-process states: read off the ROM's weather function table
- * (tools/voxel/probe_ram.lua / BUILDLOG-P2.md, "weather ids"). */
+ * (tools/voxel/BUILDLOG-P2.md, "weather ids"). */
 #define WEATHER_NONE 0
 #define WEATHER_SUNNY_CLOUDS 1
 #define WEATHER_SUNNY 2

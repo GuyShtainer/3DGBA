@@ -88,15 +88,13 @@ bool vx_snapshot_take(VxSnapshot *snap, const VxMemSrc *src)
      || !CopyEwram(src, GBA_ADDR_PALETTE_FADE, snap->paletteFade, sizeof(snap->paletteFade)))
         return false;
     {
-        uint8_t wx[0x40];
+        static const uint32_t offs[5] = {GBA_OFF_WEATHER_CURR, GBA_OFF_WEATHER_PALSTATE,
+                                         GBA_OFF_WEATHER_EVA, GBA_OFF_WEATHER_FOGH,
+                                         GBA_OFF_WEATHER_FOGD};
 
-        if (!CopyEwram(src, GBA_ADDR_WEATHER, wx, sizeof(wx)))
-            return false;
-        snap->weather[0] = wx[GBA_OFF_WEATHER_CURR];
-        snap->weather[1] = wx[GBA_OFF_WEATHER_PALSTATE];
-        snap->weather[2] = wx[GBA_OFF_WEATHER_EVA];
-        snap->weather[3] = wx[GBA_OFF_WEATHER_FOGH];
-        snap->weather[4] = wx[GBA_OFF_WEATHER_FOGD];
+        for (unsigned i = 0; i < 5; ++i)
+            if (!CopyEwram(src, GBA_ADDR_WEATHER + offs[i], &snap->weather[i], 1u))
+                return false;
     }
     CopyPalettes(snap, src);
     memcpy(snap->vramBg, src->vram, GBA_VRAM_BG_SIZE);
