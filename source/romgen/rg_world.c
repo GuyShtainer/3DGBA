@@ -70,6 +70,7 @@ const char *rg_err_str(RgErr e)
     case RG_ERR_MAP_GROUPS: return "map group table or map events unreadable";
     case RG_ERR_TILESET: return "tileset unreadable";
     case RG_ERR_NOMEM: return "out of memory";
+    case RG_ERR_CANCELLED: return "cancelled";
     }
     return "?";
 }

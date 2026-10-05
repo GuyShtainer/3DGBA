@@ -78,3 +78,14 @@
      Decision for Guy / S5 review: drop them from the file or keep upstream-faithful behaviour.
   2. SPEC 5.5 says "35 u16, no padding" for the consumer's record: it is 36 u16 = 72 bytes (3 + 16 + 16 + 1), which is what the
      same spec's "72*count" and the upstream `struct.pack("<HHH16H16HH")` say. The writer uses 72.
+
+## S1.4 (PC half) - rg_run driver + CLI
+
+- New `source/romgen/rg_run.{h,c}`: no file I/O; pair-grouped single pass (roles then signs per layout), progress callback,
+  cancel flag, optional clock. Added `RG_ERR_CANCELLED`. Device build (`make -j8`) green; rg_art/regions/roles/run/signs/world compile under devkitARM.
+- CLI: `romgen ROM OUTDIR [--time] [--only regions,signposts] [--dump-roles ID]`. Output only to the scratchpad romgen-out/.
+- Real ROM (Apple host, -O2): total 26-48 ms (warm ~26 ms: world 1.1, roles 20.3, signs 0.9, serialise 0.0).
+  442 layouts, 518 maps, regions.bin 330791 B, signposts.bin 26144 B / 363 records (20 heads, 4 empty masks, see SPEC 7.4 note).
+  Role census identical to the S1.1 pins. `--dump-roles 10` shows plausible houses (W), signposts (S), trees (T).
+- Remaining for hardware: on-device timing on New 3DS (ARM11 will be much slower than 26 ms; S4 decides on-device vs PC fallback)
+  and the in-app eyeball check of Littleroot, Rustboro and Route 104. Generation is NOT wired into the app (S4).

@@ -19,7 +19,8 @@ typedef enum {
     RG_ERR_LAYOUT_TABLE,
     RG_ERR_MAP_GROUPS,
     RG_ERR_TILESET,
-    RG_ERR_NOMEM
+    RG_ERR_NOMEM,
+    RG_ERR_CANCELLED
 } RgErr;
 
 /* Explicit little-endian reads: no casts, so host and device agree. */
