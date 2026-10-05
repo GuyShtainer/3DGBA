@@ -19,3 +19,13 @@
   objectEvents@4 bgEvents@0x10, template graphicsId@1, BgEvent x@0 y@2 elev@4 kind@5; connections direction@0 offset@4 group@8 num@9.
 - Observed: ObjectEvent mapNum/mapGroup of the player are NOT kept current (stale after a warp) -> not decoded.
 - test_voxel_lz77 173 checks, test_voxel_shims 69 checks, both green (ASan+UBSan).
+
+## 2026-10-05 slice C: adapter, world, mesh, entities suites + NOTICE
+- Suites (clang -std=c11 -Wall -Wextra, ASan+UBSan; build line in each file header): lz77 173, shims 69,
+  adapter 122 (synthetic + real-dump mode), world 133, mesh 20, entities 35 checks; 0 failures, no warnings.
+- Fixes found by the suites: arena leaked on rejected map data (validate-before-alloc + mark rollback).
+- Repo NOTICE: added "Voxel overworld (source/voxel/)" quoting both MIT notices in full (SPEC 1.5).
+- STEP: sStepFrames 16,8,6,4,2 re-derived from ROM 0x0850E768 (test_voxel_entities re-checks it); not from a gs-log replay.
+- Open: CtrVideo_Texel y convention unverified (P3); TELEVISION 0x86 / SECRET_BASE_REGISTER_PC 0xB1 not confirmed from
+  ROM; vx_overlay/vx_stereo and their tests not written; gbacore_mem_block deferred to P3; GetObjectEventGraphicsInfo
+  falls back to id 0 for id>=239 (game's own fallback differs); no tools/voxel/offsets.sh (no pret include/ available).
