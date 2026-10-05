@@ -42,4 +42,24 @@ bool rg_layer_equal(const RgLayer *a, const RgLayer *b);
 static inline bool rg_layer_any(const RgLayer *a) { return a->count != 0; }
 static inline bool rg_layer_has(const RgLayer *a, int x, int y) { return (a->drawn[y] >> x) & 1u; }
 
+/* ---- S2.1 additions (SPEC-S2 section 1.1, gaps G1/G2/G4): full pixels, for building art ---- */
+
+/* G1: one metatile layer as the GBA draws it, every pixel. c = BGR555, idx = palette index (0..15).
+ * drawn bit = the pixel is opaque for this layer: lower layer always 1 (an idx-0 pixel carries palette
+ * slot 0's colour, voxel_art Tilesets.subtile); upper layer idx != 0. A tile number past the tile data
+ * is magenta (31,0,31) with idx 0. An unreadable metatile is all magenta idx 0 (lower) / undrawn (upper). */
+typedef struct RgCellPx {
+    uint16_t c[16][16];
+    uint8_t idx[16][16];
+    uint16_t drawn[16];
+} RgCellPx;
+void rg_cell_px(RgPair *p, uint16_t metatile, int layer, RgCellPx *out);
+
+/* G2: one 8x8 subtile by (tile, palette), no flips, row major (voxel_art Tilesets.subtile). Past the tile
+ * data: magenta with idx 0. */
+void rg_subtile_px(RgPair *p, uint16_t tile, uint8_t pal, uint16_t c[64], uint8_t idx[64]);
+
+/* G4: BGR555 channel -> 8 bit the way voxel_art does (c5*255//31), for the specs' hex colour constants. */
+static inline uint8_t rg_c5_to_8(unsigned c5) { return (uint8_t)(c5 * 255u / 31u); }
+
 #endif

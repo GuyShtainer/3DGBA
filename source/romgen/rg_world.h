@@ -118,6 +118,9 @@ uint8_t  rg_behaviour(const RgLayout *L, int x, int y);
 bool     rg_touches_walkable(const RgLayout *L, int x, int y);
 bool     rg_has_warp(const RgLayout *L, int x, int y);
 bool     rg_has_sign(const RgLayout *L, int x, int y);
+/* G3: the 8 raw u16 entries of a metatile (lower layer 0..3, upper 4..7), from the primary tileset for
+ * ids < 512 else the secondary. False when out of range (upstream `entries` returning None, props:80). */
+bool rg_metatile_entries(const RgLayout *L, uint16_t metatile, uint16_t out[8]);
 /* The tileset address a metatile id is drawn from (cells post_key). */
 uint32_t rg_tileset_addr_of(const RgLayout *L, uint16_t metatile);
 

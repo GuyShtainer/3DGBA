@@ -254,3 +254,95 @@ static unsigned feature(RgPair *p, uint16_t metatile, unsigned which)
 bool rg_foliage_ge_half(RgPair *p, uint16_t metatile) { return feature(p, metatile, 0) == 2; }
 bool rg_treads(RgPair *p, uint16_t metatile) { return feature(p, metatile, 1) == 2; }
 bool rg_covers(RgPair *p, uint16_t metatile) { return feature(p, metatile, 2) == 2; }
+
+/* ---- S2.1: full-pixel layers and subtiles (SPEC-S2 section 1.1) ---- */
+
+#define RG_MAGENTA_C5 ((uint16_t)(31u | (31u << 10)))   /* (255,0,255) = BGR555 (31,0,31) */
+
+/* voxel_art Tilesets.subtile: the colour is read from palette (pal < 6 primary, else secondary). */
+static void subtile_px(const RgPair *p, uint16_t tile, unsigned pal, uint16_t c[64], uint8_t idx[64])
+{
+    unsigned tw = tile < RG_NUM_PRIMARY ? 0u : 1u;
+    unsigned local = tile - tw * RG_NUM_PRIMARY;
+    const RgTileset *pt = p->ts[pal < 6u ? 0u : 1u];
+    const uint8_t *src;
+    unsigned x, y;
+
+    if (p->tiles[tw] == NULL || local * 32u + 32u > p->tilesLen[tw]) {
+        for (x = 0; x < 64; x++) {
+            c[x] = RG_MAGENTA_C5;
+            idx[x] = 0;
+        }
+        return;
+    }
+    src = p->tiles[tw] + local * 32u;
+    for (y = 0; y < 8; y++) {
+        for (x = 0; x < 8; x++) {
+            uint8_t packed = src[y * 4u + x / 2u];
+            unsigned i = (x & 1u) ? (unsigned)(packed >> 4) : (unsigned)(packed & 0xFu);
+
+            idx[y * 8u + x] = (uint8_t)i;
+            c[y * 8u + x] = pt->palettes != NULL ? (uint16_t)(rg_rd16(pt->palettes + 32u * pal + 2u * i) & 0x7FFFu)
+                                                 : RG_MAGENTA_C5;
+        }
+    }
+}
+
+void rg_subtile_px(RgPair *p, uint16_t tile, uint8_t pal, uint16_t c[64], uint8_t idx[64])
+{
+    unsigned i;
+
+    if (p == NULL || pal > 15u) {
+        for (i = 0; i < 64; i++) {
+            c[i] = RG_MAGENTA_C5;
+            idx[i] = 0;
+        }
+        return;
+    }
+    subtile_px(p, (uint16_t)(tile & 0x3FFu), pal, c, idx);
+}
+
+void rg_cell_px(RgPair *p, uint16_t metatile, int layer, RgCellPx *out)
+{
+    unsigned which = metatile < RG_NUM_PRIMARY ? 0u : 1u;
+    unsigned quad, i;
+    const RgTileset *t;
+    unsigned index;
+
+    memset(out, 0, sizeof(*out));
+    if (p == NULL || (layer != 0 && layer != 1))
+        return;
+    t = p->ts[which];
+    index = metatile - which * RG_NUM_PRIMARY;
+    if (t->metatiles == NULL || index >= t->metatileCount) {
+        /* upstream entries() would hand back a short list: the lower layer paints nothing real, so it is magenta */
+        if (layer == 0) {
+            for (i = 0; i < 16; i++) {
+                unsigned x;
+                out->drawn[i] = 0xFFFFu;
+                for (x = 0; x < 16; x++)
+                    out->c[i][x] = RG_MAGENTA_C5;
+            }
+        }
+        return;
+    }
+    for (quad = 0; quad < 4; quad++) {
+        uint16_t entry = rg_rd16(t->metatiles + 16u * index + 2u * (unsigned)(layer * 4 + (int)quad));
+        uint16_t sc[64];
+        uint8_t si[64];
+        unsigned x, y, ox = (quad & 1u) * 8u, oy = (quad >> 1) * 8u;
+
+        subtile_px(p, (uint16_t)(entry & 0x3FFu), (entry >> 12) & 0xFu, sc, si);
+        for (y = 0; y < 8; y++) {
+            for (x = 0; x < 8; x++) {
+                unsigned sx = (entry & 0x400u) ? 7u - x : x;
+                unsigned sy = (entry & 0x800u) ? 7u - y : y;
+
+                out->c[oy + y][ox + x] = sc[sy * 8u + sx];
+                out->idx[oy + y][ox + x] = si[sy * 8u + sx];
+                if (layer == 0 || si[sy * 8u + sx] != 0)
+                    out->drawn[oy + y] |= (uint16_t)(1u << (ox + x));
+            }
+        }
+    }
+}

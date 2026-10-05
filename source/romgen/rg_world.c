@@ -644,3 +644,20 @@ uint32_t rg_tileset_addr_of(const RgLayout *L, uint16_t metatile)
 {
     return metatile < RG_NUM_PRIMARY ? L->ts[0]->addr : L->ts[1]->addr;
 }
+
+bool rg_metatile_entries(const RgLayout *L, uint16_t metatile, uint16_t out[8])
+{
+    unsigned which = metatile < RG_NUM_PRIMARY ? 0u : 1u;
+    const RgTileset *t;
+    unsigned index, k;
+
+    if (L == NULL || out == NULL || metatile == RG_NONE)
+        return false;
+    t = L->ts[which];
+    index = metatile - which * RG_NUM_PRIMARY;
+    if (t == NULL || t->metatiles == NULL || index >= t->metatileCount)
+        return false;
+    for (k = 0; k < 8; k++)
+        out[k] = rg_rd16(t->metatiles + 16u * index + 2u * k);
+    return true;
+}
