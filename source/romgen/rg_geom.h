@@ -66,8 +66,8 @@ void rg_mesh_poly(RgMesh *m, const RgVtx *pts, unsigned n, double shade, uint16_
 
 /* ---- kernel (vb:296-394) ---- */
 
-/* A tuple of up to 5 coordinates; nc says how many are live. */
-typedef struct RgPt { double c[5]; } RgPt;
+/* A tuple of up to 7 coordinates (5 live + u, v appended by tile pieces); nc says how many are live. */
+typedef struct RgPt { double c[7]; } RgPt;
 #define RG_CLIP_MAX 32u
 /* Sutherland-Hodgman against axis = val, keeping >= (keep) or <= (!keep), EPS inclusive. `out` holds >= 2n.
  * Every live coordinate is interpolated. Returns the output count. */
@@ -119,6 +119,9 @@ typedef void (*RgPieceFn)(void *ctx, const RgPt *pts, unsigned n);   /* pts.c = 
 /* vb:357-394: poly2d (s,t) split into pieces that each sit in one tile; each piece has (u,v) appended and is handed
  * to cb in upstream order. False when the tile is degenerate or the span is absurd (> 1e6 tiles). */
 bool rg_tile_pieces(const RgPt *poly2d, unsigned n, const RgTile *tile, RgPieceFn cb, void *ctx);
+/* The same with nc live coordinates per point (s, t, then nc-2 more that are interpolated by every cut, as upstream's
+ * tuples): each piece comes back with u, v appended at c[nc], c[nc+1]. nc in 2..5. */
+bool rg_tile_pieces_x(const RgPt *poly2d, unsigned n, unsigned nc, const RgTile *tile, RgPieceFn cb, void *ctx);
 
 /* vb:614-645: a planar convex face (pts, 3D) textured by a Strip. sdir/tdir are the unit directions. */
 void rg_strip_face(RgMesh *m, const double (*pts)[3], unsigned n, const double origin[3], const double sdir[3],
@@ -128,7 +131,8 @@ void rg_unit3(const double v[3], double out[3]);       /* vb:648 _unit */
 /* ---- parts ---- */
 
 typedef enum { RG_P_PRISM, RG_P_HIPROOF, RG_P_FRUSTUM, RG_P_VAULT, RG_P_WALLS, RG_P_LIFTED, RG_P_CARD,
-               RG_P_FACET, RG_P_PLAINWALL, RG_P_DECAL, RG_P_CYLINDER, RG_P_FOUNTAIN_TOP, RG_P_JET } RgPartKind;
+               RG_P_FACET, RG_P_PLAINWALL, RG_P_DECAL, RG_P_CYLINDER, RG_P_FOUNTAIN_TOP, RG_P_JET,
+               RG_P_RELIEF, RG_P_MOUND } RgPartKind;
 
 typedef enum { RG_EM_NONE = 0, RG_EM_PROJ, RG_EM_STRIP, RG_EM_TILE } RgEdgeKind;
 typedef struct RgEdgeMat { RgEdgeKind kind; RgProj proj; RgStrip strip; RgTile tile; } RgEdgeMat;
@@ -188,6 +192,41 @@ typedef struct RgCylinder {      /* vb:1474 */
 typedef struct RgFountainTop { double poly[RG_FTOP_PTS][2]; unsigned nPoly; double h; } RgFountainTop;
 typedef struct RgJet { double x0, x1, z, y0, y1; } RgJet;
 
+/* vb:877-1125 Relief: a solid read column by column off its own drawing (hedges, railings; interiors use the
+ * back/foot/solid/against options too). All pointers are borrowed from the caller and outlive the emit. */
+typedef struct RgRelief {
+    const RgImage *art;
+    double height;
+    RgTile side;
+    int hull, bridge;
+    bool hasFoot;  int foot;
+    bool solid;
+    bool hasBack;  double back;
+    bool hasTopTile; RgTile topTile;
+    bool against;
+    bool hasSeam;  int seamRows;
+    const uint8_t *openS, *openN;            /* art->w flags: pixel columns in open_s / open_n (NULL = none) */
+    bool hasFlank; RgTile flank;
+    const uint8_t *seamW, *seamE;            /* seam_x: flags by cell row (NULL = empty set) */
+    unsigned nSeamRows;
+} RgRelief;
+
+/* vb:1168-1383 Mound: a rounded thing lifted pixel by pixel off its drawing. `full` is the 3-band texture
+ * (Mound.with_ring); the body is its first `rows` rows. ring = RGB888 colours of the foam. */
+#define RG_MOUND_RING 4
+typedef struct RgMound {
+    const RgImage *full;
+    double rise;
+    int step, backSteps;
+    int rows;
+    int ring[RG_MOUND_RING][3];
+    unsigned nRing;
+} RgMound;
+
+/* Mound.with_ring (gen:127): three bands of the drawing's size: the drawing without its ring, the ring alone and the
+ * rock grown past its outline. `ring` as RgMound. False on no memory. */
+bool rg_mound_with_ring(const RgImage *art, const int (*ring)[3], unsigned nRing, RgImage *out);
+
 #define RG_NAME_LEN 48
 typedef struct RgPart {
     RgPartKind kind;
@@ -206,8 +245,14 @@ typedef struct RgPart {
         RgCylinder cyl;
         RgFountainTop ftop;
         RgJet jet;
+        RgRelief relief;
+        RgMound mound;
     } u;
 } RgPart;
+
+/* rg_grelief.c */
+bool rg_emit_relief(const RgRelief *r, const char *name, RgMesh *m);
+bool rg_emit_mound(const RgMound *mo, const char *name, RgMesh *m);
 
 /* Appends the part's triangles in upstream emission order. False for an invalid part (a prism that is not
  * counter-clockwise, a degenerate tile) or when the mesh ran out of memory. */

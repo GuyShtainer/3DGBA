@@ -739,6 +739,50 @@ static const RgExact kGymExact[4] = {
 static const RgExact kDevonExact[2] = {{0, 8, 160, 128, false}, {48, 128, 112, 144, false}};
 static const RgExact kFountainExact[1] = {{0, 0, 48, 48, false}};
 
+/* sp:464-479 */
+bool rg_stone_block(const RgSpec *s, int a0, int a1, RgPartList *out)
+{
+    static const double roof[3][2] = {{7, 39}, {7, 11}, {0, 7}};
+    static const double cornice[2] = {39, 48};
+
+    (void)a0; (void)a1;
+    return rg_flat_block(out, s->rect[2] * 16.0, s->rect[3] * 16.0, roof, cornice, 48, NULL);
+}
+
+bool rg_olive_block(const RgSpec *s, int a0, int a1, RgPartList *out)
+{
+    static const double roof[3][2] = {{8, 40}, {8, 16}, {0, 8}};
+    static const double cornice[2] = {40, 48};
+    double width = s->rect[2] * 16.0, unit[5];
+
+    (void)a1;
+    unit[0] = width - 24; unit[1] = width - 4; unit[2] = 1; unit[3] = 16; unit[4] = 31;
+    return rg_flat_block(out, width, s->rect[3] * 16.0, roof, cornice, 48, a0 ? unit : NULL);
+}
+
+void rg_flat_block_exact(RgExact *out, int width, int height, int firstRoofRow)
+{
+    out->x0 = 0; out->y0 = (int16_t)firstRoofRow; out->x1 = (int16_t)width; out->y1 = (int16_t)height;
+    out->behind = false;
+}
+
+/* The expanders' configs (sp:1124-1255). */
+static const uint16_t kHedgeTiles[15] = {0x23c, 0x23d, 0x23e, 0x244, 0x245, 0x246, 0x24c, 0x24d, 0x24e,
+                                         0x254, 0x255, 0x256, 0x264, 0x265, 0x266};
+static const uint16_t kRailTiles[28] = {0x2A7, 0x2FC, 0x318, 0x319, 0x31A, 0x315, 0x31D, 0x320, 0x321,
+                                        0x32C, 0x32D, 0x2BE, 0x2BF, 0x2CD, 0x352, 0x2E9,
+                                        0x2B7, 0x2C6, 0x2C7, 0x2D5, 0x2D7, 0x2DC, 0x2DE, 0x2DF,
+                                        0x2E6, 0x2E7, 0x2EC, 0x31B};
+#define TS_PETALBURG 0x083DF71Cu
+#define TS_RUSTBORO 0x083DF734u
+static const RgComponentsCfg kHedge = {TS_PETALBURG, kHedgeTiles, 15, 11, 0, 0, 0, false, -1};
+static const RgComponentsCfg kRailing = {TS_RUSTBORO, kRailTiles, 28, 12, 12, 3, 4, true, 0x2A7};
+static const RgKitCfg kStoneKit = {0x224, 0x21c, {0x225, 0}, {0x226, 0}, 1, 1, 7};
+static const RgKitCfg kOliveKit = {0x220, 0x240, {0x221, 0x222}, {0x223, 0x23F}, 2, 2, 8};
+static const RgPropsCfg kSeaRock = {RG_OBJ_SEA_ROCK, 1.0, 2, {{222, 230, 238}}, 1};
+static const RgPropsCfg kSandBoulder = {RG_OBJ_SAND_BOULDER, 1.0, 2, {{0, 0, 0}}, 0};
+static const RgPropsCfg kSeaStack = {RG_OBJ_SEA_STACK, 1.6, 4, {{131, 131, 139}}, 1};
+
 /* Layout ids and blockdata fingerprints (SPEC-S2 section 3.1): 1 Petalburg, 3 Mauville, 4 Rustboro,
  * 10 Littleroot, 11 Oldale, 20 Route 104. The fingerprints are of the user's BPEE ROM (host test pins them). */
 #define L_PETALBURG 1, 0xCA6DFAA0u
@@ -749,33 +793,46 @@ static const RgExact kFountainExact[1] = {{0, 0, 48, 48, false}};
 #define L_ROUTE104 20, 0x157E3492u
 #define RUST_GROUND {0x2BB, 0x2C3, GRASS}, 3
 
-/* The direct rows of sp:1092-1375, in upstream order (components / kit / props / interior rows arrive S2.5-S2.6). */
+/* The rows of sp:1092-1375 in upstream order (interior rows arrive S2.6). Components / kit / props rows are
+ * expanded by rg_bexpand.c; their rect, exact and parts are per expanded model. */
 const RgSpec rg_specs[] = {
     {"littleroot_house_w", RG_SPEC_DIRECT, L_LITTLEROOT, {2, 4, 5, 5}, {0, 0}, {GRASS}, 1, kHouseExact, 4,
-     rg_littleroot_house, 8, 0},
+     rg_littleroot_house, 8, 0, NULL},
     {"littleroot_house_e", RG_SPEC_DIRECT, L_LITTLEROOT, {13, 4, 5, 5}, {0, 0}, {GRASS}, 1, kHouseExact, 4,
-     rg_littleroot_house, 64, 0},
+     rg_littleroot_house, 64, 0, NULL},
     {"littleroot_lab", RG_SPEC_DIRECT, L_LITTLEROOT, {3, 12, 7, 5}, {0, 0}, {GRASS}, 1, kLabExact, 3,
-     rg_littleroot_lab, 0, 0},
+     rg_littleroot_lab, 0, 0, NULL},
     {"pokemon_center", RG_SPEC_DIRECT, L_PETALBURG, {19, 13, 4, 4}, {1, 4}, {GRASS}, 1, kCrownExact, 4,
-     rg_pokemon_center, 0, 0},
+     rg_pokemon_center, 0, 0, NULL},
     {"poke_mart", RG_SPEC_DIRECT, L_MAUVILLE, {22, 11, 4, 4}, {1, 4}, {GRASS}, 1, kCenterExact, 3,
-     rg_poke_mart, 0, 0},
+     rg_poke_mart, 0, 0, NULL},
     {"oldale_house", RG_SPEC_DIRECT, L_OLDALE, {4, 4, 4, 4}, {0, 0}, {GRASS}, 1, kOldaleExact, 2,
-     rg_oldale_house, 0, 0},
+     rg_oldale_house, 0, 0, NULL},
     {"briney_house", RG_SPEC_DIRECT, L_ROUTE104, {15, 47, 5, 4}, {0, 0}, {GRASS}, 1, kBrineyExact, 3,
-     rg_briney_house, 0, 0},
+     rg_briney_house, 0, 0, NULL},
     {"flower_shop", RG_SPEC_DIRECT, L_ROUTE104, {3, 15, 6, 4}, {0, 0}, {GRASS, 0x206, 0x207}, 3, kFlowerExact, 2,
-     rg_flower_shop, 0, 0},
+     rg_flower_shop, 0, 0, NULL},
     {"kit_house_4", RG_SPEC_DIRECT, L_PETALBURG, {9, 16, 4, 4}, {0, 0}, {GRASS}, 1, kKit4Exact, 2,
-     rg_kit_house, 64, 0},
+     rg_kit_house, 64, 0, NULL},
     {"kit_house_5", RG_SPEC_DIRECT, L_PETALBURG, {5, 2, 5, 4}, {0, 0}, {GRASS}, 1, kKit5Exact, 2,
-     rg_kit_house, 80, 0},
-    {"gym", RG_SPEC_DIRECT, L_PETALBURG, {12, 4, 6, 5}, {0, 4}, {GRASS}, 1, kGymExact, 4, rg_gym, 0, 0},
-    {"gym_rustboro", RG_SPEC_DIRECT, L_RUSTBORO, {24, 15, 6, 5}, {0, 0}, RUST_GROUND, kGymExact, 4, rg_gym, 0, 0},
+     rg_kit_house, 80, 0, NULL},
+    {"gym", RG_SPEC_DIRECT, L_PETALBURG, {12, 4, 6, 5}, {0, 4}, {GRASS}, 1, kGymExact, 4, rg_gym, 0, 0, NULL},
+    /* sp:1118 hedges: every connected run of the Petalburg-tileset layouts */
+    {"hedge", RG_SPEC_COMPONENTS, 0, 0, {0, 0, 0, 0}, {0, 0}, {GRASS}, 1, NULL, 0, NULL, 0, 0, &kHedge},
+    /* sp:1142, 1153 Rustboro's kit blocks, found by corner / top / end / foot */
+    {"rustboro_stone", RG_SPEC_KIT, L_RUSTBORO, {0, 0, 0, 0}, {0, 0}, RUST_GROUND, NULL, 0, rg_stone_block, 0, 0,
+     &kStoneKit},
+    {"rustboro_olive", RG_SPEC_KIT, L_RUSTBORO, {0, 0, 0, 0}, {0, 0}, RUST_GROUND, NULL, 0, rg_olive_block, 0, 0,
+     &kOliveKit},
+    {"gym_rustboro", RG_SPEC_DIRECT, L_RUSTBORO, {24, 15, 6, 5}, {0, 0}, RUST_GROUND, kGymExact, 4, rg_gym, 0, 0,
+     NULL},
+    {"railing", RG_SPEC_COMPONENTS, 0, 0, {0, 0, 0, 0}, {0, 0}, {0x2BB, 0x2C3, GRASS}, 3, NULL, 0, NULL, 0, 0, &kRailing},
+    {"sea_rock", RG_SPEC_PROPS, 0, 0, {0, 0, 0, 0}, {0, 0}, {0x170}, 1, NULL, 0, NULL, 0, 0, &kSeaRock},
+    {"sand_boulder", RG_SPEC_PROPS, 0, 0, {0, 0, 0, 0}, {0, 0}, {0x124}, 1, NULL, 0, NULL, 0, 0, &kSandBoulder},
+    {"sea_stack", RG_SPEC_PROPS, 0, 0, {0, 0, 0, 0}, {0, 0}, {0x170}, 1, NULL, 0, NULL, 0, 0, &kSeaStack},
     {"devon_corporation", RG_SPEC_DIRECT, L_RUSTBORO, {7, 7, 10, 9}, {0, 0}, RUST_GROUND, kDevonExact, 2,
-     rg_devon, 0, 0},
+     rg_devon, 0, 0, NULL},
     {"rustboro_fountain", RG_SPEC_DIRECT, L_RUSTBORO, {27, 38, 3, 3}, {0, 0}, RUST_GROUND, kFountainExact, 1,
-     rg_fountain, 0, 0},
+     rg_fountain, 0, 0, NULL},
 };
 const unsigned rg_spec_count = sizeof(rg_specs) / sizeof(rg_specs[0]);

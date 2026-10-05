@@ -392,12 +392,17 @@ void rg_band_z1(RgBand *b, double z1)
 
 bool rg_tile_pieces(const RgPt *poly2d, unsigned n, const RgTile *tile, RgPieceFn cb, void *ctx)
 {
+    return rg_tile_pieces_x(poly2d, n, 2, tile, cb, ctx);
+}
+
+bool rg_tile_pieces_x(const RgPt *poly2d, unsigned n, unsigned nc, const RgTile *tile, RgPieceFn cb, void *ctx)
+{
     double u0 = tile->rect[0], v0 = tile->rect[1], pw = tile->rect[2] - u0, ph = tile->rect[3] - v0;
     double smin, smax, tmin, tmax, fi0, fi1, fj0, fj1;
     long i, j, i0, i1, j0, j1;
     unsigned k;
 
-    if (n < 3 || n > 8 || !(pw > 0.0) || !(ph > 0.0))
+    if (n < 3 || n > 8 || nc < 2 || nc > 5 || !(pw > 0.0) || !(ph > 0.0))
         return false;
     smin = smax = poly2d[0].c[0];
     tmin = tmax = poly2d[0].c[1];
@@ -423,17 +428,17 @@ bool rg_tile_pieces(const RgPt *poly2d, unsigned n, const RgTile *tile, RgPieceF
             unsigned np;
 
             memcpy(a, poly2d, n * sizeof(RgPt));
-            np = rg_clip(a, n, 2, 0, sa, true, b);
+            np = rg_clip(a, n, nc, 0, sa, true, b);
             if (np >= 3)
-                np = rg_clip(b, np, 2, 0, sb, false, a);
+                np = rg_clip(b, np, nc, 0, sb, false, a);
             else
                 memcpy(a, b, np * sizeof(RgPt));
             if (np >= 3)
-                np = rg_clip(a, np, 2, 1, ta, true, b);
+                np = rg_clip(a, np, nc, 1, ta, true, b);
             else
                 memcpy(b, a, np * sizeof(RgPt));
             if (np >= 3)
-                np = rg_clip(b, np, 2, 1, tb, false, a);
+                np = rg_clip(b, np, nc, 1, tb, false, a);
             else
                 memcpy(a, b, np * sizeof(RgPt));
             if (np < 3)
@@ -444,10 +449,9 @@ bool rg_tile_pieces(const RgPt *poly2d, unsigned n, const RgTile *tile, RgPieceF
                 if (tile->flip)
                     fs = pw - fs;
                 memset(&res[k], 0, sizeof(RgPt));
-                res[k].c[0] = a[k].c[0];
-                res[k].c[1] = a[k].c[1];
-                res[k].c[2] = u0 + fs;
-                res[k].c[3] = v0 + (a[k].c[1] - ta);
+                memcpy(res[k].c, a[k].c, nc * sizeof(double));
+                res[k].c[nc] = u0 + fs;
+                res[k].c[nc + 1] = v0 + (a[k].c[1] - ta);
             }
             cb(ctx, res, np);
         }
@@ -558,7 +562,7 @@ static unsigned u_pieces(const RgStrip *s, double s0, double s1, UPiece *out)
 void rg_strip_face(RgMesh *m, const double (*pts)[3], unsigned n, const double origin[3], const double sdir[3],
                    const double tdir[3], const RgStrip *strip, double shade, const char *tag)
 {
-    RgPt loc[8];
+    RgPt loc[8] = {{{0}}};
     Seg segs[SEG_MAX];
     UPiece ups[UP_MAX];
     double dens, tmax, smin, smax, fixedLen;
@@ -1373,6 +1377,8 @@ bool rg_part_emit(const RgPart *p, RgMesh *m)
     case RG_P_CYLINDER: return emit_cylinder(&p->u.cyl, p->name, m);
     case RG_P_FOUNTAIN_TOP: return emit_fountain_top(&p->u.ftop, m);
     case RG_P_JET: return emit_jet(&p->u.jet, p->name, m);
+    case RG_P_RELIEF: return rg_emit_relief(&p->u.relief, p->name, m);
+    case RG_P_MOUND: return rg_emit_mound(&p->u.mound, p->name, m);
     case RG_P_LIFTED: {
         RgMesh inner;
         unsigned i;

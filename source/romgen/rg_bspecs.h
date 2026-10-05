@@ -12,6 +12,32 @@
 
 typedef enum { RG_SPEC_DIRECT, RG_SPEC_COMPONENTS, RG_SPEC_KIT, RG_SPEC_PROPS, RG_SPEC_INTERIOR } RgSpecKind;
 
+/* S2.5 expander configs (the dict members of sp:1092-1375 rows with "components" / "kit" / "props"). */
+typedef struct RgComponentsCfg {
+    uint32_t secondaryAddr;      /* the secondary tileset's GBA address (gTileset_Petalburg, gTileset_Rustboro) */
+    const uint16_t *tiles;
+    unsigned nTiles;
+    int height, hull, bridge, block;   /* block 0 = no blocks */
+    bool upper;
+    int flank;                   /* a metatile, -1 = none */
+} RgComponentsCfg;
+
+typedef struct RgKitCfg {
+    uint16_t corner, foot;
+    uint16_t top[2], end[2];
+    uint8_t nTop, nEnd;
+    uint8_t firstRoofRow;        /* flat_block_exact's third argument (7 stone, 8 olive) */
+} RgKitCfg;
+
+typedef enum { RG_OBJ_SEA_ROCK, RG_OBJ_SAND_BOULDER, RG_OBJ_SEA_STACK, RG_OBJ_COUNT } RgPropObject;
+typedef struct RgPropsCfg {
+    RgPropObject object;
+    double rise;
+    int step;
+    int ring[1][3];
+    unsigned nRing;
+} RgPropsCfg;
+
 typedef struct RgSpec {
     const char *name;
     RgSpecKind kind;
@@ -25,6 +51,7 @@ typedef struct RgSpec {
     uint8_t nExact;
     bool (*parts)(const struct RgSpec *s, int arg0, int arg1, RgPartList *out);   /* the builder */
     int16_t arg0, arg1;          /* the lambda's arguments */
+    const void *ext;             /* RgComponentsCfg / RgKitCfg / RgPropsCfg for the expanding kinds, else NULL */
 } RgSpec;
 
 extern const RgSpec rg_specs[];
@@ -44,6 +71,12 @@ bool rg_kit_house(const RgSpec *s, int width, int a1, RgPartList *out);         
 bool rg_gym(const RgSpec *s, int a0, int a1, RgPartList *out);                  /* sp:367 */
 bool rg_devon(const RgSpec *s, int a0, int a1, RgPartList *out);                /* sp:507 */
 bool rg_fountain(const RgSpec *s, int a0, int a1, RgPartList *out);             /* sp:534 */
+/* sp:464, 471: a kit row's block. width/height are rect*16; arg0 = the olive block's ventilation-unit flag. */
+bool rg_stone_block(const RgSpec *s, int a0, int a1, RgPartList *out);
+bool rg_olive_block(const RgSpec *s, int a0, int a1, RgPartList *out);
+/* sp:479: [(0, first_roof_row, width, height)]. */
+void rg_flat_block_exact(RgExact *out, int width, int height, int firstRoofRow);
+
 /* sp:482 flat_part. roof = {fixed, repeat, tail} (each a row pair), cornice, brick and rim = art rects. */
 bool rg_flat_part(RgPartList *out, const char *name, double x0, double x1, double front, double back,
                   const double roof[3][2], const double cornice[2], double facade_top, const double brick[4],

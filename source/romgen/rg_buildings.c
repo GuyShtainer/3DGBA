@@ -4,6 +4,7 @@
  * placement_patches, pack_atlas, texel_offset, export), MIT License - see source/voxel/NOTICE.md.
  * Portions Copyright (c) Dust Zallax, MIT. */
 #include "rg_buildings.h"
+#include "rg_bexpand.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -25,9 +26,9 @@ uint32_t rg_layout_fnv(const RgLayout *L)
     return h;
 }
 
-typedef struct PairCache { const RgWorld *w; RgPair *p; int idx; } PairCache;
+typedef RgPairCache PairCache;
 
-static RgPair *pc_get(PairCache *c, uint16_t idx)
+RgPair *rg_pc_get(RgPairCache *c, uint16_t idx)
 {
     if (c->p != NULL && c->idx == (int)idx)
         return c->p;
@@ -38,7 +39,7 @@ static RgPair *pc_get(PairCache *c, uint16_t idx)
     return c->p;
 }
 
-static void pc_close(PairCache *c)
+void rg_pc_close(RgPairCache *c)
 {
     if (c->p != NULL)
         rg_pair_close(c->p);
@@ -46,20 +47,52 @@ static void pc_close(PairCache *c)
     c->idx = -1;
 }
 
+#define pc_get rg_pc_get
+#define pc_close rg_pc_close
+
 /* ---- models -------------------------------------------------------------------------------- */
+
+void rg_model_release(RgBuildModel *m)
+{
+    rg_img_free(&m->art);
+    rg_img_free(&m->drawing);
+    rg_mesh_free(&m->mesh);
+    free(m->owned); free(m->own); free(m->xSpec);
+    free(m->south); free(m->north); free(m->east); free(m->west);
+    free(m->repeat); free(m->at); free(m->quads);
+    memset(m, 0, sizeof(*m));
+}
 
 void rg_models_free(RgBuildModels *ms)
 {
     unsigned i;
 
-    for (i = 0; i < ms->n; i++) {
-        rg_img_free(&ms->m[i].art);
-        rg_mesh_free(&ms->m[i].mesh);
-        free(ms->m[i].owned);
-        free(ms->m[i].own);
-    }
+    for (i = 0; i < ms->n; i++)
+        rg_model_release(&ms->m[i]);
     free(ms->m);
     memset(ms, 0, sizeof(*ms));
+}
+
+RgBuildModel *rg_models_push(RgBuildModels *ms)
+{
+    if (ms->n == ms->cap) {
+        unsigned cap = ms->cap ? ms->cap * 2u : 64u;
+        RgBuildModel *nm = (RgBuildModel *)realloc(ms->m, (size_t)cap * sizeof(RgBuildModel));
+
+        if (nm == NULL)
+            return NULL;
+        ms->m = nm;
+        ms->cap = cap;
+    }
+    memset(&ms->m[ms->n], 0, sizeof(RgBuildModel));
+    return &ms->m[ms->n++];
+}
+
+static void note_skipped(RgBuildModels *out, const RgSpec *s)
+{
+    if (out->skipped < RG_MAX_SKIPPED)
+        out->skippedNames[out->skipped] = s->name;
+    out->skipped++;
 }
 
 RgErr rg_build_models(const RgWorld *w, const RgSpec *specs, unsigned nSpecs, RgBuildModels *out)
@@ -70,56 +103,85 @@ RgErr rg_build_models(const RgWorld *w, const RgSpec *specs, unsigned nSpecs, Rg
 
     memset(out, 0, sizeof(*out));
     pc.w = w; pc.p = NULL; pc.idx = -1;
-    out->m = (RgBuildModel *)calloc(nSpecs ? nSpecs : 1u, sizeof(RgBuildModel));
-    if (out->m == NULL)
-        return RG_ERR_NOMEM;
-    for (i = 0; i < nSpecs; i++) {
+    /* phase 1 (gen:877-887): every spec expanded, in table order */
+    for (i = 0; i < nSpecs && err == RG_OK; i++) {
         const RgSpec *s = &specs[i];
         const RgLayout *L;
-        RgBuildModel *m;
-        RgPartList parts;
-        RgPair *pair;
-        bool ok;
 
-        if (s->kind != RG_SPEC_DIRECT) {              /* components / kit / props / interior: S2.5-S2.6 */
+        switch (s->kind) {
+        case RG_SPEC_COMPONENTS:
+            err = rg_expand_components(w, s, out);
+            break;
+        case RG_SPEC_KIT:
+            err = rg_expand_kit(w, s, out);
+            break;
+        case RG_SPEC_PROPS:
+            err = rg_expand_props(w, s, out);
+            break;
+        case RG_SPEC_DIRECT: {
+            RgBuildModel *m;
+
+            if (s->layoutId == 0 || s->layoutId > w->layoutCount) {
+                note_skipped(out, s);
+                break;
+            }
+            L = &w->layouts[s->layoutId - 1];
+            if (!L->present || rg_layout_fnv(L) != s->layoutFnv) {
+                note_skipped(out, s);
+                break;
+            }
+            m = rg_models_push(out);
+            if (m == NULL) {
+                err = RG_ERR_NOMEM;
+                break;
+            }
+            m->spec = s;
+            m->layout = L;
+            m->w = (uint8_t)s->rect[2];
+            m->h = (uint8_t)s->rect[3];
+            m->groundMetatile = s->ground[0];
+            rg_mesh_init(&m->mesh);
+            break;
+        }
+        default:                                       /* interior: S2.6 */
             err = RG_ERR_BUILDINGS;
             break;
         }
-        if (s->layoutId == 0 || s->layoutId > w->layoutCount) {
-            if (out->skipped < RG_MAX_SKIPPED) out->skippedNames[out->skipped] = s->name;
-            out->skipped++;
+    }
+    /* phase 2 (gen:888-939): art and mesh of each model */
+    for (i = 0; i < out->n && err == RG_OK; i++) {
+        RgBuildModel *m = &out->m[i];
+        const RgSpec *s = m->spec;
+        RgPair *pair;
+
+        if (m->prop != NULL) {
+            err = rg_build_prop(m);
             continue;
         }
-        L = &w->layouts[s->layoutId - 1];
-        if (!L->present || rg_layout_fnv(L) != s->layoutFnv) {
-            if (out->skipped < RG_MAX_SKIPPED) out->skippedNames[out->skipped] = s->name;
-            out->skipped++;
-            continue;
-        }
-        pair = pc_get(&pc, L->pairIndex);
+        pair = pc_get(&pc, m->layout->pairIndex);
         if (pair == NULL) {
             err = RG_ERR_NOMEM;
             break;
         }
-        m = &out->m[out->n];
-        m->spec = s;
-        m->layout = L;
-        m->w = (uint8_t)s->rect[2];
-        m->h = (uint8_t)s->rect[3];
-        m->groundMetatile = s->ground[0];
-        rg_mesh_init(&m->mesh);
-        out->n++;                                      /* from here rg_models_free owns it */
-        if (!rg_building_art(w, pair, L, s->rect[0], s->rect[1], s->rect[2], s->rect[3], s->ground, s->nGround, NULL,
-                             false, &m->art)) {
-            err = RG_ERR_BUILDINGS;
-            break;
+        if (m->comp != NULL) {
+            err = rg_build_component(w, pair, m);
+            out->seamClash += m->seamClash;
+            continue;
         }
-        rg_parts_init(&parts);
-        ok = s->parts(s, s->arg0, s->arg1, &parts) && rg_parts_emit(&parts, &m->mesh);
-        rg_parts_free(&parts);
-        if (!ok || m->mesh.failed) {
-            err = RG_ERR_BUILDINGS;
-            break;
+        {
+            RgPartList parts;
+            bool ok;
+
+            if (!rg_building_art(w, pair, m->layout, s->rect[0], s->rect[1], s->rect[2], s->rect[3], s->ground,
+                                 s->nGround, NULL, false, &m->art)) {
+                err = RG_ERR_BUILDINGS;
+                break;
+            }
+            rg_parts_init(&parts);
+            ok = s->parts(s, s->arg0, s->arg1, &parts) && rg_parts_emit(&parts, &m->mesh);
+            rg_parts_free(&parts);
+            if (!ok || m->mesh.failed)
+                err = RG_ERR_BUILDINGS;
         }
     }
     pc_close(&pc);
@@ -132,7 +194,7 @@ bool rg_model_gate(const RgBuildModel *m, RgOrthoResult *ortho, unsigned *densit
 {
     const RgSpec *s = m->spec;
 
-    if (!rg_ortho_check(&m->mesh, &m->art, s->exact, s->nExact, NULL, ortho))
+    if (!rg_ortho_check(&m->mesh, &m->art, s->exact, s->nExact, m->hasDrawing ? &m->drawing : NULL, ortho))
         return false;
     *densityBad = rg_density_check(&m->mesh, &m->art, NULL, 0);
     return true;
@@ -377,42 +439,196 @@ static RgErr push_placement(RgPlacementList *l, const RgPlacement *pl)
     return RG_OK;
 }
 
+typedef struct FindPlan {
+    const RgBuildModel *m;
+    uint16_t *tmpl;                     /* the reference rect's metatiles, row major */
+    unsigned (*core)[2];                /* owned cells of the matched rows, sorted (j, i) */
+    unsigned nCore;
+    bool upper;                         /* an upper-layer relief: every owned cell is "odd" and patched whatever stands */
+} FindPlan;
+
+static int cmp_pos(const void *a, const void *b)
+{
+    const uint16_t *x = (const uint16_t *)a, *y = (const uint16_t *)b;
+
+    if (x[1] != y[1]) return x[1] < y[1] ? -1 : 1;                /* py then px */
+    return x[0] != y[0] ? (x[0] < y[0] ? -1 : 1) : 0;
+}
+
+/* One candidate (px, py) in layout E (gen:1117-1172): a placement is pushed when every core cell matches. */
+static RgErr try_place(const RgWorld *w, const FindPlan *fp, PairCache *pc, const RgLayout *E, int px, int py,
+                       RgPlacementList *out)
+{
+    const RgBuildModel *m = fp->m;
+    unsigned cw = m->w, ch = m->h, lw = E->w, lh = E->h, k, i, j, i0 = fp->core[0][0], j0 = fp->core[0][1];
+    int ring[1024][2], nRing = 0, yy, xx;
+    uint16_t ground;
+    RgPlacement pl;
+    bool nomem = false;
+
+    (void)w;
+    if ((rg_rd16(E->blocks + 2u * ((size_t)(py + (int)j0) * lw + (size_t)(px + (int)i0))) & 0x3FFu)
+        != fp->tmpl[j0 * cw + i0])
+        return RG_OK;
+    for (k = 0; k < fp->nCore; k++) {
+        unsigned ci = fp->core[k][0], cj = fp->core[k][1];
+        unsigned got = rg_rd16(E->blocks + 2u * ((size_t)(py + (int)cj) * lw + (size_t)(px + (int)ci))) & 0x3FFu;
+
+        if (got == fp->tmpl[cj * cw + ci])
+            continue;
+        if (!same_building_pixels(pc, E, m, got, ci, cj, &nomem))
+            return nomem ? RG_ERR_NOMEM : RG_OK;
+    }
+    for (yy = py - 1; yy < py + (int)ch + 1; yy++) {
+        for (xx = px - 1; xx < px + (int)cw + 1; xx++) {
+            unsigned cell, mt, q;
+            bool inside = px <= xx && xx < px + (int)cw && py <= yy && yy < py + (int)ch;
+
+            if (inside || xx < 0 || yy < 0 || xx >= (int)lw || yy >= (int)lh)
+                continue;
+            cell = rg_rd16(E->blocks + 2u * ((size_t)yy * lw + (size_t)xx));
+            if (cell & 0xC00u)
+                continue;
+            mt = cell & 0x3FFu;
+            for (q = 0; q < (unsigned)nRing; q++)
+                if ((unsigned)ring[q][0] == mt)
+                    break;
+            if (q == (unsigned)nRing) {
+                ring[nRing][0] = (int)mt;
+                ring[nRing][1] = 0;
+                nRing++;
+            }
+            ring[q][1]++;
+        }
+    }
+    ground = m->groundMetatile;
+    if (nRing > 0) {                                   /* first maximum in first-seen order */
+        int best = 0, b;
+
+        for (b = 1; b < nRing; b++)
+            if (ring[b][1] > ring[best][1])
+                best = b;
+        ground = (uint16_t)ring[best][0];
+    }
+    memset(&pl, 0, sizeof(pl));
+    pl.layout = E->id;
+    pl.px = (int16_t)px;
+    pl.py = (int16_t)py;
+    pl.ground = ground;
+    pl.odd = (uint8_t (*)[2])malloc((size_t)cw * ch * 2u + 2u);
+    if (pl.odd == NULL)
+        return RG_ERR_NOMEM;
+    if (fp->upper) {
+        pl.patchAll = true;
+        for (i = 0; i < cw; i++)                       /* sorted(model.owned): (i, j) order */
+            for (j = 0; j < ch; j++)
+                if (m->owned[j * cw + i]) {
+                    pl.odd[pl.nOdd][0] = (uint8_t)i;
+                    pl.odd[pl.nOdd][1] = (uint8_t)j;
+                    pl.nOdd++;
+                }
+    } else {
+        for (j = 0; j < ch; j++)
+            for (i = 0; i < cw; i++)
+                if ((m->owned == NULL || m->owned[j * cw + i])
+                    && (rg_rd16(E->blocks + 2u * ((size_t)(py + (int)j) * lw + (size_t)(px + (int)i))) & 0x3FFu)
+                           != fp->tmpl[j * cw + i]) {
+                    pl.odd[pl.nOdd][0] = (uint8_t)i;
+                    pl.odd[pl.nOdd][1] = (uint8_t)j;
+                    pl.nOdd++;
+                }
+    }
+    if (push_placement(out, &pl) != RG_OK) {
+        free(pl.odd);
+        return RG_ERR_NOMEM;
+    }
+    return RG_OK;
+}
+
 RgErr rg_find_placements(const RgWorld *w, const RgBuildModel *m, RgPlacementList *out)
 {
     const RgSpec *s = m->spec;
     const RgLayout *ref = m->layout;
     unsigned cw = m->w, ch = m->h, r0 = 0, r1 = ch, i, j, idx;
     int x = s->rect[0], y = s->rect[1];
-    uint16_t template_[256];
-    unsigned core[256][2], nCore = 0;
-    bool primaryOnly = true, nomem = false;
+    FindPlan fp;
+    bool primaryOnly = true;
     PairCache pc;
     RgErr err = RG_OK;
 
     memset(out, 0, sizeof(*out));
-    if (s->kind != RG_SPEC_DIRECT || cw * ch > 256u || m->owned != NULL)
+    if (s->kind == RG_SPEC_INTERIOR)
         return RG_ERR_BUILDINGS;
+    if (m->nAt > 0) {                                  /* found by its tiles: it stands where it was found */
+        for (i = 0; i < m->nAt; i++) {
+            RgPlacement pl;
+
+            memset(&pl, 0, sizeof(pl));
+            pl.layout = m->at[i].lid;
+            pl.px = m->at[i].x;
+            pl.py = m->at[i].y;
+            pl.ground = RG_OWN_GROUND;
+            err = push_placement(out, &pl);
+            if (err != RG_OK) {
+                rg_placements_free(out);
+                return err;
+            }
+        }
+        return RG_OK;
+    }
     if (s->matchRows[0] != 0 || s->matchRows[1] != 0) {
         r0 = (unsigned)s->matchRows[0];
         r1 = (unsigned)s->matchRows[1];
     }
+    memset(&fp, 0, sizeof(fp));
+    fp.m = m;
+    fp.upper = m->comp != NULL && m->comp->upper;
+    fp.tmpl = (uint16_t *)malloc((size_t)cw * ch * 2u + 2u);
+    fp.core = (unsigned (*)[2])malloc((size_t)cw * ch * sizeof(unsigned[2]) + sizeof(unsigned[2]));
+    if (fp.tmpl == NULL || fp.core == NULL) {
+        free(fp.tmpl); free(fp.core);
+        return RG_ERR_NOMEM;
+    }
     for (j = 0; j < ch; j++)
         for (i = 0; i < cw; i++)
-            template_[j * cw + i] = rg_metatile(ref, x + (int)i, y + (int)j);
-    for (j = r0; j < r1; j++)                           /* core sorted by (j, i), all cells owned */
+            fp.tmpl[j * cw + i] = rg_metatile(ref, x + (int)i, y + (int)j);
+    for (j = r0; j < r1; j++)                           /* core sorted by (j, i), owned cells only */
         for (i = 0; i < cw; i++) {
-            core[nCore][0] = i;
-            core[nCore][1] = j;
-            nCore++;
-            if (template_[j * cw + i] >= RG_NUM_PRIMARY)
+            if (m->owned != NULL && !m->owned[j * cw + i])
+                continue;
+            fp.core[fp.nCore][0] = i;
+            fp.core[fp.nCore][1] = j;
+            fp.nCore++;
+            if (fp.tmpl[j * cw + i] >= RG_NUM_PRIMARY)
                 primaryOnly = false;
         }
-    if (nCore == 0)
-        return RG_OK;
     pc.w = w; pc.p = NULL; pc.idx = -1;
+    if (fp.nCore == 0)
+        goto done;
+    if (m->owned != NULL) {
+        /* an object of free shape stands only where it was found (and at its repeat_at): its own layout */
+        unsigned n = m->nRepeat ? m->nRepeat : 1u;
+        uint16_t (*pos)[2] = (uint16_t (*)[2])malloc((size_t)n * sizeof(uint16_t[2]));
+
+        if (pos == NULL) {
+            err = RG_ERR_NOMEM;
+            goto done;
+        }
+        if (m->nRepeat)
+            memcpy(pos, m->repeat, (size_t)n * sizeof(uint16_t[2]));
+        else {
+            pos[0][0] = (uint16_t)x;
+            pos[0][1] = (uint16_t)y;
+        }
+        qsort(pos, n, sizeof(uint16_t[2]), cmp_pos);
+        for (i = 0; i < n && err == RG_OK; i++)
+            if (pos[i][0] + cw <= ref->w && pos[i][1] + ch <= ref->h)
+                err = try_place(w, &fp, &pc, ref, pos[i][0], pos[i][1], out);
+        free(pos);
+        goto done;
+    }
     for (idx = 0; idx < w->layoutCount && err == RG_OK; idx++) {
         const RgLayout *E = &w->layouts[idx];
-        unsigned lw = E->w, lh = E->h, i0 = core[0][0], j0 = core[0][1];
         int py, px;
 
         if (!E->present || E->blocks == NULL)
@@ -421,122 +637,39 @@ RgErr rg_find_placements(const RgWorld *w, const RgBuildModel *m, RgPlacementLis
             continue;
         if (!primaryOnly && E->ts[1]->addr != ref->ts[1]->addr)
             continue;
-        for (py = 0; py + (int)ch <= (int)lh; py++) {
-            for (px = 0; px + (int)cw <= (int)lw; px++) {
-                bool all = true;
-                unsigned k;
-                int ring[1024][2], nRing = 0, yy, xx;
-                uint16_t ground;
-                RgPlacement pl;
-
-                if ((rg_rd16(E->blocks + 2u * ((size_t)(py + (int)j0) * lw + (size_t)(px + (int)i0))) & 0x3FFu)
-                    != template_[j0 * cw + i0])
-                    continue;
-                for (k = 0; k < nCore && all; k++) {
-                    unsigned ci = core[k][0], cj = core[k][1];
-                    unsigned got = rg_rd16(E->blocks + 2u * ((size_t)(py + (int)cj) * lw + (size_t)(px + (int)ci))) & 0x3FFu;
-
-                    if (got == template_[cj * cw + ci])
-                        continue;
-                    if (!same_building_pixels(&pc, E, m, got, ci, cj, &nomem))
-                        all = false;
-                    if (nomem) {
-                        err = RG_ERR_NOMEM;
-                        goto done;
-                    }
-                }
-                if (!all)
-                    continue;
-                for (yy = py - 1; yy < py + (int)ch + 1; yy++) {
-                    for (xx = px - 1; xx < px + (int)cw + 1; xx++) {
-                        unsigned cell, mt, q;
-                        bool inside = px <= xx && xx < px + (int)cw && py <= yy && yy < py + (int)ch;
-
-                        if (inside || xx < 0 || yy < 0 || xx >= (int)lw || yy >= (int)lh)
-                            continue;
-                        cell = rg_rd16(E->blocks + 2u * ((size_t)yy * lw + (size_t)xx));
-                        if (cell & 0xC00u)
-                            continue;
-                        mt = cell & 0x3FFu;
-                        for (q = 0; q < (unsigned)nRing; q++)
-                            if ((unsigned)ring[q][0] == mt)
-                                break;
-                        if (q == (unsigned)nRing) {
-                            ring[nRing][0] = (int)mt;
-                            ring[nRing][1] = 0;
-                            nRing++;
-                        }
-                        ring[q][1]++;
-                    }
-                }
-                ground = m->groundMetatile;
-                if (nRing > 0) {                       /* first maximum in first-seen order */
-                    int best = 0, b;
-
-                    for (b = 1; b < nRing; b++)
-                        if (ring[b][1] > ring[best][1])
-                            best = b;
-                    ground = (uint16_t)ring[best][0];
-                }
-                memset(&pl, 0, sizeof(pl));
-                pl.layout = E->id;
-                pl.px = (int16_t)px;
-                pl.py = (int16_t)py;
-                pl.ground = ground;
-                pl.odd = (uint8_t (*)[2])malloc((size_t)cw * ch * 2u);
-                if (pl.odd == NULL) {
-                    err = RG_ERR_NOMEM;
-                    goto done;
-                }
-                for (j = 0; j < ch; j++)
-                    for (i = 0; i < cw; i++)
-                        if ((rg_rd16(E->blocks + 2u * ((size_t)(py + (int)j) * lw + (size_t)(px + (int)i))) & 0x3FFu)
-                            != template_[j * cw + i]) {
-                            pl.odd[pl.nOdd][0] = (uint8_t)i;
-                            pl.odd[pl.nOdd][1] = (uint8_t)j;
-                            pl.nOdd++;
-                        }
-                if (push_placement(out, &pl) != RG_OK) {
-                    free(pl.odd);
-                    err = RG_ERR_NOMEM;
-                    goto done;
-                }
-            }
-        }
+        for (py = 0; py + (int)ch <= (int)E->h && err == RG_OK; py++)
+            for (px = 0; px + (int)cw <= (int)E->w && err == RG_OK; px++)
+                err = try_place(w, &fp, &pc, E, px, py, out);
     }
 done:
     pc_close(&pc);
+    free(fp.tmpl);
+    free(fp.core);
     if (err != RG_OK)
         rg_placements_free(out);
     return err;
 }
 
-RgErr rg_placement_patches(const RgWorld *w, const RgBuildModel *m, RgPlacement *pl)
+/* gen:1276-1290 with the model's cell heights supplied (tops, w*h bytes). */
+static RgErr patches_with_tops(const RgWorld *w, const RgBuildModel *m, RgPlacement *pl, const uint8_t *tops)
 {
-    unsigned cw = m->w, ch = m->h, k;
-    uint8_t *tops = (uint8_t *)malloc((size_t)cw * ch);
+    unsigned cw = m->w, k;
     const RgLayout *E = &w->layouts[pl->layout - 1];
     PairCache pc;
     RgErr err = RG_OK;
 
-    if (tops == NULL || !rg_cell_heights(m, tops)) {
-        free(tops);
-        return RG_ERR_NOMEM;
-    }
     pc.w = w; pc.p = NULL; pc.idx = -1;
     pl->cells = (RgPatchCell *)calloc(pl->nOdd ? pl->nOdd : 1u, sizeof(RgPatchCell));
     pl->nCells = 0;
-    if (pl->cells == NULL) {
-        free(tops);
+    if (pl->cells == NULL)
         return RG_ERR_NOMEM;
-    }
     for (k = 0; k < pl->nOdd; k++) {
         unsigned i = pl->odd[k][0], j = pl->odd[k][1], x, y;
         RgImage img;
         RgPair *pair;
-        bool any = false;
+        int bb[4];
 
-        if (tops[j * cw + i] != 0)
+        if (tops[j * cw + i] != 0 && !pl->patchAll)
             continue;                                  /* the model stands there; the map's own paint is lost */
         pair = pc_get(&pc, E->pairIndex);
         if (pair == NULL || !rg_cell_image(pair, rg_metatile(E, pl->px + (int)i, pl->py + (int)j), &img)) {
@@ -551,12 +684,7 @@ RgErr rg_placement_patches(const RgWorld *w, const RgBuildModel *m, RgPlacement 
                 if (a[3] >= 128)
                     p[0] = p[1] = p[2] = p[3] = 0;
             }
-        {
-            int bb[4];
-
-            any = rg_img_bbox(&img, bb);
-        }
-        if (!any) {
+        if (!rg_img_bbox(&img, bb)) {
             rg_img_free(&img);
             continue;
         }
@@ -567,6 +695,22 @@ RgErr rg_placement_patches(const RgWorld *w, const RgBuildModel *m, RgPlacement 
         pl->nCells++;
     }
     pc_close(&pc);
+    return err;
+}
+
+RgErr rg_placement_patches(const RgWorld *w, const RgBuildModel *m, RgPlacement *pl)
+{
+    uint8_t *tops = NULL;
+    RgErr err;
+
+    if (pl->nOdd > 0) {
+        tops = (uint8_t *)malloc((size_t)m->w * m->h);
+        if (tops == NULL || !rg_cell_heights(m, tops)) {
+            free(tops);
+            return RG_ERR_NOMEM;
+        }
+    }
+    err = patches_with_tops(w, m, pl, tops);
     free(tops);
     return err;
 }
@@ -779,6 +923,87 @@ static size_t fail(RgBuildStats *st, RgErr e, const char *field)
     return 0;
 }
 
+/* gen:1454-1482 ground_variants: every metatile a props model stands on, less the quarters of its upper layer the
+ * model stands for, keyed by (tileset, metatile, quarters); the first layout (model order, then `at` order) wins. */
+typedef struct Variant { uint16_t lid, mt; uint8_t q; } Variant;
+typedef struct VKey { uint32_t ts; uint16_t mt; uint8_t q; uint16_t lid; } VKey;
+
+static int cmp_variant(const void *a, const void *b)
+{
+    const Variant *x = (const Variant *)a, *y = (const Variant *)b;
+
+    if (x->lid != y->lid) return x->lid < y->lid ? -1 : 1;
+    if (x->mt != y->mt) return x->mt < y->mt ? -1 : 1;
+    return x->q != y->q ? (x->q < y->q ? -1 : 1) : 0;
+}
+
+static RgErr ground_variants(const RgWorld *w, const RgBuildModels *ms, Variant **out, unsigned *n)
+{
+    VKey *keys = NULL;
+    unsigned nKeys = 0, capKeys = 0, mi, a, k;
+
+    *out = NULL;
+    *n = 0;
+    for (mi = 0; mi < ms->n; mi++) {
+        const RgBuildModel *m = &ms->m[mi];
+
+        for (a = 0; a < m->nAt; a++) {
+            const RgLayout *E = &w->layouts[m->at[a].lid - 1];
+
+            for (k = 0; k < (unsigned)m->w * m->h; k++) {
+                int x, y;
+                unsigned mt, q, t;
+                uint32_t ts;
+
+                if (m->quads[k] == 0)
+                    continue;
+                x = m->at[a].x + (int)(k % m->w);
+                y = m->at[a].y + (int)(k / m->w);
+                if (x < 0 || y < 0 || x >= (int)E->w || y >= (int)E->h)
+                    continue;                           /* across a seam: the map next door draws it */
+                mt = rg_rd16(E->blocks + 2u * ((size_t)y * E->w + (size_t)x)) & 0x3FFu;
+                ts = mt < RG_NUM_PRIMARY ? E->ts[0]->addr : E->ts[1]->addr;
+                q = m->quads[k];
+                for (t = 0; t < nKeys; t++)
+                    if (keys[t].ts == ts && keys[t].mt == mt && keys[t].q == q)
+                        break;
+                if (t < nKeys)
+                    continue;
+                if (nKeys == capKeys) {
+                    unsigned cap = capKeys ? capKeys * 2u : 64u;
+                    VKey *nk = (VKey *)realloc(keys, (size_t)cap * sizeof(VKey));
+
+                    if (nk == NULL) {
+                        free(keys);
+                        return RG_ERR_NOMEM;
+                    }
+                    keys = nk;
+                    capKeys = cap;
+                }
+                keys[nKeys].ts = ts; keys[nKeys].mt = (uint16_t)mt; keys[nKeys].q = (uint8_t)q;
+                keys[nKeys].lid = E->id;
+                nKeys++;
+            }
+        }
+    }
+    if (nKeys > 0) {
+        Variant *v = (Variant *)malloc((size_t)nKeys * sizeof(Variant));
+
+        if (v == NULL) {
+            free(keys);
+            return RG_ERR_NOMEM;
+        }
+        for (k = 0; k < nKeys; k++) {
+            v[k].lid = keys[k].lid; v[k].mt = keys[k].mt; v[k].q = keys[k].q;
+        }
+        qsort(v, nKeys, sizeof(Variant), cmp_variant);
+        *out = v;
+    }
+    *n = nKeys;
+    free(keys);
+    return RG_OK;
+}
+
 size_t rg_buildings_write(const RgWorld *w, const RgBuildModels *models, uint8_t *out, size_t cap, RgBuildStats *stats)
 {
     RgBuildStats local;
@@ -791,6 +1016,8 @@ size_t rg_buildings_write(const RgWorld *w, const RgBuildModels *models, uint8_t
     ByteBuf heights, quarters, body, blob, footBuf;
     uint32_t *recFirst = NULL, *recCount = NULL, *recHeights = NULL;
     RgMaskSet masks;
+    Variant *variants = NULL;
+    unsigned nVariants = 0;
     int (*crop)[4] = NULL;
     PageModel *pms = NULL;
     unsigned nPms = 0, capPms = 0;
@@ -824,13 +1051,30 @@ size_t rg_buildings_write(const RgWorld *w, const RgBuildModels *models, uint8_t
             result = fail(st, e, "find_placements");
             goto cleanup;
         }
-        for (i = 0; i < pls[mi].n; i++) {
-            e = rg_placement_patches(w, &models->m[mi], &pls[mi].p[i]);
-            if (e != RG_OK) {
-                result = fail(st, e, "placement_patches");
-                goto cleanup;
+        {
+            uint8_t *tops = NULL;
+            bool needTops = false;
+
+            for (i = 0; i < pls[mi].n; i++)
+                needTops = needTops || pls[mi].p[i].nOdd > 0;
+            if (needTops) {                             /* the model's cell heights, once for all its placements */
+                tops = (uint8_t *)malloc((size_t)models->m[mi].w * models->m[mi].h);
+                if (tops == NULL || !rg_cell_heights(&models->m[mi], tops)) {
+                    free(tops);
+                    result = fail(st, RG_ERR_NOMEM, "placement_patches");
+                    goto cleanup;
+                }
             }
-            nFound++;
+            for (i = 0; i < pls[mi].n; i++) {
+                e = patches_with_tops(w, &models->m[mi], &pls[mi].p[i], tops);
+                if (e != RG_OK) {
+                    free(tops);
+                    result = fail(st, e, "placement_patches");
+                    goto cleanup;
+                }
+                nFound++;
+            }
+            free(tops);
         }
     }
     found = (Found *)calloc(nFound ? nFound : 1u, sizeof(Found));
@@ -889,7 +1133,7 @@ size_t rg_buildings_write(const RgWorld *w, const RgBuildModels *models, uint8_t
                 bool owned = m->owned == NULL || m->owned[k];
 
                 bb_u8(&heights, owned ? hb[k] : 255u);
-                bb_u8(&quarters, 0);
+                bb_u8(&quarters, m->quads != NULL ? m->quads[k] : 0u);
                 bb_u16(&footBuf, maskOf[k] < 0 ? 0xFFFFu : (unsigned)maskOf[k]);
             }
             totalCells += cells;
@@ -921,14 +1165,14 @@ size_t rg_buildings_write(const RgWorld *w, const RgBuildModels *models, uint8_t
             goto cleanup;
         }
         while (start < nFound) {
-            unsigned end = start, used[64], nUsed = 0, k, nImgs = 0, p;
+            unsigned end = start, used[RG_MAX_PAGE_MODELS], nUsed = 0, k, nImgs = 0, p;
             uint16_t lid = found[start].lid;
             const RgImage **imgs = NULL;
             RgImage *modelCrops = NULL;
             RgImage **patchImgs = NULL;
             unsigned nPatch = 0;
             int (*spots)[2] = NULL;
-            int tw = 0, th = 0, page, pmOf[64];
+            int tw = 0, th = 0, page, pmOf[RG_MAX_PAGE_MODELS];
             bool ok = true;
 
             while (end < nFound && found[end].lid == lid)
@@ -941,7 +1185,7 @@ size_t rg_buildings_write(const RgWorld *w, const RgBuildModels *models, uint8_t
                     if (used[q] == mdl)
                         break;
                 if (q == nUsed) {
-                    if (nUsed >= 64u) {
+                    if (nUsed >= RG_MAX_PAGE_MODELS) {
                         result = fail(st, RG_ERR_TOO_BIG, "models per page");
                         goto cleanup;
                     }
@@ -1089,6 +1333,12 @@ size_t rg_buildings_write(const RgWorld *w, const RgBuildModels *models, uint8_t
                 for (q = 0; q < nUsed; q++)
                     if (used[q] == found[k].model)
                         break;
+                if (pl->px < 0 || pl->py < 0) {
+                    result = fail(st, RG_ERR_TOO_BIG, "placement x/y negative");
+                    for (p = 0; p < nUsed; p++) rg_img_free(&modelCrops[p]);
+                    free(modelCrops); free(patchImgs); free(imgs); free(spots);
+                    goto cleanup;
+                }
                 placements[nPl].lid = lid;
                 placements[nPl].pm = (uint16_t)pmOf[q];
                 placements[nPl].x = (uint16_t)pl->px;
@@ -1113,6 +1363,10 @@ size_t rg_buildings_write(const RgWorld *w, const RgBuildModels *models, uint8_t
         goto cleanup;
     }
 
+    e = ground_variants(w, models, &variants, &nVariants);
+    if (e != RG_OK) { result = fail(st, e, "variants"); goto cleanup; }
+    if (nVariants > RG_MAX_VARIANTS) { result = fail(st, RG_ERR_TOO_BIG, "variants"); goto cleanup; }
+
     /* field widths (SPEC-S2 section 4): fail cleanly, never truncate */
     if (nm > 65535u) { result = fail(st, RG_ERR_TOO_BIG, "models"); goto cleanup; }
     if (nPms > 65535u) { result = fail(st, RG_ERR_TOO_BIG, "pageModels"); goto cleanup; }
@@ -1127,7 +1381,7 @@ size_t rg_buildings_write(const RgWorld *w, const RgBuildModels *models, uint8_t
     bb_u16(&blob, nPages); bb_u16(&blob, nm); bb_u16(&blob, nPms); bb_u16(&blob, nPl);
     bb_u16(&blob, (unsigned)heights.n); bb_u16(&blob, masks.n);
     bb_u32(&blob, (uint32_t)(verts.n / 6u));
-    bb_u16(&blob, 0);                                    /* variants: props only (S2.5) */
+    bb_u16(&blob, nVariants);
     bb_u16(&blob, 0);
     /* body */
     for (mi = 0; mi < nm; mi++) {
@@ -1155,6 +1409,9 @@ size_t rg_buildings_write(const RgWorld *w, const RgBuildModels *models, uint8_t
     bb_put(&body, quarters.d, quarters.n);
     if (quarters.n % 2u)
         bb_u8(&body, 0);
+    for (i = 0; i < nVariants; i++) {
+        bb_u16(&body, variants[i].lid); bb_u16(&body, variants[i].mt); bb_u8(&body, variants[i].q); bb_u8(&body, 0);
+    }
     {
         size_t fixed = blob.n + 8u * nPages + body.n, pad = (4u - fixed % 4u) % 4u, off;
 
@@ -1180,7 +1437,7 @@ size_t rg_buildings_write(const RgWorld *w, const RgBuildModels *models, uint8_t
         goto cleanup;
     }
     st->models = nm; st->pages = nPages; st->pageModels = nPms; st->placements = nPl;
-    st->vertices = (unsigned)(verts.n / 6u); st->masks = masks.n; st->variants = 0; st->fileSize = blob.n;
+    st->vertices = (unsigned)(verts.n / 6u); st->masks = masks.n; st->variants = nVariants; st->fileSize = blob.n;
     for (i = 0; i < nPages; i++) { st->pageW[i] = pageTexW[i]; st->pageH[i] = pageTexH[i]; }
     st->err = RG_OK;
     if (out == NULL) {
@@ -1197,6 +1454,7 @@ cleanup:
         for (mi = 0; mi < nm; mi++)
             rg_placements_free(&pls[mi]);
     free(pls);
+    free(variants);
     free(found); free(recFirst); free(recCount); free(recHeights); free(crop); free(pms); free(placements);
     if (texels != NULL)
         for (i = 0; i <= RG_MAX_PAGES; i++)

@@ -120,3 +120,22 @@ Open: none for S2.4. Next: S2.5 (components, kit, props); `rg_flat_block` unit b
 - `evidence/s24-littleroot-lab.png`: Birch's lab is now a 3D model (raised roof + rooftop dome, front wall).
 - `evidence/s24-oldale-center.png`: Oldale Pokémon Center as a 3D model (curved roof, Poké Ball crest, P.C sign)
   next to an Oldale house. Both match Zallax's sheet.
+
+## 2026-10-06 S2.5 components, kit, props
+
+Added: `rg_grelief.c` (Relief incl. `_subtract`, Mound incl. with_ring BFS and `_spans`), `rg_bexpand.c/.h` (component, kit and
+props expanders; seam_art, pick_side, flank_band, piece_spec, props find / cells_of / beyond), stone_block / olive_block and the
+21-row hedge/railing/kit table in `rg_bspecs.c`, and the two-phase `rg_build_models` plus owned / repeat_at / props placements,
+ground variants (<= 128) and the VXB7 variants table in `rg_buildings.c`. `rg_geom` gained `c[7]` points and the RELIEF/MOUND parts.
+
+Real ROM (`ROMGEN_ROM=roms/emerald.gba`): 67 models = hedge 6, railing 35, kit 7, props 5 (+14 direct), skipped 0. Gate
+(ortho 0/0/0, empty density list, props judged against `drawing`): 0 failures over 67 models, 12868 triangles. seam_art column
+assert (`seamClash`) 0, connections assert (`connAmbiguous`) 0. buildings.bin: 3479644 B, 68 pages, 219 page-models, 40254
+vertices, 2362 placements, 56 masks, 66 variants (<= 128); round-trips through `VoxelBuildings_Init` (variants enumerate, every
+owned layout has a page and a top). New suite `test_romgen_expand.c`: 417 checks (synthetic with_ring / pick_side / flank / Relief
+and Mound gate vectors, real-ROM pins, consumer round trip). All 9 romgen suites green under ASan/UBSan, geom/buildings/expand
+also with `RG_PYSUM_COMPENSATED=0`. `make -C tools/romgen` and the device `make -j8` build; fixed one maybe-uninitialized warning in rg_geom.c.
+
+Deviations: (A2) layouts iterate by id where upstream sorts by name; affects only model order / `_n` suffix; `propTies` = 0 on this
+ROM so the tie-break divergence never fires. Committed as one commit (the pieces share files, so per-sub-step green splits were not practical).
+Open: none. Not yet checked visually in Azahar, and on-device memory for 219 page-models is unmeasured.

@@ -4,7 +4,7 @@
 //
 //   clang -std=c11 -Wall -Wextra -O2 -ffp-contract=off -fsanitize=address,undefined \
 //         -I source/romgen -I source/voxel -I test/host test/host/test_romgen_geom.c \
-//         source/romgen/rg_geom.c source/romgen/rg_bcheck.c source/romgen/rg_bimg.c source/romgen/rg_art.c \
+//         source/romgen/rg_geom.c source/romgen/rg_grelief.c source/romgen/rg_bcheck.c source/romgen/rg_bimg.c source/romgen/rg_art.c \
 //         source/romgen/rg_world.c source/voxel/vx_lz77.c \
 //         -lm -o /tmp/trgg && /tmp/trgg
 #include <math.h>

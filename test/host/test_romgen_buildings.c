@@ -5,8 +5,8 @@
 //
 //   clang -std=c11 -Wall -Wextra -O2 -ffp-contract=off -fsanitize=address,undefined -DVOXEL_HOST_FILES \
 //         -DCTR_VOXEL_LIGHTING=1 -I source/romgen -I source/voxel -I test/host test/host/test_romgen_buildings.c \
-//         source/romgen/rg_world.c source/romgen/rg_art.c source/romgen/rg_bimg.c source/romgen/rg_geom.c \
-//         source/romgen/rg_bcheck.c source/romgen/rg_bspecs.c source/romgen/rg_buildings.c \
+//         source/romgen/rg_world.c source/romgen/rg_art.c source/romgen/rg_bimg.c source/romgen/rg_geom.c source/romgen/rg_grelief.c \
+//         source/romgen/rg_bcheck.c source/romgen/rg_bspecs.c source/romgen/rg_buildings.c source/romgen/rg_bexpand.c \
 //         source/voxel/voxel_world.c source/voxel/voxel_regions.c source/voxel/voxel_relief.c \
 //         source/voxel/voxel_building.c source/voxel/voxel_sign.c source/voxel/voxel_arena.c \
 //         source/voxel/voxel_atlas.c source/voxel/voxel_mesh_builder.c source/voxel/voxel_tree.c \
@@ -179,6 +179,10 @@ static void TestSyntheticParts(void)
     for (i = 0; i < rg_spec_count; i++) {
         const RgSpec *sp = &rg_specs[i];
         unsigned k;
+        if (sp->kind != RG_SPEC_DIRECT) {                 /* S2.5 expander rows: pinned in test_romgen_expand.c */
+            CHECK(sp->ext != NULL && sp->nGround > 0);
+            continue;
+        }
         CHECK(sp->kind == RG_SPEC_DIRECT && sp->parts && sp->layoutId && sp->layoutFnv && sp->nExact > 0 && sp->nGround > 0);
         for (k = 0; k < sp->nExact; k++)
             CHECK(sp->exact[k].x0 >= 0 && sp->exact[k].y0 >= 0 && sp->exact[k].x1 <= sp->rect[2] * 16 &&
@@ -228,8 +232,17 @@ static void TestRealRom(void)
     fclose(fp);
     CHECK(rg_world_open(&w, rom, (size_t)n) == RG_OK);
     CHECK(rg_layout_fnv(&w.layouts[9]) == 0xEFE99674u);
-    CHECK(rg_build_models(&w, rg_specs, rg_spec_count, &ms) == RG_OK);
-    CHECK(ms.n == rg_spec_count && ms.n == 14 && ms.skipped == 0);
+    {   /* the 14 direct rows only: the S2.3-S2.4 byte pins below stay the regression for the direct path */
+        static RgSpec direct[32];
+        unsigned nd = 0;
+
+        for (i = 0; i < rg_spec_count; i++)
+            if (rg_specs[i].kind == RG_SPEC_DIRECT)
+                direct[nd++] = rg_specs[i];
+        CHECK(nd == 14);
+        CHECK(rg_build_models(&w, direct, nd, &ms) == RG_OK);
+        CHECK(ms.n == nd && ms.n == 14 && ms.skipped == 0);
+    }
     CHECK(rg_layout_fnv(&w.layouts[0]) == 0xCA6DFAA0u && rg_layout_fnv(&w.layouts[2]) == 0x6FFC5818u &&
           rg_layout_fnv(&w.layouts[3]) == 0xA55404CFu && rg_layout_fnv(&w.layouts[10]) == 0x52C922B6u &&
           rg_layout_fnv(&w.layouts[19]) == 0x157E3492u);
