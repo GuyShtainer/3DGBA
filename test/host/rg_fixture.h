@@ -22,12 +22,12 @@ typedef struct {
     uint32_t mapHdr[FXR_MAX_MAPS];
 } RgFx;
 
-static void fxr_p16(RgFx *f, uint32_t off, uint32_t v) { f->rom[off] = (uint8_t)v; f->rom[off + 1] = (uint8_t)(v >> 8); }
-static void fxr_p32(RgFx *f, uint32_t off, uint32_t v) { fxr_p16(f, off, v & 0xFFFF); fxr_p16(f, off + 2, v >> 16); }
+static inline void fxr_p16(RgFx *f, uint32_t off, uint32_t v) { f->rom[off] = (uint8_t)v; f->rom[off + 1] = (uint8_t)(v >> 8); }
+static inline void fxr_p32(RgFx *f, uint32_t off, uint32_t v) { fxr_p16(f, off, v & 0xFFFF); fxr_p16(f, off + 2, v >> 16); }
 #define FXR_ADDR(off) (0x08000000u + (off))
 #define FXR_OFF(addr) ((addr) - 0x08000000u)
 
-static uint32_t fxr_alloc(RgFx *f, uint32_t n)
+static inline uint32_t fxr_alloc(RgFx *f, uint32_t n)
 {
     uint32_t o = (f->bump + 3u) & ~3u;
     f->bump = o + n;
@@ -36,7 +36,7 @@ static uint32_t fxr_alloc(RgFx *f, uint32_t n)
 }
 
 /* LZ77 type 0x10, all literals (flag bytes 0): valid, uncompressed-in-effect. Returns packed length. */
-static uint32_t fxr_lz77_literal(uint8_t *dst, const uint8_t *src, uint32_t n)
+static inline uint32_t fxr_lz77_literal(uint8_t *dst, const uint8_t *src, uint32_t n)
 {
     uint32_t o = 4, i = 0;
     dst[0] = 0x10; dst[1] = (uint8_t)n; dst[2] = (uint8_t)(n >> 8); dst[3] = (uint8_t)(n >> 16);
@@ -49,7 +49,7 @@ static uint32_t fxr_lz77_literal(uint8_t *dst, const uint8_t *src, uint32_t n)
 }
 
 /* Sets the table slot of layout `id` (1-based) and the sentinel after the table. */
-static void fxr_table_set(RgFx *f, unsigned id, uint32_t addr)
+static inline void fxr_table_set(RgFx *f, unsigned id, uint32_t addr)
 {
     fxr_p32(f, FXR_OFF(GBA_ADDR_MAP_LAYOUTS) + 4u * (id - 1u), addr);
     fxr_p32(f, FXR_OFF(GBA_ADDR_MAP_LAYOUTS) + 4u * id, 0xFFFFFFFFu);
@@ -58,7 +58,7 @@ static void fxr_table_set(RgFx *f, unsigned id, uint32_t addr)
 /* A tileset. tiles: tileBytes of 4bpp (compressed if `compressed`); pal: 16*16 u16 (or NULL = zeros);
  * mt: count*8 u16; attr: count u16. adjacent: attrs follow metatiles directly (count recoverable);
  * else a 4-byte gap is left (count falls back to 512). Returns the GBA address. */
-static uint32_t fxr_tileset(RgFx *f, int compressed, int secondary, const uint8_t *tiles, uint32_t tileBytes,
+static inline uint32_t fxr_tileset(RgFx *f, int compressed, int secondary, const uint8_t *tiles, uint32_t tileBytes,
                             const uint16_t *pal, const uint16_t *mt, const uint16_t *attr, unsigned count,
                             int adjacent)
 {
@@ -82,7 +82,7 @@ static uint32_t fxr_tileset(RgFx *f, int compressed, int secondary, const uint8_
 }
 
 /* Appends a layout (next id). blocks: w*h u16. Returns the id. */
-static unsigned fxr_layout(RgFx *f, int w, int h, const uint16_t *blocks, uint32_t prim, uint32_t sec)
+static inline unsigned fxr_layout(RgFx *f, int w, int h, const uint16_t *blocks, uint32_t prim, uint32_t sec)
 {
     uint32_t s = fxr_alloc(f, 24), b = fxr_alloc(f, 16), d = fxr_alloc(f, (uint32_t)(w * h) * 2u);
     int i;
@@ -95,14 +95,14 @@ static unsigned fxr_layout(RgFx *f, int w, int h, const uint16_t *blocks, uint32
     return f->nLayouts;
 }
 
-static unsigned fxr_layout_null(RgFx *f)
+static inline unsigned fxr_layout_null(RgFx *f)
 {
     f->nLayouts++;
     fxr_table_set(f, f->nLayouts, 0);
     return f->nLayouts;
 }
 
-static void fxr_init(RgFx *f)
+static inline void fxr_init(RgFx *f)
 {
     memset(f, 0, sizeof(*f));
     f->rom = (uint8_t *)calloc(1, FXR_ROM_SIZE);
@@ -114,7 +114,7 @@ static void fxr_init(RgFx *f)
 
 /* A map in `group` with `layoutId`. warps: n*(x,y) s16; bgs: n*(x,y,kind). Returns the header's ROM
  * offset (tests may poke it). */
-static uint32_t fxr_map(RgFx *f, unsigned group, unsigned mapType, unsigned layoutId,
+static inline uint32_t fxr_map(RgFx *f, unsigned group, unsigned mapType, unsigned layoutId,
                         const int16_t (*warps)[2], unsigned nw, const uint16_t (*bgs)[3], unsigned nb)
 {
     uint32_t h = fxr_alloc(f, GBA_MAP_HEADER_BYTES), i;
@@ -145,7 +145,7 @@ static uint32_t fxr_map(RgFx *f, unsigned group, unsigned mapType, unsigned layo
 }
 
 /* conns: n*(dir, offset, group, num) */
-static void fxr_conns(RgFx *f, uint32_t hdrOff, const int32_t (*c)[4], unsigned n)
+static inline void fxr_conns(RgFx *f, uint32_t hdrOff, const int32_t (*c)[4], unsigned n)
 {
     uint32_t blk = fxr_alloc(f, 8), l = fxr_alloc(f, n * 12u), i;
     fxr_p32(f, blk, n); fxr_p32(f, blk + 4, FXR_ADDR(l));
@@ -160,7 +160,7 @@ static void fxr_conns(RgFx *f, uint32_t hdrOff, const int32_t (*c)[4], unsigned 
 
 /* Writes the group arrays (back to back, ending at gMapGroups) and the group table. Empty groups get
  * one filler map (layout 1, type 0). */
-static void fxr_finish(RgFx *f)
+static inline void fxr_finish(RgFx *f)
 {
     unsigned g, i, total = 0, counts[34];
     uint32_t pos;
