@@ -58,3 +58,20 @@ Deviations / decisions:
 - Python int vs float `sum()` caveat: sums go through rg_pysum (compensated), area sums are float in upstream too.
 - Synthetic coverage is numerics only (texel_offset, pack_atlas); the end-to-end proof is the real-ROM run. A synthetic
   fixture world with masks is not yet written (mask paths are exercised with 1 mask on the real ROM).
+
+## 2026-10-06 — S2.3 visual check in the emulator (PASS)
+
+- `buildings.bin` exported from the S2.3 spec table (2 Littleroot houses, 154296 B) next to the
+  generated `regions.bin` + `signposts.bin` on the emulator SD (local only, ROM-derived, never committed).
+- App log: `VOXEL buildings: 2 models on 1 pages, 2 placements, 3684 vertices`; page 0 loads in 112 ms.
+- `evidence/s23-littleroot-houses.png`: both houses stand as real 3D models (roof, walls, windows,
+  door, cast shadows) and the signposts are 3D; Birch's lab is still flat (S2.4). Matches the
+  Littleroot panel of Zallax's sheet in shape and proportion.
+- Getting there: no Fly in the party, so a COPY of a save was patched (sector checksums recomputed):
+  `specialSaveWarpFlags |= 1` (CONTINUE_GAME_WARP) + `continueGameWarp = 0:9 (10,11)`. Patching
+  `location`/`pos` alone does NOT move the player — Continue restores the saved map view.
+- Seen but not chased: `VOXEL: no VRAM for a 512x256 atlas (free=164864)` / atlas cache capped at 1,
+  `missing=6` chunks steady — VRAM pressure since the logical surface + bloom target landed. Movie mode
+  pins Old-3DS in Azahar; recheck on New 3DS hardware (HW run) before acting.
+- Side find, fixed in 438e86b: `TOUCH_NAMES[TOUCH_PANEL]` read past a 3-entry table every frame
+  (single-game hint) — ~2–5k `unmapped Read8` per Azahar run since phase 32, 0 after the fix.
