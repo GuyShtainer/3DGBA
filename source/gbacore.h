@@ -131,4 +131,12 @@ void     gbacore_game_code(GbaCore* c, char out[5]);
 // user's FR was rev1 by exact cb2 matches).
 uint8_t  gbacore_game_rev(GbaCore* c);
 
+// --- Phase 32 voxel overworld (additive; see docs/phase32-voxel/SPEC-port.md §3, §6) ---
+// Read-only host pointer into the emulated memory: region = GBA address top nibble (2 EWRAM,
+// 3 IWRAM, 5 palette, 6 VRAM, 8 ROM). Read ONLY while the core's worker is parked; never write.
+void*    gbacore_mem_block(GbaCore* c, unsigned region, size_t* size);
+// BG0-only render with the backdrop keyed to 0x0020 (needs patches/mgba-backdrop-key.patch in
+// libmgba). Parked-window only; applies to the next rendered frame.
+void     gbacore_set_overlay_mode(GbaCore* c, bool on);
+
 void     gbacore_destroy(GbaCore* c);

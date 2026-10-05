@@ -15,6 +15,7 @@
 #include <mgba/internal/gba/sio/lockstep.h> // GBASIOLockstepCoordinator / Driver
 #include <mgba/internal/gba/sio.h>         // GBASIO, GBASIOTransferCycles, GBASIOMode (net link driver)
 #include <mgba/internal/gba/gba.h>         // struct GBA (memory.io, timing)
+#include <mgba/internal/gba/renderers/video-software.h>   // phase 32: backdrop key (patches/mgba-backdrop-key.patch)
 #include <mgba/internal/arm/arm.h>         // struct ARMCore (gprs/cpsr/banked) — D2 gbacore_dump_cpu
                                            // READS through the public header only (mGBA files never
                                            // modified; MPL note in SPEC-firmware-diag D2 order gates)
@@ -1355,6 +1356,30 @@ void gbacore_game_code(GbaCore* g, char out[5]) {
 uint8_t gbacore_game_rev(GbaCore* g) {
 	if (!g || !g->core) return 0;
 	return (uint8_t)g->core->busRead8(g->core, 0x080000BCu);
+}
+
+// ---- Phase 32 (voxel overworld): read-only memory blocks + overlay mode -------------------
+// Host pointers into the emulated memory (mGBA core->getMemoryBlock): the voxel snapshot memcpy's
+// from these ONLY while this core's worker is parked. Never written through. `region` is the GBA
+// address top nibble: 2 EWRAM, 3 IWRAM, 5 palette, 6 VRAM, 8 ROM. NULL when unavailable.
+void* gbacore_mem_block(GbaCore* g, unsigned region, size_t* size) {
+	size_t sz = 0;
+	if (!g || !g->core || !g->core->getMemoryBlock) { if (size) *size = 0; return NULL; }
+	void* p = g->core->getMemoryBlock(g->core, region, &sz);
+	if (size) *size = p ? sz : 0;
+	return p;
+}
+
+// Overlay mode (SPEC-port 6): BG1-BG3 and OBJ off, backdrop written as the colour key 0x0020, so the
+// rendered frame holds only BG0 (text boxes/menus) over key pixels. Call ONLY while the worker is
+// parked; it takes effect on the next rendered frame. Off restores every layer and the real backdrop.
+void gbacore_set_overlay_mode(GbaCore* g, bool on) {
+	if (!g || !g->core) return;
+	struct GBA* gba = (struct GBA*)g->core->board;
+	if (!gba || !gba->video.renderer || gba->video.renderer->rendererId(gba->video.renderer) != 0x6E727773u /* mGBA SOFTWARE_MAGIC */) return;
+	for (size_t id = 1; id <= 3; id++) g->core->enableVideoLayer(g->core, id, !on);
+	g->core->enableVideoLayer(g->core, GBA_LAYER_OBJ, !on);
+	GBAVideoSoftwareRendererSetBackdropKey((struct GBAVideoSoftwareRenderer*)gba->video.renderer, on);
 }
 
 void gbacore_destroy(GbaCore* g) {

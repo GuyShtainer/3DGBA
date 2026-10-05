@@ -189,3 +189,30 @@ link-cable feature likely does not survive that swap.** Decide at **M2, on hardw
   `_postAudioBuffer` ndsp flow (`AUDIO_SAMPLES=1280`, `DSP_BUFFERS=4`) is the audio model to copy.
 - `src/gba/core.c` — `GBACoreCreate` (self-contained instance); `_GBACoreSetPeripheral`.
 - mGBA issue #2460 (single-core ~48–50 fps on 3DS); #3022 (on-device link historically "not feasible" *networked* — ours is in-process, different).
+
+## Phase 32: the backdrop-key patch (our modification of an MPL-2.0 mGBA file)
+
+`patches/mgba-backdrop-key.patch` modifies mGBA's software renderer (`src/gba/renderers/video-software.c`
+and `include/mgba/internal/gba/renderers/video-software.h`, MPL-2.0, so the modified source is published
+here). It adds `bool backdropKey` to `struct GBAVideoSoftwareRenderer` and
+`GBAVideoSoftwareRendererSetBackdropKey()`. Default false = stock behaviour. When on, the backdrop is
+written as the RGB565 colour key `0x0020` (never produced by a real pixel) and the target-2 backdrop
+alpha mix is skipped, so with BG1-BG3 and OBJ disabled the frame holds only BG0 over key pixels.
+`gbacore_set_overlay_mode()` drives it (voxel overworld overlay, docs/phase32-voxel/SPEC-port.md section 6).
+
+Re-apply on a fresh clone (external/ is git-ignored), then rebuild the lib with the recipe above:
+
+```bash
+cd external/mgba && git apply ../../patches/mgba-backdrop-key.patch   # on top of mgba-92621ea-cmakelists.patch
+cd build-3ds && make mgba -j8        # MGBA_DEFS in the Makefile must stay matched to flags.make
+touch ../../../source/gbacore.c      # struct layout changed: rebuild every TU that includes the header
+```
+
+Gotchas hit on 2026-10-05 when rebuilding: the old `build-3ds/CMakeCache.txt` pointed at the pre-rename
+`projects/dual-gba/` path (cmake refuses a moved tree) so the build dir was recreated; a newer Homebrew
+`json-c` is picked up by `find_feature(USE_JSON_C)` and breaks configuration for the 3DS target, so pass
+`-DUSE_JSON_C=OFF` in the cmake line. The resulting `C_DEFINES` in `CMakeFiles/mgba.dir/flags.make` were
+diffed identical to the pre-rebuild set (MGBA_DEFS unchanged).
+
+Fallback: if the patch cannot be applied, set `VX_OVERLAY_KEY_PATCH 0` (source/voxel/vx_overlay.h): the
+overlay then keys on the frame's own backdrop colour instead (lossy where BG0 uses that colour).

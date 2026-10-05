@@ -1,0 +1,57 @@
+diff --git a/include/mgba/internal/gba/renderers/video-software.h b/include/mgba/internal/gba/renderers/video-software.h
+index ce91877..339ad17 100644
+--- a/include/mgba/internal/gba/renderers/video-software.h
++++ b/include/mgba/internal/gba/renderers/video-software.h
+@@ -132,6 +132,9 @@ struct GBAVideoSoftwareRenderer {
+ 	struct GBAVideoSoftwareBackground bg[4];
+ 
+ 	bool forceTarget1;
++	/* 3DGBA: when set, the backdrop is written as the colour key 0x0020 (RGB565) so a host can
++	 * tell "nothing was drawn here" from every real pixel. Default false = stock behaviour. */
++	bool backdropKey;
+ 	bool oamDirty;
+ 	int oamMax;
+ 	struct GBAVideoRendererSprite sprites[128];
+@@ -154,6 +157,7 @@ struct GBAVideoSoftwareRenderer {
+ };
+ 
+ void GBAVideoSoftwareRendererCreate(struct GBAVideoSoftwareRenderer* renderer);
++void GBAVideoSoftwareRendererSetBackdropKey(struct GBAVideoSoftwareRenderer* renderer, bool enable); /* 3DGBA */
+ 
+ CXX_GUARD_START
+ 
+diff --git a/src/gba/renderers/video-software.c b/src/gba/renderers/video-software.c
+index c5bc37b..c293788 100644
+--- a/src/gba/renderers/video-software.c
++++ b/src/gba/renderers/video-software.c
+@@ -939,6 +939,11 @@ void GBAVideoSoftwareRendererPreprocessBuffer(struct GBAVideoSoftwareRenderer* s
+ 		} else {
+ 			backdrop |= softwareRenderer->variantPalette[0];
+ 		}
++		if (softwareRenderer->backdropKey) {
++			/* 3DGBA: 0x0020 is never produced by a real pixel (green bit 5 of the 565 word is
++			 * always 0 after the 555 expansion and after every blend/brighten/darken mask). */
++			backdrop = FLAG_UNWRITTEN | FLAG_PRIORITY | FLAG_IS_BACKGROUND | 0x0020;
++		}
+ 		int end = softwareRenderer->windows[w].endX;
+ 		for (; x & 3; ++x) {
+ 			softwareRenderer->row[x] = backdrop;
+@@ -960,9 +965,17 @@ void GBAVideoSoftwareRendererPreprocessBuffer(struct GBAVideoSoftwareRenderer* s
+ 	softwareRenderer->bg[3].highlight = softwareRenderer->d.highlightBG[3];
+ }
+ 
++void GBAVideoSoftwareRendererSetBackdropKey(struct GBAVideoSoftwareRenderer* softwareRenderer, bool enable) {
++	/* 3DGBA: changing the key must repaint every cached scanline, or static screens keep stale rows. */
++	if (softwareRenderer->backdropKey != enable) {
++		softwareRenderer->backdropKey = enable;
++		memset(softwareRenderer->scanlineDirty, 0xFFFFFFFF, sizeof(softwareRenderer->scanlineDirty));
++	}
++}
++
+ void GBAVideoSoftwareRendererPostprocessBuffer(struct GBAVideoSoftwareRenderer* softwareRenderer) {
+ 	int x, w;
+-	if ((softwareRenderer->forceTarget1 || softwareRenderer->bg[0].target1 || softwareRenderer->bg[1].target1 || softwareRenderer->bg[2].target1 || softwareRenderer->bg[3].target1) && softwareRenderer->target2Bd) {
++	if ((softwareRenderer->forceTarget1 || softwareRenderer->bg[0].target1 || softwareRenderer->bg[1].target1 || softwareRenderer->bg[2].target1 || softwareRenderer->bg[3].target1) && softwareRenderer->target2Bd && !softwareRenderer->backdropKey) {
+ 		x = 0;
+ 		for (w = 0; w < softwareRenderer->nWindows; ++w) {
+ 			uint32_t backdrop = 0;
