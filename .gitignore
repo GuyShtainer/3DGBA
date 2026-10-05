@@ -54,3 +54,8 @@ test/fixtures/dio_*
 
 # agent worktrees
 .claude/worktrees/
+
+# phase 32: user-built voxel data and paks are never committed; the MIT tree art is the exception
+*.pak
+voxel/*.bin
+!data/voxel_trees.bin

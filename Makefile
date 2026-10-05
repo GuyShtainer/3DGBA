@@ -18,7 +18,7 @@ include $(DEVKITARM)/3ds_rules
 #---------------------------------------------------------------------------------
 TARGET		:=	3DGBA
 BUILD		:=	build
-SOURCES		:=	source
+SOURCES		:=	source source/voxel
 DATA		:=	data
 INCLUDES	:=	include
 
@@ -54,7 +54,7 @@ CFLAGS	:=	-g -Wall -O2 -mword-relocations \
 			-ffunction-sections \
 			$(ARCH)
 
-CFLAGS	+=	$(INCLUDE) -D__3DS__
+CFLAGS	+=	$(INCLUDE) -D__3DS__ -DCTR_VOXEL_ENABLED=1 -DCTR_VOXEL_LIGHTING=1 -I$(TOPDIR)/source/voxel
 
 # --- embedded mGBA core (libmgba.a in external/mgba/build-3ds; see docs/kb/mgba-integration.md)
 # MGBA_DEFS MUST match how libmgba.a was built or struct layouts drift (ABI corruption).
@@ -75,7 +75,7 @@ CFLAGS	+=	$(MGBA_DEFS) $(MGBA_INC)
 CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions -std=gnu++11
 
 ASFLAGS	:=	-g $(ARCH)
-LDFLAGS	=	-specs=3dsx.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
+LDFLAGS	=	-specs=3dsx.specs -g $(ARCH) -Wl,--wrap=GX_BindQueue -Wl,-Map,$(notdir $*.map)
 
 LIBS	:= $(MGBA_LDLIBS) -lcitro2d -lcitro3d -lctru -lm
 
