@@ -86,6 +86,21 @@
 
 ## Next steps (resume here)
 
+**PHASE 32 (voxel 3D world + widescreen + per-eye stereo + touch panel) — HARDWARE RUN, blocks P6 closeout.**
+`3DGBA.cia` 2026-10-05 20:51. Emulator-proven: the Zallax voxel world renders upright, full 400x240, from the
+ROM alone (no pak: level terrain + extruded houses), with NPC billboards and the GBA text box/START menu
+keyed on top; the camera follows walking (evidence/voxel-world-*.png). The touch panel is proven: column -> START
+-> SAVE/POKEMON/BAG/TRAINER, plus the top-hold. On a New 3DS, with Emerald, SETTINGS -> ENHANCE -> VOXEL 3D on:
+  - (a) HW-1/2: fps walking Route 119 + Lilycove, slider down then at max.
+  - (b) HW-4: stereo depth sign + comfort. Constant `VOXEL_IOD_FULL` 0.6 tiles in ctr_voxel.c; if depth looks
+    inverted, swap the -/+ slider at main.c `vx_host_draw_world` x2.
+  - (c) HW-5: outdoors (trees, terrain, water), doors/fades, caves, rain.
+  - (d) HW-3: `sdmc:/3DGBA/voxel.log` VRAM line.
+  - (e) Touch panel with a thumb (column buttons, battle panel on FR rev1, MENU chip).
+  - (f) Optional HW-8: Zallax's `emerald3ds.pak` on SD. The user builds it with Zallax's own builder; we never
+    ship or run it.
+  Dev switch `VX_DEV_ALLOW_O3DS` (vx_host.h) must stay 0 in release builds.
+
 0. **HARDWARE RETEST of the four touch fixes — blocks everything touch.** `3DGBA.cia` rebuilt
    2026-08-17 10:33. Wipe `sdmc:/cias/netlogs/` first, then exercise: tap-to-walk vs
    hold-to-steer, tap-self=START / hold-self=SELECT, an NPC dialog (should advance once per tap,
