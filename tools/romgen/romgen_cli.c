@@ -4,7 +4,7 @@
  *   romgen ROM.gba OUTDIR [--time] [--only regions,signposts,buildings,relief] [--relief ledges|full|off] [--relief-layout ID]
  *         [--relief-log] [--relief-prep] [--relief-world] [--relief-sum neumaier|naive|both] [--dump-roles LAYOUT_ID] [--dump-model NAME]
  *
- * Writes OUTDIR/regions.bin, signposts.bin, buildings.bin and relief.bin (--relief ledges, the S3a file, is the default; --relief full is the whole export, S3.7).
+ * Writes OUTDIR/regions.bin, signposts.bin, buildings.bin and relief.bin (--relief full, the whole export of S3.7, is the default since S3.8; --relief ledges is the S3a ledges-only file).
  * --relief-layout ID prints that layout's relief.bin row and every cell's 25 heights. --dump-model NAME prints one model's summary and
  * writes nothing. Built with -DRG_MEMCOUNT (`make -C tools/romgen mem`, build/romgen_mem) --time also prints the
  * peak live heap of rg_run. The output is derived from the user's ROM: write it
@@ -119,7 +119,7 @@ static void DumpReliefLayout(const RgOutput *o, unsigned id)
     unsigned count, i, k, j;
 
     if (b == NULL) {
-        fprintf(stderr, "romgen: no relief.bin built (--relief ledges)\n");
+        fprintf(stderr, "romgen: no relief.bin built (--relief off or --only without relief)\n");
         return;
     }
     count = (unsigned)(b[4] | (b[5] << 8));
@@ -442,7 +442,7 @@ int main(int argc, char **argv)
     const char *romPath = NULL, *outDir = NULL;
     bool timing = false, wantRegions = true, wantSigns = true, wantBuildings = true;
     bool wantRelief = true;
-    RgReliefMode reliefMode = RG_RELIEF_LEDGES;
+    RgReliefMode reliefMode = RG_RELIEF_FULL;   /* S3.8: the whole relief is the default; --relief ledges is the S3a file */
     int dumpId = 0, reliefId = 0, i;
     bool reliefLog = false, reliefPrep = false, reliefWorld = false;
     int sumMode = 2;                      /* --relief-sum neumaier|naive|both */
