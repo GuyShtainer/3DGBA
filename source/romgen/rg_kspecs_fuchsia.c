@@ -109,6 +109,20 @@ static const RgSideCfg kSafariSide[1] = {
 
 static const RgExact kSafariWExact[1] = {{0, 8, 96, 96, false}};
 
+/* ---- k_safari_hall: 128x96 art (rect (22,30), 8x6 at the foot of the Safari Zone centre map) -------------------------- */
+/* The roof of the Safari Zone entrance building seen from inside (its three doors (25,30)-(27,30) are the grey awning in
+ * rows 4-8): the gold tiled roof runs rows 8-96 and the map bottom cuts it, so the art has no facade. The block is
+ * invented as a low one: the roof top is rows 8-72 and its front face reuses the last 24 roof rows (72-96). */
+static bool k_safari_hall(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    (void)spec; (void)a0; (void)a1;
+    return fz_block(out, "hall", 0, 128, 96, 72, 8) && !out->failed;
+}
+static const RgExact kSafariHallExact[1] = {{0, 8, 128, 96, false}};
+static const RgSideCfg kSafariHallSide[1] = {
+    {NULL, {40, 10, 70, 12}, {40, 10, 70, 12}, 999, true},
+};
+
 /* ---- k_safari_rest: 80x64 art (rect (28,22), 5x4 on the Safari Zone centre area) -------------------------------------- */
 /* The Safari Zone rest houses: the same gold-roofed house as Fuchsia's, one cell narrower. Rows: grass 0-7, the gold roof
  * 8-40 (a level top edge at row 8), the facade with the grey awning, two arched windows and the door 40-64. */
@@ -126,6 +140,8 @@ const RgSpec rg_kspecs_fuchsia[] = {
      k_fuchsia_safari, 0, 0, kSafariSide},
     {"k_safari_west", RG_SPEC_DIRECT, L_SAFARI_W, {10, 2, 6, 6}, {0, 0}, FZ_GROUND, 1, kSafariWExact, 1,
      k_fuchsia_safari, 8, 0, kSafariSide},
+    {"k_safari_hall", RG_SPEC_DIRECT, L_SAFARI_C, {22, 30, 8, 6}, {0, 0}, FZ_GROUND, 1, kSafariHallExact, 1,
+     k_safari_hall, 0, 0, kSafariHallSide},
     {"k_safari_rest", RG_SPEC_DIRECT, L_SAFARI_C, {28, 22, 5, 4}, {1, 3}, FZ_GROUND, 1, kRestExact, 1,
      k_fuchsia_house, 80, 32, kRestSide},
 };
