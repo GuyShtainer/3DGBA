@@ -1,6 +1,7 @@
 /* romgen_cli.c -- host tool: reads a Pokemon Emerald (BPEE) .gba and writes the voxel data files
  * (3DGBA, GPLv3). Pure host code around the romgen cores in source/romgen/.
  *
+ *   romgen author ROM.gba census|art|preview|check|placements ...   (the Phase 34 authoring tool, rg_author.c)
  *   romgen ROM.gba OUTDIR [--time] [--only regions,signposts,buildings,relief] [--relief ledges|full|off] [--relief-layout ID]
  *         [--relief-log] [--relief-prep] [--relief-world] [--relief-sum neumaier|naive|both] [--dump-roles LAYOUT_ID] [--dump-model NAME]
  *
@@ -15,6 +16,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "rg_author.h"
 #include "rg_rdrawn.h"
 #include "rg_rprep.h"
 #include "rg_rworld.h"
@@ -454,6 +456,8 @@ int main(int argc, char **argv)
     RgErr e;
     double t0;
 
+    if (argc >= 2 && strcmp(argv[1], "author") == 0)   /* Phase 34 B0: romgen author ROM <command> ... (rg_author.c) */
+        return rg_author_main(argc, argv);
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--time") == 0) {
             timing = true;
