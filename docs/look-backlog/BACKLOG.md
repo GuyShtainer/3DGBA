@@ -10,6 +10,13 @@ points, with the cause found in the code:
 | L3 | "the lighting is somewhat off. The shadow has a single direction which doesn't add up: the NPCs are lit from the front" | `voxel_lighting.h`: a fixed sun in the northwest (`VOXEL_SUN_DX 0.85`, `DZ 0.55`), so shadows fall southeast, towards the camera side. The GBA sprite art is shaded as if lit from the front and above. The baked terrain shadows and the sprite shading disagree. | Move the sun in front of the scene (south, high), so cast shadows fall away from the camera. Check that `voxel_lighting.c`'s ray march does not assume a northwest sun (its reach box is built from DX/DZ signs). | small-medium |
 | L4 | "maybe for future: live lighting that changes with the day (use the 3DS clock or the RTC for RSE)" | The lighting is baked once into the chunk colours. | Sun angle and colour from the time of day. The source is the 3DS clock (osGetTime), which is also what mGBA's RTC reads for RSE, so all games agree. FRLG have no RTC, so they use the 3DS clock. Re-bake chunks incrementally when the sun has moved enough (minutes, not frames), plus a global tint (dawn, day, dusk, night). Future, after L3. | large |
 
+L1 finding (lead, 2026-10-06, `art 22 42 17 12 3`): the Route 106 / Dewford shrubs are ONE-CELL bushes (16x16) over
+sand or grass, not two-tile trees. The tree pass draws crowns from the fixed embedded 64x64 `voxel_trees.bin` (the
+General tree only), so adding 0x124/0x239/0x242/0x243 to the table would draw the wrong art. Needed: a new shrub part
+(`VOXEL_TREE_SHRUB`) that keys the cell's own atlas art (foliage pixels kept, the ground colour made transparent) into
+a rounded card standing on the cell, with the cell's ground drawn under it. The same part covers the FRLG round bush
+(0x005) and any later one-cell foliage. Emerald table rows only through the profile; FRLG rows added once checked.
+
 Order: L1 → L3 → L2 → L4, after the FRLG milestones M0/M1 that are running now. Each one is emulator-checked, then
 hardware-checked (frame time).
 
