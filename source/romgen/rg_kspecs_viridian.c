@@ -7,7 +7,8 @@
  *
  *   k_viridian_house   5x4 cells (80x64): gabled shingle house with a chimney (layout 79).
  *   k_viridian_house2  the same house with flower boxes (5x5 cells).
- *   k_route2_house     5x3 cells (80x48): blue hip-roofed house on Route 2 (layout 90). */
+ *   k_route2_house     5x3 cells (80x48): blue hip-roofed house on Route 2 (layout 90).
+ *   k_route2_gate      6x7 cells (96x112): the flat-roofed gatehouse with a porch on each side (layout 90). */
 #include "rg_bspecs.h"
 
 #include <string.h>
@@ -197,6 +198,90 @@ static bool k_route2_house(const RgSpec *spec, int a0, int a1, RgPartList *out)
     return !out->failed;
 }
 
+/* ---- k_route2_gate: 96x112 art (cells (16,41), 6x7) --------------------------------------------------------------- */
+/* Rows: north door mat 0-15, flat roof top 16-58, cornice 59-63, facade 64-95 with a canopy on the front (top 66-76,
+ * front 77-87) over two pillars (88-102), south door mat and porch floor 96-111, log posts either side of both mats.
+ * Everything is a PROJ face, so the ortho check holds by construction; the depths (z - y = art row) make it stand. */
+static void vr_vplane(RgPartList *out, const char *name, double x0, double x1, double z, double y0, double y1,
+                      double rlo, double rhi)
+{
+    RgPart *pt = rg_parts_add(out, RG_P_PRISM, name);
+    RgPrism *pr;
+
+    if (pt == NULL)
+        return;
+    pr = &pt->u.prism;
+    pr->x0 = x0; pr->x1 = x1;
+    pr->west = pr->east = false;
+    vr_box(pr, z, y0, y1, z - 1);
+    pr->edges[0].kind = RG_EM_PROJ;
+    pr->edges[0].proj = rg_proj_rows(rlo, rhi);
+    pr->skip = (1u << 1) | (1u << 2) | (1u << 3);
+}
+
+/* A level face at height y spanning depths z0..z1: art rows z0 - y .. z1 - y. */
+static void vr_hplane(RgPartList *out, const char *name, double x0, double x1, double y, double z0, double z1)
+{
+    RgPart *pt = rg_parts_add(out, RG_P_PRISM, name);
+    RgPrism *pr;
+
+    if (pt == NULL)
+        return;
+    pr = &pt->u.prism;
+    pr->x0 = x0; pr->x1 = x1;
+    pr->west = pr->east = false;
+    vr_box(pr, z1, y - 1, y, z0);
+    pr->edges[1].kind = RG_EM_PROJ;
+    pr->edges[1].proj = rg_proj_rows(z0 - y, z1 - y);
+    pr->skip = (1u << 0) | (1u << 2) | (1u << 3);
+}
+
+static bool k_route2_gate(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    static const double post[4][2] = {{0, 8}, {8, 17}, {79, 88}, {88, 96}};
+    RgPart *body = rg_parts_add(out, RG_P_PRISM, "body");
+    RgPrism *pr;
+    unsigned k;
+
+    (void)spec; (void)a0; (void)a1;
+    if (body == NULL)
+        return false;
+    pr = &body->u.prism;
+    pr->x0 = 0; pr->x1 = 96;
+    pr->west = pr->east = true;
+    vr_box(pr, 96, 0, 37, 53);
+    pr->edges[0].kind = RG_EM_PROJ;
+    pr->edges[0].proj = rg_proj_rows(59, 96);       /* cornice and facade */
+    pr->edges[1].kind = RG_EM_PROJ;
+    pr->edges[1].proj = rg_proj_rows(16, 59);       /* roof top */
+    pr->skip = (1u << 2) | (1u << 3);
+
+    {
+        RgPart *cn = rg_parts_add(out, RG_P_PRISM, "canopy");
+
+        if (cn == NULL)
+            return false;
+        pr = &cn->u.prism;
+        pr->x0 = 22; pr->x1 = 74;
+        pr->west = pr->east = false;
+        vr_box(pr, 107, 20, 30, 96);
+        pr->edges[0].kind = RG_EM_PROJ;
+        pr->edges[0].proj = rg_proj_rows(77, 87);
+        pr->edges[1].kind = RG_EM_PROJ;
+        pr->edges[1].proj = rg_proj_rows(66, 77);
+        pr->skip = (1u << 2) | (1u << 3);
+    }
+    vr_vplane(out, "pillar_w", 22, 30, 102, 0, 14, 88, 102);
+    vr_vplane(out, "pillar_e", 68, 76, 102, 0, 14, 88, 102);
+    vr_hplane(out, "mat_n", 17, 79, 0, 0, 16);
+    vr_hplane(out, "mat_s", 17, 79, 0, 96, 112);
+    for (k = 0; k < 4; k++) {
+        vr_vplane(out, "post_n", post[k][0], post[k][1], 16, 0, 16, 0, 16);
+        vr_vplane(out, "post_s", post[k][0], post[k][1], 112, 0, 16, 96, 112);
+    }
+    return !out->failed;
+}
+
 static const RgExact kViridianHouseExact[4] = {
     {47, 8, 65, 40, false},     /* chimney, top and front face */
     {0, 20, 47, 48, false},     /* front slope, fascia (west of the chimney) */
@@ -207,6 +292,13 @@ static const RgExact kViridianHouseExact[4] = {
 static const RgExact kRoute2HouseExact[2] = {
     {1, 32, 80, 48, false},     /* facade */
     {14, 1, 62, 32, false},     /* front slope and eave between the hip ends (the stripe ends at the hip edge differ by 1-2 px) */
+};
+static const RgExact kRoute2GateExact[5] = {
+    {0, 16, 96, 96, false},     /* roof, cornice, facade, canopy, pillars */
+    {17, 0, 79, 16, false},     /* north mat */
+    {17, 96, 79, 112, false},   /* south mat and porch floor */
+    {0, 0, 17, 16, false},      /* posts, west */
+    {79, 0, 96, 16, false},     /* posts, east */
 };
 static const RgExact kViridianHouse2Exact[7] = {
     {47, 8, 65, 40, false},     /* chimney, top and front face */
@@ -227,5 +319,7 @@ const RgSpec rg_kspecs_viridian[] = {
      k_viridian_house, 1, 0, NULL},
     {"k_route2_house", RG_SPEC_DIRECT, L_ROUTE2, {14, 20, 5, 3}, {0, 0}, {0x010, 0x011}, 2, kRoute2HouseExact, 2,
      k_route2_house, 0, 0, NULL},
+    {"k_route2_gate", RG_SPEC_DIRECT, L_ROUTE2, {16, 41, 6, 7}, {0, 0}, {0x010, 0x011}, 2, kRoute2GateExact, 5,
+     k_route2_gate, 0, 0, NULL},
 };
 const unsigned rg_kspecs_viridian_count = sizeof(rg_kspecs_viridian) / sizeof(rg_kspecs_viridian[0]);
