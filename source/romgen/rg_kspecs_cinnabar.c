@@ -12,6 +12,7 @@
 #include <string.h>
 
 #define L_CINNABAR 86, 0xC8348D4Bu
+#define L_INDIGO 87, 0x7014A55Cu
 #define CB_GROUND {0x001}
 
 static void cb_pt(double (*poly)[2], unsigned i, double z, double y)
@@ -20,9 +21,14 @@ static void cb_pt(double (*poly)[2], unsigned i, double z, double y)
     poly[i][1] = y;
 }
 
-/* A profile prism: poly points (z, y); each edge PROJ-textured from the listed art rows (0,0 = skipped). */
-static bool cb_profile(RgPartList *out, const char *name, double x0, double x1, unsigned n,
-                       const double (*pts)[2], const double (*rows)[2])
+/* A profile prism: poly points (z, y); each edge PROJ-textured from the listed art rows (0,0 = skipped). A model whose
+ * inner steps show an end face the side check cannot see (a lower part beside a taller one) sets sCap and passes
+ * CB_W / CB_E: that end is then closed with a plain patch of the model's own wall. */
+static double sCap[4];
+#define CB_W 1
+#define CB_E 2
+static bool cb_profile_e(RgPartList *out, const char *name, double x0, double x1, unsigned ends, unsigned n,
+                         const double (*pts)[2], const double (*rows)[2])
 {
     RgPart *pt = rg_parts_add(out, RG_P_PRISM, name);
     RgPrism *pr;
@@ -32,9 +38,20 @@ static bool cb_profile(RgPartList *out, const char *name, double x0, double x1, 
         return false;
     pr = &pt->u.prism;
     pr->x0 = x0; pr->x1 = x1;
-    pr->west = pr->east = false;
+    pr->west = (ends & CB_W) != 0;
+    pr->east = (ends & CB_E) != 0;
     pr->nPoly = n;
     pr->skip = 0;
+    if (ends != 0) {            /* the end faces are drawn only through a cap band: a tile over the whole profile */
+        double ytop = 0;
+
+        for (i = 0; i < n; i++)
+            if (pts[i][1] > ytop)
+                ytop = pts[i][1];
+        pr->hasCaps = true;
+        pr->nCaps = 1;
+        pr->caps[0] = rg_band(-1, ytop + 1, rg_tile_top(sCap[0], sCap[1], sCap[2], sCap[3], ytop), pts[0][0]);
+    }
     for (i = 0; i < n; i++) {
         cb_pt(pr->poly, i, pts[i][0], pts[i][1]);
         if (rows[i][0] == 0 && rows[i][1] == 0) {
@@ -47,9 +64,16 @@ static bool cb_profile(RgPartList *out, const char *name, double x0, double x1, 
     return true;
 }
 
+static bool cb_profile(RgPartList *out, const char *name, double x0, double x1, unsigned n,
+                       const double (*pts)[2], const double (*rows)[2])
+{
+    return cb_profile_e(out, name, x0, x1, 0, n, pts, rows);
+}
+
 /* A flat-roofed block over x0..x1: the facade runs art rows ftop..zf (a vertical face, height zf - ftop), the level roof
  * top runs rows rtop..ftop behind it. */
-static bool cb_block(RgPartList *out, const char *name, double x0, double x1, double zf, double ftop, double rtop)
+static bool cb_block_e(RgPartList *out, const char *name, double x0, double x1, unsigned ends, double zf, double ftop,
+                       double rtop)
 {
     double h = zf - ftop;
     double pts[4][2], rows[4][2];
@@ -61,7 +85,11 @@ static bool cb_block(RgPartList *out, const char *name, double x0, double x1, do
     rows[0][0] = ftop; rows[0][1] = zf;
     rows[1][0] = rtop; rows[1][1] = ftop;
     rows[2][0] = rows[2][1] = rows[3][0] = rows[3][1] = 0;
-    return cb_profile(out, name, x0, x1, 4, (const double (*)[2])pts, (const double (*)[2])rows);
+    return cb_profile_e(out, name, x0, x1, ends, 4, (const double (*)[2])pts, (const double (*)[2])rows);
+}
+static bool cb_block(RgPartList *out, const char *name, double x0, double x1, double zf, double ftop, double rtop)
+{
+    return cb_block_e(out, name, x0, x1, 0, zf, ftop, rtop);
 }
 
 /* A shallow box standing in front of a facade: front face art rows fr0..fr1 (height fr1 - fr0, front depth zf), top
@@ -127,10 +155,38 @@ static const RgSideCfg kLabSide[1] = {
     {NULL, {17, 41, 23, 62}, {26, 26, 40, 32}, 999, true},
 };
 
+/* ---- k_indigo_league: 176x112 art (rect (6,0), 11x7 on layout 87; door (11,6)) ----------------------------------------- */
+/* The Pokemon League building, the biggest block of Kanto: 174 px wide, drawn as an elevation. Rows: the pale green
+ * ribbed roof 0-57 (the map top clips it), the cornice 57-64, the orange shuttered wall with its blue windows and the
+ * corner pilasters 64-104, a grey base line at 103. The centre pavilion (x 64-116) stands 6 px proud of the wall: its
+ * front face (rows 80-110) holds the glass door between two pilasters, its top (rows 65-80) is the pediment, and a
+ * riser (rows 56-65) joins it to the roof. The wings (x 2-64 and 116-176) are two flat blocks 40 high, 64 deep. */
+static bool k_indigo_league(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    static const double mid[6][2] = {{110, 0}, {110, 30}, {95, 30}, {95, 40}, {40, 40}, {40, 0}};
+    static const double midr[6][2] = {{80, 110}, {65, 80}, {56, 65}, {0, 56}, {0, 0}, {0, 0}};
+
+    (void)spec; (void)a0; (void)a1;
+    sCap[0] = 37; sCap[1] = 66; sCap[2] = 43; sCap[3] = 80;      /* the orange shutter wall */
+    return cb_block_e(out, "wing_w", 2, 64, CB_W | CB_E, 104, 64, 0) &&
+           cb_block_e(out, "wing_e", 116, 176, CB_W | CB_E, 104, 64, 0) &&
+           cb_profile(out, "pavilion", 64, 116, 6, mid, midr) && !out->failed;
+}
+static const RgExact kLeagueExact[3] = {
+    {2, 0, 64, 104, false},         /* west wing: roof, cornice, shutters, pilaster */
+    {116, 0, 176, 104, false},      /* east wing */
+    {64, 0, 116, 110, false},       /* the pavilion, the pediment and the riser */
+};
+static const RgSideCfg kLeagueSide[1] = {
+    {NULL, {37, 66, 43, 80}, {162, 0, 166, 56}, 999, true},
+};
+
 const RgSpec rg_kspecs_cinnabar[] = {
     {"k_cinnabar_mansion", RG_SPEC_DIRECT, L_CINNABAR, {5, 0, 7, 4}, {0, 0}, CB_GROUND, 1, kMansionExact, 1,
      k_cinnabar_mansion, 0, 0, kMansionSide},
     {"k_cinnabar_lab", RG_SPEC_DIRECT, L_CINNABAR, {5, 6, 7, 4}, {0, 0}, CB_GROUND, 1, kLabExact, 9,
      k_cinnabar_lab, 0, 0, kLabSide},
+    {"k_indigo_league", RG_SPEC_DIRECT, L_INDIGO, {6, 0, 11, 7}, {0, 0}, CB_GROUND, 1, kLeagueExact, 3,
+     k_indigo_league, 0, 0, kLeagueSide},
 };
 const unsigned rg_kspecs_cinnabar_count = sizeof(rg_kspecs_cinnabar) / sizeof(rg_kspecs_cinnabar[0]);
