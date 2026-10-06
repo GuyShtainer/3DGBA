@@ -4,9 +4,12 @@
 #include <stddef.h>
 #include "voxel_tree.h"
 #include "voxel_relief.h"
+#include "gba_game.h" /* 3DGBA: VXP() */
 
 int VoxelTree_Part(int metatileId)
 {
+    if (!VXP(emeraldIdTables))
+        return -1; /* Emerald metatile ids; the Kanto tree table is slice T1 */
     switch (metatileId)
     {
     case 0x1D4: case 0x1D6: return 0; /* upper left, including forest edge */
@@ -26,6 +29,8 @@ int VoxelTree_Part(int metatileId)
 
 int VoxelTree_GroundMetatile(int metatileId)
 {
+    if (!VXP(emeraldIdTables))
+        return metatileId;
     switch (metatileId)
     {
     case 0x1C6: case 0x1C7: return 0x00D; /* tall grass without canopy */

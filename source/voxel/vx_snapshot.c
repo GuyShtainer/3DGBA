@@ -3,6 +3,13 @@
 
 #include <string.h>
 
+static uint32_t sWeatherBase; /* resolved weather struct address on FRLG (vx_snapshot_set_weather_base) */
+
+void vx_snapshot_set_weather_base(uint32_t ewramAddr)
+{
+    sWeatherBase = ewramAddr;
+}
+
 static uint32_t Rd32(const uint8_t *p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
@@ -73,12 +80,21 @@ bool vx_snapshot_take(VxSnapshot *snap, const VxMemSrc *src)
     w = Rd32(snap->backupLayout + GBA_OFF_BKL_WIDTH);
     h = Rd32(snap->backupLayout + GBA_OFF_BKL_HEIGHT);
     snap->backupMapCells = 0;
+    snap->backupMapBase = 0;
     if (w >= 1 && h >= 1 && w <= 271 && h <= 270 && w * h <= VX_BACKUP_MAP_MAX_CELLS)
     {
-        if (VXP(backupMap) - GBA_EWRAM_BASE + (size_t)(w * h) * 2u > GBA_EWRAM_SIZE)
+        /* Emerald: a fixed EWRAM address. FireRed/LeafGreen (profile backupMap == 0): the live pointer in the
+         * backup layout, which must lie in EWRAM with room for w*h cells (else no map this frame). */
+        uint32_t base = VXP(backupMap) != 0 ? VXP(backupMap) : Rd32(snap->backupLayout + GBA_OFF_BKL_MAP);
+
+        if (VXP(backupMap) == 0 && (base < GBA_EWRAM_BASE || (base & 1u) != 0
+                                    || base - GBA_EWRAM_BASE + (size_t)(w * h) * 2u > GBA_EWRAM_SIZE))
             return false;
-        DecodeU16(snap->backupMap, src->ewram + (VXP(backupMap) - GBA_EWRAM_BASE), w * h);
+        if (base - GBA_EWRAM_BASE + (size_t)(w * h) * 2u > GBA_EWRAM_SIZE)
+            return false;
+        DecodeU16(snap->backupMap, src->ewram + (base - GBA_EWRAM_BASE), w * h);
         snap->backupMapCells = w * h;
+        snap->backupMapBase = base;
     }
 
     if (!CopyEwram(src, VXP(mapHeader), snap->mapHeader, sizeof(snap->mapHeader))
@@ -88,8 +104,13 @@ bool vx_snapshot_take(VxSnapshot *snap, const VxMemSrc *src)
      || !CopyEwram(src, VXP(paletteFade), snap->paletteFade, sizeof(snap->paletteFade)))
         return false;
     {
+        /* Emerald's weather struct is at a fixed address; FRLG's was resolved through weatherPtr at bind time. */
+        uint32_t wbase = VXP(weather) != 0 ? VXP(weather) : sWeatherBase;
+
+        if (wbase == 0)
+            return false;
         for (unsigned i = 0; i < 5; ++i)
-            if (!CopyEwram(src, VXP(weather) + VXP(weatherOff)[i], &snap->weather[i], 1u))
+            if (!CopyEwram(src, wbase + VXP(weatherOff)[i], &snap->weather[i], 1u))
                 return false;
     }
     CopyPalettes(snap, src);

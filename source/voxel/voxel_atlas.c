@@ -20,7 +20,7 @@
  * because a compressed payload only declares its size at run time. */
 #define VOXEL_TILE_SCRATCH 0x10000u
 
-#define TILES_PER_TILESET 512u
+#define TILES_PER_TILESET ((unsigned)VXP(nPrimTiles)) /* 512 Emerald, 640 FireRed/LeafGreen */
 #define SUBTILE_PX 8u
 
 void VoxelAtlas_SlotUV(unsigned slot, float *u0, float *v0, float *u1, float *v1)

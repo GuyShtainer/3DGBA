@@ -74,10 +74,10 @@ static void TestSets(void)
         CHECK(gp_beh(&p->sand, b) == rg_is_sand(b));
         CHECK(gp_beh(&p->tallGrass, b) == Tall(b));
         CHECK(!gp_beh(&p->signpost, b));
-        CHECK(gp_beh(&p->surfable, b) == (u8ok && MetatileBehavior_IsSurfableWaterOrUnderwater((u8)b)));
-        CHECK(gp_beh(&p->reflective, b) == (u8ok && MetatileBehavior_IsReflective((u8)b)));
-        CHECK(gp_beh(&p->ice, b) == (u8ok && MetatileBehavior_IsIce((u8)b)));
-        CHECK(gp_beh(&p->shallowFlowing, b) == (u8ok && MetatileBehavior_IsShallowFlowingWater((u8)b)));
+        CHECK(gp_beh(&p->surfable, b) == (u8ok && MetatileBehavior_EmeraldIsSurfableWaterOrUnderwater((u8)b)));
+        CHECK(gp_beh(&p->reflective, b) == (u8ok && MetatileBehavior_EmeraldIsReflective((u8)b)));
+        CHECK(gp_beh(&p->ice, b) == (u8ok && MetatileBehavior_EmeraldIsIce((u8)b)));
+        CHECK(gp_beh(&p->shallowFlowing, b) == (u8ok && MetatileBehavior_EmeraldIsShallowFlowingWater((u8)b)));
         CHECK(gp_beh(&p->furniture, b) == fur);
         n[0] += gp_beh(&p->water, b); n[1] += gp_beh(&p->jump, b); n[2] += gp_beh(&p->houseDoor, b);
         n[3] += gp_beh(&p->sand, b); n[4] += gp_beh(&p->tallGrass, b); n[6] += gp_beh(&p->surfable, b);
@@ -105,10 +105,15 @@ static void TestDetect(void)
     CHECK(gameprof_detect(rom, 0x100) == gameprof_emerald());   /* Emerald matches by code, as before */
     CHECK(gameprof_detect(rom, 0xBF) == NULL && gameprof_detect(rom, 0) == NULL);   /* short buffer */
     memcpy(rom + 0xAC, "BPRE", 4);
-    CHECK(gameprof_detect(rom, 0x100) == NULL);            /* FireRed rev 1: row still empty (R2 enables it) */
+    /* Phase 34 R2: the renderer detects FireRed / LeafGreen rev 1 (and only rev 1). */
+    p = gameprof_detect(rom, 0x100);
+    CHECK(p != NULL && p->game == GP_FIRERED && p == gameprof_detect_romgen(rom, 0x100));
     memcpy(rom + 0xAC, "BPGE", 4);
-    CHECK(gameprof_detect(rom, 0x100) == NULL);
+    p = gameprof_detect(rom, 0x100);
+    CHECK(p != NULL && p->game == GP_LEAFGREEN && p == gameprof_detect_romgen(rom, 0x100));
     rom[0xBC] = 0;
+    CHECK(gameprof_detect(rom, 0x100) == NULL);            /* rev 0: refused */
+    memcpy(rom + 0xAC, "BPRE", 4);
     CHECK(gameprof_detect(rom, 0x100) == NULL);
     memcpy(rom + 0xAC, "BPEJ", 4);
     CHECK(gameprof_detect(rom, 0x100) == NULL);
@@ -234,8 +239,8 @@ static void TestAnchorRowsDiffer(void)
     CHECK(fr->gfxInfoPtrs == 0x0839FE20u && lg->gfxInfoPtrs == 0x0839FE00u && fr->gfxInfoCount == 152);
     CHECK(fr->fldeffTemplates == 0x083A0080u && lg->fldeffTemplates == 0x083A0060u && fr->fldeffCount == 36);
     CHECK(fr->cb2Overworld == 0x080565C9u && fr->cb2OverworldBasic == 0x080565BDu);
-    /* R1 only harvests: neither row may drive the renderer yet. */
-    CHECK(!fr->rendererOn && !lg->rendererOn && gameprof_emerald()->rendererOn);
+    /* R2: both rows drive the renderer (the runtime anchor self-check still gates each bind). */
+    CHECK(fr->rendererOn && lg->rendererOn && gameprof_emerald()->rendererOn);
     for (c = VXA_ROM_FIRST; c <= VXA_RAM_LAST; c++) CHECK(strcmp(vx_anchor_name(c), "?") != 0);
 }
 

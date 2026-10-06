@@ -51,7 +51,7 @@ VWORLD := $(foreach v,voxel_world voxel_regions voxel_relief voxel_building voxe
 VADAPT := $(foreach v,vx_adapter vx_snapshot vx_lz77 vx_behavior ctr_shims_pure,$(VX)/$(v).c) $(SRC)/rg_gameprof.c
 vtest:
 	@mkdir -p build/vtests
-	@set -e; for t in entities mesh world; do \
+	@set -e; for t in entities mesh world frlg; do \
 	  $(CC) $(VFLAGS) -DVOXEL_HOST_FILES -DCTR_VOXEL_LIGHTING=1 -I$(VX) -I$(SRC) -I$(ROOT)/test/host \
 	    $(ROOT)/test/host/test_voxel_$$t.c $(VWORLD) -lm -o build/vtests/$$t; \
 	  echo "== test_voxel_$$t"; (cd $(ROOT) && tools/romgen/build/vtests/$$t) | tail -3; done

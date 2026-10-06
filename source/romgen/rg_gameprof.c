@@ -66,8 +66,8 @@ static GameProfile sEmerald = {
  * ROM-layer numbers measured on the user's ROMs (docs/phase34-frlg/SURVEY.md, M1) and, for the behaviour values,
  * pokefirered@037335f include/constants/metatile_behaviors.h (numbers only), see docs/PROVENANCE.md. The R1 anchors
  * (the RAM block and the five ROM anchors) are listed per value in docs/PROVENANCE.md and docs/phase34-frlg/BUILDLOG-P34.md
- * with the method of each. `rendererOn` stays false until R2: gameprof_detect() (the renderer's entry) refuses these
- * rows, vx_host runs only the anchor self-check on them. */
+ * with the method of each. `rendererOn` is true from R2: gameprof_detect() (the renderer's entry) returns these rows;
+ * vx_host still runs the anchor self-check on every bind and map change and falls back to 2D on a failure. */
 static const uint8_t kFrlgGroupSizes[43] = {5, 123, 60, 66, 4, 6, 8, 10, 6, 8, 20, 10, 8, 2, 10, 4, 2, 2, 2, 1, 1, 2,
                                             2, 3, 2, 3, 2, 1, 1, 1, 1, 7, 5, 5, 8, 8, 5, 5, 1, 1, 1, 2, 1};
 
@@ -76,7 +76,7 @@ static const uint8_t kFrlgGroupSizes[43] = {5, 123, 60, 66, 4, 6, 8, 10, 6, 8, 2
     .nPrimTiles = 640, .nPrimPals = 7, .nMetatilesTotal = 1024, .tilesetAttrOff = 0x14, .attrBytes = 4,           \
     .behMask = 0x1FF, .layerMask = 0x60000000u, .layerShift = 29, .layoutBytes = 26, .houseHalfWidth = 5,          \
     .houseHeight = 7, .playerAvatarBytes = 0x20, .gfxInfoCount = 152, .fldeffCount = 36, .emeraldIdTables = false,  \
-    .interiors3d = false, .rendererOn = false,                                                                      \
+    .interiors3d = false, .rendererOn = true,                                                                      \
     .gMain = 0x030030F0u, .sb1Ptr = 0x03005008u, .backupLayout = 0x03005040u, .backupMap = 0,                     \
     .mapHeader = 0x02036DFCu, .objEvents = 0x02036E38u, .playerAvatar = 0x02037078u, .sprites = 0x0202063Cu,      \
     .plttUnfaded = 0x020371F8u, .paletteFade = 0x02037AB8u, .weather = 0,                                          \
@@ -104,10 +104,10 @@ static bool is_tall_grass(unsigned b)
 }
 
 /* The renderer predicates take a u8, so values >= 256 are never members. */
-static bool in_surfable(unsigned b) { return b < 256u && MetatileBehavior_IsSurfableWaterOrUnderwater((u8)b); }
-static bool in_reflective(unsigned b) { return b < 256u && MetatileBehavior_IsReflective((u8)b); }
-static bool in_ice(unsigned b) { return b < 256u && MetatileBehavior_IsIce((u8)b); }
-static bool in_shallow(unsigned b) { return b < 256u && MetatileBehavior_IsShallowFlowingWater((u8)b); }
+static bool in_surfable(unsigned b) { return b < 256u && MetatileBehavior_EmeraldIsSurfableWaterOrUnderwater((u8)b); }
+static bool in_reflective(unsigned b) { return b < 256u && MetatileBehavior_EmeraldIsReflective((u8)b); }
+static bool in_ice(unsigned b) { return b < 256u && MetatileBehavior_EmeraldIsIce((u8)b); }
+static bool in_shallow(unsigned b) { return b < 256u && MetatileBehavior_EmeraldIsShallowFlowingWater((u8)b); }
 static bool in_furniture(unsigned b)
 {
     return b < 256u

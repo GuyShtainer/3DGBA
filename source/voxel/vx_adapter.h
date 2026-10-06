@@ -25,6 +25,21 @@ typedef enum
     VX_ERR_CB2           /* not an overworld callback */
 } VxError;
 
+/* FireRed/LeafGreen attributes: n little-endian u32 words at src -> n host u16 (behaviour bits 0..behMask in the low
+ * bits, layer type from bits 29-30 into bits 12-13: Emerald's packing). Pure. */
+void vx_intern_attrs32(const uint8_t *src, size_t n, uint16_t *out);
+
+/* Per-game loose-data directory, no trailing slash (a static buffer, valid until the next call):
+ * Emerald "sdmc:/3ds/3DGBA/voxel" (unchanged), FireRed ".../voxel/BPRE", LeafGreen ".../voxel/BPGE".
+ * vx_profile_pak_path: Emerald's pak, and for FRLG a name that cannot exist (the Emerald pak is pinned to the
+ * Emerald ROM and must never be offered to another game). */
+const char *vx_profile_data_dir(const GameProfile *prof);
+const char *vx_profile_pak_path(const GameProfile *prof);
+
+/* True when the voxel path may draw a map of this type (gMapHeader + 0x17): towns, cities, routes, underwater and
+ * ocean routes {1, 2, 3, 5, 6}. Indoor, cave and secret-base maps are handed back to the 2D frame on FRLG. */
+bool vx_map_is_outdoor(unsigned mapType);
+
 /* The ROM buffer the adapter resolves payload pointers into; NULL/0 unloads it and clears every
  * interned object. The buffer must stay unmodified while set. */
 void vx_adapter_set_rom(const uint8_t *rom, size_t size);

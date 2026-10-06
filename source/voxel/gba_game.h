@@ -298,6 +298,9 @@ struct MapLayout
     s32 width, height;
     const u16 *border, *map;
     const struct Tileset *primaryTileset, *secondaryTileset;
+    /* Effective border size in cells. Emerald: 2x2 always; FireRed/LeafGreen: 2x2, 3x2, or a 0x0 (indoor) border
+     * that the adapter stores as one metatile-0 cell (1x1). 0 = not set by a hand-built layout: read as 2x2. */
+    u8 borderWidth, borderHeight;
 };
 
 struct MapConnection
@@ -448,6 +451,10 @@ const struct Tileset *vx_tileset_at(GbaPtr addr);
 
 const struct MapHeader *GetMapHeaderFromConnection(const struct MapConnection *conn);
 const struct MapLayout *Port_GetMapLayoutById(u16 layoutId);
+/* Border cell count (bw*bh, 2x2 when the layout does not say) and the index into layout->border of the cell the game's
+ * GetBorderBlockAt picks for backup-layout coordinates (bx, by): ((x - MAP_OFFSET) mod bw) + ((y - MAP_OFFSET) mod bh) * bw. */
+unsigned vx_border_cells(const struct MapLayout *layout);
+int vx_border_cell(const struct MapLayout *layout, int bx, int by);
 const struct ObjectEventGraphicsInfo *GetObjectEventGraphicsInfo(u8 graphicsId);
 u8 GetCurrentWeather(void);
 const void *Port_ResolveAssetPointer(const void *p);
@@ -456,6 +463,10 @@ u32 Port_GetSpriteFrameSize(const void *data, u32 declaredSize);
 const u8 *Port_PeekSpriteFramePointer(const void *data, u32 size, u32 offset);
 
 /* Behaviour predicates (vx_behavior.c). */
+bool8 MetatileBehavior_EmeraldIsReflective(u8 b);   /* the raw Emerald tables the Emerald profile row is built from */
+bool8 MetatileBehavior_EmeraldIsIce(u8 b);
+bool8 MetatileBehavior_EmeraldIsSurfableWaterOrUnderwater(u8 b);
+bool8 MetatileBehavior_EmeraldIsShallowFlowingWater(u8 b);
 bool8 MetatileBehavior_IsReflective(u8 b);
 bool8 MetatileBehavior_IsIce(u8 b);
 bool8 MetatileBehavior_IsSurfableWaterOrUnderwater(u8 b);

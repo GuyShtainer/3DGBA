@@ -41,6 +41,7 @@ typedef struct
     uint8_t backupLayout[12];
     uint16_t backupMap[VX_BACKUP_MAP_MAX_CELLS];
     uint32_t backupMapCells; /* w*h, 0 when the layout was implausible */
+    uint32_t backupMapBase;  /* EWRAM address the cells were copied from (fixed on Emerald; the live pointer on FRLG) */
     uint8_t mapHeader[GBA_MAP_HEADER_BYTES];
     /* objects and sprites */
     uint8_t objEvents[GBA_OBJECT_EVENT_COUNT * GBA_OBJECT_EVENT_STRIDE];
@@ -58,5 +59,9 @@ typedef struct
 /* Fills *snap from src. Returns true when the copy is complete and plausible; false leaves
  * snap->valid false (the voxel gate then drops to flat for the frame). */
 bool vx_snapshot_take(VxSnapshot *snap, const VxMemSrc *src);
+
+/* FireRed/LeafGreen keep the weather struct behind a ROM constant (profile weatherPtr): the adapter resolves it once
+ * per ROM bind and tells the snapshot here. 0 = unresolved; Emerald (profile weather != 0) never needs it. */
+void vx_snapshot_set_weather_base(uint32_t ewramAddr);
 
 #endif
