@@ -32,4 +32,8 @@ bool rg_roles_layout(const RgWorld *w, const RgRoles *r, RgPair *pair, const RgL
  * `reverse` walks the pairs backwards (the output must not depend on it: determinism test). */
 RgErr rg_roles_all(const RgWorld *w, RgRoles *r, bool reverse, RgProgressFn progress, void *ctx);
 
+/* G11 (cells:333-340 is_ledge_junction): a blocked cell with a jump behaviour on a horizontal neighbour and on a
+ * vertical neighbour (a ledge turning a corner). Pure function of blocked + behaviour; off-map is not blocked. */
+bool rg_is_ledge_junction(const RgLayout *L, int x, int y);
+
 #endif

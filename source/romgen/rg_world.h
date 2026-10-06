@@ -22,7 +22,9 @@ typedef enum {
     RG_ERR_NOMEM,
     RG_ERR_CANCELLED,
     RG_ERR_TOO_BIG,              /* a buildings.bin field would overflow its width */
-    RG_ERR_BUILDINGS             /* a model or atlas the format cannot hold */
+    RG_ERR_BUILDINGS,            /* a model or atlas the format cannot hold */
+    RG_ERR_TABLES,               /* the relief number tables do not describe this ROM (SPEC-S3 3.3) */
+    RG_ERR_RELIEF                /* a relief.bin field would overflow its width, or the mode is not built yet */
 } RgErr;
 
 /* Explicit little-endian reads: no casts, so host and device agree. */

@@ -73,6 +73,8 @@ const char *rg_err_str(RgErr e)
     case RG_ERR_CANCELLED: return "cancelled";
     case RG_ERR_TOO_BIG: return "a buildings.bin field overflows its width";
     case RG_ERR_BUILDINGS: return "building model or atlas not representable";
+    case RG_ERR_TABLES: return "relief tables do not describe this ROM";
+    case RG_ERR_RELIEF: return "relief.bin field overflow or relief mode not available";
     }
     return "?";
 }

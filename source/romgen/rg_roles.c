@@ -4,6 +4,7 @@
  * Portions Copyright (c) Dust Zallax, MIT. */
 #include "rg_roles.h"
 
+#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -12,6 +13,18 @@
 
 #define HOUSE_HALF_WIDTH 5
 #define HOUSE_HEIGHT 7
+
+bool rg_is_ledge_junction(const RgLayout *L, int x, int y)
+{
+    bool horizontal, vertical;
+
+    assert(L != NULL);
+    if (!rg_blocked(L, x, y))
+        return false;
+    horizontal = rg_is_jump(rg_behaviour(L, x - 1, y)) || rg_is_jump(rg_behaviour(L, x + 1, y));
+    vertical = rg_is_jump(rg_behaviour(L, x, y - 1)) || rg_is_jump(rg_behaviour(L, x, y + 1));
+    return horizontal && vertical;
+}
 
 typedef struct {
     const RgWorld *w;
