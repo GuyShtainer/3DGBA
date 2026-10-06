@@ -499,3 +499,12 @@ Baseline = main e3a7c32 built from `git archive` in a scratch directory; ROMGEN_
 - k_gym (+ k_gym_7, k_gym_8 width variants, one builder, arg0 = width px): check PASS on all three (ortho 0/0/0 on every exact rect, density 0, round trip ok); placements 2 + 4 + 1 = 7. Viewed previews (6-wide, 8-wide): slatted gold roof slab, GYM plate, porch with Poke Ball sign and doors read correctly from both oblique views and top.
 - K2 done (2026-10-06): 5 recipes (k_center, k_mart, k_gym, k_gym_7, k_gym_8), 41 placements, census covered 39/152 (was 3). New FR = LG buildings.bin SHA-1 pin dec0c711992d4b9186249f298e4f10bac9d7393f (7 models, 41 placements, 906280 bytes). Emerald gate identical (buildings 2929c764, regions 007a370f, signposts 38515605, relief 21a837f0 / ledges eb25a383; FRLG regions 3716874d, signposts ba2fde45). `make test` and `vtest` 0 failures. Not done: Azahar Viridian screenshot (SPEC 5.5 item 7), skipped as too costly for this slice. Variants not mine: Saffron Center/Gym, One Island Center, Indigo Plateau.
 - Evidence: evidence/k2-k_center.png, k2-k_mart.png, k2-k_gym.png, k2-k_gym_7.png, k2-k_gym_8.png (fl | fr | top views).
+
+## 2026-10-06: K2 merged (f6679d2), lead in-game check
+
+- Gate after the merge: Emerald SHA-1s unchanged (buildings 2929c764, regions 007a370f, signposts 38515605, FULL relief
+  21a837f0, ledges relief eb25a383); FR buildings.bin `dec0c711992d4b…` (7 models, 41 placements); FRLG regions 3716874d,
+  signposts ba2fde45.
+- Azahar, FireRed, warp-save copy `roms/firered-viridian.sav` (3/1 at 30,28; gitignored, Guy's save untouched):
+  `evidence/k2-fr-viridian.png`. The Viridian Pokémon Center stands as the K2 model with its sign and door; the Mart roof
+  shows at the top edge. Flowers and the fence row are still flat (known, later slices). LG check pending.
