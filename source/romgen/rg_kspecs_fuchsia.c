@@ -12,6 +12,7 @@
 #include <string.h>
 
 #define L_FUCHSIA 85, 0xE2428371u
+#define L_SAFARI_C 147, 0x1A2757E4u
 #define FZ_GROUND {0x001}
 
 static void fz_pt(double (*poly)[2], unsigned i, double z, double y)
@@ -82,18 +83,28 @@ static const RgSideCfg kHallSide[1] = {
  * darker eave 52-55), the facade with the grey awning, two arched windows and the door 56-80. One flat block, 24 high. */
 static bool k_fuchsia_house(const RgSpec *spec, int a0, int a1, RgPartList *out)
 {
-    (void)spec; (void)a0; (void)a1;
-    return fz_block(out, "house", 0, 96, 80, 56, 8) && !out->failed;
+    (void)spec;
+    return fz_block(out, "house", 0, a0, 8 + a1 + 24, 8 + a1, 8) && !out->failed;   /* a0 = width, a1 = roof rows */
 }
 static const RgExact kHouseExact[1] = {{0, 8, 96, 80, false}};
 static const RgSideCfg kHouseSide[1] = {
     {NULL, {8, 57, 88, 59}, {8, 10, 40, 12}, 999, true},
 };
 
+/* ---- k_safari_rest: 80x64 art (rect (28,22), 5x4 on the Safari Zone centre area) -------------------------------------- */
+/* The Safari Zone rest houses: the same gold-roofed house as Fuchsia's, one cell narrower. Rows: grass 0-7, the gold roof
+ * 8-40 (a level top edge at row 8), the facade with the grey awning, two arched windows and the door 40-64. */
+static const RgExact kRestExact[1] = {{0, 8, 80, 64, false}};
+static const RgSideCfg kRestSide[1] = {
+    {NULL, {8, 41, 72, 43}, {8, 10, 40, 12}, 999, true},
+};
+
 const RgSpec rg_kspecs_fuchsia[] = {
     {"k_fuchsia_hall", RG_SPEC_DIRECT, L_FUCHSIA, {13, 28, 5, 4}, {1, 4}, FZ_GROUND, 1, kHallExact, 1,
      k_fuchsia_hall, 0, 0, kHallSide},
     {"k_fuchsia_house", RG_SPEC_DIRECT, L_FUCHSIA, {26, 12, 6, 5}, {0, 0}, FZ_GROUND, 1, kHouseExact, 1,
-     k_fuchsia_house, 0, 0, kHouseSide},
+     k_fuchsia_house, 96, 48, kHouseSide},
+    {"k_safari_rest", RG_SPEC_DIRECT, L_SAFARI_C, {28, 22, 5, 4}, {1, 3}, FZ_GROUND, 1, kRestExact, 1,
+     k_fuchsia_house, 80, 32, kRestSide},
 };
 const unsigned rg_kspecs_fuchsia_count = sizeof(rg_kspecs_fuchsia) / sizeof(rg_kspecs_fuchsia[0]);
