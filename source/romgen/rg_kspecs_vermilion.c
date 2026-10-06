@@ -260,24 +260,50 @@ static const RgExact kHutExact[1] = {{0, 0, 64, 64, false}};
 static const RgExact kHouseExact[1] = {{0, 12, 64, 64, false}};
 static const RgExact kGreenExact[1] = {{0, 0, 80, 64, false}};
 
+/* Phase 34 side walls: the end-face patches of each model (art coordinates), see rg_close_sides. */
+static const RgSideCfg kVmFanSide[1] = {
+    {NULL, {6, 44, 51, 45}, {2, 10, 6, 38}, 24, true},
+};
+static const RgSideCfg kVmHouseSide[1] = {
+    {NULL, {3, 44, 5, 57}, {2, 10, 6, 38}, 24, true},
+};
+static const RgSideCfg kVmGreenSide[1] = {
+    {NULL, {3, 44, 7, 58}, {1, 10, 7, 30}, 30, true},
+};
+static const RgSideCfg kHutSide[1] = {
+    {NULL, {20, 51, 28, 54}, {20, 51, 28, 54}, 999, true},
+};
+static const RgSideCfg kDaySide[1] = {
+    {NULL, {8, 62, 28, 66}, {12, 21, 67, 27}, 40, true},
+};
+static const RgSideCfg kGate5Side[1] = {
+    {NULL, {23, 84, 73, 90}, {23, 84, 73, 90}, 999, true},
+};
+static const RgSideCfg kGate6Side[1] = {
+    {NULL, {39, 68, 89, 74}, {39, 68, 89, 74}, 999, true},
+};
+static const RgSideCfg kGate78Side[1] = {
+    {NULL, {24, 73, 104, 76}, {24, 73, 104, 76}, 999, true},
+};
+
 const RgSpec rg_kspecs_vermilion[] = {
     {"k_vermilion_fanclub", RG_SPEC_DIRECT, L_VERMILION, {8, 3, 5, 4}, {0, 0}, VM_GROUND, 1, kFanExact, 1,
-     k_vermilion_flat, 80, 0, NULL},
+     k_vermilion_flat, 80, 0, kVmFanSide},
     {"k_vermilion_house", RG_SPEC_DIRECT, L_VERMILION, {18, 14, 4, 4}, {1, 4}, VM_GROUND, 1, kHouseExact, 1,
-     k_vermilion_flat, 64, 0, NULL},
+     k_vermilion_flat, 64, 0, kVmHouseSide},
     {"k_vermilion_green", RG_SPEC_DIRECT, L_VERMILION, {11, 14, 5, 4}, {0, 0}, VM_GROUND, 1, kGreenExact, 1,
-     k_vermilion_green, 80, 0, NULL},
+     k_vermilion_green, 80, 0, kVmGreenSide},
     {"k_path_hut", RG_SPEC_DIRECT, L_ROUTE5, {30, 28, 4, 4}, {1, 4}, VM_GROUND, 1, kHutExact, 1,
-     k_path_hut, 0, 0, NULL},
+     k_path_hut, 0, 0, kHutSide},
     {"k_daycare", RG_SPEC_DIRECT, L_ROUTE5, {21, 21, 5, 5}, {0, 0}, VM_GROUND, 1, kDayExact, 13,
-     k_daycare, 0, 0, NULL},
+     k_daycare, 0, 0, kDaySide},
     {"k_route5_gate", RG_SPEC_DIRECT, L_ROUTE5, {22, 32, 6, 7}, {0, 0}, VM_GROUND, 1, kGate5Exact, 2,
-     k_gate_half, 0, 0, NULL},
+     k_gate_half, 0, 0, kGate5Side},
     {"k_route6_gate", RG_SPEC_DIRECT, L_ROUTE6, {9, 0, 8, 6}, {0, 0}, VM_GROUND, 1, kGate6Exact, 1,
-     k_gate_half, 16, 16, NULL},
+     k_gate_half, 16, 16, kGate6Side},
     {"k_route7_gate", RG_SPEC_DIRECT, L_ROUTE7, {15, 7, 8, 5}, {0, 0}, VM_GROUND, 1, kGate7Exact, 1,
-     k_route7_gate, 0, 0, NULL},
+     k_route7_gate, 0, 0, kGate78Side},
     {"k_route8_gate", RG_SPEC_DIRECT, L_ROUTE8, {0, 7, 8, 5}, {0, 0}, VM_GROUND, 1, kGate7Exact, 1,
-     k_route7_gate, 0, 0, NULL},
+     k_route7_gate, 0, 0, kGate78Side},
 };
 const unsigned rg_kspecs_vermilion_count = sizeof(rg_kspecs_vermilion) / sizeof(rg_kspecs_vermilion[0]);
