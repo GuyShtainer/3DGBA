@@ -198,6 +198,25 @@ static const RgSideCfg kGate12Side[1] = {
     {NULL, {48, 20, 54, 56}, {48, 20, 54, 56}, 999, true},
 };
 
+/* ---- k_route16_gate: 128x192 art (rect (20,3), 8x12 on Route 16) --------------------------------------------------------- */
+/* The Cycling Road gatehouse (doors (20,6), (27,6) at the north end, (20,13), (27,13) at the south end): a two-level
+ * building drawn from above. Rows: the upper grey ribbed roof top 0-75, its rim 75-80, the lower roof top 80-139, its
+ * rim 139-144, the window band, yellow brick and dark base 144-192, over x 16-112 (the side porches stay flat ground). A
+ * two-step profile: the facade and lower rim are one face at z 192 (rows 139-192, 53 high), the lower roof top is level
+ * at y 53 back to z 133, the upper rim stands 5 higher (rows 75-80) and the upper roof top is level at y 58. */
+static bool k_route16_gate(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    static const double pts[6][2] = {{192, 0}, {192, 53}, {133, 53}, {133, 58}, {58, 58}, {58, 0}};
+    static const double rows[6][2] = {{139, 192}, {80, 139}, {75, 80}, {0, 75}, {0, 0}, {0, 0}};
+
+    (void)spec; (void)a0; (void)a1;
+    return fz_profile(out, "gate", 16, 112, 6, pts, rows) && !out->failed;
+}
+static const RgExact kGate16Exact[1] = {{16, 0, 112, 192, false}};
+static const RgSideCfg kGate16Side[1] = {
+    {NULL, {48, 20, 54, 56}, {48, 20, 54, 56}, 999, true},
+};
+
 /* ---- k_safari_rest: 80x64 art (rect (28,22), 5x4 on the Safari Zone centre area) -------------------------------------- */
 /* The Safari Zone rest houses: the same gold-roofed house as Fuchsia's, one cell narrower. Rows: grass 0-7, the gold roof
  * 8-40 (a level top edge at row 8), the facade with the grey awning, two arched windows and the door 40-64. */
@@ -227,6 +246,8 @@ const RgSpec rg_kspecs_fuchsia[] = {
      k_cottage, 0, 0, kCotSide},
     {"k_route12_gate", RG_SPEC_DIRECT, L_ROUTE12, {12, 15, 5, 7}, {0, 0}, FZ_GROUND, 1, kGate12Exact, 1,
      k_route12_gate, 0, 0, kGate12Side},
+    {"k_route16_gate", RG_SPEC_DIRECT, L_ROUTE16, {20, 3, 8, 12}, {0, 0}, FZ_GROUND, 1, kGate16Exact, 1,
+     k_route16_gate, 0, 0, kGate16Side},
     {"k_safari_rest", RG_SPEC_DIRECT, L_SAFARI_C, {28, 22, 5, 4}, {1, 3}, FZ_GROUND, 1, kRestExact, 1,
      k_fuchsia_house, 80, 32, kRestSide},
 };
