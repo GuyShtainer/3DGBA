@@ -128,6 +128,39 @@ static const RgSideCfg kHouseSide[1] = {
     {NULL, {8, 57, 56, 60}, {12, 29, 51, 35}, 999, true},
 };
 
+/* ---- k_saffron_dojo: 96x80 art (rect (37,8), 6x5; door (40,12)) ------------------------------------------------------- */
+/* The Fighting Dojo, drawn as an elevation with a large flat tan roof. Rows: trees 0-8, the cream roof rim 9-23, the tan
+ * tiles 24-51, a dark eave 51-53, then the low facade with its windows and the grey-green ledge 53-72. The entrance
+ * porch (x 40-72) stands in front: its tan roof with the Poke Ball sign (rows 48-63) over the dark door (rows 63-79).
+ * One flat block 19 high (roof rows 9-53, so the roof is 44 deep) plus the porch box. */
+static bool k_saffron_dojo(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    (void)spec; (void)a0; (void)a1;
+    return sf_block(out, "hall", 0, 96, 72, 53, 9) &&
+           sf_porch(out, "porch", 40, 72, 79, 63, 79, 48, 63) && !out->failed;
+}
+static const RgExact kDojoExact[2] = {{0, 9, 96, 72, false}, {40, 48, 72, 79, false}};
+static const RgSideCfg kDojoSide[2] = {
+    {"porch", {48, 64, 64, 78}, {48, 64, 64, 78}, 999, false},
+    {NULL, {72, 57, 80, 64}, {4, 35, 92, 37}, 999, true},
+};
+
+/* ---- k_saffron_gym: 112x80 art (rect (43,8), 7x5; door (46,12)) ------------------------------------------------------- */
+/* The Saffron Gym: the Dojo's big sibling, the same style. Rows: the tan roof with its louvres 1-42, a dark bevelled
+ * eave 42-47, the white facade with two window triples and the GYM sign 47-71, and the same entrance porch (x 40-72,
+ * rows 48-79). One flat block 24 high (roof rows 1-47, 46 deep) plus the porch box. */
+static bool k_saffron_gym(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    (void)spec; (void)a0; (void)a1;
+    return sf_block(out, "hall", 0, 112, 71, 47, 1) &&
+           sf_porch(out, "porch", 40, 72, 79, 63, 79, 48, 63) && !out->failed;
+}
+static const RgExact kGymExact[2] = {{0, 1, 112, 71, false}, {40, 48, 72, 79, false}};
+static const RgSideCfg kGymSide[2] = {
+    {"porch", {49, 68, 55, 73}, {44, 57, 50, 62}, 63, false},
+    {NULL, {7, 56, 40, 60}, {6, 39, 106, 41}, 999, true},
+};
+
 const RgSpec rg_kspecs_saffron[] = {
     {"k_saffron_silph", RG_SPEC_DIRECT, L_SAFFRON, {29, 16, 9, 15}, {0, 0}, SF_GROUND, 1, kSilphExact, 4,
      k_saffron_silph, 0, 0, kSilphSide},
@@ -137,5 +170,9 @@ const RgSpec rg_kspecs_saffron[] = {
      k_saffron_house, 48, 0, kHouseSide},
     {"k_saffron_house5", RG_SPEC_DIRECT, L_SAFFRON, {41, 34, 5, 5}, {1, 5}, SF_GROUND, 1, kHouse5Exact, 1,
      k_saffron_house, 80, 0, kHouseSide},
+    {"k_saffron_dojo", RG_SPEC_DIRECT, L_SAFFRON, {37, 8, 6, 5}, {0, 0}, SF_GROUND, 1, kDojoExact, 2,
+     k_saffron_dojo, 0, 0, kDojoSide},
+    {"k_saffron_gym", RG_SPEC_DIRECT, L_SAFFRON, {43, 8, 7, 5}, {0, 0}, SF_GROUND, 1, kGymExact, 2,
+     k_saffron_gym, 0, 0, kGymSide},
 };
 const unsigned rg_kspecs_saffron_count = sizeof(rg_kspecs_saffron) / sizeof(rg_kspecs_saffron[0]);
