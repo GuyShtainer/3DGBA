@@ -65,3 +65,10 @@ Order: after L1-L4. Each step is checked in Azahar, then on hardware (frame time
 L1 lead check (2026-10-06, after merge 7c9beec): FireRed Viridian, warp-save copy `roms/firered-viridian2.sav` (3/1 at
 21,17): the round bushes (0x005) along the fence west of the Pokémon Center path stand as rounded cards
 (`evidence/l1-fr-viridian-after.png`). Still flat there: fences, hedges, and the Viridian houses (town slice K3).
+
+## L5: plain side walls on Kanto buildings (lead, 2026-10-07)
+
+After the side-wall fix (55ddb82) every Kanto building has closed west/east ends, but the end faces are flat colour
+patches cut from the model's own art (the ROM has no side-view drawing). Guy's Day Care view now shows a solid wall,
+yet a plain one. Future: dress the end walls from the front art (repeat the facade's wall band, base stripe and a
+window from the same building) so a side reads like the front. Size: small-medium, Kanto table only.
