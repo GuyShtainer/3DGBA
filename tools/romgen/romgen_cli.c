@@ -1,10 +1,10 @@
 /* romgen_cli.c -- host tool: reads a Pokemon Emerald (BPEE) .gba and writes the voxel data files
  * (3DGBA, GPLv3). Pure host code around the romgen cores in source/romgen/.
  *
- *   romgen ROM.gba OUTDIR [--time] [--only regions,signposts,buildings,relief] [--relief ledges|off] [--relief-layout ID]
+ *   romgen ROM.gba OUTDIR [--time] [--only regions,signposts,buildings,relief] [--relief ledges|full|off] [--relief-layout ID]
  *         [--relief-log] [--relief-prep] [--relief-world] [--relief-sum neumaier|naive|both] [--dump-roles LAYOUT_ID] [--dump-model NAME]
  *
- * Writes OUTDIR/regions.bin, signposts.bin, buildings.bin and relief.bin (--relief ledges, the S3a file; default).
+ * Writes OUTDIR/regions.bin, signposts.bin, buildings.bin and relief.bin (--relief ledges, the S3a file, is the default; --relief full is the whole export, S3.7).
  * --relief-layout ID prints that layout's relief.bin row and every cell's 25 heights. --dump-model NAME prints one model's summary and
  * writes nothing. Built with -DRG_MEMCOUNT (`make -C tools/romgen mem`, build/romgen_mem) --time also prints the
  * peak live heap of rg_run. The output is derived from the user's ROM: write it
@@ -467,10 +467,12 @@ int main(int argc, char **argv)
 
             if (strcmp(v, "ledges") == 0) {
                 reliefMode = RG_RELIEF_LEDGES;
+            } else if (strcmp(v, "full") == 0) {
+                reliefMode = RG_RELIEF_FULL;
             } else if (strcmp(v, "off") == 0) {
                 wantRelief = false;
             } else {
-                fprintf(stderr, "romgen: --relief %s is not available yet (ledges|off)\n", v);
+                fprintf(stderr, "romgen: --relief %s is not known (ledges|full|off)\n", v);
                 return 2;
             }
         } else if (strcmp(argv[i], "--relief-log") == 0) {
@@ -496,7 +498,7 @@ int main(int argc, char **argv)
         }
     }
     if (romPath == NULL || (outDir == NULL && dumpModel == NULL)) {
-        fprintf(stderr, "usage: romgen ROM.gba OUTDIR [--time] [--only regions,signposts,buildings,relief] [--relief ledges|off] [--relief-layout ID] [--relief-log] [--relief-prep] [--relief-world] [--relief-sum neumaier|naive|both] [--dump-roles LAYOUT_ID] [--dump-model NAME]\n");
+        fprintf(stderr, "usage: romgen ROM.gba OUTDIR [--time] [--only regions,signposts,buildings,relief] [--relief ledges|full|off] [--relief-layout ID] [--relief-log] [--relief-prep] [--relief-world] [--relief-sum neumaier|naive|both] [--dump-roles LAYOUT_ID] [--dump-model NAME]\n");
         return 2;
     }
     rom = ReadFile(romPath, &n);
@@ -553,8 +555,11 @@ int main(int argc, char **argv)
         printf("buildings gate: %u failing model(s)\n", out.buildingsFailed);
     }
     if (wantRelief && out.relief != NULL && WriteFile(outDir, "relief.bin", out.relief, out.reliefSize))
-        printf("relief.bin: %zu bytes, %u rows, %u cells, %u ledge layouts, %u ledge cells (mode ledges)\n", out.reliefSize,
-               out.rst.rows, out.rst.cells, out.rst.ledgeLayouts, out.rst.ledgeCells);
+        printf("relief.bin: %zu bytes, %u rows, %u cells, %u ledge layouts, %u ledge cells (mode %s)\n", out.reliefSize,
+               out.rst.rows, out.rst.cells, out.rst.ledgeLayouts, out.rst.ledgeCells, reliefMode == RG_RELIEF_FULL ? "full" : "ledges");
+    if (wantRelief && out.relief != NULL && reliefMode == RG_RELIEF_FULL)
+        printf("relief full: %u drawn rows, %u cut variants, %u cut table cells, %u groups (%u kept)\n", out.rst.drawnRows,
+               out.rst.variants, out.rst.cuts, out.rst.groups, out.rst.groupsOk);
     if (timing)
         printf("time: total %.1f ms (world %.1f, roles %.1f, signs %.1f, serialise %.1f)\n", NowMs() - t0, out.msWorld,
                out.msRoles, out.msSigns, out.msWrite);

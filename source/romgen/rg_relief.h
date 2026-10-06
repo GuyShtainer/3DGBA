@@ -25,8 +25,8 @@ typedef struct RgReliefStats {
 #include "rg_rlat.h"
 int rg_relief_cells(const RgLat *lat, int unit, uint8_t **out);
 
-/* Builds relief.bin into a malloc'd blob. roles may be NULL in LEDGES mode (it is read by FULL, S3.7). progress =
- * layouts done of total. RG_ERR_RELIEF for FULL until S3.7. */
+/* Builds relief.bin into a malloc'd blob. roles may be NULL in LEDGES mode (FULL reads it). progress =
+ * layouts done of total. FULL (S3.7) needs roles. */
 RgErr rg_relief_build(const RgWorld *w, const RgRoles *r, RgReliefMode mode, RgProgressFn progress, void *ctx,
                       const volatile int *cancel, uint8_t **out, size_t *outSize, RgReliefStats *st);
 
