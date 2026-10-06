@@ -11,7 +11,7 @@
  *    4 mapLayouts: the all-headers rule          14 backupLayout w/h = layout w + 15 / h + 14
  *    5 General primary tileset                   15 gMapHeader.layoutId = ROM header's, for sb1's (group, num)
  *    6 Building primary tileset                  16 the player object: isPlayer, coords = sb1 pos + 7
- *    7 object graphics table                     17 the player sprite's template is a ROM pointer
+ *    7 object graphics table                     17 the player sprite's anim table is a ROM pointer
  *    8 field-effect template table               18 gPaletteFade.y in 0..16
  *    9 weatherPtr const -> EWRAM struct          19 weather: current id 0..14, palette state 0..3
  *   10 CB2_Overworld / CB2_OverworldBasic        20 callback2 is an overworld callback and not in battle

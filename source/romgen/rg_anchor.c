@@ -21,7 +21,7 @@
 #define OFF_LAYOUT_PRIMARY 0x10u
 #define OFF_GFX_IMAGES 0x1Cu
 #define OFF_TMPL_CB 0x14u
-#define OFF_SP_TEMPLATE 0x14u
+#define OFF_SP_ANIMS 0x08u   /* +0x14 (template) is a stack copy in FRLG (live: 0x03007DAC), so the anim table is the ROM-pointer test */
 #define OBJ_STRIDE 0x24u
 #define SPRITE_STRIDE 0x44u
 #define BACKUP_MAX_CELLS 10240u
@@ -310,7 +310,7 @@ int vx_anchor_check_ram(const GameProfile *p, const uint8_t *rom, size_t size, c
     spr = ew_at(ram, p->sprites, 65u * SPRITE_STRIDE);
     if (spr == NULL || sid >= 65u)
         return fail(17, sid);
-    v = r32(spr + sid * SPRITE_STRIDE + OFF_SP_TEMPLATE);
+    v = r32(spr + sid * SPRITE_STRIDE + OFF_SP_ANIMS);
     if (!is_rom_ptr(size, v))
         return fail(17, v);
     /* 18: the palette fade's y field */

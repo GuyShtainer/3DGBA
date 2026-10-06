@@ -38,6 +38,9 @@ static bool sWorldReady;
 static const GameProfile *sProbe;
 static const uint8_t *sProbeRom;
 static size_t sProbeSize;
+static uint32_t sProbeSeen;    /* the map the last frames showed, and for how many frames in a row (a map load updates the
+                                * saved location a few frames before the backup layout, so the RAM checks wait for a settled map) */
+static unsigned sProbeRun;
 static uint32_t sProbeLoc;     /* (group << 8 | num) the RAM checks last ran for, 0xFFFFFFFF = not yet */
 /* The world's logical surface and the bloom target, as Emerald3DS composes them (3ds_video.c:3804-3817):
  * the world is drawn into a 512x256 RGBA8 VRAM texture with a 16-bit depth buffer, then blitted to the
@@ -90,6 +93,8 @@ static void ProbeRom(const uint8_t *rom, size_t sz)
     sProbeRom = rom;
     sProbeSize = sz;
     sProbeLoc = 0xFFFFFFFFu;
+    sProbeSeen = 0xFFFFFFFFu;
+    sProbeRun = 0;
 }
 
 static uint32_t Rd32At(const uint8_t *b, uint32_t off)
@@ -117,7 +122,13 @@ static void ProbeRam(GbaCore *top)
         loc = 0xFFFFFFFEu;
     else
         loc = ((uint32_t)ew[sb1 - 0x02000000u + 4u] << 8) | ew[sb1 - 0x02000000u + 5u];
-    if (loc == sProbeLoc)
+    if (loc != sProbeSeen)
+    {
+        sProbeSeen = loc;
+        sProbeRun = 0;
+        return;
+    }
+    if (loc == sProbeLoc || ++sProbeRun != 45u)
         return;
     sProbeLoc = loc;
     ram.ewram = ew;

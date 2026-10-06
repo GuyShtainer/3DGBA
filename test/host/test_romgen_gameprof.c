@@ -400,7 +400,7 @@ static void SynBuild(Syn *s)
     ob = s->p.objEvents - 0x02000000u + 3u * 0x24u;
     e[ob + 2] = 1;                                      /* isPlayer */
     SPut16(e, ob + 0x10, 17); SPut16(e, ob + 0x12, 27); /* 10 + 7, 20 + 7 */
-    SPut32(e, s->p.sprites - 0x02000000u + 2u * 0x44u + 0x14u, 0x08000400u);
+    SPut32(e, s->p.sprites - 0x02000000u + 2u * 0x44u + 0x08u, 0x08000400u);
     SPut16(e, s->p.paletteFade - 0x02000000u + 4, 5u << 6);
     e[0x38F00 + s->p.weatherOff[0]] = 3; e[0x38F00 + s->p.weatherOff[1]] = 3;
 }
@@ -440,7 +440,7 @@ static void TestRamChecks(void)
     BREAK_AND_CHECK(16, SPut16(s.ew, ob + 0x10, 16), SPut16(s.ew, ob + 0x10, 17));
     BREAK_AND_CHECK(16, SPut16(s.ew, ob + 0x12, 28), SPut16(s.ew, ob + 0x12, 27));
     BREAK_AND_CHECK(17, s.ew[pa + 4] = 65, s.ew[pa + 4] = 2);
-    BREAK_AND_CHECK(17, SPut32(s.ew, sp + 0x14, 0x03000000u), SPut32(s.ew, sp + 0x14, 0x08000400u));
+    BREAK_AND_CHECK(17, SPut32(s.ew, sp + 0x08, 0x03000000u), SPut32(s.ew, sp + 0x08, 0x08000400u));
     BREAK_AND_CHECK(18, SPut16(s.ew, pf + 4, 17u << 6), SPut16(s.ew, pf + 4, 5u << 6));
     BREAK_AND_CHECK(19, SPut32(s.rom, 0x200, 0x08000000u), SPut32(s.rom, 0x200, 0x02038F00u));
     BREAK_AND_CHECK(19, s.ew[0x38F00 + s.p.weatherOff[0]] = 15, s.ew[0x38F00 + s.p.weatherOff[0]] = 3);
