@@ -484,3 +484,11 @@ Baseline = main e3a7c32 built from `git archive` in a scratch directory; ROMGEN_
 - Merge: `rg_gameprof.c` hunks are three: the two `kEmeraldTree*` / `kFrlgTreePart` arrays + `GP_FRLG_TREES` macro just above the Emerald row,
   four fields in the Emerald row, and `, GP_FRLG_TREES` appended after `.cb2OverworldBasic = ...` at the end of `GP_FRLG_COMMON` (not near
   the house-size fields). `rg_gameprof.h` gains `treeGroundCount` and a comment.
+
+## 2026-10-06: T1 merged (457efb2), lead emulator check
+
+- The host CLI regenerated FR/LG `regions.bin`, `signposts.bin` and `buildings.bin` into the emulated SD (`BPRE`/`BPGE`).
+- `evidence/t1-fr-route1-trees.png`: Route 1's tree walls are 3D trees.
+- `evidence/t1-fr-pallet.png`: Pallet's border trees are 3D (top corners); the signs, mailboxes and K1 models are as
+  in G2.
+- Still flat: tall grass (look backlog L2), flowers, fences and the round bush 0x005.
