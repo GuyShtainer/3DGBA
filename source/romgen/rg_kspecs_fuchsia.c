@@ -184,6 +184,20 @@ static const RgSideCfg kCotSide[1] = {
     {NULL, {34, 42, 62, 44}, {14, 13, 66, 18}, 24, true},
 };
 
+/* ---- k_route12_gate: 80x112 art (rect (12,15), 5x7 on Route 12) ----------------------------------------------------------- */
+/* The Route 12 gatehouse on its pier (doors (14,15), (15,15) at the north deck and (14,21) at the south arch). Rows: the
+ * wooden north deck 0-16 (flat), the grey ribbed roof top 16-59, a dark rim 59-64, the window band, yellow brick and the
+ * dark arch with its canopy 64-112. One flat block over the full 80 px: facade rows 59-112 = 53 high. */
+static bool k_route12_gate(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    (void)spec; (void)a0; (void)a1;
+    return fz_block(out, "gate", 0, 80, 112, 59, 16) && !out->failed;
+}
+static const RgExact kGate12Exact[1] = {{0, 16, 80, 112, false}};
+static const RgSideCfg kGate12Side[1] = {
+    {NULL, {48, 20, 54, 56}, {48, 20, 54, 56}, 999, true},
+};
+
 /* ---- k_safari_rest: 80x64 art (rect (28,22), 5x4 on the Safari Zone centre area) -------------------------------------- */
 /* The Safari Zone rest houses: the same gold-roofed house as Fuchsia's, one cell narrower. Rows: grass 0-7, the gold roof
  * 8-40 (a level top edge at row 8), the facade with the grey awning, two arched windows and the door 40-64. */
@@ -211,6 +225,8 @@ const RgSpec rg_kspecs_fuchsia[] = {
      k_cottage, 0, 0, kCotSide},
     {"k_route16_cottage", RG_SPEC_DIRECT, L_ROUTE16, {9, 3, 5, 3}, {0, 0}, FZ_GROUND, 1, kCotExact, 13,
      k_cottage, 0, 0, kCotSide},
+    {"k_route12_gate", RG_SPEC_DIRECT, L_ROUTE12, {12, 15, 5, 7}, {0, 0}, FZ_GROUND, 1, kGate12Exact, 1,
+     k_route12_gate, 0, 0, kGate12Side},
     {"k_safari_rest", RG_SPEC_DIRECT, L_SAFARI_C, {28, 22, 5, 4}, {1, 3}, FZ_GROUND, 1, kRestExact, 1,
      k_fuchsia_house, 80, 32, kRestSide},
 };
