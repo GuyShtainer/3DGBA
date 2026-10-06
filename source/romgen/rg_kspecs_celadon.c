@@ -64,6 +64,43 @@ static bool cl_block(RgPartList *out, const char *name, double x0, double x1, do
     return cl_profile(out, name, x0, x1, 4, (const double (*)[2])pts, (const double (*)[2])rows);
 }
 
+/* A tall slab seen only from the front: the facade is art rows ftop..zf (a vertical face), the top is a smear of the
+ * art rows just under the roof line, and the slab runs `depth` back from the facade. The ROM art has no roof for these
+ * (the camera sees the front only), so the top is invented. */
+static bool cl_slab(RgPartList *out, const char *name, double x0, double x1, double zf, double ftop, double depth,
+                    double smear0)
+{
+    double h = zf - ftop;
+    double pts[4][2], rows[4][2];
+
+    cl_pt(pts, 0, zf, 0);
+    cl_pt(pts, 1, zf, h);
+    cl_pt(pts, 2, zf - depth, h);
+    cl_pt(pts, 3, zf - depth, 0);
+    rows[0][0] = ftop; rows[0][1] = zf;
+    rows[1][0] = smear0; rows[1][1] = smear0 + 1;
+    rows[2][0] = rows[2][1] = rows[3][0] = rows[3][1] = 0;
+    return cl_profile(out, name, x0, x1, 4, (const double (*)[2])pts, (const double (*)[2])rows);
+}
+
+/* A shallow box standing in front of a facade: front face art rows fr0..fr1 (height fr1 - fr0, front depth zf), top
+ * face art rows top0..top1 (depth top1 - top0). */
+static bool cl_porch(RgPartList *out, const char *name, double x0, double x1, double zf, double fr0, double fr1,
+                     double top0, double top1)
+{
+    double h = fr1 - fr0;
+    double pts[4][2], rows[4][2];
+
+    cl_pt(pts, 0, zf, 0);
+    cl_pt(pts, 1, zf, h);
+    cl_pt(pts, 2, zf - (top1 - top0), h);
+    cl_pt(pts, 3, zf - (top1 - top0), 0);
+    rows[0][0] = fr0; rows[0][1] = fr1;
+    rows[1][0] = top0; rows[1][1] = top1;
+    rows[2][0] = rows[2][1] = rows[3][0] = rows[3][1] = 0;
+    return cl_profile(out, name, x0, x1, 4, (const double (*)[2])pts, (const double (*)[2])rows);
+}
+
 /* ---- k_celadon_house: 64x80 art (rect (36,25), 4x5) -------------------------------------------------------------------- */
 /* Rows: road 0-7, the olive roof seen from above 8-42 (a level top edge at row 8), the facade with two storeys of
  * windows and the wooden door 42-80. */
@@ -77,8 +114,42 @@ static const RgSideCfg kHouseSide[1] = {
     {NULL, {14, 61, 34, 63}, {14, 61, 34, 63}, 999, true},
 };
 
+/* ---- k_celadon_game_corner: 112x96 art (rect (31,17), 7x6) ----------------------------------------------------------- */
+/* The Rocket Game Corner: a wide building drawn as an elevation. Rows: the fence posts 0-7, the cream upper wall with
+ * two rows of windows 9-46, a dark tan cornice 47-55, the orange base with its diamond reliefs 55-72 and the green
+ * ledge 72-79. The purple arched entrance stands in front: its dome (rows 44-55) over the face with the door and the
+ * two grey pillars (rows 55-85). One slab (71 high, 40 deep) plus the porch box. */
+static bool k_celadon_game_corner(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    (void)spec; (void)a0; (void)a1;
+    return cl_slab(out, "hall", 0, 112, 79, 8, 40, 26) &&
+           cl_porch(out, "porch", 39, 73, 86, 56, 86, 44, 56) && !out->failed;
+}
+static const RgExact kGameExact[2] = {{0, 8, 112, 79, false}, {39, 44, 73, 86, false}};
+static const RgSideCfg kGameSide[2] = {
+    {"porch", {40, 61, 48, 64}, {40, 61, 48, 64}, 999, false},
+    {NULL, {2, 24, 110, 32}, {2, 24, 110, 32}, 999, true},
+};
+
+/* ---- k_celadon_prize: 48x64 art (rect (38,17), 3x4) -------------------------------------------------------------------- */
+/* The Prize Room: the Game Corner's little sibling in the same style: cream wall with a window pair 9-31, tan cornice
+ * 32-39, orange base with the double door 40-55, green ledge 56-63. One slab, 55 high, 30 deep. */
+static bool k_celadon_prize(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    (void)spec; (void)a0; (void)a1;
+    return cl_slab(out, "prize", 0, 48, 63, 8, 30, 26) && !out->failed;
+}
+static const RgExact kPrizeExact[1] = {{0, 8, 48, 63, false}};
+static const RgSideCfg kPrizeSide[1] = {
+    {NULL, {16, 10, 32, 30}, {16, 10, 32, 30}, 999, true},
+};
+
 const RgSpec rg_kspecs_celadon[] = {
     {"k_celadon_house", RG_SPEC_DIRECT, L_CELADON, {36, 25, 4, 5}, {1, 5}, CL_GROUND, 1, kHouseExact, 1,
      k_celadon_house, 0, 0, kHouseSide},
+    {"k_celadon_game_corner", RG_SPEC_DIRECT, L_CELADON, {31, 17, 7, 6}, {0, 0}, CL_GROUND, 1, kGameExact, 2,
+     k_celadon_game_corner, 0, 0, kGameSide},
+    {"k_celadon_prize", RG_SPEC_DIRECT, L_CELADON, {38, 17, 3, 4}, {0, 0}, CL_GROUND, 1, kPrizeExact, 1,
+     k_celadon_prize, 0, 0, kPrizeSide},
 };
 const unsigned rg_kspecs_celadon_count = sizeof(rg_kspecs_celadon) / sizeof(rg_kspecs_celadon[0]);
