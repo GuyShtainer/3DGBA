@@ -175,7 +175,7 @@ Spec points that did not hold on this ROM (recorded, not "fixed"):
    20 -> 1 right o50 all present; the list is sorted by rank, not ROM order).
 
 Oracles: the links are cross-checked by an **independent formulation** (b placed in a's frame, global cells within 2 of the
-edge, over all 64 ROM connections between block layouts): the recorded link set equals the independent seam set exactly.
+edge, over every ROM connection between block layouts): the recorded link set equals the independent seam set exactly.
 map_links: 148 sorted, unique, every outdoor-to-outdoor connection of every ROM map (all maps, not the A.5 table) present,
 alternates mirrored. Determinism: two `rg_drawn_find` runs are memcmp-equal.
 
