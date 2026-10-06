@@ -30,4 +30,15 @@ bool rg_seam_art(RgPair *pair, const RgLayout *L, const RgBuildModel *m, const R
 bool rg_flank_band(RgPair *pair, const RgImage *art, const RgComponentsCfg *c, int height, RgImage *out,
                    RgTile *tile, bool *has);
 
+
+/* G8 (SPEC-S3 1.4): voxel_props.cells_in, all three objects. cellFlags = w*h bytes of the layout, rewritten; bit o set
+ * when object o (kObjects order: sea_rock 0, sand_boulder 1, sea_stack 2) is drawn over the cell, own finds and the
+ * neighbours' finds that a seam cuts. The one-shot form builds the connection table each call; hold an RgProps to
+ * reuse it. RG_ERR_LAYOUT_TABLE when the layout is absent. */
+typedef struct RgProps RgProps;
+RgProps *rg_props_open(const RgWorld *w, RgErr *err);
+RgErr rg_props_cells(RgProps *p, uint16_t layoutId, uint8_t *cellFlags);
+void rg_props_close(RgProps *p);
+RgErr rg_props_cells_in(const RgWorld *w, uint16_t layoutId, uint8_t *cellFlags);
+
 #endif

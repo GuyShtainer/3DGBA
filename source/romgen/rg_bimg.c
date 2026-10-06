@@ -157,7 +157,7 @@ static void put(RgImage *im, int x, int y, uint16_t c, uint8_t a)
     rg_c5_rgba(c, a, im->px + 4 * ((size_t)y * (size_t)im->w + (size_t)x));
 }
 
-bool rg_cell_image(RgPair *p, uint16_t metatile, RgImage *out16)
+bool rg_cell_image_layers(RgPair *p, uint16_t metatile, bool lowerOnly, RgImage *out16)
 {
     RgCellPx lo, hi;
     int x, y;
@@ -168,8 +168,13 @@ bool rg_cell_image(RgPair *p, uint16_t metatile, RgImage *out16)
     rg_cell_px(p, metatile, 1, &hi);
     for (y = 0; y < 16; y++)
         for (x = 0; x < 16; x++)
-            put(out16, x, y, hi.idx[y][x] != 0 ? hi.c[y][x] : lo.c[y][x], 255);
+            put(out16, x, y, (!lowerOnly && hi.idx[y][x] != 0) ? hi.c[y][x] : lo.c[y][x], 255);
     return true;
+}
+
+bool rg_cell_image(RgPair *p, uint16_t metatile, RgImage *out16)
+{
+    return rg_cell_image_layers(p, metatile, false, out16);
 }
 
 #define RG_MAX_GROUND 8u

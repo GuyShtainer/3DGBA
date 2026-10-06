@@ -41,6 +41,9 @@ bool rg_hex_to_c5(const char *hex, uint16_t *c5);
 /* vb:198-216 cell_image: a whole metatile as the ground renderer draws it, opaque over black, alpha 255
  * everywhere (upper layer where idx != 0, else the lower layer's colour). Allocates a 16x16 image. */
 bool rg_cell_image(RgPair *p, uint16_t metatile, RgImage *out16);
+/* G7: vb:198-216 with layers=(0,) when lowerOnly (the lower layer alone; an idx-0 pixel is palette slot 0's colour);
+ * lowerOnly false is rg_cell_image. */
+bool rg_cell_image_layers(RgPair *p, uint16_t metatile, bool lowerOnly, RgImage *out16);
 
 /* vb:161-196 building_art: RGBA image (cw*16 x ch*16) of the cells (x, y, cw, ch) of L, every ground pixel
  * transparent. A lower-layer 8x8 block equal (as 64 colours) to one of the ground metatiles' lower blocks is

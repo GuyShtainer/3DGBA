@@ -5,6 +5,8 @@
  * Portions Copyright (c) Dust Zallax, MIT. */
 #include "rg_bexpand.h"
 
+#include <assert.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1004,6 +1006,22 @@ static void cells_box(const PObj *obj, int sx, int sy, int *cx0, int *cy0, int *
         }
 }
 
+static void ctx_free(ExpCtx *c)
+{
+    unsigned id;
+
+    if (c->subs != NULL)
+        for (id = 0; id <= c->w->layoutCount; id++)
+            free(c->subs[id]);
+    free(c->subs);
+    if (c->conns != NULL)
+        for (id = 0; id <= c->w->layoutCount; id++)
+            free(c->conns[id]);
+    free(c->conns);
+    free(c->nConns);
+    c->subs = NULL; c->conns = NULL; c->nConns = NULL;
+}
+
 RgErr rg_expand_props(const RgWorld *w, const RgSpec *s, RgBuildModels *ms)
 {
     const RgPropsCfg *cfg = (const RgPropsCfg *)s->ext;
@@ -1157,15 +1175,7 @@ RgErr rg_expand_props(const RgWorld *w, const RgSpec *s, RgBuildModels *ms)
         ms->nProps += ms->n - first;
     rg_pc_close(&pc);
     free(hits);
-    if (ctx.subs != NULL)
-        for (id = 0; id <= w->layoutCount; id++)
-            free(ctx.subs[id]);
-    free(ctx.subs);
-    if (ctx.conns != NULL)
-        for (id = 0; id <= w->layoutCount; id++)
-            free(ctx.conns[id]);
-    free(ctx.conns);
-    free(ctx.nConns);
+    ctx_free(&ctx);
     return err;
 }
 
@@ -1186,4 +1196,108 @@ RgErr rg_build_prop(RgBuildModel *m)
         mo.ring[k][0] = cfg->ring[k][0]; mo.ring[k][1] = cfg->ring[k][1]; mo.ring[k][2] = cfg->ring[k][2];
     }
     return rg_emit_mound(&mo, "mound", &m->mesh) && !m->mesh.failed ? RG_OK : RG_ERR_BUILDINGS;
+}
+
+/* ---- G8: voxel_props.cells_in made public (props:225-242), SPEC-S3 1.4 ----------------------------------- */
+
+struct RgProps { ExpCtx c; };
+
+RgProps *rg_props_open(const RgWorld *w, RgErr *err)
+{
+    RgProps *p = (RgProps *)calloc(1, sizeof(RgProps));
+    unsigned ambiguous = 0;
+    RgErr e = RG_OK;
+
+    assert(w != NULL);
+    if (p != NULL) {
+        p->c.w = w;
+        p->c.subs = (uint32_t **)calloc((size_t)w->layoutCount + 1u, sizeof(uint32_t *));
+        e = p->c.subs != NULL ? build_conns(&p->c, &ambiguous) : RG_ERR_NOMEM;
+    } else
+        e = RG_ERR_NOMEM;
+    if (e != RG_OK) {
+        if (p != NULL)
+            ctx_free(&p->c);
+        free(p);
+        p = NULL;
+    }
+    if (err != NULL)
+        *err = e;
+    return p;
+}
+
+void rg_props_close(RgProps *p)
+{
+    if (p != NULL) {
+        ctx_free(&p->c);
+        free(p);
+    }
+}
+
+/* Marks (bit o of cellFlags) every cell of layout `lid` that object o is drawn over, for finds in layout `src`
+ * placed at (dx, dy). Cells that lie outside src are the seam's: only those count for a neighbour (props:235-241). */
+static RgErr mark_cells(ExpCtx *c, const PObj *obj, unsigned o, unsigned lid, unsigned src, int dx, int dy,
+                        uint8_t *flags)
+{
+    const RgLayout *L = &c->w->layouts[lid - 1u], *S = &c->w->layouts[src - 1u];
+    Found *res;
+    unsigned n, k;
+    RgErr e = find_obj(c, src, obj, &res, &n);
+
+    for (k = 0; k < n && e == RG_OK; k++) {
+        int i, j;
+
+        for (j = 0; j < obj->gh; j++)
+            for (i = 0; i < obj->gw; i++) {
+                int x, y;
+
+                if (obj->g[j * obj->gw + i].tile < 0)
+                    continue;
+                x = fdiv2(res[k].x0 + i);
+                y = fdiv2(res[k].y0 + j);
+                if (src != lid && 0 <= x && x < (int)S->w && 0 <= y && y < (int)S->h)
+                    continue;
+                x += dx;
+                y += dy;
+                if (0 <= x && x < (int)L->w && 0 <= y && y < (int)L->h)
+                    flags[(size_t)y * L->w + (size_t)x] |= (uint8_t)(1u << o);
+            }
+    }
+    free(res);
+    return e;
+}
+
+RgErr rg_props_cells(RgProps *p, uint16_t layoutId, uint8_t *cellFlags)
+{
+    ExpCtx *c;
+    const RgLayout *L;
+    unsigned o, k;
+    RgErr e = RG_OK;
+
+    assert(p != NULL && cellFlags != NULL);
+    c = &p->c;
+    if (!layout_ok(c->w, layoutId))
+        return RG_ERR_LAYOUT_TABLE;
+    L = &c->w->layouts[layoutId - 1u];
+    memset(cellFlags, 0, (size_t)L->w * L->h);
+    for (o = 0; o < RG_OBJ_COUNT && e == RG_OK; o++) {
+        e = mark_cells(c, &kObjects[o], o, layoutId, layoutId, 0, 0, cellFlags);
+        for (k = 0; k < c->nConns[layoutId] && e == RG_OK; k++)
+            if (layout_ok(c->w, c->conns[layoutId][k].b))
+                e = mark_cells(c, &kObjects[o], o, layoutId, c->conns[layoutId][k].b,
+                               c->conns[layoutId][k].dx, c->conns[layoutId][k].dy, cellFlags);
+    }
+    return e;
+}
+
+RgErr rg_props_cells_in(const RgWorld *w, uint16_t layoutId, uint8_t *cellFlags)
+{
+    RgErr e;
+    RgProps *p = rg_props_open(w, &e);
+
+    if (p == NULL)
+        return e;
+    e = rg_props_cells(p, layoutId, cellFlags);
+    rg_props_close(p);
+    return e;
 }
