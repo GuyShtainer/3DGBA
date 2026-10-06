@@ -205,3 +205,6 @@ All of SPEC section 6's per-town numbers hold.
     385156050629ee50724bf3f6504991b10e48c7c1  signposts.bin
 All 30 suite counts (22 romgen incl. pyset 28 and relief_faults 221, 8 vtest) identical; only addition: test_romgen_frlg_buildings 2390, 0 failures, 0 skipped.
 `romgen firered.gba OUT` -> `buildings.bin: 24 bytes, 0 models`, exit 0, loaded by the vendored consumer (test). Device `make -j8 ROMGEN_DEV_HOOK=1` and `make -j8` link.
+
+## K1 Pallet Town recipes (2026-10-06), in progress
+- k_pallet_house banked: 80x64, hip-roof house (rg_hiproof + one Prism, kit_house shape), check PASS ortho 0/0/0 on both exact rects, density empty, round trip ok; placements (5,4) and (14,4) on layout 78.
