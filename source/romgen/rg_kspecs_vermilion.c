@@ -13,7 +13,7 @@
 #define L_VERMILION 83, 0x82FF5FADu
 #define L_ROUTE5 93, 0xA0C68725u
 #define L_ROUTE6 94, 0xD03FD324u
-#define L_ROUTE7 95, 0x00000000u
+#define L_ROUTE7 95, 0x4C1E067Eu
 #define L_ROUTE8 96, 0x00000000u
 #define VM_GROUND {0x001}
 
@@ -217,6 +217,33 @@ static bool k_gate_half(const RgSpec *spec, int a0, int a1, RgPartList *out)
     return !out->failed;
 }
 
+/* ---- k_route7_gate: 128x80 art (rect (15,7), 8x5 on Route 7) ---------------------------------------------------------- */
+/* The Route 7 gatehouse (dest 19/0) is entered from its west and east ends. Rows: the flat roof top 0-43, the cornice
+ * 43-48, the window band 48-58, brick 58-78 and the bottom lip 78-80, over x 16-112 between two white pillars. The two
+ * side porches (x 0-16 and 112-128: the awnings and the arrow-mat doors drawn side-on) stay flat ground. */
+static bool k_route7_gate(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    RgPart *body = rg_parts_add(out, RG_P_PRISM, "body");
+    RgPrism *pr;
+
+    (void)spec; (void)a0; (void)a1;
+    if (body == NULL)
+        return false;
+    pr = &body->u.prism;
+    pr->x0 = 16; pr->x1 = 112;
+    pr->west = pr->east = true;
+    vm_box(pr, 80, 0, 37, 37);
+    pr->edges[0].kind = RG_EM_PROJ;
+    pr->edges[0].proj = rg_proj_rows(43, 80);       /* cornice, windows, brick */
+    pr->edges[1].kind = RG_EM_PROJ;
+    pr->edges[1].proj = rg_proj_rows(0, 43);        /* roof top */
+    pr->skip = (1u << 2) | (1u << 3);
+    return !out->failed;
+}
+
+static const RgExact kGate7Exact[1] = {
+    {16, 0, 112, 80, false},    /* roof, cornice, windows, brick */
+};
 static const RgExact kGate5Exact[2] = {
     {0, 16, 96, 112, false},    /* roof, cornice, windows, brick, canopy, pillars, apron */
     {22, 12, 74, 16, false},    /* the lip over the door */
@@ -248,5 +275,7 @@ const RgSpec rg_kspecs_vermilion[] = {
      k_gate_half, 0, 0, NULL},
     {"k_route6_gate", RG_SPEC_DIRECT, L_ROUTE6, {9, 0, 8, 6}, {0, 0}, VM_GROUND, 1, kGate6Exact, 1,
      k_gate_half, 16, 16, NULL},
+    {"k_route7_gate", RG_SPEC_DIRECT, L_ROUTE7, {15, 7, 8, 5}, {0, 0}, VM_GROUND, 1, kGate7Exact, 1,
+     k_route7_gate, 0, 0, NULL},
 };
 const unsigned rg_kspecs_vermilion_count = sizeof(rg_kspecs_vermilion) / sizeof(rg_kspecs_vermilion[0]);
