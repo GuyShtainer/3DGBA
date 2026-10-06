@@ -9,6 +9,11 @@
 
 ## Current status
 
+- **2026-10-06 — old 3D attempts removed** (Guy: the voxel world replaces them all): phase 31 diorama,
+  phase 14 tilt, and the 2D depth-pop/grid-warp/DoF/bloom/light/Vivid passes are gone (`8edd20c`,
+  `ab7184b`, `60fbe21`). Outside the voxel world the top screen is plain 2D and the 3D slider does
+  nothing. `settings.bin` layout is unchanged (reserved words). Details, history pointers and the
+  follow-ups (orphaned ENHANCE plate labels, smoke-test TILT channel): `docs/REMOVED-3D-ATTEMPTS.md`.
 - **⚠️ THE ONE THING TO KNOW:** the touch layer was proven in the emulator, shipped, and then
   **failed on the user's first real hardware test in six ways**. Four are fixed (`f7216e2`,
   `98aff5a`); **none of the fixes has been hardware-tested yet.** Every defect was a constant tuned

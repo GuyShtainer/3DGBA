@@ -31,11 +31,11 @@ games or other content.
 - **Touchscreen "smart pointer"** — instead of an on-screen gamepad, the touch screen
   drives the *real in-game UI*: tap a tile to pathfind-walk there, tap menu entries,
   bag/party/battle targets, double-tap for START. (Gen-3 Pokémon.)
-- **Experimental stereoscopic 3D depth** — uses the 3DS 3D slider to pop the overworld
-  into a 2.5D diorama: characters and scenery stand up off a ground plane, with
-  elevation/tile-collision-aware depth. (Actively being tuned.)
-- **HD-2D-style post effects** — optional tilt-shift depth-of-field, LDR bloom, and a
-  time-of-day color grade, all toggleable in the pause menu.
+- **Experimental voxel 3D overworld** *(New 3DS, hardware-unproven)* — on supported Gen-3 Pokémon
+  overworld maps the top screen can draw the map as a voxel 3D world, in stereo with the 3D slider,
+  with optional depth-of-field and bloom (pause menu). Everywhere else the game is plain 2D and the
+  3D slider has no effect. (The older 2.5D depth-pop, tilt and HD-2D post effects were removed
+  2026-10-06 — see `docs/REMOVED-3D-ATTEMPTS.md`.)
 - **Wireless multi-console lobby** *(in progress)* — host/scan/join over local wireless
   (UDS) with a live seat map; the emulation-over-the-air link is a later milestone.
 - **Same-console co-op presence** *(experimental)* — with both slots holding games from the

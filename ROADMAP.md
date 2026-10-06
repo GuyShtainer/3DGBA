@@ -17,8 +17,6 @@ touch** layers are experimental. If something here matters to you, feel free to 
 - **Wireless emulation link is experimental.** The one-console "Net link (loopback)" self-test now reaches
   the trade screen, but the trade itself is still being debugged (a word-alignment fix is in hardware
   testing). Real two-console wireless trades (M3) aren't done yet.
-- **Stereoscopic-3D "wobble" while walking.** The per-eye depth shifts oddly during overworld movement;
-  being tuned. Gen-3 Pokémon only.
 - **Touch "smart pointer" is Gen-3-Pokémon-specific and partly heuristic.** Some flows (field-menu
   detection; LeafGreen addresses derived from FireRed) may misfire or be inert; being hardened one flow
   at a time, with on-device diagnostics.
@@ -43,7 +41,8 @@ touch** layers are experimental. If something here matters to you, feel free to 
 
 - **In-app 3D-strength control ("tilt bar")** — dial the stereoscopic pop in software, decoupled from the
   hardware 3D slider.
-- More HD-2D depth refinement (Octopath-style); broaden where the effect applies.
+- ~~More HD-2D depth refinement~~ — superseded: the 2D depth-pop/tilt/HD-2D passes were removed
+  2026-10-06 in favour of the voxel 3D world (`docs/REMOVED-3D-ATTEMPTS.md`).
 - *(Optional, low certainty)* AI-baked normal maps for sprite/tile lighting — only if the above land well.
 
 ## Planned — performance
