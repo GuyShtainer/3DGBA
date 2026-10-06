@@ -5,6 +5,7 @@
 #include <sys/stat.h>
 #include <string.h>
 
+#include "romgen/rg_anchor.h"
 #include "romgen/rg_gameprof.h"
 #include "voxel/ctr_shims.h"
 #include "voxel/ctr_voxel.h"
@@ -31,6 +32,16 @@ static C3D_Tex sOvTex;
 static u16 *sOvBuf;
 static FILE *sLog;
 static bool sWorldReady;
+/* Phase 34 R1: a FireRed / LeafGreen cartridge is NOT rendered yet (its row has rendererOn = false until R2), but its
+ * anchors are self-checked and the result goes to voxel.log: the ROM checks once per bind, the RAM checks on an
+ * overworld frame, once per map. sProbe is the row under test (NULL = none / the ROM checks failed). */
+static const GameProfile *sProbe;
+static const uint8_t *sProbeRom;
+static size_t sProbeSize;
+static uint32_t sProbeSeen;    /* the map the last frames showed, and for how many frames in a row (a map load updates the
+                                * saved location a few frames before the backup layout, so the RAM checks wait for a settled map) */
+static unsigned sProbeRun;
+static uint32_t sProbeLoc;     /* (group << 8 | num) the RAM checks last ran for, 0xFFFFFFFF = not yet */
 /* The world's logical surface and the bloom target, as Emerald3DS composes them (3ds_video.c:3804-3817):
  * the world is drawn into a 512x256 RGBA8 VRAM texture with a 16-bit depth buffer, then blitted to the
  * screen with the HD-2D tilt-shift and bloom on top. */
@@ -55,6 +66,81 @@ static void LogSink(int channel, const char *line)
     }
 }
 
+/* One numbered line per failed check (SPEC-P34 3.3). */
+static void LogAnchorFail(const GameProfile *p, int check)
+{
+    PORT_LOG("vx: anchor %d (%s) failed: 0x%08X (%.4s rev %u)", check, vx_anchor_name(check),
+             (unsigned)vx_anchor_last_value(), p->code, (unsigned)p->rev);
+}
+
+/* ROM half of the self-check, once per bind, for a FireRed / LeafGreen cartridge the renderer does not drive yet. */
+static void ProbeRom(const uint8_t *rom, size_t sz)
+{
+    const GameProfile *p = gameprof_detect_romgen(rom, sz);
+    int r;
+
+    if (p == NULL || p->game == GP_EMERALD)
+        return;
+    vx_log_set_sink(LogSink);
+    r = vx_anchor_check_rom(p, rom, sz);
+    if (r != 0)
+    {
+        LogAnchorFail(p, r);
+        return;
+    }
+    PORT_LOG("vx: rom anchors ok (%.4s rev %u)", p->code, (unsigned)p->rev);
+    sProbe = p;
+    sProbeRom = rom;
+    sProbeSize = sz;
+    sProbeLoc = 0xFFFFFFFFu;
+    sProbeSeen = 0xFFFFFFFFu;
+    sProbeRun = 0;
+}
+
+static uint32_t Rd32At(const uint8_t *b, uint32_t off)
+{
+    return (uint32_t)b[off] | ((uint32_t)b[off + 1] << 8) | ((uint32_t)b[off + 2] << 16) | ((uint32_t)b[off + 3] << 24);
+}
+
+/* RAM half: on an overworld frame, once per map. No retry loop: a failure is one line until the map changes. */
+static void ProbeRam(GbaCore *top)
+{
+    size_t nEw = 0, nIw = 0;
+    const uint8_t *ew = gbacore_mem_block(top, 2, &nEw);
+    const uint8_t *iw = gbacore_mem_block(top, 3, &nIw);
+    uint32_t cb2, sb1, loc;
+    VxaRam ram;
+    int r;
+
+    if (ew == NULL || iw == NULL || nEw < 0x40000u || nIw < 0x8000u)
+        return;
+    cb2 = Rd32At(iw, sProbe->gMain - 0x03000000u + 4u);
+    if (cb2 != sProbe->cb2Overworld && cb2 != sProbe->cb2OverworldBasic)
+        return;   /* not an overworld frame (title, battle, a warp in progress) */
+    sb1 = Rd32At(iw, sProbe->sb1Ptr - 0x03000000u);
+    if (sb1 < 0x02000000u || sb1 - 0x02000000u > 0x3FFF0u)
+        loc = 0xFFFFFFFEu;
+    else
+        loc = ((uint32_t)ew[sb1 - 0x02000000u + 4u] << 8) | ew[sb1 - 0x02000000u + 5u];
+    if (loc != sProbeSeen)
+    {
+        sProbeSeen = loc;
+        sProbeRun = 0;
+        return;
+    }
+    if (loc == sProbeLoc || ++sProbeRun != 45u)
+        return;
+    sProbeLoc = loc;
+    ram.ewram = ew;
+    ram.iwram = iw;
+    r = vx_anchor_check_ram(sProbe, sProbeRom, sProbeSize, &ram);
+    if (r != 0)
+        LogAnchorFail(sProbe, r);
+    else
+        PORT_LOG("vx: anchors ok (%.4s rev %u) map %u.%u", sProbe->code, (unsigned)sProbe->rev,
+                 (unsigned)(loc >> 8), (unsigned)(loc & 0xFFu));
+}
+
 static void Rebind(GbaCore *top)
 {
     size_t sz = 0;
@@ -65,6 +151,7 @@ static void Rebind(GbaCore *top)
     sGame = GP_NONE;
     sDataOk = false;
     gVxProf = NULL;
+    sProbe = NULL;
     vx_adapter_set_rom(NULL, 0);
     if (top == NULL)
         return;
@@ -72,6 +159,8 @@ static void Rebind(GbaCore *top)
     if (rom == NULL || sz == 0)
         return;
     prof = gameprof_detect(rom, sz);
+    if (prof == NULL)
+        ProbeRom(rom, sz);
 #if VX_DEV_FORCE_OVERLAY
     if (prof == NULL)
         prof = gameprof_emerald();
@@ -101,6 +190,8 @@ bool vx_host_candidate(GbaCore *top, bool userOn, bool isN3DS, bool linkAny)
         return false;
     if (top != sBound)
         Rebind(top);
+    if (sProbe != NULL && sGame == GP_NONE)
+        ProbeRam(top);
     return sGame != GP_NONE && sDataOk;
 }
 
@@ -443,6 +534,7 @@ void vx_host_reset(void)
     sGame = GP_NONE;
     sDataOk = false;
     gVxProf = NULL;
+    sProbe = NULL;
     sMasked[0] = sMasked[1] = NULL;
     vx_adapter_set_rom(NULL, 0);
 }

@@ -68,6 +68,7 @@ typedef struct GameProfile {
     const int16_t *treeGround;
     bool emeraldIdTables;          /* Fortree puddles, GenericBuilding interior ids: Emerald only */
     bool interiors3d;              /* false on FRLG: indoor maps hand back to the 2D frame */
+    bool rendererOn;               /* gameprof_detect() returns the row only when set (Emerald; FRLG from R2) */
     const struct RgSpec *specs;    /* building recipe table (romgen); wired in G1, NULL until then */
     unsigned nSpecs;
 } GameProfile;
@@ -76,9 +77,9 @@ typedef struct GameProfile {
  * buffer). Rows whose game is GP_NONE are never returned. */
 const GameProfile *gameprof_detect(const uint8_t *rom, size_t size);
 
-/* Phase 34 G1: the same detection for romgen, which needs only the ROM-layer fields. It also returns the FireRed and
- * LeafGreen rev 1 rows, whose RAM anchors (R1) are still empty. gameprof_detect() keeps refusing a non-Emerald row
- * until its renderer anchors are harvested (gMain != 0), so the renderer is not enabled by accident. */
+/* Phase 34 G1: the same detection for romgen (and for vx_host's anchor self-check): it also returns the FireRed and
+ * LeafGreen rev 1 rows. gameprof_detect() keeps refusing a non-Emerald row until R2 sets its `rendererOn`, so the
+ * renderer is not enabled by accident. */
 const GameProfile *gameprof_detect_romgen(const uint8_t *rom, size_t size);
 
 /* The Emerald row. Its behaviour sets are filled on first use from the existing predicates; the first call
