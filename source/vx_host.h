@@ -1,6 +1,6 @@
 /* vx_host.h -- the 3DS-side glue between main.c and the voxel overworld (phase 32, 3DGBA, GPLv3).
  * Everything libctru/citro-dependent about the voxel path lives here so main.c carries only calls.
- * Pure parts are elsewhere: vx_overlay.c (key pass + state machine), tilt.c voxel_gate().
+ * Pure parts are elsewhere: vx_overlay.c (key pass + state machine), vx_gate.c voxel_gate().
  * Threading: vx_host_candidate/snapshot/mask/overlay_upload run on the main thread in the PARKED window
  * (both workers waited); everything else runs on the main thread inside the render. Voxel off => none
  * of these is called with a core that was ever masked, and no state here is touched. */

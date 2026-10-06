@@ -12,7 +12,7 @@
 #include "voxel/vx_adapter.h"
 #include "voxel/vx_data.h"
 #include "voxel/vx_snapshot.h"
-#include "tilt.h"
+#include "vx_gate.h"
 
 #define VX_MIN_VRAM (1024u * 1024u)   /* after the 768K surface: CtrVoxel_Init sizes its atlases/mesh to what is left */
 #define OV_TEX 256u
@@ -233,7 +233,7 @@ bool vx_host_snapshot(GbaCore *top)
     return vx_adapter_decode(&sSnap);
 }
 
-/* The gate (tilt.c voxel_gate) compares against Emerald's callback addresses; map the active game's two overworld
+/* The gate (vx_gate.c voxel_gate) compares against Emerald's callback addresses; map the active game's two overworld
  * callbacks onto them. Anything else (battle, bag, title, a warp in flight) passes through and fails the gate. */
 unsigned vx_host_cb2(void)
 {

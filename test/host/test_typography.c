@@ -642,7 +642,6 @@ int main(void) {
 			{ TXT_SEG,    "Gamepad",                69, "PT_TOUCH mode seg (208/3)" },
 			{ TXT_SEG,    "Smart",                  69, "PT_TOUCH mode seg (208/3)" },
 			{ TXT_SEG,    "Round",                  69, "PT_TOUCH padEdge seg (208/3)" },
-			{ TXT_SEG,    "Max",                    42, "PT_ENHANCE tilt seg (170/4)" },
 			{ TXT_BUTTON, "Resume",                216, "PT_SESSION resume" },
 			{ TXT_BUTTON, "Change games",          216, "PT_SESSION change" },
 			{ TXT_BUTTON, "Quit",                  216, "PT_SESSION quit" },
@@ -652,7 +651,6 @@ int main(void) {
 			{ TXT_BUTTON, "Load state",            104, "PT_LINK load state" },
 			{ TXT_BUTTON, "Load .sav",             216, "PT_LINK load sav" },
 			{ TXT_BUTTON, "Preview Smart",         101, "PT_TOUCH preview smart" },
-			{ TXT_SECTION,"DIORAMA \xC2\xB7 TILT",    170, "PT_ENHANCE tilt caption" },
 			{ TXT_SECTION,"Co-op presence",        219, "PT_LINK presence OV_ROW label" },
 			{ TXT_SECTION,"L/R tab  A select  B resume (or tap)", 312, "pause status hint" },
 			{ TXT_SECTION,"L / R  switch tab",     300, "run_settings hint" },
@@ -683,7 +681,6 @@ int main(void) {
 			// over it, last, as fixed chrome.
 			{ TXT_BODY,   SET_LINK_DISABLED_NOTE,  151, "settings LINK note (vs the Done chip at x244)" },
 			{ TXT_BODY,   "configure before you pick a game",   300, "run_settings subtitle" },
-			{ TXT_BODY,   "Tilt is set, but this is an Old 3DS - it stays flat.", 300, "run_settings O3DS warning" },
 			{ TXT_BODY,   "put .gba files in /3ds/dual-gba/",   400, "picker empty state (top)" },
 			{ TXT_BODY,   "put .gba files in /3ds/dual-gba/, then Rescan", 320, "picker empty state (bottom)" },
 			{ TXT_BODY,   "not a valid .gba - pause menu, Change games", 320, "dead-core panel line 2" },
@@ -711,9 +708,6 @@ int main(void) {
 			{ TXT_SEG,    "both",                   52, "PT_DISPLAY hud seg" },
 			{ TXT_SEG,    "Soft",                   69, "PT_TOUCH padEdge seg" },
 			{ TXT_SEG,    "Sharp",                  69, "PT_TOUCH padEdge seg" },
-			{ TXT_SEG,    "Off",                    42, "PT_ENHANCE tilt seg (170/4)" },
-			{ TXT_SEG,    "Low",                    42, "PT_ENHANCE tilt seg" },
-			{ TXT_SEG,    "Mid",                    42, "PT_ENHANCE tilt seg" },
 			{ TXT_BUTTON, "-",                      20, "PK_STEP minus pad" },
 			{ TXT_BUTTON, "+",                      20, "PK_STEP plus pad" },
 			{ TXT_VALUE,  "100",                    30, "PK_STEP volume value" },
@@ -1038,7 +1032,6 @@ int main(void) {
 			{ TXT_BUTTON, 22, "pad START key" },
 			{ TXT_BUTTON, 42, "wireless / splash button" },
 			{ TXT_SEG,    30, "PT_DISPLAY seg cell" },
-			{ TXT_SEG,    26, "PT_ENHANCE tilt seg" },
 			{ TXT_BODY,   18, "OV_ROW toggle row" },
 			{ TXT_CHIP,   UIHIT_CHIP_H,       "ui.c pill chip" },
 			{ TXT_CHIP,   UIHIT_TOUCH_CHIP_H, "touch mode chip" },
@@ -1173,17 +1166,8 @@ int main(void) {
 			{ TXT_BODY,     3,  0,  21, "ROM picker: row name in its card" },
 			{ TXT_CHIP,     4,  0,  21, "ROM picker: row game-code chip" },
 			// --- L3.2.6 the code-drawn OV_SECTION captions, 17 px above their control
-			// The upper bound is the plate's OWN baked ink, measured off the shipped
-			// pause-bot-enhance.png: "Vivid mode" occupies rows 175..183, so the caption may not
-			// start before 184. That is why the tilt row is at y=200 and not the manifest's 198.
-			// PHASE 19 FIX PASS (verify finding C4): the tilt caption uses OV_SECTION_TIGHT (13 px,
-			// not 17) — see the OV_* enum in main.c. 13 is the FLOOR: typo_ink_bottom(TXT_SECTION)
-			// is 13, so this row asserts the tightest legal binding, and 12 would put a
-			// descender on the seg's first row.
-			{ TXT_SECTION, 200 - 13, 184, 200, "OV_SECTION_TIGHT caption above the tilt seg (y200)" },
 			{ TXT_SECTION, 253 - 17, 220, 253, "OV_SECTION caption above the pad-edges seg (y253)" },
 			// --- L4.1 the AUDIO tab's volume value, 18 px above its row
-			{ TXT_SEG,     200,    200, 226, "PT_ENHANCE tilt seg label in its 26 px row" },
 			{ TXT_VALUE,   82 - 18, 56, 82, "PK_STEP volume value above the y82 row" },
 			{ TXT_VALUE,  132 - 18, 106, 132, "PK_STEP volume value above the y132 row" },
 			// --- the dead-core panel
@@ -1262,7 +1246,6 @@ int main(void) {
 				rx -= run_width(&f[TXT_SECTION], "60fps") + 8;
 				if (!BAR[b].withLink) {                                            /* top bar only */
 					rx -= run_width(&f[TXT_CHIP], "3D")     + CHIP_PAD + 6;
-					rx -= run_width(&f[TXT_CHIP], "TILT3")  + CHIP_PAD;
 					rx -= run_width(&f[TXT_CHIP], "CO-OP x")+ CHIP_PAD + 6;
 				}
 				CHECK(left <= rx,
@@ -1272,19 +1255,19 @@ int main(void) {
 				       BAR[b].screenW, left, rx, rx - left);
 			}
 		}
-		// ---- the pause-top pill row, summed on the shipped face at its WORST case (nine pills,
+		// ---- the pause-top pill row, summed on the shipped face at its WORST case (every pill,
 		// longest variant of every dynamic label). L3.1.4 spends padding rather than type here.
 		if (ok[TXT_CHIP]) {
-			static const char* const PILLS[9] = { "3D", "DoF", "Bloom", "Light", "Tilt", "Vivid",
+			static const char* const PILLS[] = { "3D", "DoF", "Bloom",
 			                                      "Touch Off", "Co-op", "Wireless" };
 			int tw = 0;
-			for (int k = 0; k < 9; k++) tw += run_width(&f[TXT_CHIP], PILLS[k]) + UIHIT_PILL_PAD + UIHIT_PILL_GAP;
+			for (int k = 0; k < (int)(sizeof PILLS / sizeof PILLS[0]); k++) tw += run_width(&f[TXT_CHIP], PILLS[k]) + UIHIT_PILL_PAD + UIHIT_PILL_GAP;
 			CHECK(tw <= UIHIT_PILL_ROW_W,
-			      "T16 pause-top pill row: nine pills sum to %d px on a %d px screen", tw, UIHIT_PILL_ROW_W);
+			      "T16 pause-top pill row: all pills sum to %d px on a %d px screen", tw, UIHIT_PILL_ROW_W);
 			CHECK(tw <= UIHIT_PILL_ROW_W - 20,
 			      "T16 pause-top pill row: %d px leaves only %d px of margin — the row needs to read "
 			      "as centred chrome, not as a strip jammed edge to edge", tw, UIHIT_PILL_ROW_W - tw);
-			printf("     pause-top pills: 9 worst-case pills = %d px on %d (%d px margins)\n",
+			printf("     pause-top pills: all worst-case pills = %d px on %d (%d px margins)\n",
 			       tw, UIHIT_PILL_ROW_W, (UIHIT_PILL_ROW_W - tw) / 2);
 			// PHASE 19 FIX PASS (verify finding C5). The finding's FRAMING is refuted and its
 			// measurement is banked here instead. C5 said "the plate dims native x 80..320 and the row
@@ -1302,22 +1285,22 @@ int main(void) {
 			// manifest rect's own centre, which is what makes it read as chrome belonging to that band.
 			{
 				enum { MANIFEST_X = 56, MANIFEST_W = 288 };
-				static const char* const PILLS8[8] = { "3D", "DoF", "Bloom", "Light", "Tilt",
+				static const char* const PILLS8[] = { "3D", "DoF", "Bloom",
 				                                       "Touch Off", "Co-op", "Wireless" };
 				int t8 = 0;
-				for (int k = 0; k < 8; k++)
+				for (int k = 0; k < (int)(sizeof PILLS8 / sizeof PILLS8[0]); k++)
 					t8 += run_width(&f[TXT_CHIP], PILLS8[k]) + UIHIT_PILL_PAD + UIHIT_PILL_GAP;
 				int row8 = t8 - UIHIT_PILL_GAP;            /* no trailing gap is drawn */
 				int left8 = (UIHIT_PILL_ROW_W - t8) / 2;   /* main.c: x = (400 - tw) / 2 */
 				CHECK(2 * left8 + row8 >= UIHIT_PILL_ROW_W - 6 &&
 				      2 * left8 + row8 <= UIHIT_PILL_ROW_W + 6,
-				      "T16 pause-top pill row: 8 pills span x %d..%d, whose centre is %d — the manifest "
+				      "T16 pause-top pill row: the shorter row spans x %d..%d, whose centre is %d — the manifest "
 				      "rect's centre (and the screen's) is %d", left8, left8 + row8,
 				      left8 + row8 / 2, MANIFEST_X + MANIFEST_W / 2);
 				CHECK(left8 >= 20 && left8 + row8 <= UIHIT_PILL_ROW_W - 20,
-				      "T16 pause-top pill row: 8 pills span x %d..%d on a %d px screen — under 20 px of "
+				      "T16 pause-top pill row: the shorter row spans x %d..%d on a %d px screen — under 20 px of "
 				      "margin it stops reading as centred chrome", left8, left8 + row8, UIHIT_PILL_ROW_W);
-				printf("     pause-top pills: 8-pill worst row = %d px at x %d..%d "
+				printf("     pause-top pills: shorter worst row = %d px at x %d..%d "
 				       "(design widget rect %d..%d, centre %d)\n",
 				       row8, left8, left8 + row8, MANIFEST_X, MANIFEST_X + MANIFEST_W,
 				       MANIFEST_X + MANIFEST_W / 2);

@@ -8,7 +8,7 @@
 //  SPEC-avatar A7.1 will use once the render half lands.)
 //
 // TEST NUMBERING is reserved across the two phase-15 specs (SPEC-data D6.5: "TEST 1-20 =
-// SPEC-data, TEST 21+ = SPEC-avatar"), stated here the way test_tilt.c:8-11 states its own:
+// SPEC-data, TEST 21+ = SPEC-avatar"):
 //
 //   TEST 1  SUB() over -15..15 + sgn edges ......... SPEC-data D5.3
 //   TEST 2  the D5.8 golden table, all 10 rows ..... SPEC-data D5.1/D5.3/D5.4
@@ -16,7 +16,7 @@
 //   TEST 4  degradation ladder, field by field ..... SPEC-data D1.9
 //   TEST 5  the gate ladder P-G1..P-G9 ............. SPEC-data D4.1
 //   TEST 6  map universes .......................... SPEC-data D4.3
-//   TEST 7  field_state_ok == tilt's G5-G8 ......... SPEC-data D4.6
+//   TEST 7  field_state_ok over a presence record .. SPEC-data D4.6
 //   TEST 8  staleness .............................. SPEC-data D3.5
 //   TEST 9  two-tier presence ...................... SPEC-data D3.6
 //   TEST 10 wedge + presence_hb_stall .............. SPEC-data D3.6.1
@@ -38,7 +38,7 @@
 //   TEST 26 draw-position math + the anchor identity SPEC-avatar A0.2/A1.1 (P1/P2)
 //   TEST 27 culling and clipping ................... SPEC-avatar A2.4      (P4)
 //   TEST 28 the MIRRORED clip stays registered ..... SPEC-avatar A1.2.2/A2.4.2
-//   TEST 29 the tilt composition is a PURE TRANSLATION SPEC-avatar A3.1    (P5)
+//   TEST 29 (deleted 2026-10-06 with the phase-14 tilt, docs/REMOVED-3D-ATTEMPTS.md)
 //   TEST 30 placeholder art invariants ............. SPEC-avatar A1.5      (P10)
 //   TEST 31 walk-frame selection ................... SPEC-avatar A2.6.3/4  (P9)
 //   TEST 32 the y-sort comparator .................. SPEC-avatar A3.4      (P6)
@@ -48,24 +48,16 @@
 //   TEST 36 the card's text + the formatters ....... SPEC-avatar A4.3.2/A4.4.4/A5.5.3
 //   TEST 40 presence_art_rect  == _rect_wh(16, 32) . phase20 SPEC S5.1 <- phase 20
 //   TEST 41 presence_art_clip  == _clip_wh(16, 32) . phase20 SPEC S5.2
-//   TEST 37 the co-op pref's semantics ............. SPEC-avatar A6.3      (P12, the half
-//                                                    test_tilt.c TEST 6's byte mirror cannot see)
+//   TEST 37 the co-op pref's semantics ............. SPEC-avatar A6.3      (P12)
 //
 // NUMBERING NOTE (slice M1): D6.5 reserved 1-20 for the data half and 21+ for SPEC-avatar's render
 // suite, but the data half needed four more when the producer landed. They take 21-24; the render
 // half starts at 25. Recorded here and in BUILDLOG so the two cannot collide.
 //
 // SPEC-avatar A7.1's P-series maps onto the numbers above. P11 (the degradation ladder) is covered
-// end to end by TEST 4/5/23. P12 (the settings ladder) is SPLIT on purpose: the byte layout and the
-// length ladder are mirrored in test_tilt.c TEST 6, where the Settings mirror lives and where
-// main.c's _Static_asserts point, and TEST 37 here pins what that mirror cannot see — what the
-// stored word MEANS once loaded.
-//
-// TEST 7 pulls in source/tilt.c as well: proving that the phase-14 gate and the phase-15 gate are
-// the SAME predicate is the whole point of factoring it into fieldgate.h, and the proof is worth
-// nothing if it is asserted against a copy of the rules instead of against tilt_target_level
-// itself. (test_tilt.c's own 1694 checks, passing unmodified, are the other half of that proof —
-// SPEC-data D4.6.1.)
+// end to end by TEST 4/5/23. P12 (the settings ladder): the byte layout and the length ladder are
+// pinned by main.c's _Static_asserts (the host Settings mirror lived in test_tilt.c TEST 6, deleted
+// with the phase-14 tilt on 2026-10-06), and TEST 37 here pins what the stored word MEANS once loaded.
 
 #include <stdio.h>
 #include <string.h>
@@ -76,10 +68,6 @@
 #include "../../source/presence_art.c"   // slice M2: the render half's pure-C core (TEST 25-32)
 #include "../../source/gbatext.c"        // slice M3: the charmap decoder      (TEST 33)
 #include "../../source/presence_ui.c"    // slice M3: meet / card / surfaces   (TEST 34-36)
-#include "../../source/tilt.c"     // TEST 7 only: the gate this one was factored out of
-                                   // ...and TEST 29: the REAL tilt_view_init/tilt_project, because
-                                   // "the billboard is a pure translation" is worth nothing if it
-                                   // is asserted against a re-implementation of the projection.
 
 static int g_checks = 0, g_fail = 0;
 #define CHECK(cond, ...) do { \
@@ -515,29 +503,21 @@ static void test_universes(void) {
 }
 
 // ============================================================================================
-// TEST 7 — field_state_ok IS tilt's G5-G8 (SPEC-data D4.6)
+// TEST 7 — field_state_ok over a presence record (SPEC-data D4.6)
 // ============================================================================================
 static void test_fieldgate(void) {
-	printf("TEST 7: fieldgate.h agrees with tilt_target_level's G5-G8 over the enumerated space\n");
-	CHECK(FIELD_CTX_OVERWORLD == TILT_CTX_FIELD, "TILT_CTX_FIELD is an alias of FIELD_CTX_OVERWORLD");
+	printf("TEST 7: fieldgate.h agrees with the presence record field predicate over the enumerated space\n");
 	CHECK(FIELD_CTX_OVERWORLD == 1, "== GCTX_OVERWORLD (gamestate.h:12)");
 
-	// An all-clear tilt gate (every rule G1-G11 satisfied) with only the four field inputs swept.
+	// The four field inputs swept (the phase-14 tilt gate this was once compared against is gone).
 	for (int ok = 0; ok <= 1; ok++)
 	for (int ctx = 0; ctx <= 8; ctx++)          // the nine GameCtx values
 	for (int sb1 = 0; sb1 <= 1; sb1++)
 	for (int pxi = 0; pxi < 3; pxi++)
 	for (int txt = 0; txt <= 1; txt++) {
 		int px = (pxi == 0) ? -1 : (pxi == 1) ? 0 : 12;
-		TiltGateIn in;
-		in.userLevel = 2; in.screen = 0; in.ok = ok; in.ctx = ctx; in.sb1Valid = sb1;
-		in.px = px; in.textDlg = txt; in.menuOpen = 0; in.wlOn = 0; in.netOn = 0;
-		in.touchActive = 0; in.stereoEngaged = 0; in.isN3DS = 1; in.fsOn = 0; in.focScreen = 0;
-		int want = field_state_ok(ok, ctx, sb1, px, txt);
-		EQI(tilt_target_level(&in) != 0, want,
-		    "tilt gate vs field_state_ok (ok=%d ctx=%d sb1=%d px=%d txt=%d)", ok, ctx, sb1, px, txt);
 
-		// ...and presence's own P-G6 must agree on a RECORD built from the same inputs. The `ok`
+		// Presence's own P-G6 must agree on a RECORD built from the same inputs. The `ok`
 		// half is not part of this comparison by design: for a record, "no profile" is P-G4
 		// (gameId == PRES_GAME_NONE), not the field predicate. The producer sets PRES_F_FIELD from
 		// field_state_ok itself, because the textDlg term has no separate slot in the 48 bytes —
@@ -1797,168 +1777,6 @@ static void test_art_clip_mirror(void) {
 	EQI(bad, 0, "cx + w stays inside the cell for both orientations");
 }
 
-// ============================================================================================
-// TEST 29 — the tilt composition is a PURE TRANSLATION (SPEC-avatar A3.1, A7.1 P5)
-// ============================================================================================
-static void test_art_tilt(void) {
-	printf("TEST 29: tilted avatar = flat rect + ONE constant offset; unscaled; identity at 0 deg\n");
-	// gen1-render.md finding 2: "translate(sx - fx, sy - fy); drawFn() -- PURE TRANSLATION ... the
-	// sprite is UPRIGHT and UNSCALED ('depthScale is deliberately ignored for sizing ...
-	// pixel-identical to flat mode'). Only the anchor moves." This test drives the REAL shipped
-	// tilt_view_init/tilt_project (source/tilt.c) so it cannot pass against a re-derivation.
-	int sawNonZero = 0, sawDiffersFromPerCorner = 0;
-	// main.c's SPILL, recomputed here from the same four frame corners (fix pass, finding 4): how
-	// far the projected image reaches outside the flat 240x160 frame. The projection maps the frame
-	// ONTO the trapezoid, so the outermost excursion is attained at the frame's own corners.
-	float spill[TILT_LEVELS];
-	for (int lvl = 0; lvl < TILT_LEVELS; lvl++) {
-		TiltView v;
-		tilt_view_init(&v, TILT_ANGLE_DEG[lvl] * TILT_DEG2RAD,
-		               (float)PRES_FRAME_W, (float)PRES_FRAME_H, TILT_COVER_MIX);
-		static const float CX[4] = { 0.0f, (float)PRES_FRAME_W, 0.0f, (float)PRES_FRAME_W };
-		static const float CY[4] = { 0.0f, 0.0f, (float)PRES_FRAME_H, (float)PRES_FRAME_H };
-		spill[lvl] = 0.0f;
-		for (int c = 0; c < 4; c++) {
-			float px, py, q;
-			tilt_project(&v, CX[c], CY[c], &px, &py, &q);
-			float ex = (px < 0.0f) ? -px : (px - (float)PRES_FRAME_W);
-			float ey = (py < 0.0f) ? -py : (py - (float)PRES_FRAME_H);
-			if (ex > spill[lvl]) spill[lvl] = ex;
-			if (ey > spill[lvl]) spill[lvl] = ey;
-		}
-		if (lvl == 0) EQF(spill[0], 0.0f, "a flat view spills nothing, so the clip box is unchanged");
-		else          CHECK(spill[lvl] > 0.0f, "a tilted view spills (lvl %d, got %.3f)\n",
-		                    lvl, (double)spill[lvl]);
-	}
-	for (int lvl = 0; lvl < TILT_LEVELS; lvl++) {
-		TiltView v;
-		tilt_view_init(&v, TILT_ANGLE_DEG[lvl] * TILT_DEG2RAD,
-		               (float)PRES_FRAME_W, (float)PRES_FRAME_H, TILT_COVER_MIX);
-		for (int fx = 16; fx <= 224; fx += 16) {
-			for (int fy = 40; fy <= 152; fy += 8) {
-				float ax = (float)fx, ay = (float)fy;
-				float sprX, sprY; presence_art_rect(ax, ay, &sprX, &sprY);
-				float fax, fay, q;
-				tilt_project(&v, ax, ay, &fax, &fay, &q);
-				CHECK(q > 0.0f, "q must be strictly positive (lvl %d, %d,%d)\n", lvl, fx, fy);
-				float dx = fax - ax, dy = fay - ay;
-
-				// The shipped rule: clip the UNPROJECTED rect, then translate it (A3.2.1) — with the
-				// box widened by the view's SPILL under tilt (fix pass, finding 4).
-				// NOTE: this pair used to be called with IDENTICAL arguments and then asserted equal,
-				// i.e. the function compared to itself — a check that could never fail. It now
-				// compares the FLAT box against the TILTED (spilled) box, which is a real statement:
-				// a wider box can only ever keep MORE of the sprite, never less.
-				PresArtDraw flat, tilted;
-				int vf = presence_art_clip(sprX, sprY, 0, 0.0f,      &flat);
-				int vt = presence_art_clip(sprX, sprY, 0, spill[lvl], &tilted);
-				CHECK(!vf || vt, "the spilled box never culls what the flat box kept (lvl %d)\n", lvl);
-				if (vf && vt) {
-					CHECK(tilted.w >= flat.w && tilted.h >= flat.h,
-					      "the spilled box never trims MORE than the flat box (lvl %d, %d,%d)\n",
-					      lvl, fx, fy);
-				}
-				if (!vf) continue;
-				// THE assertion: the size is BITWISE unchanged by the tilt. No q, no k*q, no
-				// tilt_disp_scale anywhere in the sizing path — any non-integer scale on 16x32
-				// pixel art turns it to mush (A3.1.1).
-				EQI(tilted.w, flat.w, "tilt never changes the sprite WIDTH (lvl %d)", lvl);
-				EQI(tilted.h, flat.h, "tilt never changes the sprite HEIGHT (lvl %d)", lvl);
-
-				if (lvl == 0) {
-					// At angle 0 the projection is the identity, bitwise (tilt.h:28-30), so the
-					// tilted path IS the flat path — phase 14's invariant 1, inherited.
-					CHECK(dx == 0.0f && dy == 0.0f,
-					      "angle 0 must translate by exactly (0,0), got (%.9f,%.9f)\n",
-					      (double)dx, (double)dy);
-				} else {
-					if (dx != 0.0f || dy != 0.0f) sawNonZero++;
-					// Non-vacuity: a PER-CORNER projection would NOT be a translation. Project the
-					// sprite's top-left corner directly and show it differs from corner+delta —
-					// that difference is exactly the "upright, unscaled billboard" decision, so if
-					// it ever vanished the test above would be asserting nothing.
-					float cfx, cfy, cq;
-					tilt_project(&v, sprX, sprY, &cfx, &cfy, &cq);
-					float pcx = sprX + dx, pcy = sprY + dy;
-					float ddx = cfx - pcx, ddy = cfy - pcy;
-					if (ddx < 0) ddx = -ddx;
-					if (ddy < 0) ddy = -ddy;
-					if (ddx > 0.01f || ddy > 0.01f) sawDiffersFromPerCorner++;
-				}
-			}
-		}
-	}
-	CHECK(sawNonZero > 0, "a nonzero angle must actually move the anchor (else the test is vacuous)\n");
-	CHECK(sawDiffersFromPerCorner > 0,
-	      "the billboard rule must differ from a per-corner projection (else it is not a billboard)\n");
-	// The foot anchor is what rides the ground: at any angle, projecting the FOOT and translating
-	// puts the foot exactly on the projected ground point. That is the one-line statement of A3.1.
-	for (int lvl = 1; lvl < TILT_LEVELS; lvl++) {
-		TiltView v;
-		tilt_view_init(&v, TILT_ANGLE_DEG[lvl] * TILT_DEG2RAD,
-		               (float)PRES_FRAME_W, (float)PRES_FRAME_H, TILT_COVER_MIX);
-		float ax = 120.0f, ay = 88.0f, fax, fay, q;
-		tilt_project(&v, ax, ay, &fax, &fay, &q);
-		float sprX, sprY; presence_art_rect(ax, ay, &sprX, &sprY);
-		float dx = fax - ax, dy = fay - ay;
-		EQF(sprX + dx + (float)PRES_FOOT_DX, fax, "translated foot x == projected ground x (lvl %d)", lvl);
-		EQF(sprY + dy + (float)PRES_FOOT_DY, fay, "translated foot y == projected ground y (lvl %d)", lvl);
-	}
-
-	// ---- the two defects the spill box exists to fix (fix pass, review finding 4) ----
-	// Both are stated as the reviewer stated them, at the steepest shipped tilt, so a regression
-	// reintroduces a named failure rather than a number moving.
-	{
-		int lvl = TILT_LEVELS - 1;
-		TiltView v;
-		tilt_view_init(&v, TILT_ANGLE_DEG[lvl] * TILT_DEG2RAD,
-		               (float)PRES_FRAME_W, (float)PRES_FRAME_H, TILT_COVER_MIX);
-		PresArtDraw d;
-		// (a) AMPUTATION. A peer near the left edge, drawn on ground the tilted image spills onto,
-		//     had its left columns cut by a boundary the sprite is no longer anywhere near.
-		{
-			float ax = 4.0f, ay = 152.0f;
-			float sprX, sprY; presence_art_rect(ax, ay, &sprX, &sprY);
-			CHECK(presence_art_clip(sprX, sprY, 0, 0.0f, &d), "the flat box keeps the left-edge peer\n");
-			EQI(d.w < PRES_CELL_W, 1, "...but the flat box AMPUTATES it (that was the bug)");
-			CHECK(presence_art_clip(sprX, sprY, 0, spill[lvl], &d), "the spilled box keeps it too\n");
-			EQI(d.w, PRES_CELL_W, "...whole: no slice missing from a sprite standing on visible ground");
-		}
-		// (b) ...and its mirror at the right edge, so the fix is not one-sided.
-		{
-			float ax = 236.0f, ay = 152.0f;
-			float sprX, sprY; presence_art_rect(ax, ay, &sprX, &sprY);
-			CHECK(presence_art_clip(sprX, sprY, 0, 0.0f, &d), "the flat box keeps the right-edge peer\n");
-			EQI(d.w < PRES_CELL_W, 1, "...but the flat box AMPUTATES it too");
-			CHECK(presence_art_clip(sprX, sprY, 0, spill[lvl], &d), "the spilled box keeps it whole\n");
-			EQI(d.w, PRES_CELL_W, "...whole");
-		}
-		// (c) What the spill box must NOT do: rescue a peer the DATA half already culled. The
-		//     horizontal map at any row is x -> 120 + s*(x-120) with s > 0, so a flat x outside
-		//     [0,240] lands outside that row's projected extent exactly — a peer whose flat rect
-		//     misses the frame is not standing on the tilted image either, and presence_solve
-		//     (which knows nothing about tilt, D5.7.1) is the right authority for that call.
-		{
-			PeerPresence self = rec_ok(10, 10, 0, 0), peer = rec_ok(10 + 9, 10, 0, 0);
-			PresenceState ps; PresenceOut o;
-			EQI(solve_once(&ps, &self, &peer, 1, 0, 0, &o), 0, "a peer past the frame edge is CULLED");
-			EQI(o.reason, PRES_OFF_CULL, "...by the data half, before any tilt geometry exists");
-		}
-		// The box is a SPILL, never a shrink, and garbage never becomes a box: a negative or absurd
-		// margin degrades to the flat box rather than to a computed-from-garbage one.
-		{
-			float sprX, sprY; presence_art_rect(120.0f, 88.0f, &sprX, &sprY);
-			PresArtDraw a, b, c;
-			CHECK(presence_art_clip(sprX, sprY, 0,  0.0f, &a), "centre, flat box\n");
-			CHECK(presence_art_clip(sprX, sprY, 0, -5.0f, &b), "centre, negative margin\n");
-			CHECK(presence_art_clip(sprX, sprY, 0, 1.0e9f, &c), "centre, absurd margin\n");
-			EQI(b.w, a.w, "a negative margin degrades to the flat box");
-			EQI(c.w, a.w, "an absurd margin degrades to the flat box");
-		}
-	}
-}
-
-// ============================================================================================
 // TEST 30 — placeholder art invariants (SPEC-avatar A1.5, A7.1 P10)
 // ============================================================================================
 static uint32_t art_px(const uint8_t* sheet, int x, int y) {
@@ -2789,9 +2607,9 @@ static void test_card_text(void) {
 // --------------------------------------------------------------------------------------------
 // TEST 37 — the co-op pref's semantics (SPEC-avatar A6.3, A7.1 P12).
 //
-// The Settings BYTE LAYOUT and the length ladder are mirrored in test_tilt.c TEST 6, where the
-// struct mirror lives and where main.c's _Static_asserts point (BUILDLOG slice M1, deviation 8).
-// What that test cannot see is what the pref MEANS once loaded, which is this one:
+// The Settings BYTE LAYOUT and the length ladder are pinned by main.c's _Static_asserts (the host
+// mirror in test_tilt.c TEST 6 was deleted with the phase-14 tilt, 2026-10-06).
+// What those cannot see is what the pref MEANS once loaded, which is this one:
 // P12's "a corrupt/negative presence word can only produce 0/1", plus the default and the gate.
 // --------------------------------------------------------------------------------------------
 static void test_pref_semantics(void) {
@@ -3024,7 +2842,6 @@ int main(void) {
 	test_art_rect();             // slice M2
 	test_art_clip();             // slice M2
 	test_art_clip_mirror();      // slice M2
-	test_art_tilt();             // slice M2
 	test_art_build();            // slice M2
 	test_art_walk();             // slice M2
 	test_art_ysort();            // slice M2

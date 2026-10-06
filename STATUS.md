@@ -38,11 +38,11 @@ games (Sonic, Kirby, etc.).
   pick battle targets, tap-to-advance dialog. **Gen-3 Pokémon only.** Being hardened one
   flow at a time on hardware; some detection is heuristic and version-specific (LeafGreen
   addresses are FireRed-derived and may be inert).
-- **Stereoscopic 3D depth** — uses the 3DS 3D slider to pop the overworld into a 2.5D
-  diorama: characters and scenery stand up off a ground plane, with elevation/collision-
-  aware depth. A walking "wobble" is the current tuning target. Gen-3 Pokémon tuned.
-- **HD-2D-style post effects** — optional tilt-shift depth-of-field, LDR bloom, and a
-  time-of-day color grade, all toggleable in the pause menu. Tuning ongoing.
+- **Experimental voxel 3D overworld** *(New 3DS, hardware-unproven)* — on supported Gen-3 Pokémon
+  overworld maps the top screen can draw the map as a voxel 3D world, in stereo with the 3D slider,
+  with optional depth-of-field and bloom (pause menu). Everywhere else the game is plain 2D and the
+  3D slider has no effect. (The older 2.5D depth-pop, tilt and HD-2D post effects were removed
+  2026-10-06 — see `docs/REMOVED-3D-ATTEMPTS.md`.)
 
 ## 🔜 In progress — the wireless emulation link
 
