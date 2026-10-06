@@ -257,3 +257,58 @@ the game stays 2D (screenshot: Pallet Town, no voxel).
 - A pre-existing `sdmc:/3DGBA/gameA.gba` (an Emerald copy) and `gameA.sav` blocked `--stage-roms`; I moved them to
   the session scratchpad (`sd-backup/`) and put back after the runs.
 - Not live-verified: the raw weather/palette values (only through the checks), the fldeff and gfx tables (ROM-only).
+
+## R2 - FRLG renderer path, M0 (branch of c9edf92 + ceb83c1 + this entry, based on bab1e69)
+
+Pallet Town renders in voxel 3D on FireRed and LeafGreen rev 1 with NO data files (no buildings.bin / regions.bin / relief.bin in
+`sdmc:/3ds/3DGBA/voxel/BPRE` or `BPGE`; the dirs were never created). Emerald is unchanged.
+
+### What changed
+- `gba_game.h`, `vx_adapter.{h,c}`: u32 attributes interned to u16 (`vx_intern_attrs32`: behaviour 9 bits, layer type bits 29-30 into
+  bits 12-13; the Emerald table stays a zero-copy ROM pointer); `MapLayout.borderWidth/Height` read from layout +0x18/+0x19 (2x2, 3x2,
+  0x0 stored as one zero cell); `vx_border_cells/vx_border_cell`; per-profile data dir and pak path; `weatherPtr` dereferenced once per
+  bind; backup-map base taken from the live pointer (`backupMap == 0`).
+- `vx_snapshot.{h,c}`: `backupMapBase`, FRLG weather base, bounds checks. `voxel_atlas.c`: tiles per primary tileset from the profile (640).
+- `voxel_world.c`, `voxel_tree.c`, `vx_behavior.c`: Emerald-only id tables guarded by `emeraldIdTables`; the behaviour predicates
+  read the active profile's sets (the raw Emerald tables are renamed `MetatileBehavior_Emerald*` and feed the Emerald profile builders).
+- `rg_gameprof.c`: `rendererOn = true` for FR/LG. `vx_host.c`: ROM anchors gate detection, RAM anchors gate FRLG candidacy, callback
+  normalised to the Emerald CB2 values for `voxel_gate`, non-outdoor map types (anything but 1,2,3,5,6) hand the frame back to 2D,
+  status string "Voxel 3D: Emerald, FireRed, LeafGreen (rev 1)".
+- Tests: `test_voxel_adapter` (intern known answers, border helpers, real-ROM layout border census 330/7/28 + 19 unreadable slots),
+  new `test_voxel_frlg` (synthetic live state over the real ROM: snapshot -> adapter -> world for Pallet, 84 checks), `test_romgen_gameprof`
+  (rev 1 detected, rev 0 refused), and one line of `test_romgen_frlg_world.c` flipped (see deviations).
+
+### Emulator M0 (Azahar, New-3DS mode, voxel pref on, harness state dir /tmp/r2emu)
+| check | FR | LG |
+|---|---|---|
+| Pallet in voxel 3D, no data | `evidence/m0-fr-pallet.png` | `evidence/m0-lg-pallet.png` |
+| voxel.log | `vx: rom anchors ok (BPRE rev 1)`, `vx: anchors ok (BPRE rev 1) map 3.0` | same with BPGE |
+| Route 1 connection (warp save 3/19 at 12,40, Pallet's houses visible at the south edge) | `evidence/m0-fr-route1-connection.png` | crossing from Route 1 into Pallet: `evidence/m0-lg-route1-crossing.png`, log `map 3.19` then `map 3.0` |
+| Indoor (player's house 1F, map 4.0) | plain 2D: `evidence/m0-fr-house-2d-indoor.png` | not run |
+| Leave the house | 2D, black fade, then 3D Pallet with no garbage frame in the sampled frames (about one shot per 2.5 s): `m0-fr-house-exit-fade.png`, `m0-fr-house-exit-3d.png`; log `map 4.0` then `map 3.0` | not run |
+| Emerald Littleroot before (bab1e69 build) vs after | `m0-emerald-littleroot-before.png` / `-after.png`: 0.106 % of pixels differ above a delta of 24, in small specks (NPCs, sparkles, fps digits); `vx:` log lines identical | |
+
+Not verified: the status string is code only (no menu screenshot); the LG house exit; a fade captured at frame granularity (sampling was
+about every 2.5 s, so a one-frame glitch could slip between shots; the hand-back path is the same one used for Emerald interiors with
+interiors3d off).
+
+### Gate
+- Emerald SHA-1 (`romgen emerald.gba`, all outputs) identical before/after (`sha-before.txt` == `sha-after.txt`).
+- `make -C tools/romgen test`: 23 suites, every count identical except `test_romgen_gameprof` 5798 -> 5799; 0 failures, 0 skipped.
+- `make -C tools/romgen vtest`: every count identical except `test_voxel_adapter` 122 -> 562; new `test_voxel_frlg` 84 checks, 0 failures, 0 skipped.
+- Device: `make -j8 ROMGEN_DEV_HOOK=1` then `make -j8` both link.
+
+### Deviations
+- `test_romgen_frlg_world.c` line 55 asserted the R1 behaviour (`gameprof_detect` refuses FRLG, "R1/R2 own it"); R2 turns the renderer on, so
+  it now asserts `gameprof_detect(...) == p` for FR rev 1. Same check count (14685).
+- Player (6,6)-style walking in the harness was unreliable (CTM timing), so the connection and the house were reached with warp-save copies
+  (`roms/firered-r1.sav`, `firered-house.sav`, LG likewise; gitignored, made from the Pallet saves with the continue-game patch). Route 1 at
+  y=70 is off the map (water-like border garbage in the first try); y=40 is inside it.
+- FRLG gets a non-existent pak path so the Emerald-pinned `emerald3ds.pak` is never opened for them.
+- `romgen_dev.c` still writes to `OUT_DIR "sdmc:/3ds/3DGBA/voxel"` regardless of game (G2).
+
+### Notes for the lead
+- The SD was restored byte-for-byte (gameA.gba/.sav, settings.bin, recent.bin); Emerald's `.bin` files untouched. `tools/emutest/.venv` is an
+  untracked harness artefact, not committed.
+- `--stage-roms` refuses while `sdmc:/3DGBA/gameA.gba` exists; I moved it to the scratchpad and put it back.
+- The movie `ML.ctm` takes about 5000 emulated frames to reach the overworld; shots need 150-300 s of wall time per run in the voxel renderer.

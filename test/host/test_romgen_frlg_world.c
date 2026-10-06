@@ -52,7 +52,7 @@ static void TestGate(void)
     p = gameprof_detect_romgen(rom, sizeof rom);
     CHECK(p != NULL && p->game == GP_FIRERED && p->groupCount == 43 && p->layoutBytes == 26);
     CHECK(rg_world_open(&w, rom, sizeof rom) == RG_ERR_GAME);       /* header ok, tables outside this tiny buffer */
-    CHECK(gameprof_detect(rom, sizeof rom) == NULL);                /* the renderer path still refuses (R1/R2 own it) */
+    CHECK(gameprof_detect(rom, sizeof rom) == p);                   /* P34 R2: the renderer path now accepts rev 1 (rendererOn) */
     memcpy(rom + 0xAC, "BPGE", 4);
     p = gameprof_detect_romgen(rom, sizeof rom);
     CHECK(p != NULL && p->game == GP_LEAFGREEN && p->dataSubdir[3] == 'E');
