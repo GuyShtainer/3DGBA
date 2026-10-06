@@ -30,4 +30,17 @@ typedef struct RgDensityBad { char tag[RG_TAG_LEN]; double along, down, shear; }
  * (kept for the spec's signature). */
 unsigned rg_density_check(const RgMesh *m, const RgImage *art, RgDensityBad *bad, unsigned maxBad);
 
+/* Side closure (Phase 34, Kanto table only). Seen from due west or due east, every prism end the camera can see
+ * (rg_prism_exposed: the prism's (z, y) cross-section, eroded by 0.75 px at its border, minus what a prism reaching
+ * further out hides) must be a solid wall: each such cell has to be covered by some triangle projected along x. Prism
+ * side faces and edge-on faces project to lines and cover nothing, so a missing end face (a prism without a cap band,
+ * or ends=false on the outermost slice) leaves its section open. A hip roof or a chamfered block (no prism) counts
+ * its own outline (under its upper edge, from its lowest point) when it reaches the model's edge. `applicable` is false
+ * when nothing on that side is a wall to judge. */
+typedef struct RgSideResult { bool applicable; unsigned expected, open; } RgSideResult;
+/* `parts` is the builder's part list, `m` its emitted mesh. False on no memory. Fails (pass) when
+ * open <= RG_SIDE_TOL(expected). */
+bool rg_side_check(const RgPartList *parts, const RgMesh *m, bool east, RgSideResult *out);
+#define RG_SIDE_TOL(expected) ((expected) / 50u > 8u ? (expected) / 50u : 8u)
+
 #endif

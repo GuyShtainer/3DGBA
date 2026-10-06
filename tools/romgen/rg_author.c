@@ -879,6 +879,34 @@ int rg_author_check(const RgWorld *w, const RgSpec *spec, int expect, FILE *fp)
         fprintf(fp, "    %s along %.4f down %.4f shear %.4f\n", bad[k].tag, bad[k].along, bad[k].down, bad[k].shear);
     if (nBad)
         pass = false;
+    if ((w->prof->game == GP_FIRERED || w->prof->game == GP_LEAFGREEN) && spec->parts != NULL) {
+        /* Phase 34: the Kanto table only. Emerald's builders are pinned bytes and never face this gate. */
+        RgPartList parts;
+        unsigned side;
+        bool ran;
+
+        rg_parts_init(&parts);
+        ran = spec->parts(spec, spec->arg0, spec->arg1, &parts);
+        for (side = 0; side < 2u; side++) {
+            RgSideResult sr;
+            const char *nm = side ? "east" : "west";
+
+            if (!ran || !rg_side_check(&parts, &m->mesh, side == 1u, &sr)) {
+                fprintf(fp, "  FAIL side %s: check could not run\n", nm);
+                pass = false;
+            } else if (!sr.applicable) {
+                fprintf(fp, "  side %s: no prism at the edge (n/a)\n", nm);
+            } else {
+                bool bad = sr.open > RG_SIDE_TOL(sr.expected);
+
+                fprintf(fp, "  side %s: %u of %u wall cells open (tolerance %u)%s\n", nm, sr.open, sr.expected,
+                        RG_SIDE_TOL(sr.expected), bad ? "  FAIL: open side" : "");
+                if (bad)
+                    pass = false;
+            }
+        }
+        rg_parts_free(&parts);
+    }
     memset(&pl, 0, sizeof(pl));
     if (rg_find_placements(w, m, &pl) != RG_OK) {
         fprintf(fp, "  FAIL placements: search failed\n");

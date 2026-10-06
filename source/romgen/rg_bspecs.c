@@ -851,3 +851,49 @@ const RgSpec rg_specs[] = {
     {"rustboro_gym", RG_SPEC_INTERIOR, 94, 0xC053E45Eu, {0, 0, 0, 0}, {0, 0}, {0x201}, 1, NULL, 0, NULL, 0, 0, &rg_room_rustboro_gym},
 };
 const unsigned rg_spec_count = sizeof(rg_specs) / sizeof(rg_specs[0]);
+
+/* ---- Phase 34 side walls --------------------------------------------------------------------------------------------- */
+
+bool rg_close_sides(const RgSpec *s, RgPartList *parts)
+{
+    const RgSideCfg *table;
+    unsigned i;
+
+    if (s->kind != RG_SPEC_DIRECT || s->ext == NULL)
+        return true;
+    table = (const RgSideCfg *)s->ext;
+    for (i = 0; i < parts->n; i++) {
+        RgPart *p = rg_parts_at(parts, i);
+        RgPrism *pr;
+        const RgSideCfg *cfg = table;
+        double ytop = -1e30, zfront = -1e30;
+        bool west, east;
+        unsigned k;
+
+        if (p == NULL || p->kind != RG_P_PRISM || p->u.prism.hasCaps)
+            continue;
+        while (cfg->part != NULL && strncmp(p->name, cfg->part, strlen(cfg->part)) != 0 && !cfg->last)
+            cfg++;
+        if (cfg->part != NULL && strncmp(p->name, cfg->part, strlen(cfg->part)) != 0)
+            continue;
+        west = rg_prism_exposed(parts, i, false, NULL, NULL) > 0;
+        east = rg_prism_exposed(parts, i, true, NULL, NULL) > 0;
+        if (!west && !east)
+            continue;
+        pr = &p->u.prism;
+        for (k = 0; k < pr->nPoly; k++) {
+            if (pr->poly[k][1] > ytop) ytop = pr->poly[k][1];
+            if (pr->poly[k][0] > zfront) zfront = pr->poly[k][0];
+        }
+        pr->west = west;
+        pr->east = east;
+        pr->hasCaps = true;
+        pr->nCaps = 0;
+        pr->caps[pr->nCaps++] = rg_band(-1, cfg->eave < ytop ? cfg->eave : ytop + 1,
+                                        rg_tile_top(cfg->wall[0], cfg->wall[1], cfg->wall[2], cfg->wall[3], ytop), zfront);
+        if (ytop > cfg->eave)
+            pr->caps[pr->nCaps++] = rg_band(cfg->eave, ytop + 1,
+                                            rg_tile_top(cfg->roof[0], cfg->roof[1], cfg->roof[2], cfg->roof[3], ytop), zfront);
+    }
+    return !parts->failed;
+}

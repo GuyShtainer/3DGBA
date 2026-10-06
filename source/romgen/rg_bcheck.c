@@ -247,3 +247,157 @@ unsigned rg_density_check(const RgMesh *m, const RgImage *art, RgDensityBad *bad
     }
     return count;
 }
+
+/* ---- side closure ---------------------------------------------------------------------------------------------- */
+
+typedef struct SideGrid { uint8_t *cov; int z0, y0, zw, yh; RgSideResult *out; } SideGrid;
+
+static void side_cell(void *vg, double z, double y)
+{
+    SideGrid *g = (SideGrid *)vg;
+    int zz = (int)floor(z) - g->z0, yy = (int)floor(y) - g->y0;
+    size_t at;
+
+    if (zz < 0 || zz >= g->zw || yy < 0 || yy >= g->yh)
+        return;
+    at = (size_t)yy * (size_t)g->zw + (size_t)zz;
+    if (g->cov[at] & 2u)
+        return;
+    g->cov[at] |= 2u;
+    g->out->expected++;
+    if (!(g->cov[at] & 1u))
+        g->out->open++;
+}
+
+/* A part's triangles are tagged "<name>" or "<name>.<what>". */
+static bool tag_of_part(const char *tag, const char *name)
+{
+    size_t n = strlen(name);
+
+    return strncmp(tag, name, n) == 0 && (tag[n] == '\0' || tag[n] == '.');
+}
+
+#define SIDE_REACH 2.5      /* a prism or part whose end lies within this many px of the model's edge is on the side (a roof's overhang) */
+
+bool rg_side_check(const RgPartList *parts, const RgMesh *m, bool east, RgSideResult *out)
+{
+    double xedge, zlo = 1e30, zhi = -1e30, ylo = 1e30, yhi = -1e30;
+    unsigned i, k;
+    int zw, yh, z0, y0, zz, yy;
+    uint8_t *cov;
+
+    memset(out, 0, sizeof(*out));
+    if (m->n == 0)
+        return true;
+    xedge = east ? -1e30 : 1e30;
+    for (i = 0; i < m->n; i++)
+        for (k = 0; k < 3; k++) {
+            double x = m->t[i].p[k].x, z = m->t[i].p[k].z, y = m->t[i].p[k].y;
+
+            if (east ? x > xedge : x < xedge)
+                xedge = x;
+            if (z < zlo) zlo = z;
+            if (z > zhi) zhi = z;
+            if (y < ylo) ylo = y;
+            if (y > yhi) yhi = y;
+        }
+    z0 = (int)floor(zlo); y0 = (int)floor(ylo);
+    zw = (int)ceil(zhi) - z0 + 1; yh = (int)ceil(yhi) - y0 + 1;
+    if (zw <= 0 || yh <= 0 || (size_t)zw * (size_t)yh > 4u * 1024u * 1024u)
+        return false;
+    cov = (uint8_t *)calloc((size_t)zw * (size_t)yh, 1);
+    if (cov == NULL)
+        return false;
+    for (i = 0; i < m->n; i++) {         /* every triangle projected along x: its (z, y) area covers the cells it holds */
+        const RgTri *t = &m->t[i];
+        double az = t->p[0].z, ay = t->p[0].y, bz = t->p[1].z, by = t->p[1].y, cz = t->p[2].z, cy = t->p[2].y;
+        double area = (bz - az) * (cy - ay) - (cz - az) * (by - ay);
+        double mz0 = az < bz ? (az < cz ? az : cz) : (bz < cz ? bz : cz), mz1 = az > bz ? (az > cz ? az : cz) : (bz > cz ? bz : cz);
+        double my0 = ay < by ? (ay < cy ? ay : cy) : (by < cy ? by : cy), my1 = ay > by ? (ay > cy ? ay : cy) : (by > cy ? by : cy);
+        int iz0 = (int)floor(mz0) - z0, iz1 = (int)ceil(mz1) - z0, iy0 = (int)floor(my0) - y0, iy1 = (int)ceil(my1) - y0;
+
+        if (fabs(area) < 1e-9 || (t->flags & (RG_TAG_DEPTH | RG_TAG_BEHIND)))
+            continue;
+        if (iz0 < 0) iz0 = 0;
+        if (iy0 < 0) iy0 = 0;
+        if (iz1 > zw - 1) iz1 = zw - 1;
+        if (iy1 > yh - 1) iy1 = yh - 1;
+        for (yy = iy0; yy <= iy1; yy++)
+            for (zz = iz0; zz <= iz1; zz++) {
+                double pz = z0 + zz + 0.5, py = y0 + yy + 0.5;
+                double w0 = ((bz - pz) * (cy - py) - (cz - pz) * (by - py)) / area;
+                double w1 = ((cz - pz) * (ay - py) - (az - pz) * (cy - py)) / area;
+                double w2 = 1.0 - w0 - w1;
+
+                if (w0 >= -1e-7 && w1 >= -1e-7 && w2 >= -1e-7)
+                    cov[(size_t)yy * (size_t)zw + (size_t)zz] = 1;
+            }
+    }
+    for (i = 0; i < parts->n; i++) {      /* the expected cells: the union of the parts on the side, eroded at their borders */
+        const RgPart *p = rg_parts_at(parts, i);
+
+        if (p == NULL)
+            continue;
+        if (p->kind == RG_P_PRISM) {
+            SideGrid g;
+
+            g.cov = cov; g.z0 = z0; g.y0 = y0; g.zw = zw; g.yh = yh; g.out = out;
+            (void)rg_prism_exposed(parts, i, east, side_cell, &g);
+        } else if (p->kind == RG_P_HIPROOF || p->kind == RG_P_FRUSTUM) {
+            /* a roof or a chamfered block: its section is everything under its own upper outline, from its lowest point */
+            double pzlo = 1e30, pzhi = -1e30, pylo = 1e30, pxlo = 1e30, pxhi = -1e30;
+            double *top = (double *)malloc((size_t)zw * sizeof(double));
+            bool any = false;
+            unsigned j;
+
+            if (top == NULL) {
+                free(cov);
+                return false;
+            }
+            for (zz = 0; zz < zw; zz++)
+                top[zz] = -1e30;
+            for (j = 0; j < m->n; j++) {
+                const RgTri *t = &m->t[j];
+
+                if (!tag_of_part(m->names[t->tag], p->name))
+                    continue;
+                any = true;
+                for (k = 0; k < 3; k++) {
+                    const RgVtx *a = &t->p[k], *b = &t->p[(k + 1) % 3];
+                    unsigned s;
+
+                    if (a->x < pxlo) pxlo = a->x;
+                    if (a->x > pxhi) pxhi = a->x;
+                    if (a->z < pzlo) pzlo = a->z;
+                    if (a->z > pzhi) pzhi = a->z;
+                    if (a->y < pylo) pylo = a->y;
+                    for (s = 0; s <= 8u; s++) {
+                        double z = a->z + (b->z - a->z) * s / 8.0, y = a->y + (b->y - a->y) * s / 8.0;
+                        int c = (int)floor(z) - z0;
+
+                        if (c >= 0 && c < zw && y > top[c])
+                            top[c] = y;
+                    }
+                }
+            }
+            if (any && (east ? pxhi >= xedge - SIDE_REACH : pxlo <= xedge + SIDE_REACH)) {
+                for (yy = 0; yy < yh; yy++)
+                    for (zz = 0; zz < zw; zz++) {
+                        size_t at = (size_t)yy * (size_t)zw + (size_t)zz;
+                        double zc = z0 + zz + 0.5, yc = y0 + yy + 0.5;
+
+                        if ((cov[at] & 2u) || zc < pzlo + 0.75 || zc > pzhi - 0.75 || yc < pylo + 0.75 || yc > top[zz] - 0.75)
+                            continue;
+                        out->expected++;
+                        cov[at] |= 2u;
+                        if (!(cov[at] & 1u))
+                            out->open++;
+                    }
+            }
+            free(top);
+        }
+    }
+    out->applicable = out->expected > 0;
+    free(cov);
+    return true;
+}

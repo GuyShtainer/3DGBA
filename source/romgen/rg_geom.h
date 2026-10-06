@@ -257,6 +257,9 @@ bool rg_emit_mound(const RgMound *mo, const char *name, RgMesh *m);
 /* Appends the part's triangles in upstream emission order. False for an invalid part (a prism that is not
  * counter-clockwise, a degenerate tile) or when the mesh ran out of memory. */
 bool rg_part_emit(const RgPart *p, RgMesh *m);
+/* A prism whose cross-section is under 4 px in depth or in height is a sheet (a facade plane, a roof face, a decal):
+ * it has no end wall to speak of, and neither the side closure pass nor the side check looks at it. */
+bool rg_prism_is_sheet(const RgPrism *pr);
 
 /* A growing list with stable addresses (a Lifted part points at another entry): chunks of 64. */
 #define RG_PART_CHUNK 64u
@@ -268,5 +271,13 @@ RgPart *rg_parts_add(RgPartList *l, RgPartKind kind, const char *name);   /* zer
 RgPart *rg_parts_at(const RgPartList *l, unsigned i);
 /* Emits every part in list order (Model.__init__, vb:1520). */
 bool rg_parts_emit(const RgPartList *l, RgMesh *m);
+
+/* 1 when the point (z, y) lies inside the (z, y) polygon (even-odd) and at least `margin` px from its border. */
+bool rg_poly_inside(const double (*poly)[2], unsigned n, double z, double y, double margin);
+/* The wall cells of prism `idx` that a camera due east (west) of the model sees at that prism's x1 (x0) end: the unit
+ * cells (centre z, y) of its section, eroded 0.75 px at the border, that no other prism reaching further east (west) has
+ * in its own section. Calls cb(ctx, z, y) per cell; returns the count. Sheets neither block nor count. */
+typedef void (*RgCellFn)(void *ctx, double z, double y);
+unsigned rg_prism_exposed(const RgPartList *parts, unsigned idx, bool east, RgCellFn cb, void *ctx);
 
 #endif
