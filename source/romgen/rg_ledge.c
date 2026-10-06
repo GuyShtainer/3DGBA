@@ -22,7 +22,7 @@ static unsigned jump_dirs(unsigned b, int8_t dx[4], int8_t dy[4])
     static const int8_t kV[8] = {0, 0, -1, 1, -1, -1, 1, 1};
     unsigned k = b - 0x38u, n = 0;
 
-    assert(rg_is_jump(b));
+    assert(b >= 0x38u && b <= 0x3Fu);
     if (kH[k] != 0) {
         dx[n] = kH[k];
         dy[n++] = 0;
@@ -34,9 +34,10 @@ static unsigned jump_dirs(unsigned b, int8_t dx[4], int8_t dy[4])
     return n;
 }
 
-bool rg_ledge_enabled(uint16_t layoutId)
+bool rg_ledge_enabled(const RgLayout *L)
 {
-    return rg_is_enabled_layout(layoutId);
+    assert(L != NULL);
+    return rg_lprof(L)->game == GP_EMERALD && rg_is_enabled_layout(L->id);
 }
 
 void rg_ledge_set_free(RgLedgeSet *s)
@@ -56,7 +57,7 @@ static bool jump_pass(const RgLayout *L, RgLedgeSet *s)
             unsigned b = rg_behaviour(L, x, y);
             RgLedgeCell *c;
 
-            if (!rg_is_jump(b))
+            if (!gp_beh(&rg_lprof(L)->jump, b))
                 continue;
             c = &s->c[s->n];
             c->x = (int16_t)x;
@@ -137,7 +138,7 @@ bool rg_ledge_cells(const RgLayout *L, bool junctions, RgLedgeSet *out)
     for (i = 0; i < cells; i++)
         out->at[i] = -1;
     (void)jump_pass(L, out);
-    if (junctions && !rg_ledge_enabled(L->id))
+    if (junctions && !rg_ledge_enabled(L))
         junction_pass(L, out);
     return true;
 }
@@ -152,11 +153,11 @@ unsigned rg_ledge_layouts(const RgWorld *w, uint16_t *out, unsigned cap)
         const RgLayout *L = &w->layouts[i];
         bool any = false;
 
-        if (!L->present || !rg_relief_outdoor(L->id))
+        if (!L->present || !rg_relief_outdoor_layout(w, L->id))
             continue;
         for (y = 0; y < (int)L->h && !any; y++)
             for (x = 0; x < (int)L->w && !any; x++)
-                any = rg_is_jump(rg_behaviour(L, x, y));
+                any = gp_beh(&rg_lprof(L)->jump, rg_behaviour(L, x, y));
         if (!any)
             continue;
         if (out != NULL && n < cap)

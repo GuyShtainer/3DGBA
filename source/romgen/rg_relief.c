@@ -817,9 +817,12 @@ RgErr rg_relief_build(const RgWorld *w, const RgRoles *r, RgReliefMode mode, RgP
     {
         const char *why = NULL;
 
-        if (!rg_rtables_check(w, &why))
+        /* the T1-T9 tables describe Emerald; Kanto has only the ledges pass (SPEC-P34 7.1), which reads none of them */
+        if (w->prof->game == GP_EMERALD && !rg_rtables_check(w, &why))
             return RG_ERR_TABLES;
     }
+    if (w->prof->game != GP_EMERALD)
+        mode = RG_RELIEF_LEDGES;        /* no drawn relief for Kanto: FULL means LEDGES there */
     if (mode == RG_RELIEF_FULL) {
         if (r == NULL || r->data == NULL)
             return RG_ERR_RELIEF;       /* FULL reads the roles */

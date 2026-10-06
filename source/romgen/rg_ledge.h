@@ -32,7 +32,7 @@ typedef struct RgLedgeSet {
 } RgLedgeSet;
 
 /* The two layouts upstream's ENABLED names (A.1): they skip the junction rule (rel:2353). */
-bool rg_ledge_enabled(uint16_t layoutId);
+bool rg_ledge_enabled(const RgLayout *L);   /* Emerald layouts 20 and 4 only; false on every other game */
 
 /* junctions=false: only the cells whose behaviour is a jump. False on no memory. Free with rg_ledge_set_free. */
 bool rg_ledge_cells(const RgLayout *L, bool junctions, RgLedgeSet *out);

@@ -45,6 +45,9 @@ uint16_t rg_relief_alt_base(uint16_t layoutId);
 uint16_t rg_name_rank(uint16_t layoutId);
 /* Used by an outdoor map, or an A.4 alternate of one (A.3 membership; layout 442 is excluded: deviation D1). */
 bool rg_relief_outdoor(uint16_t layoutId);
+/* Phase 34 L1: the outdoor test per game. Emerald: rg_relief_outdoor(id), unchanged. FireRed / LeafGreen: the layout is
+ * referenced by a map header of type 1, 2, 3, 5 or 6 (RgLayout.outdoor, after alternate inheritance). */
+bool rg_relief_outdoor_layout(const RgWorld *w, uint16_t layoutId);
 
 /* Every assertion of SPEC-S3 3.3 (T1-T9) against the opened world. False + a reason string on the first mismatch:
  * the generator then refuses (RG_ERR_TABLES), never writing a relief from a ROM the tables do not describe. */
