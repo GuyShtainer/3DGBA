@@ -326,6 +326,30 @@ static bool k_route2_gate_s(const RgSpec *spec, int a0, int a1, RgPartList *out)
     return !out->failed;
 }
 
+/* ---- k_route2_gate_n: 128x96 art (cells (2,13), 8x6) -- the north half of the Route 2 gatehouse -------------------- */
+/* The roof, cornice and window band of the building as seen from its back; the brick wall under the window band is
+ * hidden behind the tree row, so the rect stops at row 96. The log posts and the path above stay flat ground. */
+static bool k_route2_gate_n(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    RgPart *body = rg_parts_add(out, RG_P_PRISM, "body");
+    RgPrism *pr;
+
+    (void)spec; (void)a0; (void)a1;
+    if (body == NULL)
+        return false;
+    pr = &body->u.prism;
+    pr->x0 = 0; pr->x1 = 128;
+    pr->west = pr->east = true;
+    vr_box(pr, 96, 0, 21, 37);
+    pr->edges[0].kind = RG_EM_PROJ;
+    pr->edges[0].proj = rg_proj_rows(75, 96);       /* cornice, window band, brick */
+    pr->edges[1].kind = RG_EM_PROJ;
+    pr->edges[1].proj = rg_proj_rows(16, 75);       /* roof top */
+    pr->skip = (1u << 2) | (1u << 3);
+    vr_vplane(out, "slab", 38, 90, 37, 21, 25, 12, 16);     /* the raised lip over the north door */
+    return !out->failed;
+}
+
 static const RgExact kViridianHouseExact[4] = {
     {47, 8, 65, 40, false},     /* chimney, top and front face */
     {0, 20, 47, 48, false},     /* front slope, fascia (west of the chimney) */
@@ -346,6 +370,10 @@ static const RgExact kRoute2GateExact[5] = {
 };
 static const RgExact kRoute2GateSExact[1] = {
     {0, 0, 128, 112, false},    /* the whole building */
+};
+static const RgExact kRoute2GateNExact[2] = {
+    {0, 16, 128, 96, false},    /* roof, cornice, windows, brick */
+    {38, 12, 90, 16, false},    /* the lip over the door */
 };
 static const RgExact kViridianHouse2Exact[7] = {
     {47, 8, 65, 40, false},     /* chimney, top and front face */
@@ -370,5 +398,7 @@ const RgSpec rg_kspecs_viridian[] = {
      k_route2_gate, 0, 0, NULL},
     {"k_route2_gate_s", RG_SPEC_DIRECT, L_ROUTE2, {2, 45, 8, 7}, {0, 0}, {0x010, 0x011}, 2, kRoute2GateSExact, 1,
      k_route2_gate_s, 0, 0, NULL},
+    {"k_route2_gate_n", RG_SPEC_DIRECT, L_ROUTE2, {2, 13, 8, 6}, {0, 0}, {0x010, 0x011}, 2, kRoute2GateNExact, 2,
+     k_route2_gate_n, 0, 0, NULL},
 };
 const unsigned rg_kspecs_viridian_count = sizeof(rg_kspecs_viridian) / sizeof(rg_kspecs_viridian[0]);
