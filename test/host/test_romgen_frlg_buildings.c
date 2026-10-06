@@ -380,7 +380,7 @@ static void TestPallet(const char *name, const char *env, GpGame game, int idx)
     CHECK(rg_run(rom, n, &opts, &out) == RG_OK);
     CHECK(out.buildings != NULL && out.buildingsSize > 24 && memcmp(out.buildings, "VXB7", 4) == 0);
     CHECK(out.bModels == 2 && out.bPlacements == 3 && out.buildingsFailed == 0);
-    CHECK(out.regions == NULL && out.signs == NULL && out.relief == NULL);   /* regions, signposts, relief stay off for FRLG */
+    CHECK(out.regions != NULL && out.signs == NULL && out.relief == NULL);   /* G2: regions are always made; signposts only on wantSigns; relief stays off for FRLG */
     CHECK(out.layouts == 384 && out.maps == 425 && out.outdoorMaps == 76);
     if (out.buildings != NULL) {
         sPalletBin[idx] = (uint8_t *)malloc(out.buildingsSize);
