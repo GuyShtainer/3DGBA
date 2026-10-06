@@ -9,6 +9,7 @@
 
 #include "ctr_shims.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #define INTERN_SLOTS 4096u
@@ -225,12 +226,26 @@ static size_t Clip(uint32_t addr, size_t want)
     return want <= sRomSize - off ? want : sRomSize - off;
 }
 
+/* FireRed/LeafGreen metatile attributes are u32 in ROM (behaviour bits 0-8, layer type bits 29-30; SPEC-P34 1.5).
+ * The vendored code reads u16 with Emerald's packing, so convert on intern: behaviour (9 bits) stays in the low
+ * bits, the layer type moves to bits 12-13 where Emerald keeps it. src is little-endian bytes (unaligned ok). */
+void vx_intern_attrs32(const uint8_t *src, size_t n, uint16_t *out)
+{
+    for (size_t i = 0; i < n; ++i)
+    {
+        uint32_t a = (uint32_t)src[4 * i] | ((uint32_t)src[4 * i + 1] << 8) | ((uint32_t)src[4 * i + 2] << 16)
+                   | ((uint32_t)src[4 * i + 3] << 24);
+
+        out[i] = (uint16_t)((a & (uint32_t)VXP(behMask)) | (((a >> 29) & 3u) << 12));
+    }
+}
+
 static const struct Tileset *InternTileset(uint32_t addr)
 {
     struct Tileset *ts = InternFind(addr, K_TILESET);
     const uint8_t *raw;
     uint32_t tiles, pal, meta, attr;
-    size_t tilesBytes;
+    size_t tilesBytes, attrBytes;
 
     if (ts != NULL)
         return ts;
@@ -240,7 +255,7 @@ static const struct Tileset *InternTileset(uint32_t addr)
     tiles = Rd32(raw + 4);
     pal = Rd32(raw + 8);
     meta = Rd32(raw + 0xC);
-    attr = Rd32(raw + 0x10);
+    attr = Rd32(raw + VXP(tilesetAttrOff));   /* Emerald 0x10, FireRed/LeafGreen 0x14 (a callback sits at 0x10) */
     if (RomPtr(tiles, 1) == NULL)
         return NULL;
     if (raw[0] != 0)
@@ -257,8 +272,24 @@ static const struct Tileset *InternTileset(uint32_t addr)
     {
         const u16 *palP = RomU16Array(pal, 16u * 16u * 2u);
         const u16 *metaP = RomU16Array(meta, (size_t)VXP(nPrimMetatiles) * 16u);
-        const u16 *attrP = RomU16Array(attr, (size_t)VXP(nPrimMetatiles) * 2u);
+        const u16 *attrP;
 
+        if (VXP(attrBytes) == 4u)
+        {
+            size_t cells = Clip(attr, (size_t)VXP(nPrimMetatiles) * 4u) / 4u;
+            const uint8_t *rawAttr = RomPtr(attr, cells * 4u);
+            u16 *conv = cells != 0 && rawAttr != NULL ? Alloc(cells * 2u) : NULL;
+
+            if (conv != NULL)
+                vx_intern_attrs32(rawAttr, cells, conv);
+            attrP = conv;
+            attrBytes = cells * 2u;
+        }
+        else
+        {
+            attrP = RomU16Array(attr, (size_t)VXP(nPrimMetatiles) * 2u);
+            attrBytes = Clip(attr, (size_t)VXP(nPrimMetatiles) * 2u);
+        }
         if (palP == NULL || metaP == NULL || attrP == NULL)
             return NULL;
         ts = Alloc(sizeof(*ts));
@@ -275,7 +306,7 @@ static const struct Tileset *InternTileset(uint32_t addr)
     RegisterSize(ts->tiles, (uint32_t)tilesBytes);
     RegisterSize(ts->palettes, (uint32_t)Clip(pal, 512u));
     RegisterSize(ts->metatiles, (uint32_t)Clip(meta, (size_t)VXP(nPrimMetatiles) * 16u));
-    RegisterSize(ts->metatileAttributes, (uint32_t)Clip(attr, (size_t)VXP(nPrimMetatiles) * 2u));
+    RegisterSize(ts->metatileAttributes, (uint32_t)attrBytes);
     return InternPut(addr, K_TILESET, ts) ? ts : NULL;
 }
 
@@ -288,7 +319,7 @@ static const struct MapLayout *InternLayout(uint32_t addr)
 
     if (lay != NULL)
         return lay;
-    raw = RomPtr(addr, GBA_ROM_MAPLAYOUT_BYTES);
+    raw = RomPtr(addr, VXP(layoutBytes));
     if (raw == NULL)
         return NULL;
     w = (int32_t)Rd32(raw);
@@ -300,9 +331,29 @@ static const struct MapLayout *InternLayout(uint32_t addr)
     if (prim == NULL || sec == NULL)
         return NULL;
     {
-        const u16 *border = RomU16Array(Rd32(raw + 8), 8);
-        const u16 *map = RomU16Array(Rd32(raw + 0xC), (size_t)w * (size_t)h * 2u);
+        /* Emerald: always 2x2. FireRed/LeafGreen: borderWidth/Height at +0x18/+0x19: 2x2, 3x2, or 0x0 (indoor), the
+         * 0x0 stored as one metatile-0 cell. */
+        unsigned bw = 2, bh = 2;
+        const u16 *border;
+        const u16 *map;
 
+        if (VXP(layoutBytes) > 0x19)
+        {
+            bw = raw[0x18];
+            bh = raw[0x19];
+            if (bw > 8u || bh > 8u)
+                return NULL;
+        }
+        if (bw == 0 || bh == 0)
+        {
+            static const u16 sZeroBorder[1] = {0};
+
+            border = sZeroBorder;
+            bw = bh = 1;
+        }
+        else
+            border = RomU16Array(Rd32(raw + 8), (size_t)bw * bh * 2u);
+        map = RomU16Array(Rd32(raw + 0xC), (size_t)w * (size_t)h * 2u);
         if (border == NULL || map == NULL)
             return NULL;
         lay = Alloc(sizeof(*lay));
@@ -311,6 +362,8 @@ static const struct MapLayout *InternLayout(uint32_t addr)
         lay->width = w;
         lay->height = h;
         lay->border = border;
+        lay->borderWidth = (u8)bw;
+        lay->borderHeight = (u8)bh;
         lay->map = map;
         lay->primaryTileset = prim;
         lay->secondaryTileset = sec;
@@ -556,10 +609,61 @@ void vx_adapter_set_rom(const uint8_t *rom, size_t size)
     sRom = rom;
     sRomSize = rom != NULL ? size : 0;
     sError = rom != NULL ? VX_OK : VX_ERR_NO_ROM;
+    vx_snapshot_set_weather_base(0);
     if (rom == NULL)
         return;
+    if (VXP(weather) == 0 && VXP(weatherPtr) != 0)
+    {
+        /* FRLG: weather = rd32(weatherPtr) once per bind; it must lie in EWRAM with room for the struct. */
+        uint32_t wb = 0;
+
+        if (RomWord(VXP(weatherPtr), &wb) && wb >= GBA_EWRAM_BASE && wb - GBA_EWRAM_BASE < GBA_EWRAM_SIZE - 0x800u)
+            vx_snapshot_set_weather_base(wb);
+    }
     for (unsigned i = 0; i < VXP(fldeffCount); ++i)
         (void)RomWord(VXP(fldeffTemplates) + 4u * i, &gFieldEffectObjectTemplatePointers[i]);
+}
+
+unsigned vx_border_cells(const struct MapLayout *layout)
+{
+    unsigned bw = layout->borderWidth != 0 ? layout->borderWidth : 2u;
+    unsigned bh = layout->borderHeight != 0 ? layout->borderHeight : 2u;
+
+    return bw * bh;
+}
+
+int vx_border_cell(const struct MapLayout *layout, int bx, int by)
+{
+    int bw = layout->borderWidth != 0 ? layout->borderWidth : 2;
+    int bh = layout->borderHeight != 0 ? layout->borderHeight : 2;
+
+    /* For 2x2 this is the (bx + 1) & 1 phase the Emerald code always used (MAP_OFFSET 7 is odd). */
+    return ((bx - MAP_OFFSET) % bw + bw) % bw + (((by - MAP_OFFSET) % bh + bh) % bh) * bw;
+}
+
+const char *vx_profile_data_dir(const GameProfile *prof)
+{
+    static char buf[64];
+
+    if (prof == NULL || prof->dataSubdir == NULL || prof->dataSubdir[0] == '\0')
+        return "sdmc:/3ds/3DGBA/voxel";
+    snprintf(buf, sizeof buf, "sdmc:/3ds/3DGBA/voxel/%s", prof->dataSubdir);
+    return buf;
+}
+
+const char *vx_profile_pak_path(const GameProfile *prof)
+{
+    static char buf[80];
+
+    if (prof == NULL || prof->dataSubdir == NULL || prof->dataSubdir[0] == '\0')
+        return "sdmc:/3ds/emerald3ds/emerald3ds.pak";   /* vx_data.c's default */
+    snprintf(buf, sizeof buf, "sdmc:/3ds/3DGBA/voxel/%s/no-pak-for-this-game", prof->dataSubdir);
+    return buf;
+}
+
+bool vx_map_is_outdoor(unsigned mapType)
+{
+    return mapType == 1u || mapType == 2u || mapType == 3u || mapType == 5u || mapType == 6u;
 }
 
 /* ---- per-snapshot decode ------------------------------------------------------------------------ */
@@ -657,8 +761,13 @@ static bool DecodeMap(const VxSnapshot *s)
     uint32_t bh = Rd32(s->backupLayout + GBA_OFF_BKL_HEIGHT);
     uint32_t bmap = Rd32(s->backupLayout + GBA_OFF_BKL_MAP);
 
-    if (bmap < VXP(backupMap) || bmap >= VXP(backupMap) + GBA_BACKUP_MAP_BYTES
-     || ((bmap - VXP(backupMap)) & 1u) != 0)
+    if (VXP(backupMap) != 0)
+    {
+        if (bmap < VXP(backupMap) || bmap >= VXP(backupMap) + GBA_BACKUP_MAP_BYTES
+         || ((bmap - VXP(backupMap)) & 1u) != 0)
+            return Fail(VX_ERR_A1_MAP_PTR);
+    }
+    else if (bmap != s->backupMapBase || (bmap & 1u) != 0)   /* FRLG: the snapshot copied from this very pointer */
         return Fail(VX_ERR_A1_MAP_PTR);
     if (s->backupMapCells == 0 || bw * bh != s->backupMapCells)
         return Fail(VX_ERR_A2_DIMS);
@@ -669,7 +778,8 @@ static bool DecodeMap(const VxSnapshot *s)
         return Fail(VX_ERR_A3_MISMATCH);
     gBackupMapLayout.width = (s32)bw;
     gBackupMapLayout.height = (s32)bh;
-    gBackupMapLayout.map = (u16 *)(uintptr_t)(const void *)(s->backupMap + (bmap - VXP(backupMap)) / 2u);
+    gBackupMapLayout.map = (u16 *)(uintptr_t)(const void *)(s->backupMap
+                         + (VXP(backupMap) != 0 ? (bmap - VXP(backupMap)) / 2u : 0u));
     return true;
 }
 

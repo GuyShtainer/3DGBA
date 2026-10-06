@@ -517,7 +517,7 @@ bool VoxelWorld_IsVisibleReflectiveSurface(int worldX, int worldY)
      * MB_PUDDLE behavior. The original 2D ground effect treats it as nearby
      * water; a 3D surface reflection would instead be visible on the grass.
      * Blue puddle metatiles 0x274-0x27D retain their reflections. */
-    if (behavior == MB_PUDDLE && inst->secondaryTileset == &gTileset_Fortree
+    if (VXP(emeraldIdTables) && behavior == MB_PUDDLE && inst->secondaryTileset == &gTileset_Fortree
      && metatileId >= 0x288 && metatileId <= 0x29A)
         return false;
     return true;
@@ -553,9 +553,10 @@ static VoxelVisualShape BehaviorShape(u8 behavior)
     if (MetatileBehavior_IsSurfableWaterOrUnderwater(behavior)
      || MetatileBehavior_IsPuddle(behavior)
      || MetatileBehavior_IsShallowFlowingWater(behavior)
-     || behavior == MB_HOT_SPRINGS
-     || behavior == MB_REFLECTION_UNDER_BRIDGE)
+     || (VXP(emeraldIdTables) && (behavior == MB_HOT_SPRINGS || behavior == MB_REFLECTION_UNDER_BRIDGE)))
         return VOXEL_SHAPE_WATER;
+    if (!VXP(emeraldIdTables))
+        return VOXEL_SHAPE_COUNT;   /* FireRed/LeafGreen interiors are 2D (v1): no counters or machines to stand up */
     if (MetatileBehavior_IsCounter(behavior))
         return VOXEL_SHAPE_COUNTER;
     if (MetatileBehavior_IsPC(behavior)
@@ -606,7 +607,7 @@ VoxelVisualShape VoxelWorld_ClassifyTile(int worldX, int worldY)
          * its floor emblem, and read as tables, a bed and a cupboard they
          * stood up out of its floor.
          */
-        if (inst->secondaryTileset != &gTileset_GenericBuilding)
+        if (!VXP(emeraldIdTables) || inst->secondaryTileset != &gTileset_GenericBuilding)
             return VOXEL_SHAPE_FLAT;
         if (metatileId == 576 || metatileId == 577 || metatileId == 584
          || metatileId == 585 || metatileId == 586)
@@ -861,8 +862,12 @@ void VoxelWorld_MarkUsedMetatiles(const void *primaryTileset, const void *second
 
         border = layout->border != NULL ? Port_ResolveAssetPointer(layout->border) : NULL;
         if (border != NULL)
-            for (unsigned t = 0; t < 4; ++t)
+        {
+            unsigned cells = vx_border_cells(layout);
+
+            for (unsigned t = 0; t < cells; ++t)
                 used[border[t] & MAPGRID_METATILE_ID_MASK] = 2;
+        }
     }
     /* The replacement removes canopy fringes even on maps that never used
      * their bare ground tile. Keep that material available in the atlas. */
@@ -994,7 +999,7 @@ int VoxelWorld_BorderMetatile(int worldX, int worldY)
         return -1;
     bx = worldX - sInstances[0].originX + MAP_OFFSET;
     by = worldY - sInstances[0].originY + MAP_OFFSET;
-    index = ((bx + 1) & 1) + (((by + 1) & 1) * 2);
+    index = vx_border_cell(layout, bx, by);
     return (int)(border[index] & MAPGRID_METATILE_ID_MASK);
 }
 

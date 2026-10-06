@@ -12,6 +12,7 @@
 #include "voxel/vx_adapter.h"
 #include "voxel/vx_data.h"
 #include "voxel/vx_snapshot.h"
+#include "tilt.h"
 
 #define VX_MIN_VRAM (1024u * 1024u)   /* after the 768K surface: CtrVoxel_Init sizes its atlases/mesh to what is left */
 #define OV_TEX 256u
@@ -32,9 +33,12 @@ static C3D_Tex sOvTex;
 static u16 *sOvBuf;
 static FILE *sLog;
 static bool sWorldReady;
-/* Phase 34 R1: a FireRed / LeafGreen cartridge is NOT rendered yet (its row has rendererOn = false until R2), but its
- * anchors are self-checked and the result goes to voxel.log: the ROM checks once per bind, the RAM checks on an
- * overworld frame, once per map. sProbe is the row under test (NULL = none / the ROM checks failed). */
+/* Phase 34 R1/R2: a FireRed / LeafGreen cartridge is rendered only while its anchors self-check (SPEC-P34 3.3): the
+ * ROM checks once per bind (a failure = not detected, 2D), the RAM checks on an overworld frame once the map has
+ * settled, and again after every map change. Each failure is one numbered voxel.log line and no retry until the map
+ * changes. sProbe is the FRLG row in play (NULL = Emerald, or no game); sRam is the verdict of the latest RAM check. */
+typedef enum { RAM_PENDING = 0, RAM_OK, RAM_FAIL } RamVerdict;
+static RamVerdict sRam;
 static const GameProfile *sProbe;
 static const uint8_t *sProbeRom;
 static size_t sProbeSize;
@@ -73,28 +77,27 @@ static void LogAnchorFail(const GameProfile *p, int check)
              (unsigned)vx_anchor_last_value(), p->code, (unsigned)p->rev);
 }
 
-/* ROM half of the self-check, once per bind, for a FireRed / LeafGreen cartridge the renderer does not drive yet. */
-static void ProbeRom(const uint8_t *rom, size_t sz)
+/* ROM half of the self-check, once per bind, for a FireRed / LeafGreen row. False = not detected (2D). */
+static bool ProbeRom(const GameProfile *p, const uint8_t *rom, size_t sz)
 {
-    const GameProfile *p = gameprof_detect_romgen(rom, sz);
     int r;
 
-    if (p == NULL || p->game == GP_EMERALD)
-        return;
     vx_log_set_sink(LogSink);
     r = vx_anchor_check_rom(p, rom, sz);
     if (r != 0)
     {
         LogAnchorFail(p, r);
-        return;
+        return false;
     }
     PORT_LOG("vx: rom anchors ok (%.4s rev %u)", p->code, (unsigned)p->rev);
+    sRam = RAM_PENDING;
     sProbe = p;
     sProbeRom = rom;
     sProbeSize = sz;
     sProbeLoc = 0xFFFFFFFFu;
     sProbeSeen = 0xFFFFFFFFu;
     sProbeRun = 0;
+    return true;
 }
 
 static uint32_t Rd32At(const uint8_t *b, uint32_t off)
@@ -134,6 +137,7 @@ static void ProbeRam(GbaCore *top)
     ram.ewram = ew;
     ram.iwram = iw;
     r = vx_anchor_check_ram(sProbe, sProbeRom, sProbeSize, &ram);
+    sRam = r != 0 ? RAM_FAIL : RAM_OK;
     if (r != 0)
         LogAnchorFail(sProbe, r);
     else
@@ -152,6 +156,7 @@ static void Rebind(GbaCore *top)
     sDataOk = false;
     gVxProf = NULL;
     sProbe = NULL;
+    sRam = RAM_PENDING;
     vx_adapter_set_rom(NULL, 0);
     if (top == NULL)
         return;
@@ -159,8 +164,14 @@ static void Rebind(GbaCore *top)
     if (rom == NULL || sz == 0)
         return;
     prof = gameprof_detect(rom, sz);
-    if (prof == NULL)
-        ProbeRom(rom, sz);
+    if (prof != NULL && prof->game != GP_EMERALD && !ProbeRom(prof, rom, sz))
+        prof = NULL;
+    if (prof == NULL && sz > 0xBC)
+    {
+        vx_log_set_sink(LogSink);
+        PORT_LOG("vx: not detected: game %.4s rev %u (supported: Emerald, FireRed rev 1, LeafGreen rev 1)",
+                 (const char *)(rom + 0xAC), (unsigned)rom[0xBC]);
+    }
 #if VX_DEV_FORCE_OVERLAY
     if (prof == NULL)
         prof = gameprof_emerald();
@@ -171,6 +182,9 @@ static void Rebind(GbaCore *top)
     gVxProf = prof;
     vx_log_set_sink(LogSink);
     vx_adapter_set_rom(rom, sz);
+    /* Loose data has no ROM pin, so two games never share a directory (SPEC-P34 1.6); the Emerald pak is pinned to
+     * the Emerald ROM and is never offered to another game. */
+    vx_data_set_paths(vx_profile_pak_path(prof), vx_profile_data_dir(prof));
     {
         uint8_t sha[20];
         vx_sha1(rom, sz, sha);   /* once per ROM bind: ~0.5 s on ARM11, only when voxel is switched on */
@@ -190,9 +204,9 @@ bool vx_host_candidate(GbaCore *top, bool userOn, bool isN3DS, bool linkAny)
         return false;
     if (top != sBound)
         Rebind(top);
-    if (sProbe != NULL && sGame == GP_NONE)
+    if (sProbe != NULL)
         ProbeRam(top);
-    return sGame != GP_NONE && sDataOk;
+    return sGame != GP_NONE && sDataOk && (sProbe == NULL || sRam == RAM_OK);
 }
 
 bool vx_host_snapshot(GbaCore *top)
@@ -208,6 +222,10 @@ bool vx_host_snapshot(GbaCore *top)
     m.vram = gbacore_mem_block(top, 6, &n);
     if (!gbacore_io_shadow(top, io) || vx_snapshot_take(&sSnap, &m) == false)
         return false;
+    /* FireRed / LeafGreen interiors and caves are 2D in v1: hand the frame back whenever the map type is not an
+     * outdoor one. The header is the snapshot's own copy, so the switch lands with the map load under the door fade. */
+    if (!vx_prof()->interiors3d && !vx_map_is_outdoor(sSnap.mapHeader[GBA_OFF_MH_MAPTYPE]))
+        return false;
     sSnap.dispcnt = io[0];
     sSnap.bldcnt = io[1];
     sSnap.bldalpha = io[2];
@@ -215,7 +233,16 @@ bool vx_host_snapshot(GbaCore *top)
     return vx_adapter_decode(&sSnap);
 }
 
-unsigned vx_host_cb2(void) { return sSnap.cb2; }
+/* The gate (tilt.c voxel_gate) compares against Emerald's callback addresses; map the active game's two overworld
+ * callbacks onto them. Anything else (battle, bag, title, a warp in flight) passes through and fails the gate. */
+unsigned vx_host_cb2(void)
+{
+    const GameProfile *p = vx_prof();
+
+    if (sSnap.cb2 == p->cb2Overworld) return VOX_CB2_OVERWORLD_A;
+    if (sSnap.cb2 == p->cb2OverworldBasic) return VOX_CB2_OVERWORLD_B;
+    return sSnap.cb2;
+}
 bool vx_host_sb1_valid(void) { return sSnap.sb1Valid; }
 
 bool vx_host_init_ok(void)
@@ -514,7 +541,7 @@ const char *vx_host_status(bool userOn, bool isN3DS, bool linkAny, GbaCore *top)
     if (top != sBound && userOn)
         Rebind(top);
     if (!isN3DS && !VX_DEV_ALLOW_O3DS) return "Voxel 3D: needs a New 3DS";
-    if (top == NULL || sGame == GP_NONE) return "Voxel 3D: Emerald only";
+    if (top == NULL || sGame == GP_NONE || sRam == RAM_FAIL) return "Voxel 3D: Emerald, FireRed, LeafGreen (rev 1)";
     if (linkAny) return "Voxel 3D: paused during link";
     switch (vx_data_status())
     {
@@ -535,6 +562,7 @@ void vx_host_reset(void)
     sDataOk = false;
     gVxProf = NULL;
     sProbe = NULL;
+    sRam = RAM_PENDING;
     sMasked[0] = sMasked[1] = NULL;
     vx_adapter_set_rom(NULL, 0);
 }
