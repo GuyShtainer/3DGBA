@@ -61,6 +61,66 @@ static bool k_lavender_house(const RgSpec *spec, int a0, int a1, RgPartList *out
     return lv_profile(out, "house", 0, 80, true, 6, pts, rows) && !out->failed;
 }
 
+/* ---- k_pokemon_tower: 144x112 art (rect (14,0), 9x7 on Lavender; the map top cuts the tower) -------------------------- */
+/* The Pokemon Tower stands on a stone platform: the front wall (rows 81-112: dark grey stone, a yellow stripe on the
+ * foot) is 31 high, its top face (rows 55-81 in front, the rim strips beside) carries the tower. The tower is one tall
+ * block with a chamfered plan: the front face (x 39-105: window bays, pilasters and the plinth bands, rows 0-71) is a
+ * single vertical plane, the two chamfers (x 23-39 and 105-121) are 2-px slices whose bottom edge follows the 45-degree
+ * diagonal (row = x + 31). The art is cut at the map top, so the faces run up to y 102 (row 0) and are clamped there;
+ * the roof is a smear of the top row. The door is a shallow box: a flat top (rows 90-95) over the front face (95-111). */
+static bool tw_chamfer(RgPartList *out, double x0, double x1, double zf)
+{
+    double pts[4][2] = {{0, 31}, {0, 102}, {0, 102}, {0, 31}};
+    double rows[4][2] = {{0, 0}, {0, 1}, {0, 0}, {0, 0}};
+
+    pts[0][0] = zf; pts[1][0] = zf; pts[2][0] = zf - 52; pts[3][0] = zf - 52;
+    rows[0][0] = 0; rows[0][1] = zf - 31;           /* the face, its top clamped at row 0 */
+    rows[1][0] = 8; rows[1][1] = 9;                 /* the roof: the olive band between two window rows */
+    return lv_profile(out, "chamfer", x0, x1, true, 4, (const double (*)[2])pts, (const double (*)[2])rows);
+}
+
+static bool k_pokemon_tower(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    static const double plat[4][2] = {{112, 0}, {112, 31}, {86, 31}, {86, 0}};
+    static const double platr[4][2] = {{81, 112}, {55, 81}, {0, 0}, {0, 0}};
+    static const double rim[4][2] = {{86, 0}, {86, 31}, {31, 31}, {31, 0}};
+    static const double rimr[4][2] = {{0, 0}, {0, 55}, {0, 0}, {0, 0}};
+    static const double body[4][2] = {{102, 31}, {102, 102}, {50, 102}, {50, 31}};
+    static const double bodyr[4][2] = {{0, 71}, {8, 9}, {0, 0}, {0, 0}};
+    static const double tier2[4][2] = {{94, 102}, {94, 128}, {60, 128}, {60, 102}};
+    static const double tier3[4][2] = {{88, 128}, {88, 150}, {66, 150}, {66, 128}};
+    static const double tierr[4][2] = {{8, 9}, {8, 9}, {0, 0}, {0, 0}};
+    static const double door[4][2] = {{113, 1}, {113, 18}, {108, 18}, {108, 1}};
+    static const double doorr[4][2] = {{95, 112}, {90, 95}, {0, 0}, {0, 0}};
+    unsigned i;
+
+    (void)spec; (void)a0; (void)a1;
+    if (!lv_profile(out, "platform", 16, 128, true, 4, plat, platr) ||
+        !lv_profile(out, "rim_w", 16, 24, true, 4, rim, rimr) ||
+        !lv_profile(out, "rim_e", 120, 128, true, 4, rim, rimr) ||
+        !lv_profile(out, "tower", 39, 105, false, 4, body, bodyr) ||
+        !lv_profile(out, "tier2", 48, 96, true, 4, tier2, tierr) ||
+        !lv_profile(out, "tier3", 58, 86, true, 4, tier3, tierr))
+        return false;
+    for (i = 0; i < 8; i++) {                       /* the chamfers: left x 23-39, right x 105-121 */
+        double xl = 23 + 2 * i, zf = floor(xl + 1 + 62 + 0.5);
+
+        if (!tw_chamfer(out, xl, xl + 2, zf) || !tw_chamfer(out, 144 - xl - 2, 144 - xl, zf))
+            return false;
+    }
+    return lv_profile(out, "door", 59, 85, true, 4, door, doorr) && !out->failed;
+}
+
+static const RgExact kTowerExact[7] = {
+    {39, 0, 105, 71, false},        /* the front face: window bays, pilasters, plinth */
+    {25, 0, 39, 56, false},         /* the left chamfer, above its diagonal */
+    {105, 0, 119, 56, false},       /* the right chamfer */
+    {16, 81, 126, 112, false},      /* the platform's front wall */
+    {16, 71, 126, 81, false},       /* the platform's top in front of the tower */
+    {16, 0, 24, 55, false},         /* the left rim strip */
+    {120, 0, 126, 55, false},       /* the right rim strip */
+};
+
 /* ---- k_power_plant: 176x128 art (rect (2,34), 11x8 on Route 10) ----------------------------------------------------- */
 /* The Power Plant: a flat-roofed hall (x 16-160) with chamfered corners and four turbine hoods on the roof. The wall is
  * 37 rows (blue-grey louvres on the wings, glass on the centre block that stands 8 rows further forward), under a
@@ -149,6 +209,8 @@ static const RgExact kPlantExact[11] = {
 static const RgExact kHouseExact[1] = {{0, 10, 80, 68, false}};
 
 const RgSpec rg_kspecs_lavender[] = {
+    {"k_pokemon_tower", RG_SPEC_DIRECT, L_LAVENDER, {14, 0, 9, 7}, {0, 0}, LV_GROUND, 1, kTowerExact, 7,
+     k_pokemon_tower, 0, 0, NULL},
     {"k_power_plant", RG_SPEC_DIRECT, L_ROUTE10, {2, 34, 11, 8}, {0, 0}, LV_GROUND, 1, kPlantExact, 11,
      k_power_plant, 0, 0, NULL},
     {"k_lavender_house", RG_SPEC_DIRECT, L_LAVENDER, {8, 8, 5, 5}, {1, 4}, LV_GROUND, 1, kHouseExact, 1,
