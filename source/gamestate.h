@@ -688,6 +688,9 @@ typedef struct {
 // callers that don't set them leave them 0, and the dump prints them in trailing columns so an old
 // reader still parses the leading ones. Disparities are in px-at-FULL-slider (the pop_eye unit before
 // it multiplies by eyeSl), so the values are slider-independent (a wrong pop is visible regardless).
+// 2026-10-06: the 2D depth-pop and the phase-14 tilt were removed (docs/REMOVED-3D-ATTEMPTS.md).
+// main.c still fills overworld/textTop/textBot/s3d and the presence/peer-sprite blocks; every
+// depth, disparity and tilt column is kept for the row layout and written 0.
 typedef struct {
 	uint8_t overworld, textTop, textBot;   // depth gating flags
 	short   nspr, nui, nfg;                // on-screen sprite / BG0-panel / foreground-tile counts

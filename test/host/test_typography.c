@@ -1258,7 +1258,7 @@ int main(void) {
 		// ---- the pause-top pill row, summed on the shipped face at its WORST case (every pill,
 		// longest variant of every dynamic label). L3.1.4 spends padding rather than type here.
 		if (ok[TXT_CHIP]) {
-			static const char* const PILLS[] = { "3D", "DoF", "Bloom", "Light", "Vivid",
+			static const char* const PILLS[] = { "3D", "DoF", "Bloom",
 			                                      "Touch Off", "Co-op", "Wireless" };
 			int tw = 0;
 			for (int k = 0; k < (int)(sizeof PILLS / sizeof PILLS[0]); k++) tw += run_width(&f[TXT_CHIP], PILLS[k]) + UIHIT_PILL_PAD + UIHIT_PILL_GAP;
@@ -1285,7 +1285,7 @@ int main(void) {
 			// manifest rect's own centre, which is what makes it read as chrome belonging to that band.
 			{
 				enum { MANIFEST_X = 56, MANIFEST_W = 288 };
-				static const char* const PILLS8[] = { "3D", "DoF", "Bloom", "Light",
+				static const char* const PILLS8[] = { "3D", "DoF", "Bloom",
 				                                       "Touch Off", "Co-op", "Wireless" };
 				int t8 = 0;
 				for (int k = 0; k < (int)(sizeof PILLS8 / sizeof PILLS8[0]); k++)

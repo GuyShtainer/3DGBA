@@ -48,7 +48,6 @@ static u32 dim_color(u32 c, float f);   // fwd (defined near run_splash)
 #include "peersprite.h"    // phase 20: the peer's GENUINE trainer frame, read out of THEIR own
                            //   emulated OAM/VRAM/palette (docs/phase20-peersprite/SPEC.md)
 #include "gbatext.h"       // ...and the Gen-3 charmap -> UTF-8 decoder the card + nameplate share
-#include "warp_shbin.h"   // M2 grid-warp vertex shader (generated from source/warp.v.pica)
 #include "vx_host.h"      // phase 32 voxel overworld glue (SPEC-port 5)
 #include "romgen_dev.h" // PHASE 33 S2.8: dev-only romgen device hook (compiled out unless ROMGEN_DEV_HOOK=1)
 
@@ -809,392 +808,13 @@ static bool touch_to_gba(int px, int py, int mode, int* gx, int* gy) {
 #define PRE_H    (GBA_H * PRESCALE)   // 320
 #define PRE_TEX  512
 
-// HD-2D M1 (tilt-shift DoF): no fragment shader on the PICA200, so "blur" = one GPU_LINEAR
-// half-res bounce (240x160 -> 120x80) bilinear-upscaled back -> a gentle ~2x2 box soften.
-// Composited as subtle top/bottom bands over the TOP screen only (overworld; both eyes share
-// the one blurred copy) -> sharp focal band = "diorama" read. TEXT-AWARE: any BG0 text-layer
-// content under a band kills that band's blur (band_text_scan), so text stays readable.
-#define DOF_TEXA      128   // POT texture backing the 120x80 half-res bounce
-#define DOF_SHARP_Y0  48    // sharp focal band (GBA rows Y0..Y1; player sits ~64..96)
-#define DOF_SHARP_Y1  112
-#define DOF_FADE      24    // blur alpha-ramps in over this many rows outside the band
-#define DOF_ALPHA     0x78  // max band alpha (~47%): a subtle soften, never a wall of mush
-
-// HD-2D M3 (LDR bloom): bright-pass = clamp(half-res frame - BLOOM_THRESH) x2 (TEV SUBTRACT +
-// x2 scale) into a quarter-res glow map; composited ADDITIVELY (x BLOOM_GAIN) over each eye.
-// Honest LDR glow on the RGB565 frame, not HDR bloom. Focused top screen + overworld only,
-// and any on-screen text eases the glow off (a white textbox must never halo its own text).
-#define BLOOM_TEX     64    // POT texture backing the 60x40 glow map
-#define BLOOM_THRESH  0xC8  // a channel must exceed ~78% to glow (water glints, lamps, white)
-#define BLOOM_GAIN    0x90  // additive gain (~56%) on the x2'd glow -> subtle, not blinding
-
-// Stereoscopic single-game depth: pop elements forward per eye on the ALREADY-composited frame
-// (no extra emulation pass). depth3d.overworld is snapshotted in the race-safe window. M2 = player.
-#define DEPTH_MAX_SPR 32
-typedef struct {
-	bool overworld;
-	int  nspr;
-	struct { short x, y; unsigned char w, h, elev; } spr[DEPTH_MAX_SPR];   // on-screen OAM rects (+ matched object elevation tier)
-	float tdepth[10][15];           // smoothed scenery EXTRA depth px (layer-type + elevation)
-	bool textTop, textBot;          // text/UI under the top/bottom blur band -> suppress that band
-	struct { unsigned char x0, y0, x1, y1; } uiRect[6];   // BG0 window panels (tile coords, incl.)
-	int  nui;                       // panel count (panels pop in ANY context, not just overworld)
-	int  nfg;                       // foreground/solid tiles in view (HUD diagnostic)
-	float maxd;                     // strongest tdepth in view (HUD diagnostic)
-	int  camX, camY;                // gFieldCamera sub-tile scroll (px, -15..15) -> depth scroll-align
-	// --- per-sprite stereoscopic-disparity detail (LOGGING ONLY; filled by depth_disparity_stats, which
-	// mirrors pop_eye's feet base=RAMP_AT(fy)+floorD and head=base+POP3D_STANDUP). px @ FULL slider. ---
-	float feetMin, feetMax, headMin, headMax;   // grounded-feet / head disparity range across on-screen sprites
-	short tallOk, tallFail;                     // #sprites whose head exceeds feet by ~standup (tall renders taller) vs not
-	bool  orderOk;                              // on-screen set monotonic in screen-y vs feet disparity (front-is-front)
-} DepthSnap;
-#define POP3D_PLAYER_GX 112   // player tile (7,5) -> sprite rect (16x32, head 16px above the tile)
-#define POP3D_PLAYER_GY 64
-// Depth model v2 (hardware round 4): a continuous ground-plane ramp (the bottom of the frame
-// is closer -> pops more), scenery extra from the metatile layer-type PLUS the map-grid
-// elevation nibble (a hilltop pops above the grass at its feet), characters always floating
-// CHAR_PX above the floor at their own feet (the floor can never pop over them), and BG0
-// window panels (dialogs/menus) popping hardest of all as clean shifted copies.
-#define POP3D_RAMP_PX 3.6f    // ground ramp: bottom-edge pop (px @ full slider); top edge = 0 (moderate for comfort)
-#define POP3D_STANDUP 3.0f    // a sprite's head pops this far out beyond its grounded feet (standee lean)
-#define ENV3D_NORMAL  4.0f    // solid/foreground tile pop (poles/trees/walls) -- strong stand-up
-#define ENV3D_SPLIT   1.2f    // ledge / low fence mid extra
-#define ENV3D_RAISED  2.6f    // a "raised" elevation tier (engine priority 1) pops this far above ground
-#define ENV3D_FRONT   3.6f    // a "frontmost" tier (engine priority 0) pops this far
-#define TDEPTH_MAX    4.2f    // clamp the per-tile scenery depth (elevation plane + feature)
-#define POP_DISP_MAX  6.5f    // hard comfort ceiling on any element's forward disparity (px @ full slider)
-#define UIPOP3D_PX    5.0f    // BG0 window panels (dialogs/menus): strong clean-copy pop
-#define RAMP_AT(gy)   (POP3D_RAMP_PX * (float)(gy) / (float)GBA_H)
-
-// Map a Gen-3 map-grid / object elevation tier (0..15) to a forward depth PLANE. Baked from the
-// engine's own sElevationToPriority {2,2,2,2,1,2,1,2,1,2,1,2,1,0,0,2}: priority 2 = ground (0),
-// priority 1 = a raised tier, priority 0 = frontmost -> our depth order matches what the game draws
-// in front ("C"). Tiers 0 (TRANSITION) and 15 (MULTI_LEVEL) are -1 = "no own height" -> interpolated
-// from neighbours so stairs/ledges/bridges ramp between the tiers they join.
-static const float ELEV_PLANE[16] = {
-	-1.f, 0.f, 0.f, 0.f, ENV3D_RAISED, 0.f, ENV3D_RAISED, 0.f,
-	ENV3D_RAISED, 0.f, ENV3D_RAISED, 0.f, ENV3D_RAISED, ENV3D_FRONT, ENV3D_FRONT, -1.f
-};
-static inline float elev_plane(int e) { return (e >= 0 && e < 16 && ELEV_PLANE[e] >= 0.f) ? ELEV_PLANE[e] : 0.f; }
-static inline float clamp_disp(float v) { return v > POP_DISP_MAX ? POP_DISP_MAX : v; }
+// The GBA frame box on a screen for `mode` (the same fit render_game uses); presence draws in it.
 static void calc_xform(int mode, float sW, float sH, float* ox, float* oy, float* sx, float* sy) {
 	if (mode == SCALE_1X)           { *sx = *sy = 1.0f; }
 	else if (mode == SCALE_STRETCH) { *sx = sW / GBA_W; *sy = sH / GBA_H; }
 	else { float f = (sW / GBA_W < sH / GBA_H) ? sW / GBA_W : sH / GBA_H; *sx = *sy = f; }
 	*ox = (sW - GBA_W * *sx) / 2.0f;
 	*oy = (sH - GBA_H * *sy) / 2.0f;
-}
-// Re-draw a sub-rect of a frame texture shifted horizontally (the per-eye pop overdraw).
-// pscale/texDim pick the source: the raw 256px GBA tex (1/256) or the sharp-bilinear prescale
-// (PRESCALE/PRE_TEX) so popped text stays crisp. The destination is clipped to the on-screen
-// frame box, so a shifted pop never bleeds into the letterbox (per-eye rivalry on the border).
-static void draw_pop_tex(C3D_Tex* tex, int pscale, int texDim, GPU_TEXTURE_FILTER_PARAM filt,
-                         int gx, int gy, int gw, int gh, float ox, float oy, float sx, float sy, float xoff) {
-	if (gx < 0) { gw += gx; gx = 0; }
-	if (gy < 0) { gh += gy; gy = 0; }
-	if (gx + gw > GBA_W) gw = GBA_W - gx;
-	if (gy + gh > GBA_H) gh = GBA_H - gy;
-	float xs = xoff / sx;                                   // shift expressed in GBA pixels
-	int loCol = (int)ceilf(-xs);              if (gx < loCol) { gw -= (loCol - gx); gx = loCol; }
-	int hiCol = (int)floorf((float)GBA_W - xs); if (gx + gw > hiCol) gw = hiCol - gx;
-	if (gw <= 0 || gh <= 0) return;
-	float t = (float)pscale, D = (float)texDim;
-	Tex3DS_SubTexture st = { (u16)(gw * pscale), (u16)(gh * pscale),
-	                        gx * t / D, 1.0f - gy * t / D, (gx + gw) * t / D, 1.0f - (gy + gh) * t / D };
-	C2D_Image img = { tex, &st };
-	C3D_TexSetFilter(tex, filt, filt);
-	C2D_DrawImageAt(img, ox + gx * sx + xoff, oy + gy * sy, 0.0f, NULL, sx / t, sy / t);
-}
-static void draw_pop(C3D_Tex* tex, int gx, int gy, int gw, int gh,
-                     float ox, float oy, float sx, float sy, float xoff) {
-	draw_pop_tex(tex, 1, 256, GPU_NEAREST, gx, gy, gw, gh, ox, oy, sx, sy, xoff);
-}
-
-// Smoothed floor depth (px) under a screen pixel, so a character can pop ABOVE the very floor
-// (ground ramp already separate; this adds the scenery/elevation extra) it stands on.
-static float floor_at(const DepthSnap* d, int gx_px, int gy_px) {
-	int c = gx_px / 16, r = gy_px / 16;   // sprite floor = its own grid cell (do NOT scroll-shift: the player sits at a fixed cell)
-	if (c < 0) c = 0; else if (c > 14) c = 14;
-	if (r < 0) r = 0; else if (r > 9) r = 9;
-	return d->tdepth[r][c];
-}
-
-// Pop the captured characters forward on one eye (shifted sub-rect overdraws on the flat frame).
-// eyeSl = +slider (left eye) / -slider (right). Each sprite pops CHAR_PX above the floor ramp
-// at its FEET, so the ground plane can never pop over a character standing on it.
-static void pop_eye(C3D_RenderTarget* tgt, EmuInstance* g, const DepthSnap* d, int mode, float eyeSl) {
-	float ox, oy, sx, sy; calc_xform(mode, 400.0f, 240.0f, &ox, &oy, &sx, &sy);
-	C2D_SceneBegin(tgt);
-	// Every sprite (NPC, the player, sprite-objects) stands UP out of the ground: its feet sit at
-	// the ground depth and the disparity ramps to +STANDUP at its head -> a leaning standee. Applied
-	// precisely PER SPRITE (no special rectangle for the centre/player); drawn as a few horizontal
-	// strips so the head pops while the base stays anchored to the floor.
-	for (int i = 0; i < d->nspr; i++) {
-		int x0 = d->spr[i].x, y0 = d->spr[i].y, w = d->spr[i].w, h = d->spr[i].h;
-		int cx = x0 + w / 2, fy = y0 + h;
-		// Feet floor = smoothed grid depth there, RAISED to the sprite's own object-elevation plane
-		// when matched (authoritative on stairs); max keeps the standee never behind its feet tile.
-		float floorD = floor_at(d, cx, fy);
-		if (d->spr[i].elev != 0xFF) { float pl = elev_plane(d->spr[i].elev); if (pl > floorD) floorD = pl; }
-		float base = RAMP_AT(fy) + floorD;                          // disparity at the grounded feet
-		int strips = (h + 7) / 8; if (strips < 1) strips = 1;
-		for (int s = 0; s < strips; s++) {
-			int yy = y0 + s * h / strips, hh = y0 + (s + 1) * h / strips - yy;
-			float tmid = ((float)yy + 0.5f * (float)hh - (float)y0) / (float)h;   // 0 head .. 1 feet
-			float disp = eyeSl * clamp_disp(base + POP3D_STANDUP * (1.0f - tmid));
-			draw_pop(&g->tex, x0, yy, w, hh, ox, oy, sx, sy, disp);
-		}
-	}
-}
-
-// LOGGING ONLY: compute the per-sprite feet/head disparity STATS that pop_eye would render, so the gs log
-// proves the 3D effect (not just sprite counts). Mirrors pop_eye EXACTLY: feet base = RAMP_AT(fy)+floorD
-// (raised to the sprite's own elevation plane when matched), head = clamp(base+POP3D_STANDUP). All values
-// are px @ FULL slider (the unit BEFORE pop_eye multiplies by eyeSl), so they're slider-independent.
-// 'tall-is-taller': head must exceed feet by ~POP3D_STANDUP per sprite (after clamping; a sprite already at
-// the comfort ceiling can't stand taller, counted as fail). 'front-is-front': sorting sprites by screen-y
-// (lower = closer) the feet disparity must be non-decreasing (closer pops >=). Never gates rendering.
-static void depth_disparity_stats(DepthSnap* d) {
-	d->feetMin = d->feetMax = d->headMin = d->headMax = 0.0f;
-	d->tallOk = d->tallFail = 0; d->orderOk = true;
-	if (d->nspr <= 0) return;
-	float feet[DEPTH_MAX_SPR]; int fy[DEPTH_MAX_SPR];
-	for (int i = 0; i < d->nspr; i++) {
-		int x0 = d->spr[i].x, y0 = d->spr[i].y, w = d->spr[i].w, h = d->spr[i].h;
-		int cx = x0 + w / 2, feetY = y0 + h;
-		float floorD = floor_at(d, cx, feetY);
-		if (d->spr[i].elev != 0xFF) { float pl = elev_plane(d->spr[i].elev); if (pl > floorD) floorD = pl; }
-		float base = RAMP_AT(feetY) + floorD;                 // disparity at the grounded feet (px @ full slider)
-		float footDisp = clamp_disp(base);                    // pop_eye clamps each strip; feet strip = base
-		float headDisp = clamp_disp(base + POP3D_STANDUP);    // head strip (tmid->0)
-		feet[i] = footDisp; fy[i] = feetY;
-		if (i == 0 || footDisp < d->feetMin) d->feetMin = footDisp;
-		if (i == 0 || footDisp > d->feetMax) d->feetMax = footDisp;
-		if (i == 0 || headDisp < d->headMin) d->headMin = headDisp;
-		if (i == 0 || headDisp > d->headMax) d->headMax = headDisp;
-		if (headDisp - footDisp >= POP3D_STANDUP * 0.5f) d->tallOk++; else d->tallFail++;   // tall renders taller
-	}
-	// front-is-front: a sprite lower on screen (larger feet screen-y => closer) must pop >= one above it.
-	// Insertion-sort indices by feetY ascending (cheap, n<=32), then check feet disparity is non-decreasing.
-	int idx[DEPTH_MAX_SPR]; for (int i = 0; i < d->nspr; i++) idx[i] = i;
-	for (int i = 1; i < d->nspr; i++) { int v = idx[i], j = i - 1;
-		while (j >= 0 && fy[idx[j]] > fy[v]) { idx[j + 1] = idx[j]; j--; } idx[j + 1] = v; }
-	for (int i = 1; i < d->nspr; i++)
-		if (feet[idx[i]] + 0.01f < feet[idx[i - 1]]) { d->orderOk = false; break; }   // closer popped LESS -> ordering broke
-}
-
-// M4: metatile id -> layer type (0 NORMAL=foreground / 1 COVERED=ground / 2 SPLIT=mid) via the
-// gMapHeader -> MapLayout -> Tileset -> metatileAttributes chain. Cached per map + memoized by id.
-static uint8_t metatile_layer(GbaCore* c, const GameProfile* p, uint16_t id) {
-	static uint32_t cLayout = 0, cPri = 0, cSec = 0;
-	static uint8_t  cLayer[1024], cValid[1024];
-	if (!p->mapHeader || id >= 0x03FF) return 1;                 // no M4 / sentinel border -> ground
-	uint32_t layoutP = gbacore_read32(c, p->mapHeader + 0x00);   // MapHeader.mapLayout
-	if (layoutP != cLayout) {                                    // map changed -> rebuild bases + memo
-		cLayout = layoutP;
-		uint32_t tsP = gbacore_read32(c, layoutP + 0x10), tsS = gbacore_read32(c, layoutP + 0x14);
-		cPri = tsP ? gbacore_read32(c, tsP + 0x10) : 0;            // Tileset.metatileAttributes
-		cSec = tsS ? gbacore_read32(c, tsS + 0x10) : 0;
-		memset(cValid, 0, sizeof cValid);
-	}
-	if (cValid[id]) return cLayer[id];
-	uint32_t attrP = (id < 512) ? cPri : cSec;
-	uint8_t  layer = 1;
-	if (attrP) { uint16_t a = gbacore_read16(c, attrP + 2u * (uint32_t)((id < 512) ? id : id - 512)); layer = (a & 0xF000) >> 12; }
-	cLayer[id] = layer; cValid[id] = 1;
-	return layer;
-}
-
-// M4: build the smoothed scenery-depth grid for the visible 15x10 tiles (cores parked; safe reads).
-static void build_depth_grid(GbaCore* core, const GameProfile* p, int px, int py, DepthSnap* d) {
-	memset(d->tdepth, 0, sizeof d->tdepth);
-	if (!core || !p || px < 0 || py < 0) return;   // metatile_layer handles mapHeader==0 (FR/LG collision depth)
-	d->camX = p->fieldCamera ? (int)(int32_t)gbacore_read32(core, p->fieldCamera + 0x10) : 0;
-	d->camY = p->fieldCamera ? (int)(int32_t)gbacore_read32(core, p->fieldCamera + 0x14) : 0;
-	if (d->camX < -15 || d->camX > 15) d->camX = 0;   // guard garbage
-	if (d->camY < -15 || d->camY > 15) d->camY = 0;
-	int w = (int32_t)gbacore_read32(core, p->mapLayout + 0);
-	int h = (int32_t)gbacore_read32(core, p->mapLayout + 4);
-	uint32_t ptr = gbacore_read32(core, p->mapLayout + 8);
-	if ((ptr >> 24) != 0x02 || w <= 0 || w > 512 || h <= 0 || h > 512) return;
-	// Per visible tile: feature depth (layer-type) + elevation-plane depth. Elevation 0/15 (stairs/
-	// ledges/bridges) carry no own height -> left "unknown" and filled below. (Border +7 and the -7
-	// player-centring cancel, so screen col c == map gx px+c -- verified against the touch BFS.)
-	float feat[10][15], ed[10][15]; bool has[10][15];
-	for (int r = 0; r < 10; r++) for (int c = 0; c < 15; c++) {
-		int gx = px + c, gy = py + r + 2;
-		feat[r][c] = 0.0f; ed[r][c] = 0.0f; has[r][c] = false;
-		if (gx >= 0 && gx < w && gy >= 0 && gy < h) {
-			uint16_t e = gbacore_read16(core, ptr + 2u * (uint32_t)(gx + w * gy));
-			uint8_t layer = metatile_layer(core, p, e & 0x03FF);
-			// The metatile NORMAL *layer type* is the default compositing mode -> ~EVERY tile, so using
-			// it as "foreground" floods the grid uniform and the whole map reads FLAT (the f~148/150
-			// diagnostic caught exactly this). The real stand-up signal is COLLISION: a solid/impassable
-			// tile is an object (pole/tree/wall/sign/fence); walkable ground is passable and stays flat.
-			// Same 0x0C00 bits the touch BFS walks on -> proven + game-agnostic. Keep SPLIT (ledges /
-			// grass edges) as a small extra; skip elevation 1 = surf water (impassable but flat).
-			float f = (layer == 2) ? ENV3D_SPLIT : 0.0f;
-			if ((e & 0x0C00) && (e >> 12) != 1) f = ENV3D_NORMAL;
-			feat[r][c] = f;
-			float pl = ELEV_PLANE[e >> 12];
-			if (pl >= 0.0f) { ed[r][c] = pl; has[r][c] = true; }
-		}
-	}
-	int nfg = 0; for (int r = 0; r < 10; r++) for (int c = 0; c < 15; c++) if (feat[r][c] > 0.0f) nfg++;
-	d->nfg = nfg;   // HUD diagnostic
-	// Fill stairs/ledges/bridges by relaxing from known neighbours, so depth RAMPS across them
-	// instead of dropping to ground (Gauss-Seidel; cap spans the 10x15 grid, early-exits when stable).
-	for (int pass = 0; pass < 16; pass++) {
-		bool changed = false;
-		for (int r = 0; r < 10; r++) for (int c = 0; c < 15; c++) if (!has[r][c]) {
-			float sum = 0.0f; int n = 0;
-			if (r > 0  && has[r-1][c]) { sum += ed[r-1][c]; n++; }
-			if (r < 9  && has[r+1][c]) { sum += ed[r+1][c]; n++; }
-			if (c > 0  && has[r][c-1]) { sum += ed[r][c-1]; n++; }
-			if (c < 14 && has[r][c+1]) { sum += ed[r][c+1]; n++; }
-			if (n > 0) { ed[r][c] = sum / (float)n; has[r][c] = true; changed = true; }
-		}
-		if (!changed) break;
-	}
-	// Combine elevation plane + feature depth per tile. NO blur: a 3x3 average diluted an isolated
-	// object (a lone pole 4.0 -> ~0.44 -> invisible), which is why scenery read flat while the
-	// un-blurred sprite standee popped. The vertex grid already interpolates between tiles for
-	// smoothness, so crisp per-tile depth is fine. maxd = the strongest pop in view (HUD diagnostic).
-	float maxd = 0.0f;
-	for (int r = 0; r < 10; r++) for (int c = 0; c < 15; c++) {
-		float t = ed[r][c] + feat[r][c];
-		if (t > TDEPTH_MAX) t = TDEPTH_MAX;
-		d->tdepth[r][c] = t;
-		if (t > maxd) maxd = t;
-	}
-	d->maxd = maxd;
-}
-
-// M4: pop the foreground scenery tiles forward on one eye (shifted 16x16 sub-rect overdraws).
-static void warp_scenery_eye(C3D_RenderTarget* tgt, EmuInstance* g, const DepthSnap* d, int mode, float dispUnit) {
-	float ox, oy, sx, sy; calc_xform(mode, 400.0f, 240.0f, &ox, &oy, &sx, &sy);
-	C2D_SceneBegin(tgt);
-	for (int r = 0; r < 10; r++) for (int c = 0; c < 15; c++) {
-		float dep = d->tdepth[r][c];
-		if (dep > 0.01f) draw_pop(&g->tex, c * 16, r * 16, 16, 16, ox, oy, sx, sy, dispUnit * dep);
-	}
-}
-
-// ---- HD-2D M4: time-of-day directional lighting + day/night color grade --------------------
-// A per-tile light field modulates the overworld frame: a key light whose colour & direction
-// track the time of day (warm low-angle dawn/dusk, bright neutral noon, dim blue night) shades
-// the terrain by its surface normal (from the tdepth elevation field) and is drawn as a gouraud
-// MULTIPLY mesh over the frame. Pure citro2d (no shader); analytic normals -- the study's
-// AI-baked-normal atlas is the deferred optional upgrade. Cheap: ~150 gouraud quads per eye.
-typedef struct { float r, g, b, lx, ly, lz, amb, dif; } LightEnv;
-
-// Interpolate the key-light for hour-of-day hf in [0,24). L is a screen-space direction
-// (x: +east/-west, y: +down, z: out toward the viewer); ground faces +z.
-static LightEnv light_for_hour(float hf) {
-	// Kept BRIGHT on purpose: high ambient so the focused game never reads as "darkened" -- the time
-	// of day is a SUBTLE colour/lean, not a dimming (a MULTIPLY mesh can only darken, so we stay near
-	// white). Low diffuse = gentle slope shading only.
-	static const float K[][9] = {   // hour, r,g,b(0..1), lx,ly,lz, ambient, diffuse
-		{  0.f, 0.86f,0.90f,1.00f,  0.00f,-0.25f,0.97f, 0.88f,0.12f },   // night (subtle cool, still bright)
-		{  5.f, 0.90f,0.92f,1.00f,  0.50f,-0.20f,0.84f, 0.90f,0.12f },   // pre-dawn
-		{  7.f, 1.00f,0.95f,0.86f,  0.72f,-0.18f,0.67f, 0.94f,0.14f },   // dawn (subtle warm)
-		{ 12.f, 1.00f,1.00f,1.00f,  0.05f,-0.10f,0.99f, 1.00f,0.10f },   // noon (full bright neutral)
-		{ 17.f, 1.00f,0.95f,0.86f, -0.62f,-0.18f,0.76f, 0.95f,0.14f },   // golden hour (subtle warm)
-		{ 19.f, 1.00f,0.90f,0.82f, -0.74f,-0.16f,0.65f, 0.90f,0.14f },   // dusk (subtle warm)
-		{ 21.f, 0.88f,0.91f,1.00f, -0.20f,-0.22f,0.95f, 0.88f,0.12f },   // night falls
-		{ 24.f, 0.86f,0.90f,1.00f,  0.00f,-0.25f,0.97f, 0.88f,0.12f },   // wrap == 0h
-	};
-	int n = sizeof K / sizeof K[0], i = 0;
-	while (i < n - 1 && hf >= K[i + 1][0]) i++;
-	const float* a = K[i]; const float* b = K[i + 1];
-	float u = (b[0] > a[0]) ? (hf - a[0]) / (b[0] - a[0]) : 0.0f;
-	LightEnv e;
-	e.r = a[1]+(b[1]-a[1])*u; e.g = a[2]+(b[2]-a[2])*u; e.b = a[3]+(b[3]-a[3])*u;
-	e.lx= a[4]+(b[4]-a[4])*u; e.ly= a[5]+(b[5]-a[5])*u; e.lz= a[6]+(b[6]-a[6])*u;
-	e.amb=a[7]+(b[7]-a[7])*u; e.dif=a[8]+(b[8]-a[8])*u;
-	float il = 1.0f / sqrtf(e.lx*e.lx + e.ly*e.ly + e.lz*e.lz + 1e-6f);
-	e.lx*=il; e.ly*=il; e.lz*=il;
-	return e;
-}
-
-// Per-vertex tint = lightColor * (ambient + diffuse*max(0,N.L)); N from the tdepth gradient at
-// the grid vertex (raised terrain catches side light). Returned as a citro2d colour for MULTIPLY.
-static u32 light_vert(const DepthSnap* d, const LightEnv* e, int vr, int vc) {
-	#define LCELL(R,C) d->tdepth[(R)<0?0:((R)>9?9:(R))][(C)<0?0:((C)>14?14:(C))]
-	float lf = (LCELL(vr-1, vc-1) + LCELL(vr, vc-1)) * 0.5f;   // left  column avg
-	float rt = (LCELL(vr-1, vc)   + LCELL(vr, vc))   * 0.5f;   // right column avg
-	float up = (LCELL(vr-1, vc-1) + LCELL(vr-1, vc)) * 0.5f;   // upper row avg
-	float dn = (LCELL(vr, vc-1)   + LCELL(vr, vc))   * 0.5f;   // lower row avg
-	#undef LCELL
-	const float kSlope = 0.18f;                       // depth-px -> normal tilt
-	float nx = -(rt - lf) * kSlope, ny = -(dn - up) * kSlope, nz = 1.0f;
-	float ndl = (nx*e->lx + ny*e->ly + nz*e->lz) / sqrtf(nx*nx + ny*ny + nz*nz);
-	if (ndl < 0.0f) ndl = 0.0f;
-	float s = e->amb + e->dif * ndl;
-	int R = (int)(e->r*s*255.0f + 0.5f), G = (int)(e->g*s*255.0f + 0.5f), B = (int)(e->b*s*255.0f + 0.5f);
-	if (R > 255) R = 255; if (G > 255) G = 255; if (B > 255) B = 255;
-	return C2D_Color32((u8)R, (u8)G, (u8)B, 0xFF);
-}
-
-// Draw the light field over one eye as a MULTIPLY gouraud mesh (15x10 quads over the frame box).
-static void light_pass(C3D_RenderTarget* tgt, const DepthSnap* d, int mode, const LightEnv* e) {
-	float ox, oy, sx, sy; calc_xform(mode, 400.0f, 240.0f, &ox, &oy, &sx, &sy);
-	u32 col[11][16];
-	for (int vr = 0; vr <= 10; vr++) for (int vc = 0; vc <= 15; vc++) col[vr][vc] = light_vert(d, e, vr, vc);
-	C2D_SceneBegin(tgt);
-	C2D_Flush();   // commit the pending image batch before swapping the blend equation
-	C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_DST_COLOR, GPU_ZERO, GPU_DST_COLOR, GPU_ZERO);  // dst*src = MULTIPLY
-	for (int r = 0; r < 10; r++) for (int c = 0; c < 15; c++)
-		C2D_DrawRectangle(ox + c*16*sx, oy + r*16*sy, 0.0f, 16*sx, 16*sy,
-		                  col[r][c], col[r][c+1], col[r+1][c], col[r+1][c+1]);
-	C2D_Flush();   // commit the mesh while MULTIPLY is still active, then restore citro2d's blend
-	C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);
-}
-
-// M2: continuous vertex-grid scenery warp (one mesh per eye). Verts sit at 16px tile corners
-// and shift by the smoothed tile depth, so depth steps STRETCH the texture between cells
-// instead of tearing at tile edges (the per-tile quad shift's artifact). citro2d has no mesh
-// path, so this is a raw C3D draw with a passthrough shader (warp.v.pica); the warped X
-// positions are CPU-computed (176 verts/eye) and the GPU is handed back via C2D_Prepare.
-#define WARP_COLS  15
-#define WARP_ROWS  10
-#define WARP_VERTS ((WARP_COLS + 1) * (WARP_ROWS + 1))   // 16x11 = 176
-#define WARP_IDX   (WARP_COLS * WARP_ROWS * 6)           // 900
-typedef struct { float x, y, u, v; } WarpVert;
-static DVLB_s*         warpDvlb;
-static shaderProgram_s warpProg;
-static int             warpProjLoc = -1;
-static WarpVert*       warpVbo;   // linearAlloc; one slab per eye, rewritten per frame (SYNCDRAW-safe)
-static u16*            warpIbo;   // static triangle indices
-static WarpVert*       bloomVbo;  // M3 bloom: 3 quads (bright pass + additive L/R)
-static bool            warpOk;
-
-static void warp_grid_init(void) {
-	warpDvlb = DVLB_ParseFile((u32*)warp_shbin, warp_shbin_size);
-	if (!warpDvlb) return;
-	shaderProgramInit(&warpProg);
-	shaderProgramSetVsh(&warpProg, &warpDvlb->DVLE[0]);
-	warpProjLoc = shaderInstanceGetUniformLocation(warpProg.vertexShader, "projection");
-	warpVbo = (WarpVert*)linearAlloc(sizeof(WarpVert) * WARP_VERTS * 2);
-	warpIbo = (u16*)linearAlloc(sizeof(u16) * WARP_IDX);
-	bloomVbo = (WarpVert*)linearAlloc(sizeof(WarpVert) * 12);   // M3 bloom quads
-	if (!warpVbo || !warpIbo || !bloomVbo || warpProjLoc < 0) return;   // warpOk stays false -> fallbacks
-	int n = 0;
-	for (int r = 0; r < WARP_ROWS; r++) for (int c = 0; c < WARP_COLS; c++) {
-		u16 tl = (u16)(r * (WARP_COLS + 1) + c), tr = tl + 1;
-		u16 bl = tl + (WARP_COLS + 1), br = bl + 1;
-		warpIbo[n++] = tl; warpIbo[n++] = bl; warpIbo[n++] = tr;
-		warpIbo[n++] = tr; warpIbo[n++] = bl; warpIbo[n++] = br;
-	}
-	GSPGPU_FlushDataCache(warpIbo, sizeof(u16) * WARP_IDX);
-	warpOk = true;
-}
-
-static void warp_grid_fini(void) {
-	if (warpVbo) linearFree(warpVbo);
-	if (warpIbo) linearFree(warpIbo);
-	if (bloomVbo) linearFree(bloomVbo);
-	if (warpDvlb) { shaderProgramFree(&warpProg); DVLB_Free(warpDvlb); }
 }
 
 // The GameCtx enum crossings into the pure-C modules: presence (fieldgate.h FIELD_CTX_OVERWORLD,
@@ -1425,11 +1045,9 @@ static void presence_live_update(int g) {
 }
 
 // The peer avatars on ONE screen. Called from the three per-screen sequences (top-left eye,
-// top-right eye, bottom) at the position A2.1 fixes: after ui_pop_eye and immediately BEFORE
-// light_pass, so the avatar is (a) not overpainted by the pop passes' background re-draws,
-// (b) not composited away by the DoF bands, and (c) graded by the time-of-day MULTIPLY like the
-// world it stands in — the ordering-instead-of-a-second-colour-path analogue of gen1recomp's
-// per-billboard zone-palette lookup at the foot anchor (gen1-render.md finding 2).
+// top-right eye, bottom) right after the game image. (A2.1 originally placed it between the 2D
+// depth-pop/DoF/bloom passes and the time-of-day light pass; those passes were removed 2026-10-06,
+// docs/REMOVED-3D-ATTEMPTS.md, and the comments below that name them are historical.)
 //
 // `po`, `peer` and `pose` are ARRAYS of `nPeers` entries, one per peer slot; when the flagged 3-4
 // player work lands, main.c calls presence_solve per slot and passes longer arrays — A3.4's whole
@@ -1812,275 +1430,6 @@ static void presence_draw_card(C2D_TextBuf buf, const PresCardText* t, float scr
 		ui_text  (buf, PRES_CARD_UNION_NOTE,                 px, y + 67.0f, 0.28f, g_ui.dim);
 	}
 }
-
-// Standee depth field: a vertex carries the depth of the tile(s) just BELOW it (grid row vr), so a
-// foreground tile's TOP edge pops out while its BOTTOM edge (the next row down) sits at the ground.
-// Every foreground object (pole / thin tree / rock tile) thus STANDS UP all over the map -- not only
-// where it overlaps the player's sprite rect (the old 4-tile AVERAGE diluted an isolated tile down to
-// near-ground, so lone poles went flat). max() over the two tiles below keeps thin verticals at full
-// pop; a flat plateau (tiles below also raised) stays uniformly forward, leaning only at its front edge.
-static float warp_vert_depth(const DepthSnap* d, int vr, int vc) {
-	if (vr < 0 || vr >= WARP_ROWS) return 0.0f;                       // bottom screen edge -> grounded
-	float dep = 0.0f;
-	if (vc - 1 >= 0 && vc - 1 < WARP_COLS && d->tdepth[vr][vc - 1] > dep) dep = d->tdepth[vr][vc - 1];
-	if (vc >= 0     && vc     < WARP_COLS && d->tdepth[vr][vc]     > dep) dep = d->tdepth[vr][vc];
-	return dep;
-}
-
-// Sample the standee field at a FRACTIONAL grid position (bilinear), so a vertex's depth can be
-// shifted by the camera's sub-tile scroll -> object pops track the smoothly scrolling map instead
-// of snapping per whole tile (the walk "wobble").
-static float warp_depth_at(const DepthSnap* d, float fr, float fc) {
-	int r0 = (int)floorf(fr), c0 = (int)floorf(fc);
-	float fy = fr - (float)r0, fx = fc - (float)c0;
-	float d00 = warp_vert_depth(d, r0,     c0), d01 = warp_vert_depth(d, r0,     c0 + 1);
-	float d10 = warp_vert_depth(d, r0 + 1, c0), d11 = warp_vert_depth(d, r0 + 1, c0 + 1);
-	return (d00 * (1.0f - fx) + d01 * fx) * (1.0f - fy) + (d10 * (1.0f - fx) + d11 * fx) * fy;
-}
-
-static void warp_grid_eye(C3D_RenderTarget* tgt, EmuInstance* g, const DepthSnap* d, int mode,
-                          float dispUnit, bool sharpPre, C3D_Tex* pre, u32 mod, int eye) {
-	float ox, oy, sx, sy; calc_xform(mode, 400.0f, 240.0f, &ox, &oy, &sx, &sy);
-	WarpVert* v = warpVbo + (eye ? WARP_VERTS : 0);
-	float cxf = (float)d->camX / 16.0f, cyf = (float)d->camY / 16.0f;   // sub-tile scroll
-	for (int r = 0; r <= WARP_ROWS; r++) for (int c = 0; c <= WARP_COLS; c++) {
-		WarpVert* w = &v[r * (WARP_COLS + 1) + c];
-		float gx = (float)(c * 16), gy = (float)(r * 16);
-		float dep = warp_depth_at(d, (float)r + cyf, (float)c + cxf);   // depth tracks the sub-tile scroll
-		w->x = ox + gx * sx + dispUnit * clamp_disp(RAMP_AT(gy) + dep);   // ramp (screen-anchored) + scrolled depth
-		w->y = oy + gy * sy;
-		w->u = gx / 256.0f;             // preTex UVs coincide: PRESCALE/PRE_TEX == 1/256
-		w->v = 1.0f - gy / 256.0f;
-	}
-	GSPGPU_FlushDataCache(v, sizeof(WarpVert) * WARP_VERTS);
-	C2D_Flush();                        // submit citro2d's pending work before going raw C3D
-	C3D_FrameDrawOn(tgt);
-	C3D_BindProgram(&warpProg);
-	C3D_Mtx proj;
-	Mtx_OrthoTilt(&proj, 0.0f, 400.0f, 240.0f, 0.0f, 1.0f, -1.0f, true);
-	C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, warpProjLoc, &proj);
-	C3D_AttrInfo* ai = C3D_GetAttrInfo();
-	AttrInfo_Init(ai);
-	AttrInfo_AddLoader(ai, 0, GPU_FLOAT, 2);   // v0 = position
-	AttrInfo_AddLoader(ai, 1, GPU_FLOAT, 2);   // v1 = texcoord
-	C3D_BufInfo* bi = C3D_GetBufInfo();
-	BufInfo_Init(bi);
-	BufInfo_Add(bi, v, sizeof(WarpVert), 2, 0x10);
-	C3D_TexBind(0, sharpPre ? pre : &g->tex);  // sharp-bilinear keeps its crisp prescale as the source
-	C3D_TexEnv* env = C3D_GetTexEnv(0);
-	C3D_TexEnvInit(env);
-	C3D_TexEnvSrc(env, C3D_Both, GPU_TEXTURE0, GPU_CONSTANT, 0);
-	C3D_TexEnvFunc(env, C3D_Both, GPU_MODULATE);   // x mod = the unfocused dim-tint analog
-	C3D_TexEnvColor(env, mod);
-	C3D_TexEnvInit(C3D_GetTexEnv(1));
-	C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
-	C3D_CullFace(GPU_CULL_NONE);
-	C3D_DrawElements(GPU_TRIANGLES, WARP_IDX, C3D_UNSIGNED_SHORT, warpIbo);
-	C2D_Prepare();                      // hand the GPU back to citro2d (rebinds its shader/state)
-}
-
-// HD-2D M1: build the blurred copy of the top game's frame (one LINEAR half-res bounce). Runs
-// once per frame before the per-eye composites; both eyes sample texA. Half-texel insets on
-// the outer sample edges keep the cleared/stride texels from bleeding into the blur.
-static void dof_prepare(C3D_Tex* src, C3D_RenderTarget* tgtA) {
-	Tex3DS_SubTexture s0 = { GBA_W, GBA_H, 0.0f, 1.0f,
-	                         ((float)GBA_W - 0.5f) / 256.0f, 1.0f - ((float)GBA_H - 0.5f) / 256.0f };
-	C2D_Image i0 = { src, &s0 };
-	C3D_TexSetFilter(src, GPU_LINEAR, GPU_LINEAR);   // averaging downsample (render_game resets it)
-	C2D_TargetClear(tgtA, C2D_Color32(0, 0, 0, 0xFF));
-	C2D_SceneBegin(tgtA);
-	C2D_DrawImageAt(i0, 0.0f, 0.0f, 0.0f, NULL, 0.5f, 0.5f);
-}
-
-// One blurred horizontal band: GBA rows gy0..gy1 (multiples of 2) of the half-res copy,
-// bilinear-upscaled through the same screen transform, vertical alpha ramp a0(top)->a1(bottom).
-// Tint blend 0 leaves RGB untouched; the tint color's alpha is per-corner transparency.
-static void dof_band(C3D_Tex* texA, int gy0, int gy1, float ox, float oy, float sx, float sy, float xoff, u8 a0, u8 a1) {
-	if (gy1 <= gy0) return;
-	float u1 = ((float)(GBA_W / 2) - 0.5f) / DOF_TEXA;
-	float v1 = 1.0f - ((float)(gy1 / 2) - (gy1 == GBA_H ? 0.5f : 0.0f)) / DOF_TEXA;
-	Tex3DS_SubTexture st = { (u16)(GBA_W / 2), (u16)((gy1 - gy0) / 2),
-	                        0.0f, 1.0f - (float)(gy0 / 2) / DOF_TEXA, u1, v1 };
-	C2D_Image img = { texA, &st };
-	C2D_ImageTint t;
-	C2D_SetImageTint(&t, C2D_TopLeft,  C2D_Color32(0, 0, 0, a0), 0.0f);
-	C2D_SetImageTint(&t, C2D_TopRight, C2D_Color32(0, 0, 0, a0), 0.0f);
-	C2D_SetImageTint(&t, C2D_BotLeft,  C2D_Color32(0, 0, 0, a1), 0.0f);
-	C2D_SetImageTint(&t, C2D_BotRight, C2D_Color32(0, 0, 0, a1), 0.0f);
-	C2D_DrawImageAt(img, ox + xoff, oy + gy0 * sy, 0.0f, &t, 2.0f * sx, 2.0f * sy);
-}
-
-// Tilt-shift composite on one eye target: solid blur at the frame edges, alpha ramp into the
-// sharp focal band. Drawn AFTER the pops, so out-of-focus pop edges blur away with the band.
-// Each band has its own engagement level: text under a band kills just that band's blur.
-static void dof_bands(C3D_RenderTarget* tgt, C3D_Tex* texA, int mode, float lvlTop, float lvlBot, float eyeSl) {
-	u8 aT = (u8)(DOF_ALPHA * lvlTop + 0.5f), aB = (u8)(DOF_ALPHA * lvlBot + 0.5f);
-	if (!aT && !aB) return;
-	float ox, oy, sx, sy; calc_xform(mode, 400.0f, 240.0f, &ox, &oy, &sx, &sy);
-	float dT = eyeSl * RAMP_AT(DOF_SHARP_Y0 / 2);            // bands ride the floor ramp at their
-	float dB = eyeSl * RAMP_AT((DOF_SHARP_Y1 + GBA_H) / 2);  // centers -> no depth rivalry with it
-	C2D_SceneBegin(tgt);
-	if (aT) {
-		dof_band(texA, 0,                       DOF_SHARP_Y0 - DOF_FADE, ox, oy, sx, sy, dT, aT, aT);
-		dof_band(texA, DOF_SHARP_Y0 - DOF_FADE, DOF_SHARP_Y0,            ox, oy, sx, sy, dT, aT, 0x00);
-	}
-	if (aB) {
-		dof_band(texA, DOF_SHARP_Y1,            DOF_SHARP_Y1 + DOF_FADE, ox, oy, sx, sy, dB, 0x00, aB);
-		dof_band(texA, DOF_SHARP_Y1 + DOF_FADE, GBA_H,                   ox, oy, sx, sy, dB, aB, aB);
-	}
-}
-
-// BG0 scan v2 (game-agnostic): gen-3 draws every textbox/banner/menu on BG0, the text/window
-// layer (verified: both decomps template bg0; the standard textbox sits at tile rows 15-18).
-// One pass yields (a) per-band text flags -> that band's blur is suppressed so ALL text stays
-// readable, and (b) the window-panel RECTS -> popped out per eye in ANY context (dialog, START
-// menu, bag, party, battle text). Filler = the dominant entry of the visible grid (not assumed
-// 0); unscannable modes fail toward readable. Runs at the parked per-frame handshake.
-static void bg0_scan(GbaCore* c, const GameProfile* p, bool overworld, DepthSnap* d) {
-	uint16_t disp = gbacore_read16(c, 0x04000000);
-	if (!(disp & 0x0100)) return;                       // BG0 disabled -> no text layer
-	uint16_t cnt = gbacore_read16(c, 0x04000008);
-	if ((disp & 0x0007) != 0 || (cnt >> 14) != 0) {     // not mode 0 / text BG not 32x32:
-		d->textTop = d->textBot = true;                  // can't reason -> fail toward readable
-		return;
-	}
-	uint32_t map = 0x06000000u + (uint32_t)((cnt >> 8) & 0x1F) * 0x800u;
-	uint16_t smp[40];                                   // dominant entry of the visible 32x20 grid
-	for (int i = 0; i < 40; i++) smp[i] = gbacore_read16(c, map + 2u * (uint32_t)(i * 16));
-	uint16_t filler = smp[0]; int best = 0;
-	for (int i = 0; i < 40; i++) {
-		int n = 0;
-		for (int j = 0; j < 40; j++) n += (smp[j] == smp[i]);
-		if (n > best) { best = n; filler = smp[i]; }
-	}
-	signed char rlo[20], rhi[20]; int rowN[20], topBusy = 0, botBusy = 0;
-	for (int r = 0; r < 20; r++) {                      // per-row occupancy of the visible 30 cols
-		int lo = -1, hi = -1, n = 0;
-		for (int col = 0; col < 30; col++)
-			if (gbacore_read16(c, map + 2u * (uint32_t)(r * 32 + col)) != filler) {
-				if (lo < 0) lo = col;
-				hi = col; n++;
-			}
-		rlo[r] = (signed char)lo; rhi[r] = (signed char)hi; rowN[r] = n;
-		if (r <= 6)  topBusy += n;
-		if (r >= 13) botBusy += n;
-	}
-	if (topBusy >= 8) d->textTop = true;                // tile rows 0..6  ~ GBA y 0..55
-	if (botBusy >= 8) d->textBot = true;                // tile rows 13..19 ~ GBA y 104..159
-	// UI-panel RECTS are gen-3 only: BG0 is the text/window layer there, but an arbitrary GBA
-	// game's BG0 is usually the main playfield -> a full-screen 'panel' popped at max disparity.
-	// (The blur text-flags above stay general; they only gate DoF, which is itself gen-3-gated.)
-	if (!p) return;
-	for (int r = 0; r < 20 && d->nui < 6; ) {           // merge busy rows (>=2 tiles) into panels
-		if (rowN[r] < 2) { r++; continue; }
-		int q = r, lo = rlo[r], hi = rhi[r];
-		while (q + 1 < 20 && rowN[q + 1] >= 2) {
-			q++;
-			if (rlo[q] < lo) lo = rlo[q];
-			if (rhi[q] > hi) hi = rhi[q];
-		}
-		int wc = hi - lo + 1, hr = q - r + 1;
-		// Drop a near-full-screen rect in the OVERWORLD (a transient full BG0 = playfield false
-		// positive); menus/bag/party run with overworld=false and legitimately fill the screen.
-		if (!(overworld && wc >= 24 && hr >= 14)) {
-			d->uiRect[d->nui].x0 = (unsigned char)lo;  d->uiRect[d->nui].y0 = (unsigned char)r;
-			d->uiRect[d->nui].x1 = (unsigned char)hi;  d->uiRect[d->nui].y1 = (unsigned char)q;
-			d->nui++;
-		}
-		r = q + 1;
-	}
-}
-
-// Pop the BG0 window panels out of the screen on one eye: clean shifted overdraws of the SAME
-// pixels -> strong depth while the text stays pixel-sharp (no blending, no blur).
-static void ui_pop_eye(C3D_RenderTarget* tgt, EmuInstance* g, const DepthSnap* d, int mode,
-                       float disp, bool sharpPre, C3D_Tex* pre) {
-	float ox, oy, sx, sy; calc_xform(mode, 400.0f, 240.0f, &ox, &oy, &sx, &sy);
-	C2D_SceneBegin(tgt);
-	for (int i = 0; i < d->nui; i++) {
-		int x = d->uiRect[i].x0 * 8, y = d->uiRect[i].y0 * 8;
-		int w = (d->uiRect[i].x1 - d->uiRect[i].x0 + 1) * 8;
-		int h = (d->uiRect[i].y1 - d->uiRect[i].y0 + 1) * 8;
-		if (sharpPre) draw_pop_tex(pre, PRESCALE, PRE_TEX, GPU_LINEAR, x, y, w, h, ox, oy, sx, sy, disp);
-		else          draw_pop(&g->tex, x, y, w, h, ox, oy, sx, sy, disp);
-	}
-}
-
-// ---- HD-2D M3: LDR bloom (raw C3D draws reusing the warp passthrough shader) ----------------
-static void bloom_raw_state(C3D_Tex* tex) {   // shared state for the two bloom draws
-	C3D_BindProgram(&warpProg);
-	C3D_AttrInfo* ai = C3D_GetAttrInfo();
-	AttrInfo_Init(ai);
-	AttrInfo_AddLoader(ai, 0, GPU_FLOAT, 2);   // v0 = position
-	AttrInfo_AddLoader(ai, 1, GPU_FLOAT, 2);   // v1 = texcoord
-	C3D_TexBind(0, tex);
-	C3D_TexEnvInit(C3D_GetTexEnv(1));
-	C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
-	C3D_CullFace(GPU_CULL_NONE);
-}
-
-static void bloom_quad(WarpVert* v, float x0, float y0, float x1, float y1,
-                       float u0, float v0, float u1, float v1) {
-	v[0] = (WarpVert){ x0, y0, u0, v0 };
-	v[1] = (WarpVert){ x1, y0, u1, v0 };
-	v[2] = (WarpVert){ x1, y1, u1, v1 };
-	v[3] = (WarpVert){ x0, y1, u0, v1 };
-	GSPGPU_FlushDataCache(v, sizeof(WarpVert) * 4);
-	C3D_BufInfo* bi = C3D_GetBufInfo();
-	BufInfo_Init(bi);
-	BufInfo_Add(bi, v, sizeof(WarpVert), 2, 0x10);
-	C3D_DrawArrays(GPU_TRIANGLE_FAN, 0, 4);
-}
-
-// Bright-pass: half-res copy -> quarter-res glow map. TEV: clamp(tex - threshold) * 2.
-static void bloom_bright(C3D_Tex* srcHalf, C3D_RenderTarget* tgt) {
-	C2D_TargetClear(tgt, C2D_Color32(0, 0, 0, 0xFF));
-	C2D_Flush();
-	C3D_FrameDrawOn(tgt);
-	bloom_raw_state(srcHalf);
-	C3D_Mtx proj;
-	Mtx_Ortho(&proj, 0.0f, (float)BLOOM_TEX, (float)BLOOM_TEX, 0.0f, 1.0f, -1.0f, true);
-	C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, warpProjLoc, &proj);
-	C3D_TexEnv* env = C3D_GetTexEnv(0);
-	C3D_TexEnvInit(env);
-	C3D_TexEnvSrc(env, C3D_RGB, GPU_TEXTURE0, GPU_CONSTANT, 0);
-	C3D_TexEnvFunc(env, C3D_RGB, GPU_SUBTRACT);      // clamp(frame - threshold)
-	C3D_TexEnvScale(env, C3D_RGB, GPU_TEVSCALE_2);   // x2: punch the survivors up
-	C3D_TexEnvSrc(env, C3D_Alpha, GPU_TEXTURE0, 0, 0);
-	C3D_TexEnvFunc(env, C3D_Alpha, GPU_REPLACE);
-	C3D_TexEnvColor(env, C2D_Color32(BLOOM_THRESH, BLOOM_THRESH, BLOOM_THRESH, 0x00));
-	bloom_quad(bloomVbo, 0.0f, 0.0f, (float)(GBA_W / 4), (float)(GBA_H / 4),
-	           0.0f, 1.0f,
-	           ((float)(GBA_W / 2) - 0.5f) / DOF_TEXA, 1.0f - ((float)(GBA_H / 2) - 0.5f) / DOF_TEXA);
-	C2D_Prepare();
-}
-
-// Additive composite of the glow map over one finished eye (drawn after the DoF bands).
-static void bloom_add(C3D_RenderTarget* tgt, C3D_Tex* glow, int mode, float lvl, int eye) {
-	float ox, oy, sx, sy; calc_xform(mode, 400.0f, 240.0f, &ox, &oy, &sx, &sy);
-	C2D_Flush();
-	C3D_FrameDrawOn(tgt);
-	bloom_raw_state(glow);
-	C3D_Mtx proj;
-	Mtx_OrthoTilt(&proj, 0.0f, 400.0f, 240.0f, 0.0f, 1.0f, -1.0f, true);
-	C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, warpProjLoc, &proj);
-	u8 g = (u8)(BLOOM_GAIN * lvl + 0.5f);
-	C3D_TexEnv* env = C3D_GetTexEnv(0);
-	C3D_TexEnvInit(env);
-	C3D_TexEnvSrc(env, C3D_RGB, GPU_TEXTURE0, GPU_CONSTANT, 0);
-	C3D_TexEnvFunc(env, C3D_RGB, GPU_MODULATE);      // glow x gain (gain carries the text fade)
-	C3D_TexEnvSrc(env, C3D_Alpha, GPU_CONSTANT, 0, 0);
-	C3D_TexEnvFunc(env, C3D_Alpha, GPU_REPLACE);
-	C3D_TexEnvColor(env, C2D_Color32(g, g, g, 0xFF));
-	C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ONE, GPU_ZERO, GPU_ONE);   // additive
-	bloom_quad(bloomVbo + 4 + eye * 4, ox, oy, ox + GBA_W * sx, oy + GBA_H * sy,
-	           0.0f, 1.0f,
-	           ((float)(GBA_W / 4) - 0.5f) / BLOOM_TEX, 1.0f - ((float)(GBA_H / 4) - 0.5f) / BLOOM_TEX);
-	C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA,
-	               GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);   // restore citro2d's standard blend
-	C2D_Prepare();
-}
-
 // Draw one game to `screen` at the current scale + filter, leaving `screen` bound so the
 // caller can draw overlays (focus bar, toast, menu) on top. `preTgt`/`preTex` are the shared
 // offscreen prescale buffer, reused per screen (sequential on the render thread -> no race).
@@ -2166,9 +1515,9 @@ typedef struct {
 	s32 frameskip;
 	s32 dof;
 	s32 bloom;
-	s32 light;
-	s32 vivid;
-	// --- UI redesign additions (appended; older files that end at `vivid` still load) ---
+	s32 rsvLight;         // RESERVED: was the 2D time-of-day Light toggle (deleted 2026-10-06). Written 0, ignored.
+	s32 rsvVivid;         // RESERVED: was the 2D Vivid toggle (deleted 2026-10-06). Written 0, ignored.
+	// --- UI redesign additions (appended; older files that end at `rsvVivid` still load) ---
 	s32 theme;            // ThemeId
 	s32 customBaseHue;    // custom-theme builder params
 	s32 customAccentHue;
@@ -2193,7 +1542,7 @@ typedef struct {
 } Settings;
 // Pin the layout: if a field is inserted anywhere above, these fire — the alternative is a
 // silently-shifted offsetof ladder that mis-loads every older settings file. Removed features keep
-// their word as a reserved field (rsvTilt) for exactly this reason.
+// their word as a reserved field (rsvLight, rsvVivid, rsvTilt) for exactly this reason.
 _Static_assert(sizeof(Settings)             == 29 * sizeof(s32), "Settings grew/shrank — settings.bin ladder broken");
 _Static_assert(offsetof(Settings, voxZoom)  == 28 * sizeof(s32), "Settings.voxZoom moved — settings.bin ladder broken");
 _Static_assert(offsetof(Settings, voxPitch) == 27 * sizeof(s32), "Settings.voxPitch moved — settings.bin ladder broken");
@@ -2202,9 +1551,11 @@ _Static_assert(offsetof(Settings, traverse) == 25 * sizeof(s32), "Settings.trave
 _Static_assert(offsetof(Settings, presence) == 24 * sizeof(s32), "Settings.presence moved — settings.bin ladder broken");
 _Static_assert(offsetof(Settings, rsvTilt)  == 23 * sizeof(s32), "Settings.rsvTilt moved — settings.bin ladder broken");
 _Static_assert(offsetof(Settings, padEdge)  == 22 * sizeof(s32), "Settings.padEdge moved — settings.bin ladder broken");
+_Static_assert(offsetof(Settings, rsvVivid) == 15 * sizeof(s32), "Settings.rsvVivid moved — settings.bin ladder broken");
+_Static_assert(offsetof(Settings, rsvLight) == 14 * sizeof(s32), "Settings.rsvLight moved — settings.bin ladder broken");
 
 static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, int* hudMode,
-                          int* audioMode, int* volA, int* volB, int* touchMode, bool* fsOn, bool* dofOn, bool* bloomOn, bool* lightOn, bool* vividOn,
+                          int* audioMode, int* volA, int* volB, int* touchMode, bool* fsOn, bool* dofOn, bool* bloomOn,
                           bool* presenceOn) {
 	FILE* f = fopen(SETTINGS_PATH, "rb");
 	if (!f) return;
@@ -2214,9 +1565,9 @@ static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, int* 
 	// Accepted file lengths, oldest → newest (offsetof keeps this robust as the struct grows).
 	size_t lenDof   = offsetof(Settings, dof);    // pre-dof (ends at frameskip)
 	size_t lenBloom = offsetof(Settings, bloom);  // includes dof
-	size_t lenLight = offsetof(Settings, light);  // includes bloom
-	size_t lenVivid = offsetof(Settings, vivid);  // includes light
-	size_t lenOld   = offsetof(Settings, theme);  // includes vivid = pre-redesign full struct
+	size_t lenLight = offsetof(Settings, rsvLight);  // includes bloom
+	size_t lenVivid = offsetof(Settings, rsvVivid);  // includes rsvLight
+	size_t lenOld   = offsetof(Settings, theme);  // includes rsvVivid = pre-redesign full struct
 	// phase 14 (SPEC-integration I4.10): NO magic bump — SETTINGS_MAGIC identifies the FAMILY and
 	// the length ladder does the versioning. lenPad is the pre-phase-14 full struct.
 	size_t lenPad   = offsetof(Settings, rsvTilt);   // includes the UI-redesign prefs (pre-phase-14)
@@ -2245,8 +1596,7 @@ static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, int* 
 	*fsOn = s.frameskip != 0;
 	if (n >= lenBloom) *dofOn   = s.dof != 0;      // older files keep the defaults
 	if (n >= lenLight) *bloomOn = s.bloom != 0;
-	if (n >= lenVivid) *lightOn = s.light != 0;
-	if (n >= lenOld)   *vividOn = s.vivid != 0;
+	// s.rsvLight / s.rsvVivid (the deleted 2D Light / Vivid toggles) are ignored.
 	if (n >= lenPad) {                              // the UI-redesign chrome prefs (into the global)
 		g_prefs.theme           = ((unsigned)s.theme) % THEME_PRESET_COUNT;
 		g_prefs.customBaseHue   = ((s.customBaseHue % 360) + 360) % 360;
@@ -2275,10 +1625,10 @@ static void settings_load(int scaleMode[2], bool smooth[2], bool* swapped, int* 
 }
 
 static void settings_save(const int scaleMode[2], const bool smooth[2], bool swapped, int hudMode,
-                          int audioMode, int volA, int volB, int touchMode, bool fsOn, bool dofOn, bool bloomOn, bool lightOn, bool vividOn,
+                          int audioMode, int volA, int volB, int touchMode, bool fsOn, bool dofOn, bool bloomOn,
                           bool presenceOn) {
 	Settings s = { SETTINGS_MAGIC, { scaleMode[0], scaleMode[1] },
-	               { smooth[0], smooth[1] }, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn,
+	               { smooth[0], smooth[1] }, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, 0, 0,   // rsvLight, rsvVivid: reserved
 	               g_prefs.theme, g_prefs.customBaseHue, g_prefs.customAccentHue, g_prefs.customContrast,
 	               g_prefs.gameMode, g_prefs.padColor, g_prefs.padEdge,
 	               0,                     // rsvTilt: reserved (the deleted phase-14 tilt level)
@@ -2303,8 +1653,6 @@ enum { SESSION_CHANGE, SESSION_QUIT };
 #define MENU_HUD_IDX   5   // dynamic label ("HUD: off/top/bottom/both")
 #define MENU_DOF_IDX   12  // dynamic label ("DoF: on/off")
 #define MENU_BLOOM_IDX 13  // dynamic label ("Bloom: on/off")
-#define MENU_LIGHT_IDX 14  // dynamic label ("Light: on/off")
-#define MENU_VIVID_IDX 15  // dynamic label ("Vivid: on/off")
 #define MENU_WIRELESS_IDX 16  // opens the wireless lobby
 #define MENU_NETLINK_IDX  19  // M2.5 net link (loopback) toggle — dynamic label
 static const char* const HUD_NAMES[4] = { "off", "top", "bottom", "both" };
@@ -2326,8 +1674,8 @@ static const char* const HUD_NAMES[4] = { "off", "top", "bottom", "both" };
 enum {
 	ACT_RESUME = 0, ACT_LINK = 1, ACT_AUDIOMODE = 2, ACT_TOUCHMODE = 3, ACT_FS = 4,
 	ACT_HUD = 5, ACT_SWAP = 6, ACT_SAVEST = 7, ACT_LOADST = 8, ACT_LOADSAV = 9,
-	ACT_MUTE = 10, ACT_PAUSEG = 11, ACT_DOF = 12, ACT_BLOOM = 13, ACT_LIGHT = 14,
-	ACT_VIVID = 15, ACT_WIRELESS = 16, ACT_CHANGE = 17, ACT_QUIT = 18, ACT_NETLINK = 19,
+	ACT_MUTE = 10, ACT_PAUSEG = 11, ACT_DOF = 12, ACT_BLOOM = 13, ACT_RSV_LIGHT = 14,
+	ACT_RSV_VIVID = 15, ACT_WIRELESS = 16, ACT_CHANGE = 17, ACT_QUIT = 18, ACT_NETLINK = 19,   // 14/15 reserved: the Light/Vivid rows deleted 2026-10-06
 	ACT_SCALE_TOP = 100, ACT_SCALE_BOT, ACT_FILTER, ACT_THEME, ACT_VOLA, ACT_VOLB,
 	ACT_3D, ACT_PADCOL, ACT_PADEDGE, ACT_CHUE, ACT_CAHUE, ACT_CCON,
 	ACT_PREVIEW_PAD, ACT_PREVIEW_SMART,   // Touch tab: set the mode + resume to see it live
@@ -2404,7 +1752,6 @@ static const PCtl PT_AUDIO[] = {
   {PK_STEP,ACT_VOLB,0, 93,132,216,24,0},{PK_TOG,ACT_MUTE,0, 276,171,34,18,0} };
 static const PCtl PT_ENHANCE[] = {
   {PK_TOG,ACT_3D,0, 276,51,34,18,0},{PK_TOG,ACT_DOF,0, 276,83,34,18,0},{PK_TOG,ACT_BLOOM,0, 276,112,34,18,0},
-  {PK_TOG,ACT_LIGHT,0, 276,141,34,18,0},{PK_TOG,ACT_VIVID,0, 276,170,34,18,0},
   // PHASE 32 / SPEC-port 8.3: ENHANCE is full, so the voxel rows went BELOW the (since deleted) tilt row and the tab
   // scrolls (the content panel is a viewport since phase 17; uihit_content_h derives the extent from
   // this table). contentH 362 -> maxScroll 136. ANGLE/ZOOM are dimmed + not hit-testable while VOXEL 3D is off.
@@ -2458,7 +1805,7 @@ static const PCtl* const PTABS[6] = { PT_SESSION, PT_DISPLAY, PT_AUDIO, PT_ENHAN
 // A6.1.1: LINK goes 6 -> 7 for the phase-15 CO-OP row, and it is the SAME silent trap.
 // A6.1.1 again for phase 22.2: TOUCH goes 5 -> 6 for the HM-ROUTES row, and forgetting it is the
 // SAME silent trap (the draw loop and the hit-test loop are both `for (i < nPd)`).
-static const int PTABN[6] = { 3, 6, 4, 8, 7, 6 };   // phase 32: ENHANCE 6 -> 9 (the voxel rows); 2026-10-06: 9 -> 8 (tilt row deleted) — the SAME silent trap
+static const int PTABN[6] = { 3, 6, 4, 6, 7, 6 };   // phase 32: ENHANCE 6 -> 9 (the voxel rows); 2026-10-06: 9 -> 8 (tilt row deleted), 8 -> 6 (Light + Vivid rows deleted) — the SAME silent trap
 static const char* const PT_PLATE[6] = { "pause-bot-session","pause-bot-display","pause-bot-audio",
                                          "pause-bot-enhance","pause-bot-link","pause-bot-touch" };
 
@@ -2755,8 +2102,6 @@ static int menu_layout(int tab, MenuW* out) {
 		PUSH(W_TOGGLE, ACT_3D, 0, 1);                  // aux 1 = "top screen" sublabel
 		PUSH(W_TOGGLE, ACT_DOF, 0, 0);
 		PUSH(W_TOGGLE, ACT_BLOOM, 0, 0);
-		PUSH(W_TOGGLE, ACT_LIGHT, 0, 0);
-		PUSH(W_TOGGLE, ACT_VIVID, 0, 0);
 		PUSH(W_TOGGLE, ACT_VOXEL, 0, 0);   // phase 32 (SPEC-port 8.3 — bookkeeping)
 		PUSH(W_SEG,    ACT_VOXPITCH, 0, 0);
 		PUSH(W_SEG,    ACT_VOXZOOM,  0, 0);
@@ -2822,7 +2167,7 @@ static void draw_load_error(C2D_TextBuf buf, float screenW) {
 // Top-screen summary while the pause menu is open (draws to whichever top target is bound):
 // "|| PAUSED", the two game names, a row of active-feature pills, and a pointer to the bottom screen.
 static void draw_paused_summary(C2D_TextBuf buf, const char* nameTop, const char* nameBot,
-                                bool s3d, bool dof, bool bloom, bool light, bool vivid,
+                                bool s3d, bool dof, bool bloom,
                                 int touchMode, bool linkOn, bool netOn, bool wlOn, bool coop) {
 	// Screen 05 top: the pause-top PLATE (PAUSED + swap arrow + hint, over a light dim of the game)
 	// is the chrome; we composite the two game names (manifest x56/x216 y95) + the feature pills.
@@ -2844,8 +2189,6 @@ static void draw_paused_summary(C2D_TextBuf buf, const char* nameTop, const char
 		const char* labs[10]; u32 col[10]; int n = 0;
 		#define PILL(L, ON, C) do { labs[n] = (L); col[n] = (ON) ? (C) : g_ui.dim; n++; } while (0)
 		PILL("3D", s3d, THEME_GAME_B); PILL("DoF", dof, g_ui.acc); PILL("Bloom", bloom, g_ui.acc);
-		PILL("Light", light, g_ui.acc);
-		if (vivid) PILL("Vivid", 1, g_ui.acc);
 		if (g_prefs.voxel) PILL("Voxel", 1, g_ui.acc);   // phase 32: pause screen answers "is voxel on" (pref only: voxTop is false while paused)
 		PILL(touchMode == 2 ? "Smart" : (touchMode == 1 ? "Pad" : "Touch Off"), touchMode != 0, THEME_GAME_A);
 		// A6.4.3: so the pause screen answers "is co-op on" without opening the LINK tab. It sits
@@ -2910,24 +2253,6 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		preTgt = C3D_RenderTargetCreateFromTex(&preTex, GPU_TEXFACE_2D, 0, -1);
 	}
 
-	// HD-2D M1: the DoF bounce target (RGB565, VRAM). DoF silently disables if it fails.
-	C3D_Tex dofTexA;
-	C3D_RenderTarget *dofTgtA = NULL;
-	if (C3D_TexInitVRAM(&dofTexA, DOF_TEXA, DOF_TEXA, GPU_RGB565)) {
-		C3D_TexSetFilter(&dofTexA, GPU_LINEAR, GPU_LINEAR);
-		C3D_TexSetWrap(&dofTexA, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
-		dofTgtA = C3D_RenderTargetCreateFromTex(&dofTexA, GPU_TEXFACE_2D, 0, -1);
-	}
-
-	// HD-2D M3: the bloom glow map (RGB565, VRAM). Bloom silently disables if it fails.
-	C3D_Tex bloomTex;
-	C3D_RenderTarget* bloomTgt = NULL;
-	if (warpOk && C3D_TexInitVRAM(&bloomTex, BLOOM_TEX, BLOOM_TEX, GPU_RGB565)) {
-		C3D_TexSetFilter(&bloomTex, GPU_LINEAR, GPU_LINEAR);
-		C3D_TexSetWrap(&bloomTex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
-		bloomTgt = C3D_RenderTargetCreateFromTex(&bloomTex, GPU_TEXFACE_2D, 0, -1);
-	}
-
 	// Audio: both cores share one rate (pitch-matched to the 3DS refresh); start clean.
 	GbaCore* anyCore = emuA.core ? emuA.core : emuB.core;
 	audio_thread_start(mainPrio, isN3DS);   // dedicated audio thread on the core-1 slice
@@ -2941,18 +2266,13 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	int  wlRtt  = -1, wlDrops = 0;   // RX-thread-measured link RTT/drops for the HUD
 	int  touchMode = TOUCH_OFF;   // 0 off / 1 gamepad / 2 smart (touch drives the bottom game)
 	bool fsOn = false;      // frameskip the unfocused game to free heavy-scene budget
-	bool dofOn = true;      // HD-2D M1: tilt-shift depth-of-field on the top screen (overworld only)
-	float dofLvlTop = 1.0f, dofLvlBot = 1.0f;   // per-band engagement 0..1 (text kills its band's blur)
-	bool bloomOn = true;    // HD-2D M3: LDR bloom on the focused top screen (overworld only)
-	bool lightOn = true;    // HD-2D M4: time-of-day lighting on the overworld
-	bool vividOn = false;   // round 7: bright+sharp "sign look" everywhere (no lighting/DoF/bloom haze)
-	float bloomLvl = 1.0f;  // eased like the DoF bands; any on-screen text kills the glow
+	bool dofOn = true;      // the voxel world's tilt-shift DoF (vx_host_draw_world; was the 2D HD-2D M1 DoF)
+	bool bloomOn = true;    // the voxel world's bloom (vx_host_draw_world; was the 2D HD-2D M3 bloom)
 	bool muted = false;     // HARD mute (stops audio rendering, saves CPU)
 
 	int focused = 0;
 	bool menuOpen = false;
 	bool workersRunning = false;   // pipeline: a non-link frame is computing while we render the last
-	DepthSnap depth3d = { false };  // top game's overworld state for stereoscopic depth (M2)
 	// ---- phase 15 co-op presence: per-session state (SPEC-data D3.4 / D6) ----
 	// Indexed by GAME (0 = emuA, 1 = emuB), NOT by screen: presence state is a property of a
 	// WORLD — the identity latch,
@@ -3100,12 +2420,12 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	int audioMode = AUD_SOLO;
 	int volA = 256, volB = 256;
 
-	settings_load(scaleMode, smooth, &swapped, &hudMode, &audioMode, &volA, &volB, &touchMode, &fsOn, &dofOn, &bloomOn, &lightOn, &vividOn, &presenceOn);   // restore prefs
+	settings_load(scaleMode, smooth, &swapped, &hudMode, &audioMode, &volA, &volB, &touchMode, &fsOn, &dofOn, &bloomOn, &presenceOn);   // restore prefs
 	if (presenceOn) presence_art_ensure();   // finding 10: build the co-op sheet only for a session
 	                                         // that actually starts with the pref on (idempotent;
 	                                         // the other call site is the pause-menu row)
 	if (single) swapped = false;   // 1-game: the game is ALWAYS on top (a stale swapped would blank it)
-	settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);   // persist picker-side g_prefs changes (mode/theme)
+	settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, presenceOn);   // persist picker-side g_prefs changes (mode/theme)
 	if (startLinked && emuA.core && emuB.core && link) {   // picker's "START - LINKED": attach the cable now
 		gbacore_link_attach(emuA.core, link, 0, link_cb_sleep, link_cb_wake, &emuA);
 		gbacore_link_attach(emuB.core, link, 1, link_cb_sleep, link_cb_wake, &emuB);
@@ -3300,7 +2620,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					swapped = !swapped;
 					snprintf(toast, sizeof toast, "Layout: %s", swapped ? "B top / A bottom" : "A top / B bottom");
 					toastTimer = 90;
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, presenceOn);
 				}
 				int fs = swapped ? (focused ^ 1) : focused;   // screen the focused game sits on
 				if (kDown & KEY_ZR) {
@@ -3308,14 +2628,14 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					snprintf(toast, sizeof toast, "%s scale: %s",
 					         fs == 0 ? "Top" : "Bottom", SCALE_NAMES[scaleMode[fs]]);
 					toastTimer = 90;
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, presenceOn);
 				}
 				if (kDown & KEY_ZL) {
 					smooth[fs] = !smooth[fs];   // render_game sets the per-pass filters
 					snprintf(toast, sizeof toast, "%s filter: %s", fs == 0 ? "Top" : "Bottom",
 					         smooth[fs] ? "Smooth" : "Sharp-bilinear");
 					toastTimer = 90;
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, presenceOn);
 				}
 				u16 g = to_gba_keys(kHeld);
 				// PHASE 24 / lane A3 (RS-P24) — LOGGING ONLY. Both seats, every frame, workers parked
@@ -3363,65 +2683,6 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 						if (game_read(botCore, gp, &gsr)) smart_fill(&sm, botCore, gp, &gsr, kHeld);
 					}
 					if (tmEff != TOUCH_PANEL) tk = touch_update(tmEff, touching, tp.px, tp.py, gx, gy, gvalid, &sm);
-				}
-				{   // stereoscopic depth: TOP game overworld state + on-screen OAM rects (cores parked)
-					GbaCore* topCore = swapped ? emuB.core : emuA.core;
-					const GameProfile* tprof = profile_for(topCore);
-					GameState ts; depth3d.overworld = game_read(topCore, tprof, &ts) && ts.ctx == GCTX_OVERWORLD;
-					depth3d.textTop = ts.textBanner;   // map-name banner lives in the top band
-					depth3d.textBot = ts.textDlg;      // dialog textbox lives in the bottom band
-					depth3d.nspr = 0; depth3d.nui = 0; depth3d.nfg = 0; depth3d.maxd = 0.0f; depth3d.camX = depth3d.camY = 0; memset(depth3d.tdepth, 0, sizeof depth3d.tdepth);
-					depth3d.feetMin = depth3d.feetMax = depth3d.headMin = depth3d.headMax = 0.0f; depth3d.tallOk = depth3d.tallFail = 0; depth3d.orderOk = true;   // 3D disparity-detail (LOGGING ONLY)
-					if (topCore) bg0_scan(topCore, tprof, depth3d.overworld, &depth3d);   // text flags + gen-3 UI panel rects
-					if (depth3d.overworld && topCore) {
-						static const unsigned char SW[3][4] = {{8,16,32,64},{16,32,32,64},{8,8,16,32}};
-						static const unsigned char SH[3][4] = {{8,16,32,64},{8,8,16,32},{16,32,32,64}};
-						for (int i = 0; i < 128 && depth3d.nspr < DEPTH_MAX_SPR; i++) {
-							u16 a0 = gbacore_read16(topCore, 0x07000000 + i*8 + 0);
-							u16 a1 = gbacore_read16(topCore, 0x07000000 + i*8 + 2);
-							int aff = (a0 >> 8) & 1;
-							if (!aff && ((a0 >> 9) & 1)) continue;            // OBJ disabled
-							int shape = (a0 >> 14) & 3; if (shape == 3) continue;
-							int w = SW[shape][(a1 >> 14) & 3], h = SH[shape][(a1 >> 14) & 3];
-							if (aff && ((a0 >> 9) & 1)) { w *= 2; h *= 2; }   // double-size
-							if (w > 32 || h > 32) continue;                   // characters only (skip big effects/UI)
-							int y = a0 & 0xFF; if (y >= 160) y -= 256;
-							int x = a1 & 0x1FF; if (x >= 256) x -= 512;
-							if (x + w <= 0 || x >= GBA_W || y + h <= 0 || y >= GBA_H) continue;
-							depth3d.spr[depth3d.nspr].x = (short)x; depth3d.spr[depth3d.nspr].y = (short)y;
-							depth3d.spr[depth3d.nspr].w = (unsigned char)w; depth3d.spr[depth3d.nspr].h = (unsigned char)h;
-							depth3d.spr[depth3d.nspr].elev = 0xFF;   // 0xFF = unmatched -> floor_at fallback
-							depth3d.nspr++;
-						}
-						build_depth_grid(topCore, tprof, ts.px, ts.py, &depth3d);   // scenery depth (elevation priority planes)
-						// B/C: tag each on-screen sprite with its object-event elevation tier (previousElevation =
-						// what the engine uses for draw priority) so NPCs/the player pop with the tier they stand on.
-						if (tprof->mapObjects) {
-							short ogx[16], ogy[16]; unsigned char oel[16]; int nobj = 0;
-							for (int o = 0; o < 16; o++) {
-								uint32_t oe = tprof->mapObjects + 0x24u * (uint32_t)o;
-								if (!(gbacore_read32(topCore, oe) & 1u)) continue;                       // active:1
-								ogx[nobj] = (short)(int16_t)gbacore_read16(topCore, oe + 0x10);          // currentCoords.x (grid, +7)
-								ogy[nobj] = (short)(int16_t)gbacore_read16(topCore, oe + 0x12);          // currentCoords.y
-								oel[nobj] = (gbacore_read8(topCore, oe + 0x0B) >> 4) & 0x0F;             // previousElevation (high nibble)
-								nobj++;
-							}
-							for (int s = 0; s < depth3d.nspr; s++) {                                     // match each sprite by feet grid-tile
-								int col = (depth3d.spr[s].x + depth3d.spr[s].w / 2) / 16;
-								int row = (depth3d.spr[s].y + depth3d.spr[s].h - 1) / 16;
-								if (col < 0) col = 0; else if (col > 14) col = 14;
-								if (row < 0) row = 0; else if (row > 9) row = 9;
-								int ggx = ts.px + col, ggy = ts.py + row + 2;
-								int best = -1, bestd = 3;
-								for (int o = 0; o < nobj; o++) {
-									int dd = abs(ogx[o] - ggx) + abs(ogy[o] - ggy);
-									if (dd < bestd) { bestd = dd; best = o; }
-								}
-								if (best >= 0) depth3d.spr[s].elev = oel[best];
-							}
-						}
-						depth_disparity_stats(&depth3d);   // LOGGING ONLY: per-sprite feet/head disparity stats for the gs log
-					}
 				}
 				{   // ---- game-state instrumentation log (READ-ONLY; both games; edge-triggered) ----
 					// Records each game's screen/geo/3D timeline to SD. Same parked-window reads the touch+3D
@@ -3623,12 +2884,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					}
 #endif   // CTL_D4_ENABLE || CTL_D5_ENABLE (the shared per-frame control tick)
 					if (gsTopOk) {
-						GsDepth gd = { (uint8_t)depth3d.overworld, (uint8_t)depth3d.textTop, (uint8_t)depth3d.textBot,
-						               (short)depth3d.nspr, (short)depth3d.nui, (short)depth3d.nfg,
-						               depth3d.maxd, (short)depth3d.camX, (short)depth3d.camY };
-						gd.feetMin = depth3d.feetMin; gd.feetMax = depth3d.feetMax;            // per-sprite disparity detail (3D-effect proof)
-						gd.headMin = depth3d.headMin; gd.headMax = depth3d.headMax;
-						gd.tallOk = depth3d.tallOk; gd.tallFail = depth3d.tallFail; gd.orderOk = depth3d.orderOk ? 1 : 0;
+						// The 2D depth-pop that filled the depth/disparity columns was removed 2026-10-06
+						// (docs/REMOVED-3D-ATTEMPTS.md): they stay in the row layout, written 0.
+						GsDepth gd = { (uint8_t)(gst.ctx == GCTX_OVERWORLD), (uint8_t)gst.textBanner, (uint8_t)gst.textDlg };
 						gd.s3d = (osGet3DSliderState() > 0.03f && !menuOpen) ? 1 : 0;          // stereoscopic engaged this frame (read-only)
 						// phase 15 (A6.5.3): the TOP game's peer — the surface that actually fires
 						// in a same-console run, because the D3 CSV's peer columns only write during
@@ -3873,7 +3131,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 								if (c2->kind == PK_SEG)   segSet = ui_seg_hit(c2->x, c2->w, c2->nseg, (float)menuGest.x);
 								else if (c2->kind == PK_STEP) adj = (menuGest.x < c2->x + 24) ? -1 : (menuGest.x > c2->x + c2->w - 24 ? 1 : 0);
 								else if (c2->kind == PK_SWATCH) { int cc = (menuGest.x - c2->x) / 30; if (cc<0)cc=0; if (cc>4)cc=4;
-									g_prefs.padColor = cc; settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn); }
+									g_prefs.padColor = cc; settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, presenceOn); }
 								else activate = true;
 							}
 						}
@@ -3904,19 +3162,19 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 						case ACT_TRAVERSE: g_prefs.smartTraverse=cur; break;   // phase 22.2 (T4.1)
 						case ACT_VOXPITCH: g_prefs.voxPitch=cur; break; case ACT_VOXZOOM: g_prefs.voxZoom=cur; break;   // phase 32
 						default: g_prefs.padEdge=cur; break; }
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, presenceOn);
 					activate = false;
 				}
 				else if (pkind == PK_STEP && adj) {
 					int* v = (act == ACT_VOLA) ? &volA : &volB;
 					*v += adj * 32; if (*v < 0) *v = 0; else if (*v > 256) *v = 256;
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, presenceOn);
 					activate = false;
 				}
 				else if (activate && act == ACT_VOXEL) {   // phase 32 (SPEC-port 8.3)
 					g_prefs.voxel = !g_prefs.voxel;
 					voxStatusTimer = 180;                                    // the hint band shows vx_status for ~3 s (8.4)
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, presenceOn);
 					activate = false;
 				}
 				else if (activate && act == ACT_3D) {
@@ -3972,12 +3230,12 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 								presToastDone = true;  // and the session-start toast must not repeat it
 							}
 						}
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, presenceOn);
 					activate = false;
 				}
 				else if (activate && (act == ACT_PREVIEW_PAD || act == ACT_PREVIEW_SMART)) {
 					touchMode = (act == ACT_PREVIEW_PAD) ? TOUCH_PAD : TOUCH_SMART;
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, presenceOn);
 					menuOpen = false; activate = false;
 				}
 				// §0.2.2 — the harness's per-frame window into this screen (logging only).
@@ -4017,25 +3275,25 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					audioMode = (audioMode + 1) % 3;
 					snprintf(status, sizeof status, "Audio: %s", AUDIO_NAMES[audioMode]);
 					audio_reset_stream();                        // clean cut between modes
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, presenceOn);
 				}
 				else if (menuSel == 3) {                         // Touch mode (off / gamepad / smart)
 					touchMode = (touchMode + 1) % 3;
 					snprintf(status, sizeof status, "Touch: %s",
 					         (single && touchMode == TOUCH_SMART) ? "Panel" : TOUCH_NAMES[touchMode]);
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, presenceOn);
 				}
 				else if (menuSel == 4) {                         // Frameskip (unfocused game)
 					fsOn = !fsOn;
 					gbacore_set_frameskip(emuA.core, (fsOn && focused != 0) ? 2 : 0);
 					gbacore_set_frameskip(emuB.core, (fsOn && focused != 1) ? 2 : 0);
 					snprintf(status, sizeof status, "Frameskip %s", fsOn ? "on" : "off");
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, presenceOn);
 				}
 				else if (menuSel == 5) {                         // Toggle HUD
 					hudMode = (hudMode + 1) & 3;
 					snprintf(status, sizeof status, "HUD: %s", HUD_NAMES[hudMode]);
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, presenceOn);
 				}
 				else if (menuSel == 6 && single) {               // Swap: meaningless with one game
 					snprintf(status, sizeof status, "No swap in 1-game mode");
@@ -4044,7 +3302,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					swapped = !swapped; menuOpen = false;
 					snprintf(toast, sizeof toast, "Layout: %s", swapped ? "B top / A bottom" : "A top / B bottom");
 					toastTimer = 90;
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, presenceOn);
 				}
 				else if ((menuSel == 7 || menuSel == 8 || menuSel == 9) && (linkOn || netOn || wlOn)) {
 					snprintf(status, sizeof status, "Stop the link first");   // save/load/.sav would race a live core
@@ -4077,22 +3335,12 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 				else if (menuSel == MENU_DOF_IDX) {              // HD-2D tilt-shift DoF (top screen)
 					dofOn = !dofOn;
 					snprintf(status, sizeof status, "DoF %s", dofOn ? "on" : "off");
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, presenceOn);
 				}
 				else if (menuSel == MENU_BLOOM_IDX) {            // HD-2D LDR bloom (focused top)
 					bloomOn = !bloomOn;
 					snprintf(status, sizeof status, "Bloom %s", bloomOn ? "on" : "off");
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
-				}
-				else if (menuSel == MENU_LIGHT_IDX) {            // HD-2D time-of-day lighting
-					lightOn = !lightOn;
-					snprintf(status, sizeof status, "Light %s", lightOn ? "on" : "off");
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
-				}
-				else if (menuSel == MENU_VIVID_IDX) {            // bright+sharp "sign look" everywhere
-					vividOn = !vividOn;
-					snprintf(status, sizeof status, "Vivid %s", vividOn ? "on" : "off");
-					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn);
+					settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, presenceOn);
 				}
 				else if (menuSel == MENU_WIRELESS_IDX) {        // wireless multi-console lobby (M1) -> M3 link
 					if (wlOn) {                                  // already linked -> stop the wireless link
@@ -4241,8 +3489,8 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					snprintf(hudStat, sizeof hudStat, "N P%04X R%04X s%d o%d to%d ST%d V%u b%d",
 					         psp, prp, ns, no, nt, stallO, vblMax, paceBlk);
 			} else
-			snprintf(hudStat, sizeof hudStat, "%s %dfps %dms %02d:%02d %d/5 f%d d%.1f c%d,%d",
-			         linkOn ? "LINK" : AUDIO_NAMES[audioMode], fps, showMs, lt ? lt->tm_hour : 0, lt ? lt->tm_min : 0, batLvl, depth3d.nfg, depth3d.maxd, depth3d.camX, depth3d.camY);
+			snprintf(hudStat, sizeof hudStat, "%s %dfps %dms %02d:%02d %d/5",
+			         linkOn ? "LINK" : AUDIO_NAMES[audioMode], fps, showMs, lt ? lt->tm_hour : 0, lt ? lt->tm_min : 0, batLvl);
 			// FIX PASS. tHudTop/tHudBot are GONE: the two game names in the HUD bar were the last
 			// always-on-screen strings still drawn with the SYSTEM font, at scale 0.4. That is
 			// exactly the mechanism SPEC-crisp removed everywhere else (a stroke covering under
@@ -4307,7 +3555,6 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		// top screen (sharp-bilinear two-pass when applicable). render_game leaves `top` bound.
 		float slider3d = osGet3DSliderState();
 		bool s3dOn = slider3d > 0.03f && !menuOpen && s3dEnabled;   // 3D engaged AND not in the menu; else plain 2D (gates every 3D effect)
-		bool pop3d = s3dOn && depth3d.overworld && topG->core;
 
 		// ---- phase 15 slice M1: co-op presence SOLVE (SPEC-data D6.2) ----
 		// One call per GAME, in the render phase, exactly as D6.1 splits the
@@ -4506,45 +3753,14 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			}
 		}
 
-		bool popPass = pop3d && !voxDraw;
-		bool uipop = s3dOn && depth3d.nui > 0 && topG->core && !voxDraw;   // BG0 panels pop in ANY context
-		// Text-aware DoF: kill a band's blur the moment text/UI shows under it (BG0 scan + RAM
-		// signals), ease back in afterwards (fast-out ~3 frames, slow-in ~12 -> no flicker).
-		dofLvlTop += (depth3d.overworld && !depth3d.textTop) ? 0.08f : -0.34f;
-		dofLvlBot += (depth3d.overworld && !depth3d.textBot) ? 0.08f : -0.34f;
-		if (dofLvlTop > 1.0f) dofLvlTop = 1.0f; else if (dofLvlTop < 0.0f) dofLvlTop = 0.0f;
-		if (dofLvlBot > 1.0f) dofLvlBot = 1.0f; else if (dofLvlBot < 0.0f) dofLvlBot = 0.0f;
-		bloomLvl += (depth3d.overworld && !depth3d.textTop && !depth3d.textBot) ? 0.08f : -0.34f;
-		if (bloomLvl > 1.0f) bloomLvl = 1.0f; else if (bloomLvl < 0.0f) bloomLvl = 0.0f;
-		bool dofPass = s3dOn && !vividOn && dofOn && dofTgtA && depth3d.overworld && topG->core && (dofLvlTop > 0.01f || dofLvlBot > 0.01f) && !voxDraw;
-		bool bloomPass = s3dOn && !vividOn && bloomOn && bloomTgt && dofTgtA && depth3d.overworld && topG->core
-		              && focScreen == 0 && bloomLvl > 0.01f && !voxDraw;   // focused top only (study budget rule)
-		bool litPass = s3dOn && !vividOn && lightOn && depth3d.overworld && topG->core && !voxDraw;   // time-of-day grade
-		LightEnv lenv; if (litPass) { time_t _tt = time(NULL); struct tm* _lt = localtime(&_tt);
-			lenv = light_for_hour(_lt ? _lt->tm_hour + _lt->tm_min / 60.0f : 12.0f); }
-		if (dofPass || bloomPass) dof_prepare(&topG->tex, dofTgtA);   // shared half-res copy (DoF + bloom source)
-		if (bloomPass) bloom_bright(&dofTexA, bloomTgt);              // bright-pass glow map, shared by both eyes
-		bool sharpTop = !smooth[0] && scaleMode[0] != SCALE_1X && preTgt;     // matches render_game's two-pass choice
-		u32 topMod = (focScreen == 0) ? 0xFFFFFFFFu : C2D_Color32(0x80, 0x80, 0x80, 0xFF);   // grid analog of dimTint
 		if (voxDraw) {   // phase 32: the voxel world fills the whole 400x240; BG0 (text, menus) is laid over it
 			vx_host_draw_world(top, s3dOn ? -slider3d : 0.0f, dofOn, bloomOn);   // left eye (citro3d convention: left = -iod); mono when 3D is off
 			vx_overlay_quad(top, scaleMode[0], smooth[0]);
 		} else if (render_game_gate(topG, top, clrBg))
 			render_game(topG, top, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], topTint, clrBg);
-		if (popPass) {   // M2: continuous grid warp (stretch, no tile tears); quad-warp fallback if no shader
-			if (warpOk) warp_grid_eye(top, topG, &depth3d, scaleMode[0], +slider3d, sharpTop, &preTex, topMod, 0);
-			else        warp_scenery_eye(top, topG, &depth3d, scaleMode[0], +slider3d);
-			pop_eye(top, topG, &depth3d, scaleMode[0], +slider3d);   // LEFT eye shifts RIGHT -> pops OUT (ramp+char per sprite)
-		}
 		if (topG->loadFailed) draw_load_error(txtBuf, 400.0f);   // review finding 4
-		if (dofPass) dof_bands(top, &dofTexA, scaleMode[0], dofLvlTop, dofLvlBot, warpOk ? +slider3d : 0.0f);   // bands OVER the pops
-		if (bloomPass) bloom_add(top, &bloomTex, scaleMode[0], bloomLvl, 0);   // additive glow, over the blur
-		if (uipop) ui_pop_eye(top, topG, &depth3d, scaleMode[0], +UIPOP3D_PX * slider3d, sharpTop, &preTex);   // UI panels pop hardest
-		// Phase 15 slice M2 (SPEC-avatar A2.1): the co-op avatar goes AFTER the pop/DoF/bloom/UI
-		// passes — each of them re-draws sub-rects of the GAME texture over the frame, so anything
-		// drawn earlier is overpainted by background pixels — and BEFORE light_pass, which is a
-		// MULTIPLY grade over the whole frame box: the avatar is world content and must take the
-		// time-of-day grade with the map it stands on, or a bright peer floats over a dusk route.
+		// Phase 15 slice M2 (SPEC-avatar A2.1): the co-op avatar goes after the game image. (The
+		// 2D depth-pop/DoF/bloom/light passes it once had to sit between were removed 2026-10-06.)
 		// PHASE 20 / SPEC S5.4 — THE `^ 1`, written once. The record in presSt[g] was PUBLISHED BY
 		// game g ^ 1, so the live cell for the peer drawn on this screen is s_psprCell[g ^ 1]. Get
 		// this backwards and each screen shows its OWN trainer standing next to itself, which looks
@@ -4553,11 +3769,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 		presence_draw_screen(top, &presOut[presTopGame], &presSt[presTopGame].rec[0], &presPose[presTopGame],
 		                     1, scaleMode[0], 400.0f, 240.0f, topTint, &presCh[0],
 		                     &s_psprCell[presTopGame ^ 1]);
-		if (litPass) light_pass(top, &depth3d, scaleMode[0], &lenv);   // lit LAST -> tints the UI panels too (sign is not a bright patch)
 		if (!menuOpen) {
 			// Slice M3 / A5.4.2: the Card, over the game image and UNDER the HUD bar drawn just
-			// below, as a !menuOpen overlay. AFTER light_pass on purpose — unlike the nameplate it
-			// is a UI panel, not world content, so it must not take the time-of-day grade. The
+			// below, as a !menuOpen overlay. The
 			// hudMode suppression (A5.4.4) is inside the FSM, so `open` is already false there and
 			// this needs no second condition that could disagree with it.
 			if (presCard[presTopGame].open) presence_draw_card(txtBuf, &presCardTx[presTopGame], 400.0f);
@@ -4743,34 +3957,25 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 			if (toastTimer > 0)
 				assets_text(txtBuf, TXT_BODY, toast, 8.0f, (hudMode & 1) ? 20.0f : 8.0f, clrHi);
 		} else {
-			draw_paused_summary(txtBuf, topName, botName, s3dEnabled, dofOn, bloomOn, lightOn, vividOn, touchMode, linkOn, netOn, wlOn, presenceOn);
+			draw_paused_summary(txtBuf, topName, botName, s3dEnabled, dofOn, bloomOn, touchMode, linkOn, netOn, wlOn, presenceOn);
 		}
 
-		// top RIGHT eye = the SAME (top) game -> single-game stereoscopic depth. Player pops forward
-		// (positive disparity). (Per-eye dual-game retired; can return later as a menu toggle.)
+		// top RIGHT eye = the SAME (top) game -> the 2D frame, or the voxel world's second eye.
+		// (The 2D path is identical in both eyes since the depth-pop removal, 2026-10-06; only the voxel world has stereo.)
 		if (voxDraw) {   // phase 32: the right-eye world (off-axis, zero parallax at the player); skipped when the 3D slider is down
 			if (slider3d > 0.03f) { vx_host_draw_world(topR, s3dOn ? +slider3d : 0.0f, dofOn, bloomOn); vx_overlay_quad(topR, scaleMode[0], smooth[0]); }
 		} else if (render_game_gate(topG, topR, clrBg))
 			render_game(topG, topR, preTgt, &preTex, 400.0f, 240.0f, scaleMode[0], smooth[0], NULL, clrBg);
-		if (popPass) {
-			if (warpOk) warp_grid_eye(topR, topG, &depth3d, scaleMode[0], -slider3d, sharpTop, &preTex, 0xFFFFFFFFu, 1);
-			else        warp_scenery_eye(topR, topG, &depth3d, scaleMode[0], -slider3d);
-			pop_eye(topR, topG, &depth3d, scaleMode[0], -slider3d);   // RIGHT eye shifts LEFT
-		}
 		if (topG->loadFailed) draw_load_error(txtBuf, 400.0f);   // review finding 4 (right eye)
-		if (dofPass) dof_bands(topR, &dofTexA, scaleMode[0], dofLvlTop, dofLvlBot, warpOk ? -slider3d : 0.0f);
-		if (bloomPass) bloom_add(topR, &bloomTex, scaleMode[0], bloomLvl, 1);
-		if (uipop) ui_pop_eye(topR, topG, &depth3d, scaleMode[0], -UIPOP3D_PX * slider3d, sharpTop, &preTex);
 		// A2.8: the right eye draws the avatar at the IDENTICAL frame-space position (zero
 		// disparity), and A2.6.2: with the identical NULL tint the left eye's `topTint` becomes at
-		// this call site. Both eyes therefore agree pixel for pixel except for the game image's own
-		// per-eye pops, which is what "the avatar sits on the screen plane" means.
+		// this call site. Both eyes therefore agree pixel for pixel, which is what "the avatar sits
+		// on the screen plane" means.
 		if (!voxDraw)
 		presence_draw_screen(topR, &presOut[presTopGame], &presSt[presTopGame].rec[0], &presPose[presTopGame],
 		                     1, scaleMode[0], 400.0f, 240.0f, NULL, &presCh[0],
 		                     &s_psprCell[presTopGame ^ 1]);   // same cell, both eyes (A2.8)
-		if (litPass) light_pass(topR, &depth3d, scaleMode[0], &lenv);
-		if (menuOpen) draw_paused_summary(txtBuf, topName, botName, s3dEnabled, dofOn, bloomOn, lightOn, vividOn, touchMode, linkOn, netOn, wlOn, presenceOn);
+		if (menuOpen) draw_paused_summary(txtBuf, topName, botName, s3dEnabled, dofOn, bloomOn, touchMode, linkOn, netOn, wlOn, presenceOn);
 
 		if (holdSwap) emuA.tex = liveTexA;   // the bottom draws the LIVE frame
 
@@ -4904,7 +4109,7 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					int on = 0;
 					switch (c->act) { case ACT_SWAP: on=swapped; break; case ACT_FS: on=fsOn; break; case ACT_MUTE: on=muted; break;
 						case ACT_3D: on=s3dEnabled; break; case ACT_DOF: on=dofOn; break; case ACT_BLOOM: on=bloomOn; break;
-						case ACT_LIGHT: on=lightOn; break; case ACT_VIVID: on=vividOn; break; case ACT_LINK: on=linkOn; break;
+						case ACT_LINK: on=linkOn; break;
 						case ACT_NETLINK: on=netOn; break; case ACT_PRESENCE: on=presenceOn; break;
 						case ACT_VOXEL: on=g_prefs.voxel; break; }   // A6.2 site 2; phase 32
 					assets_toggle(on, x, y);
@@ -5053,8 +4258,6 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	teardown_core(&emuB);
 	gbalink_destroy(link);
 	if (preTgt) { C3D_RenderTargetDelete(preTgt); C3D_TexDelete(&preTex); }
-	if (dofTgtA) { C3D_RenderTargetDelete(dofTgtA); C3D_TexDelete(&dofTexA); }
-	if (bloomTgt) { C3D_RenderTargetDelete(bloomTgt); C3D_TexDelete(&bloomTex); }
 	g_quit = false;
 	gfxSet3D(false);   // back to flat for the ROM picker / splash between sessions
 	return result;
@@ -5092,7 +4295,7 @@ static u64 busy_ticks(void) {
 static void run_settings(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextBuf txtBuf) {
 	int scaleMode[2] = { SCALE_FIT, SCALE_FIT }; bool smooth[2] = { false, false };
 	bool swapped = false; int hudMode = 3, audioMode = AUD_SOLO, volA = 256, volB = 256, touchMode = TOUCH_OFF;
-	bool fsOn = false, dofOn = true, bloomOn = true, lightOn = true, vividOn = false, muted = false, s3dEnabled = true;
+	bool fsOn = false, dofOn = true, bloomOn = true, muted = false, s3dEnabled = true;
 	// Phase 15 / A6.2 sites 3+4 — and PHASE 18 / SPEC-coop P2.3, which is "the day the tab list
 	// grows". The CO-OP row lives on the pause menu's LINK tab, and until now this pre-game screen
 	// exposed only Display/Audio/Enhance/Touch, so a user who had never started a session could not
@@ -5101,8 +4304,8 @@ static void run_settings(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextB
 	// screen offering "Save state" would be a worse defect than the one being fixed).
 	bool presenceOn = false;
 	int focused = 0;
-	settings_load(scaleMode, smooth, &swapped, &hudMode, &audioMode, &volA, &volB, &touchMode, &fsOn, &dofOn, &bloomOn, &lightOn, &vividOn, &presenceOn);
-	#define SETSAVE() settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, lightOn, vividOn, presenceOn)
+	settings_load(scaleMode, smooth, &swapped, &hudMode, &audioMode, &volA, &volB, &touchMode, &fsOn, &dofOn, &bloomOn, &presenceOn);
+	#define SETSAVE() settings_save(scaleMode, smooth, swapped, hudMode, audioMode, volA, volB, touchMode, fsOn, dofOn, bloomOn, presenceOn)
 	// P2.3.1: Display, Audio, Enhance, LINK, Touch (indices into PTABS/PT_PLATE). Kept in the
 	// pause menu's own tab order so a user who learns one screen knows the other.
 	static const int TABS[SET_TABS] = { 1, 2, 3, 4, 5 };
@@ -5200,7 +4403,6 @@ static void run_settings(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextB
 			switch (act) {
 			case ACT_SWAP: swapped=!swapped; break; case ACT_FS: fsOn=!fsOn; break; case ACT_MUTE: muted=!muted; break;
 			case ACT_3D: s3dEnabled=!s3dEnabled; break; case ACT_DOF: dofOn=!dofOn; break; case ACT_BLOOM: bloomOn=!bloomOn; break;
-			case ACT_LIGHT: lightOn=!lightOn; break; case ACT_VIVID: vividOn=!vividOn; break;
 			case ACT_PRESENCE: presenceOn=!presenceOn; break;   // A6.2 site 3 (see the note below)
 			case ACT_VOXEL: g_prefs.voxel=!g_prefs.voxel; break;   // phase 32
 			case ACT_PREVIEW_PAD: touchMode=TOUCH_PAD; break; case ACT_PREVIEW_SMART: touchMode=TOUCH_SMART; break;
@@ -5233,8 +4435,8 @@ static void run_settings(C3D_RenderTarget* top, C3D_RenderTarget* bot, C2D_TextB
 			if (c->ov) menu_ov_label(txtBuf, c->ov, c->ovs, y, h);
 			switch (c->kind) {
 			case PK_TOG: { int on=0; switch(c->act){case ACT_SWAP:on=swapped;break;case ACT_FS:on=fsOn;break;case ACT_MUTE:on=muted;break;
-				case ACT_3D:on=s3dEnabled;break;case ACT_DOF:on=dofOn;break;case ACT_BLOOM:on=bloomOn;break;case ACT_LIGHT:on=lightOn;break;
-				case ACT_VIVID:on=vividOn;break;case ACT_PRESENCE:on=presenceOn;break;case ACT_VOXEL:on=g_prefs.voxel;break;}   // A6.2 site 4; phase 32
+				case ACT_3D:on=s3dEnabled;break;case ACT_DOF:on=dofOn;break;case ACT_BLOOM:on=bloomOn;break;
+				case ACT_PRESENCE:on=presenceOn;break;case ACT_VOXEL:on=g_prefs.voxel;break;}   // A6.2 site 4; phase 32
 				assets_toggle(on,x,y); if(sel) sel_ring(x,y,w,h,h*0.5f,2.0f); break; }
 			case PK_SEG: { static const char* const A[3]={"1:1","Aspect-fit","Stretch"};static const char* const F[2]={"Sharp","Smooth"};
 				static const char* const H[4]={"off","top","bottom","both"};static const char* const M[3]={"Solo","Mixed","Split"};
@@ -5382,7 +4584,6 @@ int main(int argc, char** argv) {
 	C2D_Prepare();
 	assets_init();   // device-native art pack (plates/widgets/fonts); code-drawn fallback if absent
 	assets_dbg_publish_scales();   // phase 18: expose the live texel scale per role to `gdbio read`
-	warp_grid_init();   // M2 grid-warp shader (falls back to the quad warp if it fails)
 	// (phase 15's co-op avatar sheet is deliberately NOT built here — presence_art_ensure() is
 	//  called from run_session when the stored pref is on, and from the pause-menu row the moment it
 	//  is turned on. FIX PASS finding 10: the pref ships default-OFF and the sheet is a permanent
@@ -5405,8 +4606,8 @@ int main(int argc, char** argv) {
 		// The full read happens again in run_session; this one only wants the g_prefs side effects.
 		int sm[2] = { 0, 0 }; bool sm2[2] = { false, false }; bool sw = false;
 		int hm = 3, am = 0, va = 256, vb = 256, tm = 0;
-		bool f1 = false, f2 = true, f3 = true, f4 = true, f5 = false, f6 = false;   // f6 = presence
-		settings_load(sm, sm2, &sw, &hm, &am, &va, &vb, &tm, &f1, &f2, &f3, &f4, &f5, &f6);
+		bool f1 = false, f2 = true, f3 = true, f6 = false;   // f6 = presence
+		settings_load(sm, sm2, &sw, &hm, &am, &va, &vb, &tm, &f1, &f2, &f3, &f6);
 	}
 	run_splash(top, bot, txtBuf, perfWarn);   // animated boot splash (skippable) + perf warning
 
@@ -5433,7 +4634,6 @@ int main(int argc, char** argv) {
 	if (s_hasPtm) ptmuExit();
 	C2D_TextBufDelete(txtBuf);
 	presence_art_fini();
-	warp_grid_fini();
 	C2D_Fini();
 	C3D_Fini();
 	gfxExit();
