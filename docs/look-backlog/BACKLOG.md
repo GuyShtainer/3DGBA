@@ -61,3 +61,7 @@ no code from it (licence unknown; the original repo was taken down, a fork exist
 | C4 | First person (experimental) | Flat sprite cards seen edge-on, tile-step movement from the GBA game, longer draw distance against the New-3DS frame budget (Azahar shows ~21-25 fps today). Prototype only, after hardware frame-time numbers exist. | large, risky |
 
 Order: after L1-L4. Each step is checked in Azahar, then on hardware (frame time).
+
+L1 lead check (2026-10-06, after merge 7c9beec): FireRed Viridian, warp-save copy `roms/firered-viridian2.sav` (3/1 at
+21,17): the round bushes (0x005) along the fence west of the Pokémon Center path stand as rounded cards
+(`evidence/l1-fr-viridian-after.png`). Still flat there: fences, hedges, and the Viridian houses (town slice K3).
