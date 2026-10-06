@@ -91,3 +91,13 @@ in the touched files.
 ### Not done here (the lead owns it)
 - The Azahar Littleroot pixel-diff after merge (Azahar was not run).
 - `make cia` was not run.
+
+## 2026-10-06 — R0 merged into main (26d8bb1), lead verification
+
+- Azahar, New-3DS mode, emerald-littleroot save warp, voxel on. Capture before the merge (main at 7b311c8) and after
+  it. The pixel difference sits only on the two wandering NPCs and their shadows, the sparkle particles and the fps
+  digits. Buildings, terrain, signposts and the player are identical. **PASS** (R0 renderer gate).
+- After the merge: `make -C tools/romgen test` + `vtest` give 27 suites, 0 failures. Device `make -j8` links, both
+  with `ROMGEN_DEV_HOOK=1` and without (this also covers S3.6's skipped hook compile). Release `.cia` rebuilt.
+- Xcode license gotcha: once Xcode updated, /usr/bin/git and clang refuse to run until `sudo xcodebuild -license
+  accept`. The workaround is `export DEVELOPER_DIR=/Library/Developer/CommandLineTools`.
