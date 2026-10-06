@@ -51,6 +51,7 @@ static u32 dim_color(u32 c, float f);   // fwd (defined near run_splash)
 #include "warp_shbin.h"   // M2 grid-warp vertex shader (generated from source/warp.v.pica)
 #include "tilt_shbin.h"   // phase 14 tilt vertex shader (generated from source/tilt.v.pica)
 #include "vx_host.h"      // phase 32 voxel overworld glue (SPEC-port 5)
+#include "romgen_dev.h" // PHASE 33 S2.8: dev-only romgen device hook (compiled out unless ROMGEN_DEV_HOOK=1)
 
 #define WORKER_STACKSIZE (512 * 1024)   // mGBA runFrame has deep call chains; 32KB overflows
 #define FRAME_TICKS      4481520ULL    // SYSCLOCK_ARM11 / (16756991/280095) -> 59.826 fps real-time cap
@@ -3928,6 +3929,20 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 					// Output = a key mask ORed into the assembly below (the emulated keypad).
 					// The outer gate is the OR of the two bisect gates so either slice can be
 					// compiled out alone (review fix 2026-08-03).
+#if ROMGEN_DEV_HOOK
+					if (s_ctlOn) {   // S2.8 dev hook: runtime opt-in = the control dir + a dropped romgen_go.txt
+						const EmuInstance* rgE[2] = { &emuA, &emuB };
+						const uint8_t* rgRom = NULL;
+						size_t rgSz = 0;
+						for (int rg = 0; rg < 2 && !rgRom; rg++) {
+							char rgCode[5] = "----";
+							if (!rgE[rg]->core) continue;
+							gbacore_game_code(rgE[rg]->core, rgCode);
+							if (memcmp(rgCode, "BPEE", 4) == 0) rgRom = (const uint8_t*)gbacore_mem_block(rgE[rg]->core, 8, &rgSz);
+						}
+						romgen_dev_poll(rgRom, rgSz);   // the worker only READS mGBA's ROM buffer; see romgen_dev.h
+					}
+#endif
 					if (s_ctlOn) {
 						const GameState* gsFor[2] = { swapped ? &gsb : &gst, swapped ? &gst : &gsb };
 						GbaCore*         coFor[2] = { emuA.core, emuB.core };
@@ -5549,6 +5564,9 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 	LightEvent_Signal(&emuB.go);
 	if (emuA.thread) { threadJoin(emuA.thread, U64_MAX); threadFree(emuA.thread); }
 	if (emuB.thread) { threadJoin(emuB.thread, U64_MAX); threadFree(emuB.thread); }
+#if ROMGEN_DEV_HOOK
+	romgen_dev_stop();   // join the romgen worker BEFORE teardown_core frees the ROM image it reads
+#endif
 	audio_thread_stop();   // workers joined -> nothing pumps the rings; safe to stop audio + free them
 	if (linkOn) { gbacore_link_detach(emuA.core); gbacore_link_detach(emuB.core); }
 	if (netOn)  { gbacore_net_detach(emuA.core);  gbacore_net_detach(emuB.core);  }

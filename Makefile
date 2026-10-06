@@ -72,6 +72,10 @@ MGBA_LDLIBS  := -Wl,--start-group -lmgba -lzlibstatic -llibpng16_static -Wl,--en
 
 CFLAGS	+=	$(MGBA_DEFS) $(MGBA_INC)
 
+# DEV-ONLY romgen device test hook (source/romgen_dev.h). Default 0 = not compiled in. `make ROMGEN_DEV_HOOK=1`.
+ROMGEN_DEV_HOOK ?= 0
+CFLAGS	+=	-DROMGEN_DEV_HOOK=$(ROMGEN_DEV_HOOK)
+
 CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions -std=gnu++11
 
 ASFLAGS	:=	-g $(ARCH)

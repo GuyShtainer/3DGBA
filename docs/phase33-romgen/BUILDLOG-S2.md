@@ -229,3 +229,31 @@ guard is area <= 512x512 (gen:1216-1218, rg_buildings.c). Page 3 is 1024x256, so
 512*512. (2) The CLI default now includes buildings (`--only` restricts). (3) A model gate failure does not fail `rg_run`.
 Open: device memory and load time for the 7.9 MB file and the on-device `rg_run` time (S2.8, hardware); `--dump-model`/`--time`
 polish is S2.8.
+
+## 2026-10-06 S2.8 CLI, timing, device hook
+
+Status: host side DONE and measured; device hook BUILT (links with the switch at 1) but NOT yet run on hardware. S2.8 is not closed until Guy runs it on the New 3DS (steps below).
+
+**CLI** (`tools/romgen/romgen_cli.c`): `--only buildings` confirmed (restricts output to buildings.bin). New `--dump-model NAME`: opens the world, builds all 286 models, prints one model's kind/layout/cells/art size, part (tag) count and names, triangle count, the gate result (ortho wrong/missing/extra + density) and its placements (layout, cell, ground, odd cells); writes nothing, exits 1 for an unknown name. Sample: `model devon_corporation: kind direct, layout 4, 10x9 cells, art 160x144 px / parts 32, triangles 870 / gate: ortho wrong 0 missing 0 extra 0, density 0 -> pass / placements: 1`. `--time` already printed every phase (world, roles, signs, serialise, buildings models/gates/placements+write); unchanged.
+
+**Peak memory**: `make -C tools/romgen mem` builds `build/romgen_mem` with a counting allocator (`tools/romgen/rg_memcount.{h,c}`, force-included with `-include`, 16-byte size header per block, peak reported relative to a baseline taken just before `rg_run`, so the 16 MB ROM buffer is excluded). The normal CLI and the device build contain none of it (zero cost off). The mem build's three output files are byte-identical to the normal build's (`cmp`).
+
+**Host timing** (PC clang -O2, ROM emerald.gba, one run, noisy +-10%): total ~195-230 ms = world 1.2, roles 22, signs 1, serialise 0.1, buildings models 84-86, gates 8-9, placements+write 70-104. 62,806 allocations.
+
+**Peak heap, host (64-bit pointers): 43.98 MB** (46,119,543 B) over rg_run; 22.3 MB by the end of build_models (~+114 ms), the rest (to 44.0 MB) is reached inside the placements + write phase (+194 ms). 8,255,411 B stay live at the end = the three outputs (no leak). On ARM32 pointers are half the size, so expect somewhat less, but the art buffers dominate, so assume 35-44 MB.
+
+**Memory-budget verdict vs SPEC-S2 6.2: FLAG.** 6.2 assumed model art kept cropped as RGBA5551 (1-2 MB) and doubles freed after conversion; the real port keeps all 286 models' RGBA8 art and double meshes alive until the write, so the peak is ~44 MB, not a few MB. Whether the 3DS app heap can give that is UNKNOWN until measured: the app has 2 mGBA cores plus two 16 MB ROM images plus linear buffers inside APP_SYSTEM_MODE 64MB / EXT 124MB, and libctru splits the app memory between heap and linear. The device hook writes `envGetHeapSize`, `linearSpaceFree` and the newlib arena delta to the timings file; if rg_run returns "out of memory" the run is over budget. Retreat options if it fails (not done, out of scope): crop-and-free model art after gates/placements as 6.2 specified (the biggest lever; models phase alone reaches 22 MB), run the writer's size pass only, or the PHASE.md PC fallback.
+
+**Device hook** (`source/romgen_dev.{h,c}`, platform glue outside `source/romgen/`):
+- Compile gate: `ROMGEN_DEV_HOOK`, default 0 (header default + Makefile knob `ROMGEN_DEV_HOOK ?= 0`, enabled with `make ROMGEN_DEV_HOOK=1`). With 0 the .c compiles to nothing and main.c's two `#if` blocks vanish.
+- Runtime opt-in: only when the control dir `sdmc:/cias/control` exists (`s_ctlOn`, the existing convention) AND the file `sdmc:/cias/control/romgen_go.txt` appears (stat every 120 polls, ~2 s); consumed (removed) on pickup.
+- Where: poll runs in the per-frame control block in main.c (render thread, only a stat); the generator runs on its own worker thread (128 KB stack, core 1, priority main+3, i.e. below the emulator workers), never touches the GPU.
+- ROM safety: uses mGBA's ROM buffer via `gbacore_mem_block(core, 8)` of whichever core reports game code BPEE; never copied, only read. mGBA never writes its ROM buffer, so concurrent reads by the cores are safe; lifetime is guarded by `romgen_dev_stop()` (cancel flag into `rg_run` + thread join) called in the session teardown after the emulator workers are joined and BEFORE `teardown_core`.
+- Output: `regions.bin`, `signposts.bin`, `buildings.bin`, `romgen_timings.txt` in `sdmc:/3ds/3DGBA/voxel/` (where vx_data reads; S4 settles the path), each written to `.tmp` then renamed. The timings file is first written as "STARTED" so a crash is visible. Contains result, per-phase ms, byte sizes, counts, gate failures, heap arena before/after, heap size, linear free.
+- Not tested in Azahar.
+
+**Release build unaffected (proven)**: `make` with the switch at 0 gives a `3DGBA.3dsx` with md5 c7b497ea2e1ff251b11a8f84cbd15850, identical to the md5 of a build of the unmodified tree (HEAD ba94b06 plus the CLI commit; main.c and Makefile checked out clean). With the switch at 1 it links (3DGBA.3dsx 4,789,080 B vs 4,582,344 B off).
+
+**Suites** (ASan+UBSan, ROMGEN_ROM=roms/emerald.gba): art 33149, bimg 10481, buildings 4400, expand 1512, export 580568, geom 585, interior 851, regions 474, roles 656013, signs 1751, world 612 checks, all 0 failures.
+
+**Hardware steps for Guy**: (1) `make clean && make ROMGEN_DEV_HOOK=1 cia` (or 3dsx), install/launch on the New 3DS; (2) Make sure `sdmc:/cias/control/` exists and load an Emerald (BPEE) ROM in either slot; (3) create the file `sdmc:/cias/control/romgen_go.txt` (any content) and wait; (4) when `sdmc:/3ds/3DGBA/voxel/romgen_timings.txt` no longer says STARTED, read it: result OK, ms per phase, heap numbers; (5) copy the voxel dir back and `cmp` buildings.bin against the host's (H3 device-vs-host parity); (6) check Littleroot shows two modelled houses with voxel on; (7) rebuild with the default (switch 0) afterwards. If the file still says STARTED after ~60 s the run is slow or the app died; if it says out of memory, the heap budget above is exceeded.
