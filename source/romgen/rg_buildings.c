@@ -5,6 +5,7 @@
  * Portions Copyright (c) Dust Zallax, MIT. */
 #include "rg_buildings.h"
 #include "rg_bexpand.h"
+#include "rg_binterior.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -59,7 +60,7 @@ void rg_model_release(RgBuildModel *m)
     rg_mesh_free(&m->mesh);
     free(m->owned); free(m->own); free(m->xSpec);
     free(m->south); free(m->north); free(m->east); free(m->west);
-    free(m->repeat); free(m->at); free(m->quads);
+    free(m->repeat); free(m->at); free(m->quads); free(m->reused); free(m->bareAt);
     memset(m, 0, sizeof(*m));
 }
 
@@ -67,6 +68,7 @@ void rg_models_free(RgBuildModels *ms)
 {
     unsigned i;
 
+    rg_interior_free(ms);
     for (i = 0; i < ms->n; i++)
         rg_model_release(&ms->m[i]);
     free(ms->m);
@@ -103,6 +105,7 @@ RgErr rg_build_models(const RgWorld *w, const RgSpec *specs, unsigned nSpecs, Rg
 
     memset(out, 0, sizeof(*out));
     pc.w = w; pc.p = NULL; pc.idx = -1;
+    err = rg_interior_prepare(out, w, specs, nSpecs);
     /* phase 1 (gen:877-887): every spec expanded, in table order */
     for (i = 0; i < nSpecs && err == RG_OK; i++) {
         const RgSpec *s = &specs[i];
@@ -143,17 +146,21 @@ RgErr rg_build_models(const RgWorld *w, const RgSpec *specs, unsigned nSpecs, Rg
             rg_mesh_init(&m->mesh);
             break;
         }
-        default:                                       /* interior: S2.6 */
-            err = RG_ERR_BUILDINGS;
+        default:
+            err = rg_expand_interior(w, s, out);
             break;
         }
     }
+    if (err == RG_OK)
+        err = rg_interior_finish(w, out);              /* reuse_everywhere, then the bare twins */
     /* phase 2 (gen:888-939): art and mesh of each model */
     for (i = 0; i < out->n && err == RG_OK; i++) {
         RgBuildModel *m = &out->m[i];
         const RgSpec *s = m->spec;
         RgPair *pair;
 
+        if (m->built)
+            continue;                                  /* an interior piece, finished by its expander */
         if (m->prop != NULL) {
             err = rg_build_prop(m);
             continue;
@@ -193,11 +200,33 @@ RgErr rg_build_models(const RgWorld *w, const RgSpec *specs, unsigned nSpecs, Rg
 bool rg_model_gate(const RgBuildModel *m, RgOrthoResult *ortho, unsigned *densityBad)
 {
     const RgSpec *s = m->spec;
+    RgImage judged;
+    bool ok;
 
-    if (!rg_ortho_check(&m->mesh, &m->art, s->exact, s->nExact, m->hasDrawing ? &m->drawing : NULL, ortho))
+    if (m->own == NULL) {
+        if (!rg_ortho_check(&m->mesh, &m->art, s->exact, s->nExact, m->hasDrawing ? &m->drawing : NULL, ortho))
+            return false;
+        *densityBad = rg_density_check(&m->mesh, &m->art, NULL, 0);
+        return true;
+    }
+    /* a bare twin is judged against its own pixels alone (gen:1503): the rest of the w*16 x h*16 drawing is its
+     * room's floor, which the twin does not carry */
+    if (!rg_img_new(&judged, m->art.w, m->art.h))
         return false;
-    *densityBad = rg_density_check(&m->mesh, &m->art, NULL, 0);
-    return true;
+    memcpy(judged.px, m->art.px, (size_t)m->art.w * (size_t)m->art.h * 4u);
+    {
+        int u, v, pw = m->w * 16, ph = m->h * 16;
+
+        for (v = 0; v < ph; v++)
+            for (u = 0; u < pw; u++)
+                if (!m->own[(size_t)v * (size_t)pw + (size_t)u])
+                    memset(judged.px + ((size_t)v * (size_t)judged.w + (size_t)u) * 4u, 0, 4);
+    }
+    ok = rg_ortho_check(&m->mesh, &judged, s->exact, s->nExact, NULL, ortho);
+    if (ok)
+        *densityBad = rg_density_check(&m->mesh, &judged, NULL, 0);
+    rg_img_free(&judged);
+    return ok;
 }
 
 /* ---- cell heights and footprints ----------------------------------------------------------- */
@@ -545,6 +574,124 @@ static RgErr try_place(const RgWorld *w, const FindPlan *fp, PairCache *pc, cons
     return RG_OK;
 }
 
+
+/* ---- interior pieces (gen:1141-1188, S2.6) ----------------------------------------------------------- */
+
+static bool same_ids(const RgLayout *a, const RgLayout *b)
+{
+    size_t i, n = (size_t)a->w * a->h;
+
+    if (a->w != b->w || a->h != b->h)
+        return false;
+    for (i = 0; i < n; i++)
+        if ((rg_rd16(a->blocks + 2u * i) & 0x3FFu) != (rg_rd16(b->blocks + 2u * i) & 0x3FFu))
+            return false;
+    return true;
+}
+
+static RgErr push_interior(RgPlacementList *out, const RgLayout *E, int px, int py, uint16_t ground, bool all,
+                           unsigned cw, unsigned ch)
+{
+    RgPlacement pl;
+    unsigned i, j;
+
+    memset(&pl, 0, sizeof(pl));
+    pl.layout = E->id;
+    pl.px = (int16_t)px;
+    pl.py = (int16_t)py;
+    pl.ground = ground;
+    pl.patchAll = all;
+    pl.odd = (uint8_t (*)[2])malloc((size_t)cw * ch * 2u + 2u);
+    if (pl.odd == NULL)
+        return RG_ERR_NOMEM;
+    if (all)
+        for (j = 0; j < ch; j++)
+            for (i = 0; i < cw; i++) {
+                pl.odd[pl.nOdd][0] = (uint8_t)i;
+                pl.odd[pl.nOdd][1] = (uint8_t)j;
+                pl.nOdd++;
+            }
+    if (push_placement(out, &pl) != RG_OK) {
+        free(pl.odd);
+        return RG_ERR_NOMEM;
+    }
+    return RG_OK;
+}
+
+/* The commonest walkable metatile of a room, first seen wins a tie (gen:1176-1180); -1 = none. */
+static int commonest_floor(const RgLayout *E)
+{
+    unsigned cnt[1024], order[1024], nOrder = 0, i, best = 0;
+    size_t n = (size_t)E->w * E->h, c;
+
+    memset(cnt, 0, sizeof(cnt));
+    for (c = 0; c < n; c++) {
+        unsigned cell = rg_rd16(E->blocks + 2u * c);
+
+        if (cell & 0xC00u)
+            continue;
+        if (cnt[cell & 0x3FFu]++ == 0)
+            order[nOrder++] = cell & 0x3FFu;
+    }
+    if (nOrder == 0)
+        return -1;
+    for (i = 1; i < nOrder; i++)
+        if (cnt[order[i]] > cnt[order[best]])
+            best = i;
+    return (int)order[best];
+}
+
+static RgErr find_interior(const RgWorld *w, const RgBuildModel *m, RgPlacementList *out)
+{
+    const RgSpec *s = m->spec;
+    const RgLayout *ref = m->layout;
+    unsigned cw = m->w, ch = m->h, i, idx;
+    int x = s->rect[0], y = s->rect[1];
+    RgErr err = RG_OK;
+
+    memset(out, 0, sizeof(*out));
+    if (m->own == NULL) {                               /* a piece stands where it was drawn, in the same room only */
+        bool primaryOnly = true;
+
+        for (i = 0; i < cw * ch; i++)
+            if (rg_metatile(ref, x + (int)(i % cw), y + (int)(i / cw)) >= RG_NUM_PRIMARY)
+                primaryOnly = false;
+        for (idx = 0; idx < w->layoutCount && err == RG_OK; idx++) {
+            const RgLayout *E = &w->layouts[idx];
+
+            if (!E->present || E->blocks == NULL || E->ts[0]->addr != ref->ts[0]->addr)
+                continue;
+            if (!primaryOnly && E->ts[1]->addr != ref->ts[1]->addr)
+                continue;
+            if (E != ref && !same_ids(E, ref))
+                continue;
+            err = push_interior(out, E, x, y, m->groundMetatile, false, cw, ch);
+        }
+    }
+    for (i = 0; i < m->nReused && err == RG_OK; i++) {
+        const RgReuseAt *r = &m->reused[i];
+        const RgLayout *E;
+        int floor = -1;
+        unsigned k;
+
+        if (r->lid == 0 || r->lid > w->layoutCount)
+            continue;
+        E = &w->layouts[r->lid - 1];
+        if (r->noGround) {
+            floor = commonest_floor(E);
+            err = push_interior(out, E, r->x, r->y, floor < 0 ? m->groundMetatile : (uint16_t)floor, true, cw, ch);
+            for (k = 0; k < out->n; k++)                /* patch_all names the layout, whatever stands in it */
+                if (out->p[k].layout == r->lid)
+                    out->p[k].patchAll = true;
+        } else {
+            err = push_interior(out, E, r->x, r->y, r->ground, false, cw, ch);
+        }
+    }
+    if (err != RG_OK)
+        rg_placements_free(out);
+    return err;
+}
+
 RgErr rg_find_placements(const RgWorld *w, const RgBuildModel *m, RgPlacementList *out)
 {
     const RgSpec *s = m->spec;
@@ -558,7 +705,7 @@ RgErr rg_find_placements(const RgWorld *w, const RgBuildModel *m, RgPlacementLis
 
     memset(out, 0, sizeof(*out));
     if (s->kind == RG_SPEC_INTERIOR)
-        return RG_ERR_BUILDINGS;
+        return find_interior(w, m, out);
     if (m->nAt > 0) {                                  /* found by its tiles: it stands where it was found */
         for (i = 0; i < m->nAt; i++) {
             RgPlacement pl;
@@ -681,7 +828,8 @@ static RgErr patches_with_tops(const RgWorld *w, const RgBuildModel *m, RgPlacem
                 const uint8_t *a = m->art.px + (((size_t)j * 16u + y) * (size_t)m->art.w + (size_t)i * 16u + x) * 4u;
                 uint8_t *p = img.px + ((size_t)y * 16u + x) * 4u;
 
-                if (a[3] >= 128)
+                if (m->own != NULL ? m->own[((size_t)j * 16u + y) * ((size_t)m->w * 16u) + (size_t)i * 16u + x] != 0
+                                   : a[3] >= 128)
                     p[0] = p[1] = p[2] = p[3] = 0;
             }
         if (!rg_img_bbox(&img, bb)) {

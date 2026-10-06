@@ -3,6 +3,7 @@
  * (littleroot_house, HOUSE_EXACT, the first two SPECS rows), MIT License - see source/voxel/NOTICE.md.
  * Portions Copyright (c) Dust Zallax, MIT. */
 #include "rg_bspecs.h"
+#include "rg_brooms.h"
 
 #include <string.h>
 
@@ -834,5 +835,19 @@ const RgSpec rg_specs[] = {
      rg_devon, 0, 0, NULL},
     {"rustboro_fountain", RG_SPEC_DIRECT, L_RUSTBORO, {27, 38, 3, 3}, {0, 0}, RUST_GROUND, kFountainExact, 1,
      rg_fountain, 0, 0, NULL},
+    /* sp:1296-1375 the 13 interior rows: a room cut into pieces (rg_brooms.c); layout ids and pins as SPEC-S2 3.1 */
+    {"pc1f", RG_SPEC_INTERIOR, 61, 0xBBF5FE0Du, {0, 0, 0, 0}, {0, 0}, {0x202}, 1, NULL, 0, NULL, 0, 0, &rg_room_pc1f},
+    {"pc2f", RG_SPEC_INTERIOR, 62, 0x2C4488F9u, {0, 0, 0, 0}, {0, 0}, {0x202}, 1, NULL, 0, NULL, 0, 0, &rg_room_pc2f},
+    {"mart", RG_SPEC_INTERIOR, 63, 0x13A673F9u, {0, 0, 0, 0}, {0, 0}, {0x201}, 1, NULL, 0, NULL, 0, 0, &rg_room_mart},
+    {"brendan_1f", RG_SPEC_INTERIOR, 54, 0x74435B94u, {0, 0, 0, 0}, {0, 0}, {0x201}, 1, NULL, 0, NULL, 0, 0, &rg_room_brendan_1f},
+    {"brendan_2f", RG_SPEC_INTERIOR, 55, 0xEB9E8528u, {0, 0, 0, 0}, {0, 0}, {0x201}, 1, NULL, 0, NULL, 0, 0, &rg_room_brendan_2f},
+    {"may_1f", RG_SPEC_INTERIOR, 56, 0x933D5B5Eu, {0, 0, 0, 0}, {0, 0}, {0x201}, 1, NULL, 0, NULL, 0, 0, &rg_room_may_1f},
+    {"may_2f", RG_SPEC_INTERIOR, 57, 0xEC70A737u, {0, 0, 0, 0}, {0, 0}, {0x201}, 1, NULL, 0, NULL, 0, 0, &rg_room_may_2f},
+    {"lab", RG_SPEC_INTERIOR, 58, 0xB02DC393u, {0, 0, 0, 0}, {0, 0}, {0x202}, 1, NULL, 0, NULL, 0, 0, &rg_room_lab},
+    {"lab_table", RG_SPEC_INTERIOR, 432, 0xE9140827u, {0, 0, 0, 0}, {0, 0}, {0x202}, 1, NULL, 0, NULL, 0, 0, &rg_room_lab_table},
+    {"lavaridge_pc1f", RG_SPEC_INTERIOR, 71, 0x7A6744BCu, {0, 0, 0, 0}, {0, 0}, {0x202}, 1, NULL, 0, NULL, 0, 0, &rg_room_lavaridge_pc1f},
+    {"house1", RG_SPEC_INTERIOR, 59, 0x0E2EFCEEu, {0, 0, 0, 0}, {0, 0}, {0x223}, 1, NULL, 0, NULL, 0, 0, &rg_room_house1},
+    {"house2", RG_SPEC_INTERIOR, 60, 0x1DF7BAB3u, {0, 0, 0, 0}, {0, 0}, {0x223}, 1, NULL, 0, NULL, 0, 0, &rg_room_house2},
+    {"rustboro_gym", RG_SPEC_INTERIOR, 94, 0xC053E45Eu, {0, 0, 0, 0}, {0, 0}, {0x201}, 1, NULL, 0, NULL, 0, 0, &rg_room_rustboro_gym},
 };
 const unsigned rg_spec_count = sizeof(rg_specs) / sizeof(rg_specs[0]);

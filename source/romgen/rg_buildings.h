@@ -26,6 +26,9 @@
 typedef struct RgXSpec { RgSpec spec; RgExact exact; char name[64]; } RgXSpec;
 
 typedef struct RgAt { uint16_t lid; int16_t x, y; } RgAt;      /* a props model's copy: layout id, min cell */
+/* gen:493-500: a piece reused in another room; noGround = the room nobody modelled (its commonest floor, every cell
+ * patched), else `ground` is the modelled room's floor and nothing is patched. */
+typedef struct RgReuseAt { uint16_t lid; int16_t x, y; bool noGround; uint16_t ground; } RgReuseAt;
 
 typedef struct RgBuildModel {
     const RgSpec *spec;                 /* the spec, or xSpec for an expanded model */
@@ -35,7 +38,7 @@ typedef struct RgBuildModel {
     uint8_t w, h;
     uint16_t groundMetatile;
     uint8_t *owned;                     /* w*h flags, NULL = every cell */
-    uint8_t *own;                       /* bare twins only (S2.6); NULL */
+    uint8_t *own;                       /* bare twins only (S2.6): w*16 x h*16 flags (stride w*16), the piece's own pixels; NULL */
     /* ---- S2.5: expanded models (NULL / 0 for a direct spec) ---- */
     RgXSpec *xSpec;                     /* private copy of the spec (spec == &xSpec->spec); NULL for a direct row */
     const RgComponentsCfg *comp;        /* a hedge / railing piece */
@@ -51,6 +54,12 @@ typedef struct RgBuildModel {
     RgImage drawing;                    /* props: the judged reference (the art before with_ring) */
     bool hasDrawing;
     bool artReady;                      /* art composed by the expander (props) */
+    /* ---- S2.6: interior pieces and their bare twins ---- */
+    bool built;                         /* art and mesh finished by the expander: phase 2 skips it */
+    RgReuseAt *reused;                  /* reused_at: where this piece also stands in other rooms (gen:493, 500) */
+    unsigned nReused;
+    uint16_t (*bareAt)[3];              /* bare_at (layout, x, y): found by its own pixels on another floor; twin pending */
+    unsigned nBareAt;
 } RgBuildModel;
 
 typedef struct RgBuildModels {
@@ -64,6 +73,12 @@ typedef struct RgBuildModels {
     unsigned seamClash;                 /* seam_art: south cells sharing a pixel column (must be 0) */
     unsigned connAmbiguous;             /* out-of-layout cells two connections claim (must be 0) */
     unsigned propTies;                  /* props groups tied on size: upstream's name order vs ours (A2) */
+    /* S2.6 diagnostics */
+    void *reuse;                        /* the interior expander's state while the models are expanded (rg_binterior.c) */
+    unsigned nInterior, nTwin;          /* interior piece models, bare twins */
+    unsigned nReuseExact, nReuseBare;   /* placements found by reuse_pieces (tile for tile, own pixels) */
+    unsigned nReuseRooms;               /* rooms nobody modelled that got at least one piece */
+    char errPiece[64];                  /* the interior piece that failed (RG_ERR_BUILDINGS) */
 } RgBuildModels;
 
 /* gen:877-939. The layout fingerprint must match or the spec is skipped (SPEC-S2 A10). */

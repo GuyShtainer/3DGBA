@@ -6,7 +6,7 @@
 //   clang -std=c11 -Wall -Wextra -O2 -ffp-contract=off -fsanitize=address,undefined -DVOXEL_HOST_FILES \
 //         -DCTR_VOXEL_LIGHTING=1 -I source/romgen -I source/voxel -I test/host test/host/test_romgen_buildings.c \
 //         source/romgen/rg_world.c source/romgen/rg_art.c source/romgen/rg_bimg.c source/romgen/rg_geom.c source/romgen/rg_grelief.c \
-//         source/romgen/rg_bcheck.c source/romgen/rg_bspecs.c source/romgen/rg_buildings.c source/romgen/rg_bexpand.c \
+//         source/romgen/rg_bcheck.c source/romgen/rg_bspecs.c source/romgen/rg_buildings.c source/romgen/rg_bexpand.c source/romgen/rg_binterior.c source/romgen/rg_brooms.c \
 //         source/voxel/voxel_world.c source/voxel/voxel_regions.c source/voxel/voxel_relief.c \
 //         source/voxel/voxel_building.c source/voxel/voxel_sign.c source/voxel/voxel_arena.c \
 //         source/voxel/voxel_atlas.c source/voxel/voxel_mesh_builder.c source/voxel/voxel_tree.c \

@@ -146,3 +146,40 @@ Open: none. Not yet checked visually in Azahar, and on-device memory for 219 pag
   2362 placements, 40254 vertices`, no VRAM/page errors logged.
 - `evidence/s25-rustboro.png`: Rustboro Center + Mart, street lamps (props, with cast shadows) and a stone kit
   building all stand as 3D models. Verified by the lead: expand 417/0, buildings 4387/0 with the ROM.
+
+## 2026-10-06 S2.6 interiors + reuse
+
+Added: `rg_brooms.c/.h` (the 13 room piece tables, their helpers, open polygons, shade lists, colour table), `rg_binterior.c/.h`
+(`_inside` / `_inside_grid`, the room expander `interior_specs`, KeyTab cell keys, `register_piece`, `reuse_pieces` exact + loose
+passes, `place_reused`, `reuse_everywhere`, bare twins, `room_check`), 13 interior rows at the end of `rg_specs[]`, and in
+`rg_buildings.c` the interior branch of `find_placements` (position == rect, same-room only, `reused_at` entries with whole-room
+`patch_all` for unmodelled rooms), the twin's `own` mask in `ground_patch` and a masked-art gate for twins. New suite
+`test_romgen_interior.c`: 851 checks (synthetic shapes / colour preimages / table sanity; real ROM: whole-table build, gate, 13x
+room_check, a negative control, write + consumer round trip).
+
+Real ROM (`ROMGEN_ROM=roms/emerald.gba`): 200 interior pieces + 19 bare twins (286 models in all with the 67 of S2.5), skipped 0.
+Pieces per room: 54:20 55:13 56:11 57:12 58:40 432:3 59:14 60:15 61:20 62:18 63:10 71:5 94:19. Gate (ortho 0/0/0, empty density
+list; twins judged on their own pixels): 0 failures. room_check == 0 for all 13 rooms (layouts 54-63, 71, 94, 432). The negative
+control (the same placements with every triangle removed) leaves 16144 pixels wrong in room 61, so the 0s are not vacuous.
+Reuse: 173 exact placements, 159 own-pixel (bare) placements, 37 unmodelled rooms received at least one piece; 265 placements carry
+a whole-room patch (all of them nOdd == w*h). buildings.bin: 7,898,476 B, 118 pages, 630 page-models, 80520 vertices, 2894
+placements, 56 masks, 66 variants (<= 128, pages <= 256); round-trips through `VoxelBuildings_Init`.
+Updated pins in `test_romgen_expand.c` (reason: the table now carries the 13 interior rows): models 67 -> 286, triangles 12868 ->
+25514, file 3,479,644 -> 7,898,476 B, pages 68 -> 118, placements 2362 -> 2894, vertices 40254 -> 80520; masks (56) and variants (66)
+unchanged (interior pieces are boxes for the footprint masks). The S2.3 suite needed only its build line.
+All 9 romgen suites green under ASan/UBSan with the ROM; geom / buildings / expand / interior in both `RG_PYSUM_COMPENSATED` modes
+(1 and 0, identical pins). `make -C tools/romgen` and the device `make -j8` build.
+
+Deviations / decisions: (1) pieces are built (art + mesh) inside the room expander, not in phase 2, because relief / card / decal
+parts borrow the piece's art and cell arrays; `RgBuildModel.built` makes phase 2 skip them. (2) A bare twin's mesh is the piece's
+mesh with the `*_floor.decal` triangles dropped (same result as re-emitting the parts without the `_floor` decal). (3) Twins are
+inserted right after their model once `reuse_everywhere` is done (bare_at is complete only then). (4) Upstream's "blocked cell
+%d,%d is in no piece" and "reuse:" prints are not ported; counters (`nReuseExact`, `nReuseBare`, `nReuseRooms`) replace them.
+(5) A piece that claims no pixel and has no walls returns `RG_ERR_BUILDINGS` with its name in `errPiece` (upstream `SystemExit`).
+(6) `place_reused`'s loose pass checks the anchor cell first, then the other cells; same set of placements as upstream's start-pixel
+lookup. Anchor and floor-count ties take first-seen / row-major (SPEC neutral rule). (7) `patch_all` is applied to every placement of
+that model in that layout. (8) An interior row whose layout fingerprint does not match is skipped, as the other kinds.
+Dropped: none. Open: functions `room_setup`, `room_owner`, `pb_body` and the table functions in `rg_brooms.c` exceed the ~60-line
+guide (straight transcriptions; not split here); the file doubled to 7.9 MB and 118 pages, on-device memory and load time are
+unmeasured and not yet seen in Azahar; the room tables were checked against the ROM only through the gate and room_check (they
+cannot cross-check each other).

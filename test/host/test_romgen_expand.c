@@ -7,7 +7,7 @@
 //   clang -std=c11 -Wall -Wextra -O2 -ffp-contract=off -fsanitize=address,undefined -DVOXEL_HOST_FILES \
 //         -DCTR_VOXEL_LIGHTING=1 -I source/romgen -I source/voxel -I test/host test/host/test_romgen_expand.c \
 //         source/romgen/rg_world.c source/romgen/rg_art.c source/romgen/rg_bimg.c source/romgen/rg_geom.c source/romgen/rg_grelief.c \
-//         source/romgen/rg_bcheck.c source/romgen/rg_bspecs.c source/romgen/rg_buildings.c source/romgen/rg_bexpand.c \
+//         source/romgen/rg_bcheck.c source/romgen/rg_bspecs.c source/romgen/rg_buildings.c source/romgen/rg_bexpand.c source/romgen/rg_binterior.c source/romgen/rg_brooms.c \
 //         source/voxel/voxel_world.c source/voxel/voxel_regions.c source/voxel/voxel_relief.c \
 //         source/voxel/voxel_building.c source/voxel/voxel_sign.c source/voxel/voxel_arena.c \
 //         source/voxel/voxel_atlas.c source/voxel/voxel_mesh_builder.c source/voxel/voxel_tree.c \
@@ -318,8 +318,9 @@ static void TestRealRom(void)
     }
     CHECK(nPl > 0);
     printf("gate failures %u of %u models, %u triangles\n", gateBad, ms.n, nTris);
-    CHECK(ms.n == 67 && ms.nHedge == 6 && ms.nRailing == 35 && ms.nKit == 7 && ms.nProps == 5 && ms.skipped == 0);
-    CHECK(gateBad == 0 && nTris == 12868);
+    /* S2.6: the 13 interior rows add 200 pieces + 19 bare twins to the S2.5 total of 67 models */
+    CHECK(ms.n == 286 && ms.nInterior == 200 && ms.nTwin == 19 && ms.nHedge == 6 && ms.nRailing == 35 && ms.nKit == 7 && ms.nProps == 5 && ms.skipped == 0);
+    CHECK(gateBad == 0 && nTris == 25514);
     CHECK(ms.seamClash == 0 && ms.connAmbiguous == 0);   /* seam_art column assert, connections assert */
     printf("props tie-break divergence A2: %u tied adjacent groups (informational, model order / _n suffix only)\n", ms.propTies);
     t0 = Now();
@@ -331,8 +332,8 @@ static void TestRealRom(void)
         CHECK(buf && rg_buildings_write(&w, &ms, buf, sz, &st) == sz);
         printf("buildings.bin: %zu bytes, %u pages, %u models, %u pageModels, %u vertices, %u placements, %u masks, %u variants\n",
                sz, st.pages, st.models, st.pageModels, st.vertices, st.placements, st.masks, st.variants);
-        CHECK(st.err == RG_OK && st.models == 67 && st.variants == 66 && st.variants <= 128);
-        CHECK(sz == 3479644u && st.pages == 68 && st.placements == 2362u && st.vertices == 40254u && st.masks == 56u);
+        CHECK(st.err == RG_OK && st.models == 286 && st.variants == 66 && st.variants <= 128);
+        CHECK(sz == 7898476u && st.pages == 118 && st.placements == 2894u && st.vertices == 80520u && st.masks == 56u);
         CHECK(memcmp(buf, "VXB7", 4) == 0 && sz % 4 == 0);
         {   /* the vendored consumer reads it back: every variant, every owned model's layout page */
             VoxelMapInstance inst;
