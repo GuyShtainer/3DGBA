@@ -12,3 +12,18 @@ points, with the cause found in the code:
 
 Order: L1 → L3 → L2 → L4, after the FRLG milestones M0/M1 that are running now. Each one is emulator-checked, then
 hardware-checked (frame time).
+
+## Future: camera freedom (Guy 2026-10-06, after the Gen1Recomp voxel mod)
+
+Reference: Gen1Recomp (a native Lua/LÖVE rewrite of Red/Blue/Yellow, not an emulator) with DramaticShapeVoxelMod:
+pitch presets, third-person follow, free-fly, experimental first person (v1.5.1), VR, day/night. Inspiration only,
+no code from it (licence unknown; the original repo was taken down, a fork exists).
+
+| # | Step | What it needs here | Size |
+|---|---|---|---|
+| C1 | Pitch presets (gentle to steep diorama) | `voxel_camera.c` already has pitch/yaw/distance; the pitch is a setting today. Bind a button to cycle presets. | small |
+| C2 | Yaw in 90° steps (look east/west/south) | The world mesh is fully 3D, but: sprites are 4-direction billboards (remap the facing relative to the camera), building backs/sides were authored from the front only, the tilt-shift focus and the entity AABB assume a north view, and D-pad input must be rotated to match the camera. Lighting ties into L3/L4. | medium-large |
+| C3 | Free yaw / third-person follow | C2 plus smooth sprite-facing selection and an occlusion fallback (fade walls between the camera and the player). | large |
+| C4 | First person (experimental) | Flat sprite cards seen edge-on, tile-step movement from the GBA game, longer draw distance against the New-3DS frame budget (Azahar shows ~21-25 fps today). Prototype only, after hardware frame-time numbers exist. | large, risky |
+
+Order: after L1-L4. Each step is checked in Azahar, then on hardware (frame time).
