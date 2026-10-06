@@ -1691,8 +1691,8 @@ bool CtrVoxel_Init(void)
     CtrLog_Write(CTR_LOG_VIDEO, "VOXEL lighting: %s",
                  CTR_VOXEL_LIGHTING ? "fixed sun + baked shadows + cast sprite shadows" : "disabled");
     CtrLog_Write(CTR_LOG_VIDEO,
-                 "VOXEL init: %u staging + %u billboard vertices (%lu KiB linear), up to %u VRAM "
-                 "atlases of %lu KiB (%ux%u, %u slots), page stream %s, linear free=%lu, VRAM free=%lu",
+                 "VOXEL init: %u staging + %u billboard vertices (%lu KiB linear), up to %u "
+                 "atlases (VRAM first, then linear) of %lu KiB (%ux%u, %u slots), page stream %s, linear free=%lu, VRAM free=%lu",
                  VOXEL_STAGING_VERTICES, VOXEL_DYNAMIC_VERTICES,
                  (unsigned long)((VOXEL_STAGING_VERTICES + VOXEL_DYNAMIC_VERTICES)
                                  * sizeof(VoxelGpuVertex) >> 10),
@@ -1924,6 +1924,34 @@ static bool AtlasInView(const VoxelAtlasSlot *slot)
     return false;
 }
 
+static bool AtlasInVram(const C3D_Tex *tex)
+{
+    uintptr_t a = (uintptr_t)tex->data;
+    return a >= OS_VRAM_VADDR && a < OS_VRAM_VADDR + OS_VRAM_SIZE;
+}
+
+/* "V" or "L" per allocated page of an atlas, for the log. */
+static const char *AtlasMemTag(VoxelAtlasSlot *slot)
+{
+    static char tag[VOXEL_ATLAS_PAGES + 1u];
+    unsigned n = 0;
+
+    for (unsigned p = 0; p < VOXEL_ATLAS_PAGES; ++p)
+        if (AtlasTex(slot, p)->data != NULL)
+            tag[n++] = AtlasInVram(AtlasTex(slot, p)) ? 'V' : 'L';
+    tag[n] = '\0';
+    return tag;
+}
+
+/*
+ * A page's texture: VRAM first, then the linear heap (vx_atlas_mem_allowed).
+ * VRAM here holds the screen targets, the prescale target, the logical
+ * surface and the mesh and building-page arenas, and has room for one
+ * 256 KiB atlas; a second tileset pair on screen - every town edge - then had
+ * none, its chunks stayed missing and the view fell back to 2D. The PICA
+ * samples linear (FCRAM) textures as well, with less bandwidth; the upload is
+ * the same GPU copy.
+ */
 static bool AllocateAtlasPage(VoxelAtlasSlot *slot, unsigned page)
 {
     C3D_Tex *tex = AtlasTex(slot, page);
@@ -1931,8 +1959,21 @@ static bool AllocateAtlasPage(VoxelAtlasSlot *slot, unsigned page)
         return true;
     for (;;)
     {
-        if (CountAllocatedAtlases() < VOXEL_ATLAS_SLOTS
-         && C3D_TexInitVRAM(tex, VOXEL_ATLAS_W, VOXEL_ATLAS_H, GPU_RGBA5551))
+        const unsigned long bytes = VOXEL_ATLAS_PIXELS * sizeof(uint16_t);
+        unsigned allowed = vx_atlas_mem_allowed(CountAllocatedAtlases(), VOXEL_ATLAS_SLOTS,
+                                                (unsigned long)linearSpaceFree(), bytes,
+                                                VX_ATLAS_LINEAR_RESERVE);
+        bool placed = (allowed & VX_ATLAS_MEM_VRAM) != 0
+                   && C3D_TexInitVRAM(tex, VOXEL_ATLAS_W, VOXEL_ATLAS_H, GPU_RGBA5551);
+        if (!placed && (allowed & VX_ATLAS_MEM_LINEAR) != 0
+         && C3D_TexInit(tex, VOXEL_ATLAS_W, VOXEL_ATLAS_H, GPU_RGBA5551))
+        {
+            placed = true;
+            CtrLog_Write(CTR_LOG_VIDEO, "VOXEL atlas page %u in linear memory "
+                         "(VRAM free=%lu, linear free=%lu)", page,
+                         (unsigned long)vramSpaceFree(), (unsigned long)linearSpaceFree());
+        }
+        if (placed)
         {
             C3D_TexSetFilter(tex, GPU_NEAREST, GPU_NEAREST);
             C3D_TexSetWrap(tex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
@@ -2046,8 +2087,9 @@ static VoxelAtlasSlot *AcquireAtlas(const VoxelMapInstance *inst, bool mayEvict)
         if (!sAtlasCapped)
         {
             sAtlasCapped = true;
-            CtrLog_Write(CTR_LOG_VIDEO, "VOXEL: atlas cache capped at %u (VRAM free=%lu)",
-                         CountAllocatedAtlases(), (unsigned long)vramSpaceFree());
+            CtrLog_Write(CTR_LOG_VIDEO, "VOXEL: atlas cache capped at %u (VRAM free=%lu, "
+                         "linear free=%lu)", CountAllocatedAtlases(),
+                         (unsigned long)vramSpaceFree(), (unsigned long)linearSpaceFree());
         }
         if (!mayEvict)
             return NULL;
@@ -2068,9 +2110,10 @@ static VoxelAtlasSlot *AcquireAtlas(const VoxelMapInstance *inst, bool mayEvict)
             {
                 sReported = true;
                 ++sStats.errors;
-                CtrLog_Write(CTR_LOG_ERROR, "VOXEL: no VRAM for a %ux%u atlas (free=%lu); "
-                             "asking for the depth planes back",
-                             VOXEL_ATLAS_W, VOXEL_ATLAS_H, (unsigned long)vramSpaceFree());
+                CtrLog_Write(CTR_LOG_ERROR, "VOXEL: no room for a %ux%u atlas (VRAM free=%lu, "
+                             "linear free=%lu, %u held)", VOXEL_ATLAS_W, VOXEL_ATLAS_H,
+                             (unsigned long)vramSpaceFree(), (unsigned long)linearSpaceFree(),
+                             CountAllocatedAtlases());
             }
             return NULL;
         }
@@ -2215,10 +2258,11 @@ static void RunAtlasJob(uint64_t started, float budget, bool inFrame)
     ++slot->generation;
     slot->valid = true;
     ++sStats.atlasRebuilds;
-    CtrLog_Write(CTR_LOG_VIDEO, "VOXEL atlas for %d:%d: %u/%u slots%s (rebuilds=%u, linear free=%lu)",
+    CtrLog_Write(CTR_LOG_VIDEO, "VOXEL atlas for %d:%d: %u/%u slots%s mem=%s (rebuilds=%u, "
+                 "VRAM free=%lu, linear free=%lu)",
                  job->mapGroup, job->mapNum, slot->map.used, VOXEL_ATLAS_MAX_SLOTS,
-                 slot->map.overflowed ? " OVERFLOW" : "", sStats.atlasRebuilds,
-                 (unsigned long)linearSpaceFree());
+                 slot->map.overflowed ? " OVERFLOW" : "", AtlasMemTag(slot), sStats.atlasRebuilds,
+                 (unsigned long)vramSpaceFree(), (unsigned long)linearSpaceFree());
 }
 
 /* ── Building ───────────────────────────────────────────────────────────── */

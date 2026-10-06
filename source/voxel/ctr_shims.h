@@ -60,6 +60,21 @@ void vx_gx_set_probe(unsigned (*probe)(void));
 void vx_gx_install_probe(void); /* ARM: probe = the GX_BindQueue wrapper's queue (ctr_shims.c) */
 void vx_gx_frame_begin(void); /* zero the voxel command count (call after C3D_FrameBegin) */
 
+/* Where a new voxel atlas page may live, tried in this order: VRAM (fastest to sample), then the
+ * linear FCRAM heap (valid PICA200 texture memory, slower to sample). VRAM is shared with the
+ * screen targets and the voxel mesh/page arenas and holds about one 256 KiB atlas; without the
+ * linear tier a second tileset pair on screen (a town's edge) never got an atlas and the view
+ * fell back to 2D. `allocated`: atlas textures held now; at `cap` neither (the caller evicts).
+ * Linear only while `linearReserve` bytes would still be left free after the page. */
+enum
+{
+    VX_ATLAS_MEM_VRAM = 1u,
+    VX_ATLAS_MEM_LINEAR = 2u
+};
+#define VX_ATLAS_LINEAR_RESERVE (2ul * 1024ul * 1024ul)
+unsigned vx_atlas_mem_allowed(unsigned allocated, unsigned cap, unsigned long linearFree,
+                              unsigned long pageBytes, unsigned long linearReserve);
+
 bool CtrVideo_TryVoxelUpload(void);
 unsigned CtrVideo_VoxelUploadsLeft(void);
 void CtrVideo_RequestPlaneRelease(void);

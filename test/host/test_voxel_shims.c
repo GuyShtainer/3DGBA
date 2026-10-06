@@ -112,6 +112,29 @@ static void TestBudget(void)
     CHECK(CtrVideo_VoxelUploadsLeft() == 16);
 }
 
+/* ---------------------------------------------------------------- atlas memory policy */
+static void TestAtlasMem(void)
+{
+    const unsigned long page = 512ul * 256ul * 2ul, mib = 1024ul * 1024ul;
+    const unsigned both = VX_ATLAS_MEM_VRAM | VX_ATLAS_MEM_LINEAR;
+
+    /* The Route 5 / Saffron case: one atlas held, 14 MB of linear left -> linear allowed. */
+    CHECK(vx_atlas_mem_allowed(1, 6, 14043136ul, page, VX_ATLAS_LINEAR_RESERVE) == both);
+    CHECK(vx_atlas_mem_allowed(0, 6, 14043136ul, page, VX_ATLAS_LINEAR_RESERVE) == both);
+    /* At the cache's bound: neither tier; the caller evicts the LRU off-view atlas instead. */
+    CHECK(vx_atlas_mem_allowed(6, 6, 14043136ul, page, VX_ATLAS_LINEAR_RESERVE) == 0);
+    CHECK(vx_atlas_mem_allowed(7, 6, 14043136ul, page, VX_ATLAS_LINEAR_RESERVE) == 0);
+    /* Linear never dips below the reserve: exactly at it is allowed, one byte short is not. */
+    CHECK(vx_atlas_mem_allowed(1, 6, page + 2 * mib, page, 2 * mib) == both);
+    CHECK(vx_atlas_mem_allowed(1, 6, page + 2 * mib - 1, page, 2 * mib) == VX_ATLAS_MEM_VRAM);
+    /* Less linear than one page (no unsigned wrap): VRAM only. */
+    CHECK(vx_atlas_mem_allowed(1, 6, page - 1, page, 0) == VX_ATLAS_MEM_VRAM);
+    CHECK(vx_atlas_mem_allowed(1, 6, 0, page, VX_ATLAS_LINEAR_RESERVE) == VX_ATLAS_MEM_VRAM);
+    CHECK(vx_atlas_mem_allowed(1, 6, page, page, 0) == both);
+    /* VRAM is always the first tier asked for while under the bound. */
+    CHECK((vx_atlas_mem_allowed(5, 6, 0, page, 0) & VX_ATLAS_MEM_VRAM) != 0);
+}
+
 /* ---------------------------------------------------------------- hashes */
 static void TestHashes(void)
 {
@@ -355,6 +378,7 @@ int main(void)
     TestRgba();
     TestObjTile();
     TestBudget();
+    TestAtlasMem();
     TestHashes();
     TestPak();
     printf("test_voxel_shims: %d checks, %d failures\n", sChecks, sFails);

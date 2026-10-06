@@ -118,6 +118,20 @@ unsigned CtrVideo_VoxelUploadsLeft(void)
     return vx_gx_budget_left(sVoxCmds, UsedNow(), VX_GX_RESERVE);
 }
 
+/* ---- atlas memory policy -------------------------------------------------------------------- */
+unsigned vx_atlas_mem_allowed(unsigned allocated, unsigned cap, unsigned long linearFree,
+                              unsigned long pageBytes, unsigned long linearReserve)
+{
+    unsigned allowed = 0;
+
+    if (allocated >= cap)
+        return 0;
+    allowed |= VX_ATLAS_MEM_VRAM;
+    if (linearFree >= pageBytes && linearFree - pageBytes >= linearReserve)
+        allowed |= VX_ATLAS_MEM_LINEAR;
+    return allowed;
+}
+
 /* ---- video odds and ends ---------------------------------------------------------------------- */
 static CtrVideoStats sVideoStats;
 static const uint8_t *sBgVram;
