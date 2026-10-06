@@ -127,6 +127,9 @@ static const RgExact kHouse5Exact[1] = {{0, 8, 80, 80, false}};
 static const RgSideCfg kHouseSide[1] = {
     {NULL, {8, 57, 56, 60}, {12, 29, 51, 35}, 999, true},
 };
+static const RgSideCfg kHouse3Side[1] = {          /* 48 px wide: the tiles stay inside the art */
+    {NULL, {8, 57, 40, 60}, {12, 29, 40, 35}, 999, true},
+};
 
 /* ---- k_saffron_dojo: 96x80 art (rect (37,8), 6x5; door (40,12)) ------------------------------------------------------- */
 /* The Fighting Dojo, drawn as an elevation with a large flat tan roof. Rows: trees 0-8, the cream roof rim 9-23, the tan
@@ -161,18 +164,43 @@ static const RgSideCfg kGymSide[2] = {
     {NULL, {7, 56, 40, 60}, {6, 39, 106, 41}, 999, true},
 };
 
+/* ---- k_saffron_gate / k_saffron_gate_s: 128x96 art (rects (31,0) 8x6 and (31,46) 8x7; doors (34,5), (35,5) and (34,46), (35,46)) ---- */
+/* Saffron's own half of the two Route gatehouses (the north one to Route 5, the south one to Route 6): the same 96x96
+ * art in both places (x 16-112 of the rect; the rect takes one ground column each side, because the bare 6x6 cells
+ * also occur on Routes 5 and 6, whose halves K6 models with a canopy, and a second model must not land there). The south
+ * rect starts one row higher, on the door cells at y 46, so every shape row is shifted by 16 (a1). Rows: the slate roof with its ribs 0-43 (level top), the cornice 43-48, the window band 51-62, yellow
+ * brick 62-90 and the grey base, over the full 96 px between two white pillars (x 0-8 and 88-96). The lintel and the
+ * dark arch (x 16-80, rows 68-96) are painted on the facade. One flat block 53 high. */
+static bool k_saffron_gate(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    (void)spec; (void)a0;
+    return sf_block(out, "gate", 16, 112, 96 + a1, 43 + a1, a1) && !out->failed;   /* a1 = the row shift */
+}
+static const RgExact kGateExact[1] = {{16, 0, 112, 96, false}};
+static const RgExact kGateSExact[1] = {{16, 16, 112, 112, false}};
+static const RgSideCfg kGateSide[1] = {
+    {NULL, {24, 89, 32, 93}, {96, 2, 103, 42}, 999, true},
+};
+static const RgSideCfg kGateSSide[1] = {
+    {NULL, {24, 105, 32, 109}, {96, 18, 103, 58}, 999, true},
+};
+
 const RgSpec rg_kspecs_saffron[] = {
     {"k_saffron_silph", RG_SPEC_DIRECT, L_SAFFRON, {29, 16, 9, 15}, {0, 0}, SF_GROUND, 1, kSilphExact, 4,
      k_saffron_silph, 0, 0, kSilphSide},
     {"k_saffron_house", RG_SPEC_DIRECT, L_SAFFRON, {21, 10, 4, 5}, {1, 5}, SF_GROUND, 1, kHouse4Exact, 1,
      k_saffron_house, 64, 0, kHouseSide},
     {"k_saffron_house3", RG_SPEC_DIRECT, L_SAFFRON, {26, 17, 3, 5}, {1, 5}, SF_GROUND, 1, kHouse3Exact, 1,
-     k_saffron_house, 48, 0, kHouseSide},
+     k_saffron_house, 48, 0, kHouse3Side},
     {"k_saffron_house5", RG_SPEC_DIRECT, L_SAFFRON, {41, 34, 5, 5}, {1, 5}, SF_GROUND, 1, kHouse5Exact, 1,
      k_saffron_house, 80, 0, kHouseSide},
     {"k_saffron_dojo", RG_SPEC_DIRECT, L_SAFFRON, {37, 8, 6, 5}, {0, 0}, SF_GROUND, 1, kDojoExact, 2,
      k_saffron_dojo, 0, 0, kDojoSide},
     {"k_saffron_gym", RG_SPEC_DIRECT, L_SAFFRON, {43, 8, 7, 5}, {0, 0}, SF_GROUND, 1, kGymExact, 2,
      k_saffron_gym, 0, 0, kGymSide},
+    {"k_saffron_gate", RG_SPEC_DIRECT, L_SAFFRON, {31, 0, 8, 6}, {0, 0}, SF_GROUND, 1, kGateExact, 1,
+     k_saffron_gate, 0, 0, kGateSide},
+    {"k_saffron_gate_s", RG_SPEC_DIRECT, L_SAFFRON, {31, 46, 8, 7}, {0, 0}, SF_GROUND, 1, kGateSExact, 1,
+     k_saffron_gate, 0, 16, kGateSSide},
 };
 const unsigned rg_kspecs_saffron_count = sizeof(rg_kspecs_saffron) / sizeof(rg_kspecs_saffron[0]);
