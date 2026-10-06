@@ -257,3 +257,21 @@ Status: host side DONE and measured; device hook BUILT (links with the switch at
 **Suites** (ASan+UBSan, ROMGEN_ROM=roms/emerald.gba): art 33149, bimg 10481, buildings 4400, expand 1512, export 580568, geom 585, interior 851, regions 474, roles 656013, signs 1751, world 612 checks, all 0 failures.
 
 **Hardware steps for Guy**: (1) `make clean && make ROMGEN_DEV_HOOK=1 cia` (or 3dsx), install/launch on the New 3DS; (2) Make sure `sdmc:/cias/control/` exists and load an Emerald (BPEE) ROM in either slot; (3) create the file `sdmc:/cias/control/romgen_go.txt` (any content) and wait; (4) when `sdmc:/3ds/3DGBA/voxel/romgen_timings.txt` no longer says STARTED, read it: result OK, ms per phase, heap numbers; (5) copy the voxel dir back and `cmp` buildings.bin against the host's (H3 device-vs-host parity); (6) check Littleroot shows two modelled houses with voxel on; (7) rebuild with the default (switch 0) afterwards. If the file still says STARTED after ~60 s the run is slow or the app died; if it says out of memory, the heap budget above is exceeded.
+
+## 2026-10-06 — S2.8 device hook run in Azahar (emulator, NOT hardware evidence)
+
+Build: `make clean && make -j8 ROMGEN_DEV_HOOK=1`. Triggered by dropping `sdmc:/cias/control/romgen_go.txt`
+while Littleroot was running (BPEE ROM, emerald-littleroot save warp).
+
+| Mode | Result | Timings (emulated) | Memory |
+|---|---|---|---|
+| Old-3DS (movie default) | **out of memory** in the models phase (11772 ms in) | n/a | heap arena before 35741696; process heap 60096512 |
+| New-3DS (`--keep-n3ds`, cia = 124 MB ext mode) | **OK**, 0 gate failures, counts match the host | total 32457 ms: models 15386, gates 1396, placements+write 11744, roles 3436 | arena 35741696 → 62840832 (peak delta ~27.1 MB); process heap 89456640 |
+
+- **Parity:** the device-written regions.bin, signposts.bin and buildings.bin are **byte-identical** to the host CLI.
+- The game kept running during generation (worker on core 1): the player moved between the before/after frames.
+- Azahar's timings are not hardware evidence and sit above the SPEC 10 s budget. Real New-3DS time and memory
+  are still unmeasured.
+- Old-3DS cannot run it as-is. The memory lever, if needed: crop and free model art after the gates and
+  placements (SPEC §6.2).
+- The release build was rebuilt afterwards with `ROMGEN_DEV_HOOK=0` and `VX_DEV_ALLOW_O3DS 0`.
