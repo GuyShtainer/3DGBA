@@ -588,3 +588,56 @@ Ran on a private harness instance (`--instance l`, own bundle clone and sdmc und
 - k_route8_gate (Route 8 gatehouse, dest 20/0, door (7,10)) banked: the Route 7 builder (`k_route7_gate`), rect (0,7,8,5) 128x80 on L96 (FNV 87638ADF, FR = LG). A separate row because the top corner cell of the rect (fence posts here, grass on Route 7) differs, so the Route 7 rect does not match. check PASS ortho 0/0/0 on 1 exact rect (16,0,112,80), density empty, round trip ok. placements 3: L96 (0,7) map 3/26, L103 (9,8) map 3/33 (Route 15's west gatehouse) and L207 (58,24) map 3/10 (Saffron's west-facing gate); the last two are deliberate reuse on layouts this slice does not own (the same cells, so the same art; K9 and K10 get them for free). Same limitation as Route 7 (side porches stay ground). viewed: identical read to Route 7 (flat slatted roof, cornice, window band, brick, white end pillars).
 - k_path_hut corrected: the hut is 4 cells wide (x 30-33), not the census seed's 3, so the first banked rect (30,28,3,4) lost the east pillar. Now rect (30,28,4,4) 64x64, exact (0,0,64,64), still matchRows (1,4); check PASS ortho 0/0/0, density empty, round trip ok, placements still the same 4. viewed again: both white end pillars present, door, brick and slatted roof read right.
 - K6 closing: census covered 57 -> 73 / 152 (13 own placements + 3 reuse placements on Saffron L207 x2 and Route 15 L103). FR = LG buildings.bin SHA-1 90a94764a477945f9c6ef47611bcf42ebc43a142 (old pin 0b7fb62f). Gate: FRLG regions 3716874d, signposts ba2fde45, relief 32c24146 unchanged; Emerald buildings 2929c764, regions 007a370f, signposts 38515605, relief 21a837f0, ledges relief eb25a383 identical. `make -C tools/romgen test`: 27 suites, 0 failures, 0 skipped (test_romgen_frlg_buildings 2951 checks); `vtest`: 9 suites, 0 failures, 0 skipped; device `make -j8` builds. Azahar (private instance k, warp-save copies, voxel on, new movie MK.ctm without the trailing START/B so no menu overlay): `evidence/k6-vermilion.png` shows Vermilion at (12,9) in 3D, an orange-roofed house with flower boxes beside the Pokemon Center, no menu open (it does not isolate which K6 model is which; the previews do that); `evidence/k6-route.png` shows Route 5 at (31,26) in 3D, the Underground Path hut (slatted grey roof, brick, door) in front and the Day Care at the left. Not passed: Route 5 at (31,33) rendered plain 2D (letterboxed GBA frame, same at 90 s and 140 s) while (31,20) and (31,26) render 3D; cause not investigated (possibly a gate hand-back next to the hut), nothing in K6 data changes at that cell.
+
+## VRAM atlas fallback (2026-10-06)
+Resolves K6's "Route 5 at (31,33) rendered plain 2D". Renderer only: no romgen data changes.
+
+- Cause: VRAM held room for exactly one 512x256 RGBA5551 atlas (256 KiB). The 6 MiB (6291456 B) is taken up by:
+  screen targets 1612800 (top L and top R 400x240 RGBA8 + DEPTH16 at 576000 each, bottom 320x240 at 460800);
+  sharp-bilinear prescale target `preTex` 512x512 RGBA8 1048576 (main.c:2251); the logical surface 512x256
+  RGBA8 + DEPTH16 786432 and bloom 128x64 RGB565 16384 (vx_host.c:255-261); the mesh arena 1572864
+  (`VOXEL_CHUNK_VRAM_BUDGET`) and the building-page arena 786432 (`VOXEL_PAGE_VRAM_BUDGET`). Sum 5823488, which
+  leaves exactly the logged `VRAM free=467968`. One atlas leaves 205824. At (31,33) Route 5 (3:23) and the Saffron
+  connection map (3:11, a different tileset pair) are both on screen; the second never got an atlas, its chunks
+  stayed missing and the gate fell back to 2D. The LRU did the right thing: both atlases were in view, so neither
+  could be evicted. `CtrVideo_RequestPlaneRelease` is a no-op in this build, so nothing ever freed VRAM.
+- Fix: `AllocateAtlasPage` (ctr_voxel.c) tries VRAM first, then the linear heap (`C3D_TexInit`, which PICA200 can
+  sample, with less bandwidth). The upload stays the same GPU TextureCopy from the linear staging buffer, on the
+  render thread inside the frame, and it still allocates only when an atlas is built. The policy is the pure
+  `vx_atlas_mem_allowed` (ctr_shims_pure.c): it keeps the 6-texture cap (at most 1.5 MiB of linear) and a 2 MiB
+  linear reserve. The atlas log line now says `mem=` with V or L per page, and each linear placement is logged.
+  The mesh budget was not reduced: "Rustboro's view alone draws 54K" vertices of the 96K, so shrinking it trades this
+  bug for missing chunks in cities.
+- Before (instance v, FR warp save firered-r5s, Route 5 (31,33)):
+  ```
+  VOXEL atlas for 3:23: 341/512 slots (rebuilds=1, linear free=14043136)
+  VOXEL: atlas cache capped at 1 (VRAM free=205824)
+  VOX: atlas VRAM blocked; no compositor planes to release
+  VOXEL: no VRAM for a 512x256 atlas (free=205824); asking for the depth planes back
+  VOXEL stream frame=120 missing=2 ... (every 120 frames through frame=720, missing=2)
+  ```
+- After (same save, same movie):
+  ```
+  VOXEL atlas for 3:23: 341/512 slots mem=V (rebuilds=1, VRAM free=205824, linear free=14043136)
+  VOXEL atlas page 0 in linear memory (VRAM free=205824, linear free=13780992)
+  VOXEL atlas for 3:11: 267/512 slots mem=L (rebuilds=2, VRAM free=205824, linear free=13780992)
+  VOXEL atlas page 0 in linear memory (VRAM free=205824, linear free=13518848)
+  VOXEL atlas for 3:26: 93/512 slots mem=L (rebuilds=3, VRAM free=205824, linear free=13518848)
+  ```
+  No `VOXEL stream frame=` line at all. It is printed only while `missing != 0` (ctr_voxel.c, the
+  `lastMissingLog` block), so missing was 0 at every check.
+- Emerald Route 104 (emerald-r104) after the fix: `atlas for 0:19 ... mem=V`, `atlas for 0:0 ... mem=L` (Petalburg,
+  the neighbour, which before this fix could not have had an atlas either), no stream lines.
+- Evidence: `evidence/vram-before-r5s.png` shows Route 5 (31,33) as a letterboxed 2D GBA frame (before);
+  `evidence/vram-after-r5s.png` shows the same spot in 3D, with the Route 5 gate house and trees and the textured
+  Saffron-side building at the lower left; `evidence/vram-after-emerald-r104.png` shows Emerald Route 104 (Briney's
+  cottage, the pier, the sea) in 3D.
+- Gate: `make -C tools/romgen test` 27 suites, 0 failures (romgen data untouched by this change); `vtest` 9 suites,
+  0 failures (test_voxel_shims 69 -> 79 checks: `TestAtlasMem`); device `make -j8` builds with no warnings in
+  source/voxel/.
+- UNPROVEN until a New 3DS run: frame time with an atlas in linear (FCRAM) memory. Azahar does not model PICA
+  texture fetch bandwidth. The current map's atlas usually lands in VRAM (it is built first), and the neighbour's
+  pair is the one in linear. However, an atlas does not move back to VRAM when the player crosses into the neighbour,
+  so after a crossing the current map can be the one sampled from FCRAM. On hardware, check the fps at a town edge
+  and after walking into the neighbour. If it is slow, the next step is migrating the current map's atlas into VRAM
+  (evict or swap the off-view one), or moving `preTex` (1 MiB, 2D prescale only) out of VRAM while voxel is on.
