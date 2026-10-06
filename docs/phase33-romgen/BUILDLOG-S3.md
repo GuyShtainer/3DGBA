@@ -72,3 +72,17 @@ Deviations and decisions:
    not dict"); the ground-colour set is a 4 KB bitset per ledge cell.
 Open: the Azahar parity (device SHA-1 vs host) and the Route 101 visual check (lead). Functions in rg_ledge.c stay
 under about 60 lines; `ledge_row` carries an unused `e` that is harmless.
+
+## 2026-10-06 — S3.1 lead verification (host suite, device parity, emulator visual)
+
+- Host: `ROMGEN_ROM=$PWD/roms/emerald.gba make -C tools/romgen test` (the path must be ABSOLUTE; a relative one
+  silently skips the real-ROM parts because the tests run from tools/romgen) gives all 12 suites 0 failures;
+  relief_ledge has 55152 checks.
+- CLI: `romgen roms/emerald.gba OUT --time` gives relief.bin 23292 B, 23 rows, 850 cells, 863 ledge cells, 6.1 ms.
+- Device parity (Azahar, New-3DS mode, `ROMGEN_DEV_HOOK=1` auto-run): `relief ledges: 23292 bytes, 23 rows, 850
+  cells, 1073 ms`. regions, signposts, buildings and **relief are all byte-identical to the host**. This is
+  emulator evidence, not hardware evidence.
+- Visual (O5 row 1): Route 101 (0/16) through the save warp, voxel mode on. The same spot with and without
+  relief.bin (`evidence/s31-route101-ledges-relief.png` vs `-norelief.png`). The pixel difference
+  (`s31-route101-diff.png`) sits exactly on the three ledge runs, plus sparkle-particle noise. With relief the lips
+  stand up as a thicker raised band. It is subtle by design (LIP 6 px) from the default camera. **PASS.**
