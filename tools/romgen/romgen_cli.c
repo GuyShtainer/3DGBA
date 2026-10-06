@@ -1,9 +1,11 @@
 /* romgen_cli.c -- host tool: reads a Pokemon Emerald (BPEE) .gba and writes the voxel data files
  * (3DGBA, GPLv3). Pure host code around the romgen cores in source/romgen/.
  *
- *   romgen ROM.gba OUTDIR [--time] [--only regions,signposts,buildings] [--dump-roles LAYOUT_ID] [--dump-model NAME]
+ *   romgen ROM.gba OUTDIR [--time] [--only regions,signposts,buildings,relief] [--relief ledges|off] [--relief-layout ID]
+ *         [--dump-roles LAYOUT_ID] [--dump-model NAME]
  *
- * Writes OUTDIR/regions.bin, signposts.bin and buildings.bin. --dump-model NAME prints one model's summary and
+ * Writes OUTDIR/regions.bin, signposts.bin, buildings.bin and relief.bin (--relief ledges, the S3a file; default).
+ * --relief-layout ID prints that layout's relief.bin row and every cell's 25 heights. --dump-model NAME prints one model's summary and
  * writes nothing. Built with -DRG_MEMCOUNT (`make -C tools/romgen mem`, build/romgen_mem) --time also prints the
  * peak live heap of rg_run. The output is derived from the user's ROM: write it
  * outside the repo or under an ignored path. --dump-roles prints a layout with upstream's letters
@@ -106,6 +108,40 @@ static void DumpRoles(const RgOutput *o, unsigned id)
     fprintf(stderr, "romgen: layout %u is not in the output\n", id);
 }
 
+/* Prints one relief.bin row (id, cells, size, flags, base) and every cell's 25 stored heights. */
+static void DumpReliefLayout(const RgOutput *o, unsigned id)
+{
+    const uint8_t *b = o->relief;
+    unsigned count, i, k, j;
+
+    if (b == NULL) {
+        fprintf(stderr, "romgen: no relief.bin built (--relief ledges)\n");
+        return;
+    }
+    count = (unsigned)(b[4] | (b[5] << 8));
+    for (i = 0; i < count; i++) {
+        const uint8_t *row = b + 8 + 14u * i;
+        unsigned lid = (unsigned)(row[0] | (row[1] << 8)), cells = (unsigned)(row[2] | (row[3] << 8));
+        unsigned w = (unsigned)(row[4] | (row[5] << 8)), hf = (unsigned)(row[6] | (row[7] << 8));
+        uint32_t off = (uint32_t)row[8] | ((uint32_t)row[9] << 8) | ((uint32_t)row[10] << 16) | ((uint32_t)row[11] << 24);
+
+        if (lid != id)
+            continue;
+        printf("relief layout %u: %u cells, %ux%u, flags %02x, base %d\n", lid, cells, w, hf & 0x3FFFu, hf >> 14,
+               (int)(int16_t)(row[12] | (row[13] << 8)));
+        for (k = 0; k < cells; k++) {
+            const uint8_t *c = b + off + 27u * k;
+
+            printf("cell (%u,%u):", c[0], c[1]);
+            for (j = 0; j < 25; j++)
+                printf(" %d", (int)(int8_t)c[2 + j]);
+            putchar('\n');
+        }
+        return;
+    }
+    fprintf(stderr, "romgen: layout %u has no relief row\n", id);
+}
+
 static const char *KindName(RgSpecKind k)
 {
     static const char *const kN[] = {"direct", "components", "kit", "props", "interior"};
@@ -171,7 +207,9 @@ int main(int argc, char **argv)
 {
     const char *romPath = NULL, *outDir = NULL;
     bool timing = false, wantRegions = true, wantSigns = true, wantBuildings = true;
-    int dumpId = 0, i;
+    bool wantRelief = true;
+    RgReliefMode reliefMode = RG_RELIEF_LEDGES;
+    int dumpId = 0, reliefId = 0, i;
     const char *dumpModel = NULL;
     size_t n = 0;
     uint8_t *rom;
@@ -188,7 +226,20 @@ int main(int argc, char **argv)
             wantRegions = strstr(v, "regions") != NULL;
             wantSigns = strstr(v, "signposts") != NULL;
             wantBuildings = strstr(v, "buildings") != NULL;
-        } else if (strcmp(argv[i], "--dump-roles") == 0 && i + 1 < argc) {
+            wantRelief = strstr(v, "relief") != NULL;
+        } else if (strcmp(argv[i], "--relief") == 0 && i + 1 < argc) {
+            const char *v = argv[++i];
+
+            if (strcmp(v, "ledges") == 0) {
+                reliefMode = RG_RELIEF_LEDGES;
+            } else if (strcmp(v, "off") == 0) {
+                wantRelief = false;
+            } else {
+                fprintf(stderr, "romgen: --relief %s is not available yet (ledges|off)\n", v);
+                return 2;
+            }
+        } else if (strcmp(argv[i], "--relief-layout") == 0 && i + 1 < argc) {
+            reliefId = atoi(argv[++i]);        } else if (strcmp(argv[i], "--dump-roles") == 0 && i + 1 < argc) {
             dumpId = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--dump-model") == 0 && i + 1 < argc) {
             dumpModel = argv[++i];
@@ -199,7 +250,7 @@ int main(int argc, char **argv)
         }
     }
     if (romPath == NULL || (outDir == NULL && dumpModel == NULL)) {
-        fprintf(stderr, "usage: romgen ROM.gba OUTDIR [--time] [--only regions,signposts,buildings] [--dump-roles LAYOUT_ID] [--dump-model NAME]\n");
+        fprintf(stderr, "usage: romgen ROM.gba OUTDIR [--time] [--only regions,signposts,buildings,relief] [--relief ledges|off] [--relief-layout ID] [--dump-roles LAYOUT_ID] [--dump-model NAME]\n");
         return 2;
     }
     rom = ReadFile(romPath, &n);
@@ -216,6 +267,7 @@ int main(int argc, char **argv)
     opts.nowMs = NowMs;
     opts.wantSigns = wantSigns;
     opts.wantBuildings = wantBuildings;
+    opts.relief = wantRelief ? reliefMode : RG_RELIEF_OFF;
 #ifdef RG_MEMCOUNT
     rgm_reset();   /* the ROM buffer read above is not rg_run's: count from here */
 #endif
@@ -242,12 +294,17 @@ int main(int argc, char **argv)
                out.bVariants);
         printf("buildings gate: %u failing model(s)\n", out.buildingsFailed);
     }
+    if (wantRelief && out.relief != NULL && WriteFile(outDir, "relief.bin", out.relief, out.reliefSize))
+        printf("relief.bin: %zu bytes, %u rows, %u cells, %u ledge layouts, %u ledge cells (mode ledges)\n", out.reliefSize,
+               out.rst.rows, out.rst.cells, out.rst.ledgeLayouts, out.rst.ledgeCells);
     if (timing)
         printf("time: total %.1f ms (world %.1f, roles %.1f, signs %.1f, serialise %.1f)\n", NowMs() - t0, out.msWorld,
                out.msRoles, out.msSigns, out.msWrite);
     if (timing && wantBuildings)
         printf("time: buildings models %.1f ms, gates %.1f ms, placements+write %.1f ms\n", out.msBuildModels, out.msChecks,
                out.msWriteBuildings);
+    if (timing && wantRelief)
+        printf("time: relief %.1f ms\n", out.msRelief);
 #ifdef RG_MEMCOUNT
     if (timing)
         printf("memory: peak live heap of rg_run %.2f MB (%zu bytes), %zu allocations, %zu bytes still live (the outputs)\n",
@@ -255,6 +312,8 @@ int main(int argc, char **argv)
 #endif
     if (dumpId > 0)
         DumpRoles(&out, (unsigned)dumpId);
+    if (reliefId > 0)
+        DumpReliefLayout(&out, (unsigned)reliefId);
     rg_output_free(&out);
     free(rom);
     return 0;

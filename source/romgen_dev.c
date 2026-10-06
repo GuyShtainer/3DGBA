@@ -98,6 +98,8 @@ static void Describe(char *t, size_t cap, RgErr e, const RgOutput *o, double tot
                             o->msChecks, o->msWriteBuildings);
     n += (unsigned)snprintf(t + n, cap - n, "bytes regions %zu signposts %zu buildings %zu\n", o->regionsSize, o->signsSize,
                             o->buildingsSize);
+    n += (unsigned)snprintf(t + n, cap - n, "relief ledges: %zu bytes, %u rows, %u cells, %u ms\n", o->reliefSize, o->rst.rows,
+                            o->rst.cells, (unsigned)o->msRelief);
     n += (unsigned)snprintf(t + n, cap - n, "counts models %u pages %u pageModels %u placements %u vertices %u masks %u variants %u\n",
                             o->bModels, o->bPages, o->bPageModels, o->bPlacements, o->bVertices, o->bMasks, o->bVariants);
     n += (unsigned)snprintf(t + n, cap - n, "gate failures %u\n", o->buildingsFailed);
@@ -118,12 +120,14 @@ static bool WriteOutputs(const RgOutput *o)
         ok = WriteAtomic("signposts.bin", o->signs, o->signsSize) && ok;
     if (o->buildings != NULL)
         ok = WriteAtomic("buildings.bin", o->buildings, o->buildingsSize) && ok;
+    if (o->relief != NULL)
+        ok = WriteAtomic("relief.bin", o->relief, o->reliefSize) && ok;
     return ok;
 }
 
 static void WorkerMain(void *arg)
 {
-    static char text[1024];
+    static char text[1536];
     const Job *j = (const Job *)arg;
     RgRunOpts opts;
     RgOutput out;
@@ -139,6 +143,7 @@ static void WorkerMain(void *arg)
     opts.cancel = &s_cancel;
     opts.wantSigns = true;
     opts.wantBuildings = true;
+    opts.relief = RG_RELIEF_LEDGES;   /* S3a: the full relief stays host-only (SPEC-S3 1.7) */
     a0 = Arena();
     u0 = Used();
     t0 = NowMs();

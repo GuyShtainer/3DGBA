@@ -4,6 +4,7 @@
 #define RG_RUN_H
 
 #include "rg_buildings.h"
+#include "rg_relief.h"
 #include "rg_world.h"
 
 typedef struct RgRunOpts {
@@ -13,6 +14,7 @@ typedef struct RgRunOpts {
     double (*nowMs)(void);       /* optional clock; when set the ms* fields of RgOutput are filled */
     bool wantSigns;              /* false: roles and regions.bin only */
     bool wantBuildings;          /* true: also build the models, gate them and write buildings.bin (SPEC-S2 1.8) */
+    RgReliefMode relief;         /* RG_RELIEF_OFF (0): no relief.bin; LEDGES: the S3a file (SPEC-S3 1.7) */
 } RgRunOpts;
 
 typedef struct RgOutput {
@@ -22,6 +24,9 @@ typedef struct RgOutput {
     size_t signsSize;
     uint8_t *buildings;          /* buildings.bin (VXB7), malloc'd; NULL unless wantBuildings */
     size_t buildingsSize;
+    uint8_t *relief;             /* relief.bin (VXL4), malloc'd; NULL unless opts->relief != OFF */
+    size_t reliefSize;
+    RgReliefStats rst;
     unsigned bModels, bPages, bPageModels, bPlacements, bVertices, bMasks, bVariants;
     unsigned buildingsFailed;    /* models whose gate (ortho + density) failed; the file is still written */
     char failedNames[RG_MAX_SKIPPED][64];   /* the first few failing model names */
@@ -29,6 +34,7 @@ typedef struct RgOutput {
     unsigned signCount, headCount, emptyMasks;
     unsigned roleCount[11];
     double msWorld, msRoles, msSigns, msWrite;
+    double msRelief;             /* S3: rg_relief_build */
     double msBuildModels, msChecks, msWriteBuildings;   /* S2: build_models, the gates, rg_buildings_write (placements run inside the write) */
 } RgOutput;
 

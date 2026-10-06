@@ -82,6 +82,16 @@ static RgErr write_outputs(const RgWorld *w, const RgRoles *r, RgSignList *signs
     return RG_OK;
 }
 
+/* S3: relief.bin from the world (and, for FULL, the roles). */
+static RgErr run_relief(const RgWorld *w, const RgRoles *r, const RgRunOpts *o, RgOutput *out)
+{
+    double t0 = now(o);
+    RgErr e = rg_relief_build(w, r, o->relief, o->progress, o->ctx, o->cancel, &out->relief, &out->reliefSize, &out->rst);
+
+    out->msRelief = now(o) - t0;
+    return e;
+}
+
 /* S2: models -> gates -> buildings.bin. The pair-grouped passes live inside the builders; no RgPair is open here. */
 static RgErr run_buildings(const RgWorld *w, const RgRunOpts *o, RgOutput *out)
 {
@@ -171,6 +181,8 @@ RgErr rg_run(const uint8_t *rom, size_t romSize, const RgRunOpts *opts, RgOutput
         e = run_pair(&w, &r, &signs, pi, opts, out, &done, total);
     if (e == RG_OK && opts != NULL && opts->wantBuildings)
         e = run_buildings(&w, opts, out);
+    if (e == RG_OK && opts != NULL && opts->relief != RG_RELIEF_OFF)
+        e = run_relief(&w, &r, opts, out);
     t0 = now(opts);
     if (e == RG_OK)
         e = write_outputs(&w, &r, &signs, out);
@@ -200,6 +212,7 @@ void rg_output_free(RgOutput *out)
     free(out->regions);
     free(out->signs);
     free(out->buildings);
-    out->regions = out->signs = out->buildings = NULL;
-    out->regionsSize = out->signsSize = out->buildingsSize = 0;
+    free(out->relief);
+    out->regions = out->signs = out->buildings = out->relief = NULL;
+    out->regionsSize = out->signsSize = out->buildingsSize = out->reliefSize = 0;
 }
