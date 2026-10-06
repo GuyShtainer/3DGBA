@@ -271,3 +271,19 @@ Deviations and decisions:
 3. Nodes are keyed (kind, group-or-layout, block) and looked up linearly (74 nodes); the sample dict is a hash set in insertion order.
 4. The R2 log counts terrace regions that are `big`, each group's fallback level and the plain maps (not every pixel-less region).
 5. A seam side whose edge pixel has no terrace skips the cell, as upstream's `None` does, but the other side's node is still created first.
+
+## S3.6 Solve (rg_rsolve.{h,c}, rg_rplain.c)
+
+```
+make -C tools/romgen test      # 18 suites, 0 failures; relief_solve 379 checks, relief_ledge 55159 (ROMGEN_ROM set)
+```
+- Ports: solve_drawn (rel:1851-2336), solve (189-398), awash (2580-2595), ledges_on_ground, pier_ends (PIER_REACH 2), layout_heights.
+- relief.bin SHA-1 unchanged `eb25a3835edf7ebbcc9d634dd199be955fb4d27e`; other three files unchanged. Device release builds unchanged in size
+  (`3DGBA.3dsx` 4,582,344 B, `3DGBA.cia` 2,156,992 B); the new files compile for ARM without warnings.
+- 33 groups solved, none lay()-capped (2-4 sweeps each); 56 layouts own a lattice. 125,704 soil footprint cells: 0 points below their level.
+  Bases nonzero: group 9 +160, 13 +48, 136 -16, 21 -16, 22 -16, 27/29/28 +48, 392 +48, 239's layout 394 +16.
+- Fallback solve(): layout 4 (Rustboro, no group) 1 land region, 158 sweeps, 4 mounds, h -16..8.07; layout 20 3 regions, 60 sweeps. Both < 400.
+- Pier double writes 0 (D4: row-major port with a conflict counter, since upstream's set is hash-ordered).
+- layout_heights over 87 outdoor layouts finite and pinned; 30 non-drawn non-ENABLED layouts equal flat + berms.
+- Deviations: D3 hypot via sqrt (grid pin 0xed111a40d76c3471); S3.5 trimmed preps, so rg_solve_all re-prepares each ok group with the same RgRCtx.
+- Timing (host -O2, ASan test build): solve_drawn all groups ~3.8 s under ASan; layout_heights 70-80 ms.
