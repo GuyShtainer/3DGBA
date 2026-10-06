@@ -27,6 +27,8 @@ extern const RgSpec rg_kspecs_vermilion[];
 extern const unsigned rg_kspecs_vermilion_count;
 extern const RgSpec rg_kspecs_lavender[];
 extern const unsigned rg_kspecs_lavender_count;
+extern const RgSpec rg_kspecs_celadon[];
+extern const unsigned rg_kspecs_celadon_count;
 
 static const KTown sTowns[] = {
     {rg_kspecs_pallet, &rg_kspecs_pallet_count},   /* K1 */
@@ -36,6 +38,7 @@ static const KTown sTowns[] = {
     {rg_kspecs_cerulean, &rg_kspecs_cerulean_count},   /* K5 */
     {rg_kspecs_vermilion, &rg_kspecs_vermilion_count},   /* K6 */
     {rg_kspecs_lavender, &rg_kspecs_lavender_count},   /* K7 */
+    {rg_kspecs_celadon, &rg_kspecs_celadon_count},   /* K8 */
 };
 
 static RgSpec sTable[RG_KSPECS_MAX];
