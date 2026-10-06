@@ -18,6 +18,8 @@
 
 #include "vx_fixture.h"
 #include "voxel_world.h"
+#include "voxel_tree.h"
+#include "rg_gameprof.h"
 
 static int sChecks, sFails;
 #define CHECK(c) do { ++sChecks; if (!(c)) { ++sFails; printf("FAIL %s:%d  %s\n", __FILE__, __LINE__, #c); } } while (0)
@@ -175,6 +177,93 @@ static void TestHashes(void)
     CHECK(VoxelWorld_LiveDigest() == live0 && VoxelWorld_BlockHash(0, 0, 8, 8) == blk0);        /* undo restores */
 }
 
+/* ---- Phase 34 T1: the tree tables come from the game profile ---- */
+
+/* The Emerald tables exactly as voxel_tree.c carried them before T1 (the oracle for "byte-identical"). */
+static int OldPart(int metatileId)
+{
+    switch (metatileId)
+    {
+    case 0x1D4: case 0x1D6: return 0;
+    case 0x1D5: case 0x1D7: return 1;
+    case 0x1DC: case 0x1DE: case 0x1E4: case 0x1E6: return 2;
+    case 0x1DD: case 0x1DF: case 0x1E5: case 0x1E7: return 3;
+    case 0x1EC: return 2;
+    case 0x1ED: return 3;
+    case 0x016: case 0x017: case 0x0C6: case 0x0C7:
+    case 0x1F4: case 0x1F5: return VOXEL_TREE_SMALL;
+    default: return -1;
+    }
+}
+
+static int OldGround(int metatileId)
+{
+    switch (metatileId)
+    {
+    case 0x1C6: case 0x1C7: return 0x00D;
+    case 0x1CE: case 0x1CF: return 0x001;
+    case 0x00E: case 0x00F: case 0x040: return 0x001;
+    case 0x01D: return 0x002;
+    case 0x025: return 0x00D;
+    case 0x02D: return 0x0A1;
+    case 0x035: case 0x193: return 0x170;
+    case 0x0CE: return 0x091;
+    default: return metatileId;
+    }
+}
+
+static void TestTreeTables(void)
+{
+    static const int kKantoTrees[] = {0x14, 0x15, 0x16, 0x17, 0x1C, 0x1D, 0x1E, 0x1F, 0x24, 0x25, 0x26, 0x27};
+    uint8_t hdr[0xC0];
+    int id;
+
+    /* Emerald: every id, plus out-of-range ids, gives what the old switch gave. */
+    gVxProf = NULL;
+    for (id = 0; id < 1024; ++id)
+    {
+        CHECK(VoxelTree_Part(id) == OldPart(id));
+        CHECK(VoxelTree_GroundMetatile(id) == OldGround(id));
+    }
+    CHECK(VoxelTree_Part(-1) == -1 && VoxelTree_Part(1024) == -1 && VoxelTree_Part(0x7FFF) == -1);
+    CHECK(VoxelTree_GroundMetatile(-1) == -1 && VoxelTree_GroundMetatile(1024) == 1024);
+    CHECK(gameprof_emerald()->treePartCount == 20 && gameprof_emerald()->treeGroundCount == 13);   /* 20 parts, 13 grounds */
+
+    /* FireRed / LeafGreen rev 1: the Kanto table. Header-only fake images (code + revision) pick the rows. */
+    for (int game = 0; game < 2; ++game)
+    {
+        const GameProfile *p;
+
+        memset(hdr, 0, sizeof hdr);
+        memcpy(hdr + 0xAC, game == 0 ? "BPRE" : "BPGE", 4);
+        hdr[0xBC] = 1;
+        p = gameprof_detect(hdr, sizeof hdr);
+        CHECK(p != NULL && p->game == (game == 0 ? GP_FIRERED : GP_LEAFGREEN));
+        if (p == NULL)
+            continue;
+        gVxProf = p;
+        CHECK(p->treePart != NULL && p->treePartCount == 12 && p->treeGround == NULL && p->treeGroundCount == 0);
+        for (int k = 0; k < p->treePartCount; ++k)       /* every tree id is a primary metatile, below 640 */
+            CHECK(p->treePart[2 * k] >= 0 && p->treePart[2 * k] < (int)p->nPrimMetatiles && p->treePart[2 * k] < 640);
+        for (id = -2; id < 1030; ++id)
+        {
+            int want = -1;
+
+            for (int k = 0; k < 12; ++k)
+                if (kKantoTrees[k] == id)
+                    want = (id & 1) | (((id == 0x1C || id == 0x1D || id == 0x1E || id == 0x1F) ? 0 : 1) << 1);
+            CHECK(VoxelTree_Part(id) == want);
+            CHECK(VoxelTree_GroundMetatile(id) == id);    /* Kanto has no ground replacements */
+        }
+        /* Pallet's border block (SPEC T1): 1C 1D over 14 15 is the quadrants 0 1 / 2 3. */
+        CHECK(VoxelTree_Part(0x1C) == 0 && VoxelTree_Part(0x1D) == 1 && VoxelTree_Part(0x14) == 2 && VoxelTree_Part(0x15) == 3);
+        CHECK(VoxelTree_Part(0x001) == -1 && VoxelTree_Part(0x00D) == -1 && VoxelTree_Part(0x005) == -1);   /* grass, tall grass, bush */
+        CHECK(VoxelTree_Part(0x1D4) == -1 && VoxelTree_Part(0x016 + 0x100) == -1);   /* Emerald's ids are not Kanto's */
+    }
+    gVxProf = NULL;
+    CHECK(VoxelTree_Part(0x1D4) == 0 && VoxelTree_Part(0x1C) == -1);   /* and back: the Emerald table again */
+}
+
 int main(void)
 {
     CHECK(fxInit() == 0);
@@ -183,6 +272,7 @@ int main(void)
     TestWeatherAndFade();
     TestReflectionAndFortree();
     TestHashes();
+    TestTreeTables();
     printf("test_voxel_world: %d checks, %d failures\n", sChecks, sFails);
     return sFails != 0;
 }

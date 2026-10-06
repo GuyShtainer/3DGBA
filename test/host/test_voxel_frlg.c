@@ -12,6 +12,7 @@
 #include "rg_fixture.h"
 #include "vx_fixture_frlg.h"
 #include "voxel_world.h"
+#include "voxel_tree.h"
 
 static int sChecks, sFails, sSkips;
 #define CHECK(c) do { ++sChecks; if (!(c)) { ++sFails; printf("FAIL %s:%d  %s\n", __FILE__, __LINE__, #c); } } while (0)
@@ -57,6 +58,39 @@ static void RunGame(const char *env, GpGame game, const char *label)
             && pal->connections->connections[i].mapNum == 19)
             northRoute1 = 1;
     CHECK(northRoute1);   /* Route 1 (3/19) joins Pallet's north edge */
+
+    /* T1: Route 1's layout (3/19), straight from the ROM: its tree walls resolve to tree parts. The Kanto ids are the
+     * 2x2 tree blocks 1C 1D / 14 15 (+ edge variants 1E 1F / 16 17, trunk row 24 25 / 26 27). */
+    {
+        struct MapConnection c1 = {0, 0, 3, 19};
+        const struct MapHeader *r1 = GetMapHeaderFromConnection(&c1);
+        int cells = 0, parts = 0, top = 0, bottom = 0, stray = 0;
+
+        CHECK(r1 != NULL && r1->mapLayout != NULL && r1->mapLayout->map != NULL);
+        if (r1 != NULL && r1->mapLayout != NULL && r1->mapLayout->map != NULL)
+        {
+            const struct MapLayout *l1 = r1->mapLayout;
+
+            CHECK(l1->primaryTileset == &gTileset_General);
+            for (int i = 0; i < l1->width * l1->height; ++i)
+            {
+                int mt = l1->map[i] & 0x3FF, part = VoxelTree_Part(mt);
+
+                ++cells;
+                if (part >= 0) ++parts;
+                if (part == 0 || part == 1) ++top;
+                if (part == 2 || part == 3) ++bottom;
+                /* nothing outside the 12 Kanto ids is a part, and every one of the 12 is */
+                if ((part >= 0) != ((mt >= 0x14 && mt <= 0x17) || (mt >= 0x1C && mt <= 0x1F) || (mt >= 0x24 && mt <= 0x27)))
+                    ++stray;
+            }
+            printf("  %s: Route 1 %dx%d, %d tree-part cells (%d top row, %d bottom row)\n", label, (int)l1->width, (int)l1->height,
+                   parts, top, bottom);
+            CHECK(stray == 0);
+            CHECK(parts == 278 && top == 138 && bottom == 140);   /* measured: the walls along both sides and the north end */
+            CHECK(cells == l1->width * l1->height);
+        }
+    }
 
     /* The Pallet door metatile 0x2A3 (secondary tileset, local index 0x2A3 - 640): attribute word read straight from the
      * ROM must equal the interned u16: behaviour 0x69 in the low 9 bits, layer type from bits 29-30 into bits 12-13. */
@@ -107,7 +141,7 @@ static void RunGame(const char *env, GpGame game, const char *label)
             }
         CHECK(water >= 8);       /* the pond */
         CHECK(doors == 3);
-        CHECK(trees == 0);       /* Emerald's tree table is off on FRLG (Kanto's is slice T1) */
+        CHECK(trees > 0);        /* Pallet's tree wall resolves to tree parts (Kanto's table, slice T1) */
         CHECK(VoxelWorld_BorderMetatile(-2, -2) >= 0 && VoxelWorld_BorderMetatile(30, 30) >= 0);
         free(snap);
     }

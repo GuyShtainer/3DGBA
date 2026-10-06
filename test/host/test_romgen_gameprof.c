@@ -52,7 +52,7 @@ static void TestFields(void)
     CHECK(p->gfxInfoPtrs == GBA_ADDR_GFX_INFO_PTRS && p->gfxInfoCount == GBA_GFX_INFO_COUNT);
     CHECK(p->fldeffTemplates == GBA_ADDR_FLDEFF_TEMPLATES && p->fldeffCount == GBA_FLDEFF_TEMPLATE_COUNT);
     CHECK(p->cb2Overworld == CB2_Overworld && p->cb2OverworldBasic == CB2_OverworldBasic);
-    CHECK(p->emeraldIdTables && p->interiors3d && p->treePart == NULL && p->specs == NULL);
+    CHECK(p->emeraldIdTables && p->interiors3d && p->treePart != NULL && p->specs == NULL);
     CHECK(gameprof_emerald() == p);
 }
 

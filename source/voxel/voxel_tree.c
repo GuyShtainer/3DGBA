@@ -6,45 +6,46 @@
 #include "voxel_relief.h"
 #include "gba_game.h" /* 3DGBA: VXP() */
 
+/* 3DGBA (Phase 34 T1): the tables live in the game profile (treePart / treeGround, flat int16 pairs, see
+ * rg_gameprof.h) so each game brings its own metatile ids. They are expanded once per profile into two lookup tables:
+ * these functions run per cell, per frame, and the ground map is walked over all 1024 ids on every atlas build. */
+#define TREE_LUT_IDS 1024
+
+static const GameProfile *sLutFor;
+static int8_t sPartLut[TREE_LUT_IDS];
+static int16_t sGroundLut[TREE_LUT_IDS];
+
+static void TreeLut(void)
+{
+    const GameProfile *p = vx_prof();
+    unsigned i;
+
+    if (p == sLutFor)
+        return;
+    for (i = 0; i < TREE_LUT_IDS; ++i)
+    {
+        sPartLut[i] = -1;
+        sGroundLut[i] = (int16_t)i;
+    }
+    for (i = 0; p->treePart != NULL && i < p->treePartCount; ++i)
+        if ((unsigned)p->treePart[2 * i] < TREE_LUT_IDS)
+            sPartLut[p->treePart[2 * i]] = (int8_t)p->treePart[2 * i + 1];
+    for (i = 0; p->treeGround != NULL && i < p->treeGroundCount; ++i)
+        if ((unsigned)p->treeGround[2 * i] < TREE_LUT_IDS)
+            sGroundLut[p->treeGround[2 * i]] = p->treeGround[2 * i + 1];
+    sLutFor = p;
+}
+
 int VoxelTree_Part(int metatileId)
 {
-    if (!VXP(emeraldIdTables))
-        return -1; /* Emerald metatile ids; the Kanto tree table is slice T1 */
-    switch (metatileId)
-    {
-    case 0x1D4: case 0x1D6: return 0; /* upper left, including forest edge */
-    case 0x1D5: case 0x1D7: return 1;
-    case 0x1DC: case 0x1DE: case 0x1E4: case 0x1E6: return 2;
-    case 0x1DD: case 0x1DF: case 0x1E5: case 0x1E7: return 3;
-    /* A large tree's lower row under a small tree's canopy top. */
-    case 0x1EC: return 2;
-    case 0x1ED: return 3;
-    /* Small trees: the edge of a wood, and inside it where the next crown
-     * overlaps the trunk. 1F4-1F5 also carry a neighbour's leaves. */
-    case 0x016: case 0x017: case 0x0C6: case 0x0C7:
-    case 0x1F4: case 0x1F5: return VOXEL_TREE_SMALL;
-    default: return -1;
-    }
+    TreeLut();
+    return (unsigned)metatileId < TREE_LUT_IDS ? sPartLut[metatileId] : -1;
 }
 
 int VoxelTree_GroundMetatile(int metatileId)
 {
-    if (!VXP(emeraldIdTables))
-        return metatileId;
-    switch (metatileId)
-    {
-    case 0x1C6: case 0x1C7: return 0x00D; /* tall grass without canopy */
-    case 0x1CE: case 0x1CF: return 0x001; /* ordinary grass */
-    /* A small tree's canopy top, over whatever it stood in front of. The
-     * fence feet under 040 have no metatile of their own: grass. */
-    case 0x00E: case 0x00F: case 0x040: return 0x001;
-    case 0x01D: return 0x002; /* ledge edge */
-    case 0x025: return 0x00D; /* tall grass */
-    case 0x02D: return 0x0A1; /* reflective water */
-    case 0x035: case 0x193: return 0x170; /* calm water */
-    case 0x0CE: return 0x091; /* rock wall, sand base */
-    default: return metatileId;
-    }
+    TreeLut();
+    return (unsigned)metatileId < TREE_LUT_IDS ? sGroundLut[metatileId] : metatileId;
 }
 
 /* The small crown is 16:32: width 1, length 2 tiles, at the same 50 degrees
