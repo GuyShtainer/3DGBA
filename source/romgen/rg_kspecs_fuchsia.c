@@ -13,6 +13,7 @@
 
 #define L_FUCHSIA 85, 0xE2428371u
 #define L_SAFARI_C 147, 0x1A2757E4u
+#define L_SAFARI_W 150, 0xFEAD1C27u
 #define FZ_GROUND {0x001}
 
 static void fz_pt(double (*poly)[2], unsigned i, double z, double y)
@@ -98,13 +99,15 @@ static const RgSideCfg kHouseSide[1] = {
  * canopy and its pillars (a few px past row 96) stay painted: the art has them no deeper than the facade itself. */
 static bool k_fuchsia_safari(const RgSpec *spec, int a0, int a1, RgPartList *out)
 {
-    (void)spec; (void)a0; (void)a1;
-    return fz_block(out, "safari", 0, 96, 96, 64, 0) && !out->failed;
+    (void)spec; (void)a1;
+    return fz_block(out, "safari", 0, 96, 96, 64, a0) && !out->failed;   /* a0 = the roof's top row */
 }
 static const RgExact kSafariExact[1] = {{0, 0, 96, 96, false}};
 static const RgSideCfg kSafariSide[1] = {
     {NULL, {8, 65, 88, 67}, {8, 57, 40, 59}, 999, true},
 };
+
+static const RgExact kSafariWExact[1] = {{0, 8, 96, 96, false}};
 
 /* ---- k_safari_rest: 80x64 art (rect (28,22), 5x4 on the Safari Zone centre area) -------------------------------------- */
 /* The Safari Zone rest houses: the same gold-roofed house as Fuchsia's, one cell narrower. Rows: grass 0-7, the gold roof
@@ -121,6 +124,8 @@ const RgSpec rg_kspecs_fuchsia[] = {
      k_fuchsia_house, 96, 48, kHouseSide},
     {"k_fuchsia_safari", RG_SPEC_DIRECT, L_FUCHSIA, {22, 0, 6, 6}, {0, 0}, FZ_GROUND, 1, kSafariExact, 1,
      k_fuchsia_safari, 0, 0, kSafariSide},
+    {"k_safari_west", RG_SPEC_DIRECT, L_SAFARI_W, {10, 2, 6, 6}, {0, 0}, FZ_GROUND, 1, kSafariWExact, 1,
+     k_fuchsia_safari, 8, 0, kSafariSide},
     {"k_safari_rest", RG_SPEC_DIRECT, L_SAFARI_C, {28, 22, 5, 4}, {1, 3}, FZ_GROUND, 1, kRestExact, 1,
      k_fuchsia_house, 80, 32, kRestSide},
 };
