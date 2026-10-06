@@ -654,7 +654,7 @@ static RgErr find_interior(const RgWorld *w, const RgBuildModel *m, RgPlacementL
         bool primaryOnly = true;
 
         for (i = 0; i < cw * ch; i++)
-            if (rg_metatile(ref, x + (int)(i % cw), y + (int)(i / cw)) >= RG_NUM_PRIMARY)
+            if (rg_metatile(ref, x + (int)(i % cw), y + (int)(i / cw)) >= rg_lprof(ref)->nPrimMetatiles)
                 primaryOnly = false;
         for (idx = 0; idx < w->layoutCount && err == RG_OK; idx++) {
             const RgLayout *E = &w->layouts[idx];
@@ -746,7 +746,7 @@ RgErr rg_find_placements(const RgWorld *w, const RgBuildModel *m, RgPlacementLis
             fp.core[fp.nCore][0] = i;
             fp.core[fp.nCore][1] = j;
             fp.nCore++;
-            if (fp.tmpl[j * cw + i] >= RG_NUM_PRIMARY)
+            if (fp.tmpl[j * cw + i] >= rg_lprof(ref)->nPrimMetatiles)
                 primaryOnly = false;
         }
     pc.w = w; pc.p = NULL; pc.idx = -1;
@@ -1110,7 +1110,7 @@ static RgErr ground_variants(const RgWorld *w, const RgBuildModels *ms, Variant 
                 if (x < 0 || y < 0 || x >= (int)E->w || y >= (int)E->h)
                     continue;                           /* across a seam: the map next door draws it */
                 mt = rg_rd16(E->blocks + 2u * ((size_t)y * E->w + (size_t)x)) & 0x3FFu;
-                ts = mt < RG_NUM_PRIMARY ? E->ts[0]->addr : E->ts[1]->addr;
+                ts = mt < rg_lprof(E)->nPrimMetatiles ? E->ts[0]->addr : E->ts[1]->addr;
                 q = m->quads[k];
                 for (t = 0; t < nKeys; t++)
                     if (keys[t].ts == ts && keys[t].mt == mt && keys[t].q == q)

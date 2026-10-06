@@ -5,10 +5,43 @@
 // Header-only, included by one .c per suite.
 #pragma once
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "gba_game.h"
+
+/* Real-ROM loading for the FireRed / LeafGreen suites (Phase 34). ROMGEN_ROM_FR / ROMGEN_ROM_LG name the files;
+ * when unset, firered.gba / leafgreen.gba beside the file named by ROMGEN_ROM are used. Paths should be ABSOLUTE
+ * (make runs from tools/romgen). Returns a malloc'd image, or NULL (the suite prints SKIP). */
+#define FXR_ENV_FR "ROMGEN_ROM_FR"
+#define FXR_ENV_LG "ROMGEN_ROM_LG"
+static inline uint8_t *fxr_load_rom(const char *env, size_t *n)
+{
+    char path[1024];
+    const char *p = getenv(env), *base = getenv("ROMGEN_ROM"), *slash;
+    FILE *fp;
+    long len;
+    uint8_t *buf;
+
+    if (p == NULL || p[0] == 0) {
+        size_t dl;
+        if (base == NULL || (slash = strrchr(base, '/')) == NULL) return NULL;
+        dl = (size_t)(slash - base) + 1u;
+        if (dl + 16u >= sizeof path) return NULL;
+        memcpy(path, base, dl);
+        strcpy(path + dl, strcmp(env, FXR_ENV_FR) == 0 ? "firered.gba" : "leafgreen.gba");
+        p = path;
+    }
+    fp = fopen(p, "rb");
+    if (fp == NULL) return NULL;
+    if (fseek(fp, 0, SEEK_END) != 0 || (len = ftell(fp)) <= 0 || len > 0x2000000L || fseek(fp, 0, SEEK_SET) != 0) { fclose(fp); return NULL; }
+    buf = (uint8_t *)malloc((size_t)len);
+    if (buf == NULL || fread(buf, 1, (size_t)len, fp) != (size_t)len) { free(buf); fclose(fp); return NULL; }
+    fclose(fp);
+    *n = (size_t)len;
+    return buf;
+}
 
 #define FXR_ROM_SIZE 0x490000u
 #define FXR_MAX_MAPS 256

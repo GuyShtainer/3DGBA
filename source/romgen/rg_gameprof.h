@@ -76,6 +76,11 @@ typedef struct GameProfile {
  * buffer). Rows whose game is GP_NONE are never returned. */
 const GameProfile *gameprof_detect(const uint8_t *rom, size_t size);
 
+/* Phase 34 G1: the same detection for romgen, which needs only the ROM-layer fields. It also returns the FireRed and
+ * LeafGreen rev 1 rows, whose RAM anchors (R1) are still empty. gameprof_detect() keeps refusing a non-Emerald row
+ * until its renderer anchors are harvested (gMain != 0), so the renderer is not enabled by accident. */
+const GameProfile *gameprof_detect_romgen(const uint8_t *rom, size_t size);
+
 /* The Emerald row. Its behaviour sets are filled on first use from the existing predicates; the first call
  * must not race with another thread's first call (vx_host and romgen both call it before any worker runs). */
 const GameProfile *gameprof_emerald(void);

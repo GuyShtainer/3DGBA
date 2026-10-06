@@ -11,18 +11,19 @@
 #include "rg_behavior.h"
 #include "voxel_regions.h"
 
-#define HOUSE_HALF_WIDTH 5
-#define HOUSE_HEIGHT 7
 
 bool rg_is_ledge_junction(const RgLayout *L, int x, int y)
 {
     bool horizontal, vertical;
 
+    const GpBehSet *jump;
+
     assert(L != NULL);
     if (!rg_blocked(L, x, y))
         return false;
-    horizontal = rg_is_jump(rg_behaviour(L, x - 1, y)) || rg_is_jump(rg_behaviour(L, x + 1, y));
-    vertical = rg_is_jump(rg_behaviour(L, x, y - 1)) || rg_is_jump(rg_behaviour(L, x, y + 1));
+    jump = &rg_lprof(L)->jump;
+    horizontal = gp_beh(jump, rg_behaviour(L, x - 1, y)) || gp_beh(jump, rg_behaviour(L, x + 1, y));
+    vertical = gp_beh(jump, rg_behaviour(L, x, y - 1)) || gp_beh(jump, rg_behaviour(L, x, y + 1));
     return horizontal && vertical;
 }
 
@@ -66,6 +67,7 @@ static bool build_houses(Ctx *c)
 {
     static const int8_t nb[4][2] = {{0, -1}, {0, 1}, {-1, 0}, {1, 0}};
     const RgLayout *L = c->L;
+    const GameProfile *gp = rg_lprof(L);
     size_t cells = (size_t)L->w * L->h, d;
     uint16_t *seen;
     int32_t *stack;
@@ -83,7 +85,7 @@ static bool build_houses(Ctx *c)
         size_t sp = 0;
         uint16_t stamp = (uint16_t)(d + 1);
 
-        if (!rg_is_house_door(rg_behaviour(L, dx, dy)) || rg_off(L, sx, sy) || !rg_blocked(L, sx, sy))
+        if (!gp_beh(&gp->houseDoor, rg_behaviour(L, dx, dy)) || rg_off(L, sx, sy) || !rg_blocked(L, sx, sy))
             continue;
         stack[sp++] = sy * (int32_t)L->w + sx;
         seen[(size_t)sy * L->w + (size_t)sx] = stamp;
@@ -96,8 +98,8 @@ static bool build_houses(Ctx *c)
             for (k = 0; k < 4; k++) {
                 int nx = x + nb[k][0], ny = y + nb[k][1];
                 size_t ni;
-                if (rg_off(L, nx, ny) || !rg_blocked(L, nx, ny) || abs(nx - dx) > HOUSE_HALF_WIDTH
-                    || ny > dy || ny < dy - HOUSE_HEIGHT)
+                if (rg_off(L, nx, ny) || !rg_blocked(L, nx, ny) || abs(nx - dx) > gp->houseHalfWidth
+                    || ny > dy || ny < dy - gp->houseHeight)
                     continue;
                 ni = (size_t)ny * L->w + (size_t)nx;
                 if (seen[ni] == stamp || rg_foliage_ge_half(c->pair, rg_metatile(L, nx, ny)))
@@ -212,9 +214,9 @@ static unsigned role_at(Ctx *c, int x, int y)
     unsigned b = rg_behaviour(L, x, y);
     uint16_t m;
 
-    if (rg_is_water(b))
+    if (gp_beh(&rg_lprof(L)->water, b))
         return VOXEL_ROLE_WATER;
-    if (rg_is_jump(b))
+    if (gp_beh(&rg_lprof(L)->jump, b))
         return VOXEL_ROLE_LEDGE;
     m = rg_metatile(L, x, y);
     if (!rg_blocked(L, x, y))

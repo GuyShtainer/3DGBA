@@ -20,6 +20,7 @@
 #include "rg_rworld.h"
 #include "rg_run.h"
 #include "rg_bspecs.h"
+#include "rg_gameprof.h"
 #include "rg_world.h"
 
 #ifdef RG_MEMCOUNT
@@ -504,6 +505,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "romgen: cannot read %s\n", romPath);
         return 1;
     }
+    { const GameProfile *gp = gameprof_detect_romgen(rom, n); printf("game: %s\n", gp == NULL ? "unsupported" : gp->game == GP_EMERALD ? "Emerald" : gp->game == GP_FIRERED ? "FireRed rev 1" : "LeafGreen rev 1"); if (gp != NULL && gp->game != GP_EMERALD) wantRegions = false; /* G1: FRLG writes nothing yet */ }
     if (dumpModel != NULL) {
         int rc = DumpModel(rom, n, dumpModel);
         free(rom);
