@@ -23,7 +23,12 @@ static void lv_pt(double (*poly)[2], unsigned i, double z, double y)
 }
 
 /* A profile prism: poly points (z, y); each edge PROJ-textured from the listed art rows (0,0 = skipped). */
-static bool lv_profile(RgPartList *out, const char *name, double x0, double x1, bool ends, unsigned n,
+static double sCap[4];          /* the side-wall tile (art u0, v0, u1, v1): a plain patch of the model's wall */
+#define LV_W 1                   /* close the west end face */
+#define LV_E 2                   /* close the east end face */
+#define LV_WE 3
+
+static bool lv_profile(RgPartList *out, const char *name, double x0, double x1, unsigned ends, unsigned n,
                        const double (*pts)[2], const double (*rows)[2])
 {
     RgPart *pt = rg_parts_add(out, RG_P_PRISM, name);
@@ -34,9 +39,20 @@ static bool lv_profile(RgPartList *out, const char *name, double x0, double x1, 
         return false;
     pr = &pt->u.prism;
     pr->x0 = x0; pr->x1 = x1;
-    pr->west = pr->east = ends;
+    pr->west = (ends & LV_W) != 0;
+    pr->east = (ends & LV_E) != 0;
     pr->nPoly = n;
     pr->skip = 0;
+    if (ends != 0) {            /* the end faces are drawn only through a cap band: a tile over the whole profile */
+        double ytop = 0;
+
+        for (i = 0; i < n; i++)
+            if (pts[i][1] > ytop)
+                ytop = pts[i][1];
+        pr->hasCaps = true;
+        pr->nCaps = 1;
+        pr->caps[0] = rg_band(-1, ytop + 1, rg_tile_top(sCap[0], sCap[1], sCap[2], sCap[3], ytop), pts[0][0]);
+    }
     for (i = 0; i < n; i++) {
         lv_pt(pr->poly, i, pts[i][0], pts[i][1]);
         if (rows[i][0] == 0 && rows[i][1] == 0) {
@@ -58,7 +74,8 @@ static bool k_lavender_house(const RgSpec *spec, int a0, int a1, RgPartList *out
     static const double rows[6][2] = {{47, 68}, {45, 47}, {10, 45}, {0, 0}, {0, 0}, {0, 0}};
 
     (void)spec; (void)a0; (void)a1;
-    return lv_profile(out, "house", 0, 80, true, 6, pts, rows) && !out->failed;
+    sCap[0] = 15; sCap[1] = 44; sCap[2] = 17; sCap[3] = 46;      /* lilac wall */
+    return lv_profile(out, "house", 0, 80, LV_WE, 6, pts, rows) && !out->failed;
 }
 
 /* ---- k_pokemon_tower: 144x112 art (rect (14,0), 9x7 on Lavender; the map top cuts the tower) -------------------------- */
@@ -68,7 +85,7 @@ static bool k_lavender_house(const RgSpec *spec, int a0, int a1, RgPartList *out
  * single vertical plane, the two chamfers (x 23-39 and 105-121) are 2-px slices whose bottom edge follows the 45-degree
  * diagonal (row = x + 31). The art is cut at the map top, so the faces run up to y 102 (row 0) and are clamped there;
  * the roof is a smear of the top row. The door is a shallow box: a flat top (rows 90-95) over the front face (95-111). */
-static bool tw_chamfer(RgPartList *out, double x0, double x1, double zf)
+static bool tw_chamfer(RgPartList *out, double x0, double x1, double zf, unsigned ends)
 {
     double pts[4][2] = {{0, 31}, {0, 102}, {0, 102}, {0, 31}};
     double rows[4][2] = {{0, 0}, {0, 1}, {0, 0}, {0, 0}};
@@ -76,7 +93,7 @@ static bool tw_chamfer(RgPartList *out, double x0, double x1, double zf)
     pts[0][0] = zf; pts[1][0] = zf; pts[2][0] = zf - 52; pts[3][0] = zf - 52;
     rows[0][0] = 0; rows[0][1] = zf - 31;           /* the face, its top clamped at row 0 */
     rows[1][0] = 8; rows[1][1] = 9;                 /* the roof: the olive band between two window rows */
-    return lv_profile(out, "chamfer", x0, x1, true, 4, (const double (*)[2])pts, (const double (*)[2])rows);
+    return lv_profile(out, "chamfer", x0, x1, ends, 4, (const double (*)[2])pts, (const double (*)[2])rows);
 }
 
 static bool k_pokemon_tower(const RgSpec *spec, int a0, int a1, RgPartList *out)
@@ -95,20 +112,23 @@ static bool k_pokemon_tower(const RgSpec *spec, int a0, int a1, RgPartList *out)
     unsigned i;
 
     (void)spec; (void)a0; (void)a1;
-    if (!lv_profile(out, "platform", 16, 128, true, 4, plat, platr) ||
-        !lv_profile(out, "rim_w", 16, 24, true, 4, rim, rimr) ||
-        !lv_profile(out, "rim_e", 120, 128, true, 4, rim, rimr) ||
-        !lv_profile(out, "tower", 39, 105, false, 4, body, bodyr) ||
-        !lv_profile(out, "tier2", 48, 96, true, 4, tier2, tierr) ||
-        !lv_profile(out, "tier3", 58, 86, true, 4, tier3, tierr))
+    sCap[0] = 30; sCap[1] = 85; sCap[2] = 34; sCap[3] = 89;          /* the platform's dark stone */
+    if (!lv_profile(out, "platform", 16, 128, LV_WE, 4, plat, platr) ||
+        !lv_profile(out, "rim_w", 16, 24, LV_W, 4, rim, rimr) ||
+        !lv_profile(out, "rim_e", 120, 128, LV_E, 4, rim, rimr))
+        return false;
+    sCap[0] = 45; sCap[1] = 61; sCap[2] = 49; sCap[3] = 63;          /* the tower's mid-green pilaster */
+    if (!lv_profile(out, "tower", 39, 105, 0, 4, body, bodyr) ||
+        !lv_profile(out, "tier2", 48, 96, LV_WE, 4, tier2, tierr) ||
+        !lv_profile(out, "tier3", 58, 86, LV_WE, 4, tier3, tierr))
         return false;
     for (i = 0; i < 8; i++) {                       /* the chamfers: left x 23-39, right x 105-121 */
         double xl = 23 + 2 * i, zf = floor(xl + 1 + 62 + 0.5);
 
-        if (!tw_chamfer(out, xl, xl + 2, zf) || !tw_chamfer(out, 144 - xl - 2, 144 - xl, zf))
+        if (!tw_chamfer(out, xl, xl + 2, zf, i == 0 ? LV_W : 0) || !tw_chamfer(out, 144 - xl - 2, 144 - xl, zf, i == 0 ? LV_E : 0))
             return false;
     }
-    return lv_profile(out, "door", 59, 85, true, 4, door, doorr) && !out->failed;
+    return lv_profile(out, "door", 59, 85, LV_WE, 4, door, doorr) && !out->failed;
 }
 
 static const RgExact kTowerExact[7] = {
@@ -128,7 +148,7 @@ static const RgExact kTowerExact[7] = {
  * 16-26). Each x-range is one profile prism whose front depth is the wall's bottom row: the flat wings and the centre
  * are one prism each, the four chamfers are 2-px slices that follow the diagonal. The hoods are boxes on the roof:
  * front face rows 26-54, the dark opening on top rows 12-26. */
-static bool pp_slice(RgPartList *out, double x0, double x1, double zf, double t)
+static bool pp_slice(RgPartList *out, double x0, double x1, double zf, double t, unsigned ends)
 {
     double pts[7][2], rows[7][2];
     double zb = t + 10 + 43;
@@ -147,7 +167,7 @@ static bool pp_slice(RgPartList *out, double x0, double x1, double zf, double t)
     rows[1][0] = zf - 49; rows[1][1] = zf - 37;     /* the bevelled rim */
     rows[2][0] = t + 10;  rows[2][1] = zf - 49;     /* the roof */
     rows[3][0] = t;       rows[3][1] = t + 10;      /* the parapet face */
-    return lv_profile(out, "hall", x0, x1, true, 7, (const double (*)[2])pts, (const double (*)[2])rows);
+    return lv_profile(out, "hall", x0, x1, ends, 7, (const double (*)[2])pts, (const double (*)[2])rows);
 }
 
 static bool pp_hood(RgPartList *out, double x0)
@@ -155,7 +175,7 @@ static bool pp_hood(RgPartList *out, double x0)
     static const double pts[4][2] = {{97, 43}, {97, 71}, {83, 71}, {83, 43}};
     static const double rows[4][2] = {{26, 54}, {12, 26}, {0, 0}, {0, 0}};
 
-    return lv_profile(out, "hood", x0, x0 + 16, true, 4, pts, rows);
+    return lv_profile(out, "hood", x0, x0 + 16, LV_WE, 4, pts, rows);
 }
 
 static bool k_power_plant(const RgSpec *spec, int a0, int a1, RgPartList *out)
@@ -164,27 +184,29 @@ static bool k_power_plant(const RgSpec *spec, int a0, int a1, RgPartList *out)
     double xm, zf, t;
 
     (void)spec; (void)a0; (void)a1;
+    sCap[0] = 31; sCap[1] = 75; sCap[2] = 35; sCap[3] = 77;      /* the wing wall's blue-grey */
     for (i = 0; i < 6; i++) {                       /* outer chamfers, x 16-28 and 148-160 */
         double xl = 16 + 2 * i;
 
         xm = xl + 1;
         zf = floor(106 + 0.5 * (xm - 16) + 0.5);
         t = floor(25 - 0.75 * (xm - 16) + 0.5);
-        if (!pp_slice(out, xl, xl + 2, zf, t) || !pp_slice(out, 176 - xl - 2, 176 - xl, zf, t))
+        if (!pp_slice(out, xl, xl + 2, zf, t, i == 0 ? LV_W : 0) || !pp_slice(out, 176 - xl - 2, 176 - xl, zf, t, i == 0 ? LV_E : 0))
             return false;
     }
-    if (!pp_slice(out, 28, 48, 112, 16) || !pp_slice(out, 128, 148, 112, 16))
+    if (!pp_slice(out, 28, 48, 112, 16, 0) || !pp_slice(out, 128, 148, 112, 16, 0))
         return false;
     for (i = 0; i < 5; i++) {                       /* inner chamfers, x 48-58 and 118-128 */
         double xl = 48 + 2 * i;
 
         xm = xl + 1;
         zf = floor(112 + 0.8 * (xm - 48) + 0.5);
-        if (!pp_slice(out, xl, xl + 2, zf, 16) || !pp_slice(out, 176 - xl - 2, 176 - xl, zf, 16))
+        if (!pp_slice(out, xl, xl + 2, zf, 16, 0) || !pp_slice(out, 176 - xl - 2, 176 - xl, zf, 16, 0))
             return false;
     }
-    if (!pp_slice(out, 58, 118, 120, 16))
+    if (!pp_slice(out, 58, 118, 120, 16, 0))
         return false;
+    sCap[0] = 36; sCap[1] = 50; sCap[2] = 42; sCap[3] = 53;      /* the hood's grey */
     for (i = 0; i < 4; i++)
         if (!pp_hood(out, 32 + 32 * i))
             return false;
