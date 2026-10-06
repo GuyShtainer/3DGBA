@@ -91,6 +91,46 @@ static bool k_path_hut(const RgSpec *spec, int a0, int a1, RgPartList *out)
     return vm_profile(out, "hut", 0, 48, true, 5, pts, rows) && !out->failed;
 }
 
+/* ---- k_daycare: 80x80 art (rect (21,21), 5x5 on Route 5) ------------------------------------------------------------ */
+/* The Day Care: an orange hip roof whose end faces are drawn as 2-px diagonal steps (top row 14 at the corners down to
+ * row 8 along the ridge), an eave band 40-43, and the cream facade with two windows and the door 43-80. The roof is cut
+ * into x-slices whose first row follows the diagonal, as the Route 25 cottage does. */
+static const struct { int x0, x1, r0; } kDaySl[13] = {
+    {0, 1, 14}, {1, 3, 13}, {3, 5, 12}, {5, 7, 11}, {7, 9, 10}, {9, 11, 9}, {11, 69, 8},
+    {69, 71, 9}, {71, 73, 10}, {73, 75, 11}, {75, 77, 12}, {77, 79, 13}, {79, 80, 14},
+};
+
+static bool k_daycare(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    unsigned i;
+
+    (void)spec; (void)a0; (void)a1;
+    for (i = 0; i < 13; i++) {
+        double d = (40.0 - kDaySl[i].r0) / 2;
+        double pts[6][2], rows[6][2];
+
+        pts[0][0] = 80; pts[0][1] = 0;
+        pts[1][0] = 80; pts[1][1] = 37;
+        pts[2][0] = 80; pts[2][1] = 40;
+        pts[3][0] = 80 - d; pts[3][1] = 40 + d;
+        pts[4][0] = 40; pts[4][1] = 40 + d;
+        pts[5][0] = 40; pts[5][1] = 0;
+        rows[0][0] = 43; rows[0][1] = 80;           /* facade */
+        rows[1][0] = 40; rows[1][1] = 43;           /* eave band */
+        rows[2][0] = kDaySl[i].r0; rows[2][1] = 40; /* roof slope */
+        rows[3][0] = rows[3][1] = rows[4][0] = rows[4][1] = rows[5][0] = rows[5][1] = 0;
+        if (!vm_profile(out, "daycare", kDaySl[i].x0, kDaySl[i].x1, false, 6, (const double (*)[2])pts,
+                        (const double (*)[2])rows))
+            return false;
+    }
+    return !out->failed;
+}
+
+static const RgExact kDayExact[13] = {
+    {0, 14, 1, 80, false}, {1, 13, 3, 80, false}, {3, 12, 5, 80, false}, {5, 11, 7, 80, false}, {7, 10, 9, 80, false},
+    {9, 9, 11, 80, false}, {11, 8, 69, 80, false}, {69, 9, 71, 80, false}, {71, 10, 73, 80, false},
+    {73, 11, 75, 80, false}, {75, 12, 77, 80, false}, {77, 13, 79, 80, false}, {79, 14, 80, 80, false},
+};
 static const RgExact kHutExact[1] = {{0, 0, 48, 64, false}};
 static const RgExact kHouseExact[1] = {{0, 12, 64, 64, false}};
 static const RgExact kGreenExact[1] = {{0, 0, 80, 64, false}};
@@ -104,5 +144,7 @@ const RgSpec rg_kspecs_vermilion[] = {
      k_vermilion_green, 80, 0, NULL},
     {"k_path_hut", RG_SPEC_DIRECT, L_ROUTE5, {30, 28, 3, 4}, {1, 4}, VM_GROUND, 1, kHutExact, 1,
      k_path_hut, 0, 0, NULL},
+    {"k_daycare", RG_SPEC_DIRECT, L_ROUTE5, {21, 21, 5, 5}, {0, 0}, VM_GROUND, 1, kDayExact, 13,
+     k_daycare, 0, 0, NULL},
 };
 const unsigned rg_kspecs_vermilion_count = sizeof(rg_kspecs_vermilion) / sizeof(rg_kspecs_vermilion[0]);
