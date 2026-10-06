@@ -77,8 +77,23 @@ static const RgSideCfg kHallSide[1] = {
     {NULL, {40, 58, 66, 60}, {6, 10, 72, 11}, 999, true},
 };
 
+/* ---- k_fuchsia_house: 96x80 art (rect (26,12), 6x5) -------------------------------------------------------------------- */
+/* The gold-roofed house: grass 0-7, the tiled gold roof with its F-shaped relief 8-55 (a level top edge at row 8, a
+ * darker eave 52-55), the facade with the grey awning, two arched windows and the door 56-80. One flat block, 24 high. */
+static bool k_fuchsia_house(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    (void)spec; (void)a0; (void)a1;
+    return fz_block(out, "house", 0, 96, 80, 56, 8) && !out->failed;
+}
+static const RgExact kHouseExact[1] = {{0, 8, 96, 80, false}};
+static const RgSideCfg kHouseSide[1] = {
+    {NULL, {8, 57, 88, 59}, {8, 10, 40, 12}, 999, true},
+};
+
 const RgSpec rg_kspecs_fuchsia[] = {
     {"k_fuchsia_hall", RG_SPEC_DIRECT, L_FUCHSIA, {13, 28, 5, 4}, {1, 4}, FZ_GROUND, 1, kHallExact, 1,
      k_fuchsia_hall, 0, 0, kHallSide},
+    {"k_fuchsia_house", RG_SPEC_DIRECT, L_FUCHSIA, {26, 12, 6, 5}, {0, 0}, FZ_GROUND, 1, kHouseExact, 1,
+     k_fuchsia_house, 0, 0, kHouseSide},
 };
 const unsigned rg_kspecs_fuchsia_count = sizeof(rg_kspecs_fuchsia) / sizeof(rg_kspecs_fuchsia[0]);
