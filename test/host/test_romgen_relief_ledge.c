@@ -24,6 +24,7 @@
 #include "rg_relief.h"
 #include "rg_relief_write.h"
 #include "rg_roles.h"
+#include "rg_rsolve.h"
 #include "rg_rtables.h"
 #include "rg_run.h"
 #include "rg_fixture.h"
@@ -506,10 +507,70 @@ static void TestRealRom(void)
     free(rom);
 }
 
+/* ---- ledges_on_ground (S3.6, rel:2466-2504): each ledge cell's points go back to the plane of its four corners,
+ * except an edge point shared with an on-map blocked cell that is no ledge ---- */
+static double OgField(int i, int j) { return (double)((i * 7 + j * 13) % 11) * 1.5; }
+
+static void TestOnGround(void)
+{
+    RgFx f;
+    RgWorld w;
+    uint32_t ts;
+    uint16_t blocksA[9], blocksB[9];
+    unsigned idA, idB, i;
+    RgLat lat;
+    int x, y, bad = 0, kept = 0;
+
+    BuildTileset();
+    fxr_init(&f);
+    ts = fxr_tileset(&f, 0, 0, sTiles, sizeof(sTiles), sPal, sMt, sAtt, MT_COUNT, 1);
+    for (i = 0; i < 9; i++) blocksA[i] = blocksB[i] = MT_GRASS;
+    blocksA[3] = blocksA[4] = blocksA[5] = MT_LEDGE_S;
+    blocksB[3] = MT_LEDGE_E;
+    blocksB[4] = (uint16_t)(MT_GRASS | (1u << 10));          /* blocked grass east of the ledge */
+    idA = AddLayout(&f, ts, 3, 3, blocksA);
+    idB = AddLayout(&f, ts, 3, 3, blocksB);
+    (void)fxr_map(&f, 0, MAP_TYPE_ROUTE, idA, NULL, 0, NULL, 0);
+    (void)fxr_map(&f, 0, MAP_TYPE_ROUTE, idB, NULL, 0, NULL, 0);
+    fxr_finish(&f);
+    CHECK(rg_world_open(&w, f.rom, FXR_ROM_SIZE) == RG_OK);
+    for (i = 0; i < 2; i++) {
+        const RgLayout *L = &w.layouts[(i == 0 ? idA : idB) - 1];
+
+        CHECK(rg_lat_new(&lat, 3, 3));
+        for (y = 0; y <= 12; y++)
+            for (x = 0; x <= 12; x++) *rg_lat_at(&lat, x, y) = OgField(x, y);
+        CHECK(rg_ledges_on_ground(L, &lat) == RG_OK);
+        for (y = 0; y <= 12; y++)
+            for (x = 0; x <= 12; x++) {
+                double want = OgField(x, y);
+
+                if (y >= 4 && y <= 8 && (i == 0 || x <= 4)) {                /* the ledge cells' rows (y == 1) */
+                    int x0 = (i == 0 ? (x / 4 < 2 ? x / 4 : 2) : 0) * 4, y0 = 4, di = x - x0, dj = y - y0;
+                    double t = (double)di / 4.0, s2 = (double)dj / 4.0;
+                    int corner = (di == 0 || di == 4) && (dj == 0 || dj == 4);
+                    int edgeKept = i == 1 && x == 4;                          /* shared with the blocked non-ledge cell */
+
+                    if (!corner && !edgeKept)
+                        want = ((OgField(x0, y0) * (1 - t) + OgField(x0 + 4, y0) * t) * (1 - s2) +
+                                (OgField(x0, y0 + 4) * (1 - t) + OgField(x0 + 4, y0 + 4) * t) * s2);
+                    if (edgeKept && !corner) kept++;
+                }
+                bad += *rg_lat_at(&lat, x, y) != want;
+            }
+        rg_lat_free(&lat);
+    }
+    CHECK(bad == 0);
+    CHECK(kept == 3);                                       /* the three interior points of the shared east edge */
+    rg_world_close(&w);
+    free(f.rom);
+}
+
 int main(void)
 {
     TestHalfEven();
     TestSynthetic();
+    TestOnGround();
     TestWriter();
     TestRealRom();
     printf("test_romgen_relief_ledge: %d checks, %d failures%s\n", sChecks, sFails, sSkips ? " (real-ROM part skipped)" : "");
