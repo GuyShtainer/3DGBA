@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "vx_fixture.h"
+#include "rg_fixture.h"
 
 static int sChecks, sFails;
 #define CHECK(c) do { ++sChecks; if (!(c)) { ++sFails; printf("FAIL %s:%d  %s\n", __FILE__, __LINE__, #c); } } while (0)
@@ -226,6 +227,132 @@ static void TestBehaviour(void)
     CHECK(n == 6);
 }
 
+/* ---- Phase 34 R2: the FireRed / LeafGreen additions ---- */
+static const GameProfile *FrlgProfile(GpGame g)
+{
+    static uint8_t hdr[0x100];
+
+    memset(hdr, 0, sizeof hdr);
+    memcpy(hdr + 0xAC, g == GP_FIRERED ? "BPRE" : "BPGE", 4);
+    hdr[0xBC] = 1;
+    return gameprof_detect(hdr, sizeof hdr);
+}
+
+static void TestIntern32(void)
+{
+    /* little-endian words: behaviour 0x69 / layer 0; layer 1; layer 2 + behaviour 0x1FF; layer 3 + bits 8-9; junk bits */
+    static const uint32_t in[] = {0x00000069u, 0x20000069u, 0x400001FFu, 0x60000169u, 0x1FFFFE00u, 0x80000000u, 0xFFFFFFFFu, 0};
+    static const uint16_t want[] = {0x0069, 0x1069, 0x21FF, 0x3169, 0x0000, 0x0000, 0x31FF, 0x0000};
+    uint8_t raw[sizeof in];
+    uint16_t out[8];
+
+    for (unsigned i = 0; i < 8; ++i)
+        for (unsigned b = 0; b < 4; ++b)
+            raw[4 * i + b] = (uint8_t)(in[i] >> (8 * b));
+    gVxProf = FrlgProfile(GP_FIRERED);
+    CHECK(gVxProf != NULL && gVxProf->game == GP_FIRERED);
+    vx_intern_attrs32(raw, 8, out);
+    for (unsigned i = 0; i < 8; ++i) CHECK(out[i] == want[i]);
+    /* bits 8-9 survive (behaviour is 9 bits on FRLG), bit 31 and bits 10-28 never leak in */
+    CHECK((out[3] & 0x1FFu) == 0x169u && (out[4] & 0x1FFu) == 0 && (out[7] & 0xFFFFu) == 0);
+    gVxProf = FrlgProfile(GP_LEAFGREEN);
+    vx_intern_attrs32(raw, 8, out);
+    for (unsigned i = 0; i < 8; ++i) CHECK(out[i] == want[i]);
+    gVxProf = NULL;
+    vx_intern_attrs32(raw, 8, out);   /* the Emerald mask (0xFF) if anyone ever called it there: behaviour 8 bits only */
+    CHECK(out[0] == 0x0069 && out[2] == 0x20FF && out[3] == 0x3069);
+}
+
+static void TestBorderAndProfileHelpers(void)
+{
+    struct MapLayout l22 = {0}, l32 = {0}, l11 = {0}, lnone = {0};
+    int phaseOk = 1;
+
+    l22.borderWidth = l22.borderHeight = 2;
+    l32.borderWidth = 3; l32.borderHeight = 2;
+    l11.borderWidth = l11.borderHeight = 1;   /* a 0x0 border is stored as one cell */
+    CHECK(vx_border_cells(&l22) == 4 && vx_border_cells(&l32) == 6 && vx_border_cells(&l11) == 1 && vx_border_cells(&lnone) == 4);
+    /* 2x2 (and "unset") reproduce the Emerald indexing ((bx + 1) & 1) + ((by + 1) & 1) * 2 for every cell */
+    for (int by = -40; by < 80; ++by)
+        for (int bx = -40; bx < 80; ++bx)
+        {
+            int old = ((bx + 1) & 1) + (((by + 1) & 1) * 2);
+            if (vx_border_cell(&l22, bx, by) != old || vx_border_cell(&lnone, bx, by) != old) phaseOk = 0;
+        }
+    CHECK(phaseOk);
+    /* 3x2: period 3 in x, 2 in y, every cell reachable, always inside [0, 6) */
+    {
+        int seen[6] = {0}, inRange = 1, periodic = 1;
+
+        for (int by = -30; by < 30; ++by)
+            for (int bx = -30; bx < 30; ++bx)
+            {
+                int c = vx_border_cell(&l32, bx, by);
+                if (c < 0 || c >= 6) inRange = 0; else seen[c] = 1;
+                if (vx_border_cell(&l32, bx + 3, by) != c || vx_border_cell(&l32, bx, by + 2) != c) periodic = 0;
+            }
+        CHECK(inRange && periodic);
+        for (int c = 0; c < 6; ++c) CHECK(seen[c]);
+        /* cell (MAP_OFFSET, MAP_OFFSET) is the layout's own origin: border cell 0; the next column / row is the next cell */
+        CHECK(vx_border_cell(&l32, MAP_OFFSET, MAP_OFFSET) == 0 && vx_border_cell(&l32, MAP_OFFSET + 1, MAP_OFFSET) == 1
+              && vx_border_cell(&l32, MAP_OFFSET + 2, MAP_OFFSET) == 2 && vx_border_cell(&l32, MAP_OFFSET, MAP_OFFSET + 1) == 3);
+    }
+    for (int by = -9; by < 9; ++by)
+        for (int bx = -9; bx < 9; ++bx) CHECK(vx_border_cell(&l11, bx, by) == 0);
+
+    CHECK(strcmp(vx_profile_data_dir(NULL), "sdmc:/3ds/3DGBA/voxel") == 0);
+    CHECK(strcmp(vx_profile_data_dir(gameprof_emerald()), "sdmc:/3ds/3DGBA/voxel") == 0);
+    CHECK(strcmp(vx_profile_data_dir(FrlgProfile(GP_FIRERED)), "sdmc:/3ds/3DGBA/voxel/BPRE") == 0);
+    CHECK(strcmp(vx_profile_data_dir(FrlgProfile(GP_LEAFGREEN)), "sdmc:/3ds/3DGBA/voxel/BPGE") == 0);
+    CHECK(strcmp(vx_profile_pak_path(gameprof_emerald()), "sdmc:/3ds/emerald3ds/emerald3ds.pak") == 0);
+    CHECK(strstr(vx_profile_pak_path(FrlgProfile(GP_FIRERED)), "/BPRE/") != NULL);
+    for (unsigned t = 0; t < 16; ++t)
+        CHECK(vx_map_is_outdoor(t) == (t == 1 || t == 2 || t == 3 || t == 5 || t == 6));
+
+    /* the renderer's behaviour predicates follow the active profile (Emerald by default) */
+    gVxProf = FrlgProfile(GP_FIRERED);
+    CHECK(MetatileBehavior_IsSurfableWaterOrUnderwater(0x15) && MetatileBehavior_IsSurfableWaterOrUnderwater(0x1B)
+          && !MetatileBehavior_IsSurfableWaterOrUnderwater(0x14) && !MetatileBehavior_IsSurfableWaterOrUnderwater(0x2A)
+          && !MetatileBehavior_IsSurfableWaterOrUnderwater(0x6C));
+    CHECK(MetatileBehavior_IsReflective(0x16) && MetatileBehavior_IsReflective(0x23) && !MetatileBehavior_IsReflective(0x14)
+          && !MetatileBehavior_IsReflective(0x2B));
+    CHECK(MetatileBehavior_IsIce(0x23) && !MetatileBehavior_IsIce(0x20));
+    CHECK(MetatileBehavior_IsShallowFlowingWater(0x17) && !MetatileBehavior_IsShallowFlowingWater(0x1B));
+    gVxProf = NULL;
+    CHECK(MetatileBehavior_IsSurfableWaterOrUnderwater(0x14) && MetatileBehavior_IsIce(0x20) && MetatileBehavior_IsReflective(0x2B));
+}
+
+/* The real ROMs, when ROMGEN_ROM_FR / _LG are set: every layout's border size (SPEC-P34 1.5: 2x2, 3x2 and 0x0). */
+static void TestRealLayouts(const char *env, GpGame game, int want22, int want32, int want00)
+{
+    size_t n = 0;
+    uint8_t *rom = fxr_load_rom(env, &n);
+    int c22 = 0, c32 = 0, c00 = 0, bad = 0;
+
+    if (rom == NULL) { printf("SKIP %s: ROM not found\n", env); return; }
+    gVxProf = gameprof_detect(rom, n);
+    CHECK(gVxProf != NULL && gVxProf->game == game);
+    if (gVxProf == NULL) { free(rom); return; }
+    vx_adapter_set_rom(rom, n);
+    for (unsigned id = 1; id <= gVxProf->layoutSlots; ++id)
+    {
+        const struct MapLayout *l = Port_GetMapLayoutById((u16)id);
+
+        if (l == NULL) { ++bad; continue; }
+        if (l->borderWidth == 2 && l->borderHeight == 2) ++c22;
+        else if (l->borderWidth == 3 && l->borderHeight == 2) ++c32;
+        else if (l->borderWidth == 1 && l->borderHeight == 1) { ++c00; CHECK(l->border[0] == 0); }
+        else CHECK(0);
+    }
+    printf("  %s: layouts 2x2 %d, 3x2 %d, 0x0 %d, unreadable %d\n", env, c22, c32, c00, bad);
+    /* SURVEY: 384 slots, 18 NULL, and 331 / 7 / 28 by border size. The adapter refuses layout 24 (a non-NULL slot with a
+     * NULL primary tileset: unused dev data), so 330 + 7 + 28 are readable and 19 slots are not. */
+    CHECK(c22 == want22 && c32 == want32 && c00 == want00 && bad == 19);
+    vx_adapter_set_rom(NULL, 0);
+    gVxProf = NULL;
+    free(rom);
+}
+
 static uint8_t *Slurp(const char *dir, const char *name, size_t *n)
 {
     char path[512];
@@ -295,6 +422,10 @@ int main(int argc, char **argv)
     TestBehaviour();
     TestGuards();
     TestArenaDoesNotLeakOnBadData();
+    TestIntern32();
+    TestBorderAndProfileHelpers();
+    TestRealLayouts(FXR_ENV_FR, GP_FIRERED, 330, 7, 28);
+    TestRealLayouts(FXR_ENV_LG, GP_LEAFGREEN, 330, 7, 28);
     printf("test_voxel_adapter: %d checks, %d failures\n", sChecks, sFails);
     return sFails != 0;
 }

@@ -1,0 +1,126 @@
+// test_voxel_frlg.c -- Phase 34 R2: the renderer path on the real FireRed / LeafGreen rev 1 ROMs. The adapter builds
+// Pallet Town (group 3, map 0) from the ROM with NO data files: u32 attributes interned, border sizes, the 640/384
+// tileset split, the weatherPtr deref, the live backup-map pointer, map connections, the world's cell queries.
+// Real ROMs come from ROMGEN_ROM_FR / ROMGEN_ROM_LG (absolute paths) or firered.gba / leafgreen.gba beside ROMGEN_ROM;
+// a missing ROM prints SKIP (the gate sets the variables, so no SKIP may appear there). No game bytes are committed.
+//
+//   make -C tools/romgen vtest   (builds this with the other world suites, run from the repo root)
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "rg_fixture.h"
+#include "vx_fixture_frlg.h"
+#include "voxel_world.h"
+
+static int sChecks, sFails, sSkips;
+#define CHECK(c) do { ++sChecks; if (!(c)) { ++sFails; printf("FAIL %s:%d  %s\n", __FILE__, __LINE__, #c); } } while (0)
+
+static uint32_t Rd32R(const uint8_t *rom, uint32_t addr)
+{
+    const uint8_t *p = rom + (addr - 0x08000000u);
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+static void RunGame(const char *env, GpGame game, const char *label)
+{
+    size_t n = 0;
+    uint8_t *rom = fxr_load_rom(env, &n);
+    const GameProfile *prof;
+    struct MapConnection conn = {0, 0, 3, 0};
+    const struct MapHeader *pal;
+    const struct MapLayout *lay;
+    FrState st;
+    int water = 0, doors = 0, trees = 0, northRoute1 = 0;
+
+    if (rom == NULL) { printf("SKIP %s: ROM not found (%s)\n", label, env); ++sSkips; return; }
+    prof = gameprof_detect(rom, n);
+    CHECK(prof != NULL && prof->game == game);
+    if (prof == NULL) { free(rom); return; }
+    gVxProf = prof;
+    vx_adapter_set_rom(rom, n);
+
+    pal = GetMapHeaderFromConnection(&conn);
+    CHECK(pal != NULL && pal->mapLayout != NULL);
+    if (pal == NULL || pal->mapLayout == NULL) { free(rom); gVxProf = NULL; return; }
+    lay = pal->mapLayout;
+    CHECK(lay->width == 24 && lay->height == 20);
+    CHECK(lay->borderWidth == 2 && lay->borderHeight == 2 && lay->border != NULL);
+    CHECK(pal->mapType == 1 && vx_map_is_outdoor(pal->mapType));          /* MAP_TYPE_TOWN */
+    CHECK(lay->primaryTileset == &gTileset_General && lay->secondaryTileset != NULL);
+    CHECK(!lay->primaryTileset->isSecondary && lay->secondaryTileset->isSecondary);
+    CHECK(lay->primaryTileset->metatileAttributes != NULL && lay->secondaryTileset->metatileAttributes != NULL);
+    CHECK(Port_GetAssetSizeExact(lay->primaryTileset->metatileAttributes) == 640u * 2u);
+    CHECK(pal->connections != NULL);
+    for (int i = 0; pal->connections != NULL && i < pal->connections->count; ++i)
+        if (pal->connections->connections[i].direction == 2 && pal->connections->connections[i].mapGroup == 3
+            && pal->connections->connections[i].mapNum == 19)
+            northRoute1 = 1;
+    CHECK(northRoute1);   /* Route 1 (3/19) joins Pallet's north edge */
+
+    /* The Pallet door metatile 0x2A3 (secondary tileset, local index 0x2A3 - 640): attribute word read straight from the
+     * ROM must equal the interned u16: behaviour 0x69 in the low 9 bits, layer type from bits 29-30 into bits 12-13. */
+    {
+        uint32_t tsAddr = Rd32R(rom, prof->mapLayouts + 4u * (pal->mapLayoutId - 1u));
+        uint32_t secTs = Rd32R(rom, tsAddr + 0x14);
+        uint32_t attrAddr = Rd32R(rom, secTs + prof->tilesetAttrOff);
+        uint32_t raw = Rd32R(rom, attrAddr + 4u * (0x2A3u - 640u));
+        uint16_t got = lay->secondaryTileset->metatileAttributes[0x2A3u - 640u];
+
+        CHECK((raw & 0x1FFu) == 0x69u);
+        CHECK(got == (uint16_t)((raw & 0x1FFu) | (((raw >> 29) & 3u) << 12)));
+        CHECK((got & 0x1FFu) == 0x69u);
+        printf("  %s: Pallet door metatile 0x2A3 attribute raw=0x%08X -> u16 0x%04X (layer %u)\n", label, raw, got, (got >> 12) & 3u);
+    }
+
+    /* A live-state image of Pallet at (12,12), facing south, then the real snapshot -> adapter -> world path. */
+    FrBuild(&st, rom, prof, pal, 12, 12);
+    {
+        VxMemSrc src = {st.ewram, st.iwram, st.pltt, st.vram, 0x1040, 0, 0, 0};
+        VxSnapshot *snap = calloc(1, sizeof *snap);
+
+        CHECK(snap != NULL && vx_snapshot_take(snap, &src));
+        CHECK(snap->backupMapBase == FR_BACKUP_MAP && snap->backupMapCells == (24u + 15u) * (20u + 14u));
+        CHECK(snap->weather[0] == 2 && snap->weather[1] == 3 && snap->weather[2] == 9);   /* resolved through weatherPtr */
+        CHECK(vx_adapter_decode(snap) && vx_adapter_error() == VX_OK);
+        CHECK(gBackupMapLayout.map == snap->backupMap && gBackupMapLayout.width == 39 && gBackupMapLayout.height == 34);
+        CHECK(gMapHeader.mapLayout == lay && gMapHeader.mapLayoutId == pal->mapLayoutId);
+        CHECK(gPlayerAvatar.objectEventId == 0 && gObjectEvents[0].isPlayer && gObjectEvents[0].currentCoords.x == 19);
+        CHECK(GetCurrentWeather() == 2);
+        VoxelWorld_BeginBatch();
+        VoxelWorld_BuildInstances();
+        CHECK(VoxelWorld_IsMapAvailable());
+        CHECK(VoxelWorld_InstanceCount() >= 2);   /* Pallet + at least Route 1 to the north (and no other connection) */
+        CHECK(VoxelWorld_GetInstanceAt(5, -3) != NULL && VoxelWorld_GetInstanceAt(5, -3) != VoxelWorld_Instance(0));
+        /* The three Pallet doors are behaviour 0x69 and blocked (SPEC 2: a door is entered through its warp). */
+        CHECK(VoxelWorld_GetMetatileBehavior(6, 7) == 0x69u && VoxelWorld_GetMetatileBehavior(15, 7) == 0x69u
+              && VoxelWorld_GetMetatileBehavior(16, 13) == 0x69u);
+        for (int y = 0; y < 20; ++y)
+            for (int x = 0; x < 24; ++x)
+            {
+                unsigned b = VoxelWorld_GetMetatileBehavior(x, y);
+                VoxelVisualShape s = VoxelWorld_ClassifyTile(x, y);
+
+                if (b == 0x15u) { ++water; CHECK(s == VOXEL_SHAPE_WATER); }
+                if (b == 0x69u) ++doors;
+                if (VoxelWorld_UsesTreeSprites(VoxelWorld_Instance(0)) && VoxelTree_Part(VoxelWorld_GetMetatileId(x, y)) >= 0) ++trees;
+            }
+        CHECK(water >= 8);       /* the pond */
+        CHECK(doors == 3);
+        CHECK(trees == 0);       /* Emerald's tree table is off on FRLG (Kanto's is slice T1) */
+        CHECK(VoxelWorld_BorderMetatile(-2, -2) >= 0 && VoxelWorld_BorderMetatile(30, 30) >= 0);
+        free(snap);
+    }
+    FrFree(&st);
+    gVxProf = NULL;
+    vx_adapter_set_rom(NULL, 0);
+    free(rom);
+}
+
+int main(void)
+{
+    RunGame(FXR_ENV_FR, GP_FIRERED, "FireRed");
+    RunGame(FXR_ENV_LG, GP_LEAFGREEN, "LeafGreen");
+    printf("test_voxel_frlg: %d checks, %d failures, %d skipped\n", sChecks, sFails, sSkips);
+    return sFails != 0;
+}
