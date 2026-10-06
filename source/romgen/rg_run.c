@@ -7,6 +7,7 @@
 #include "rg_regions.h"
 #include "rg_signs.h"
 #include "rg_bspecs.h"
+#include "rg_kspecs.h"
 
 static double now(const RgRunOpts *o)
 {
@@ -105,10 +106,19 @@ static RgErr run_buildings(const RgWorld *w, const RgRunOpts *o, RgOutput *out)
     if (cancelled(o))
         return RG_ERR_CANCELLED;
     /* the profile's recipe table; the Emerald row leaves it NULL (rg_gameprof.c must not link rg_bspecs.c) and uses rg_specs */
-    if (w->prof->specs != NULL)
+    if (w->prof->specs != NULL) {
         e = rg_build_models(w, w->prof->specs, w->prof->nSpecs, &ms);
-    else
+    } else if (w->prof->game != GP_EMERALD) {
+        /* Phase 34 B0: FireRed / LeafGreen use the Kanto table (rg_kspecs.c); empty until the K slices, which is a valid
+         * 0-model buildings.bin the consumer loads (the device then draws the fallback boxes). It is not read through
+         * the profile's `specs` pointer because rg_gameprof.c is also linked by the renderer-only builds. */
+        unsigned nk = 0;
+        const RgSpec *k = rg_kspecs_table(w->prof, &nk);
+
+        e = rg_build_models(w, k, nk, &ms);
+    } else {
         e = rg_build_models(w, rg_specs, rg_spec_count, &ms);
+    }
     out->msBuildModels = now(o) - t0;
     if (e != RG_OK) {
         rg_models_free(&ms);
@@ -175,8 +185,16 @@ RgErr rg_run(const uint8_t *rom, size_t romSize, const RgRunOpts *opts, RgOutput
         return e;
     out->msWorld = now(opts) - t0;
     if (w.prof->game != GP_EMERALD) {
-        /* Phase 34 G1: FireRed / LeafGreen open the world and write nothing yet (regions, signposts, buildings arrive in
-         * G2/B0; relief stays OFF until L1, so the Emerald-only relief modules are never reached). */
+        /* Phase 34: FireRed / LeafGreen. B0 turns the buildings on (the Kanto table, empty until the K slices; it needs
+         * no roles). Regions and signposts arrive in G2; relief stays OFF until L1, so the Emerald-only relief modules
+         * are never reached. */
+        if (opts != NULL && opts->wantBuildings)
+            e = run_buildings(&w, opts, out);
+        if (e != RG_OK) {
+            rg_output_free(out);
+            rg_world_close(&w);
+            return e;
+        }
         out->layouts = w.layoutCount;
         out->maps = w.mapCount;
         out->tilesets = w.tilesetCount - 1u;
