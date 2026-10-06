@@ -2,7 +2,7 @@
  * (3DGBA, GPLv3). Pure host code around the romgen cores in source/romgen/.
  *
  *   romgen ROM.gba OUTDIR [--time] [--only regions,signposts,buildings,relief] [--relief ledges|off] [--relief-layout ID]
- *         [--dump-roles LAYOUT_ID] [--dump-model NAME]
+ *         [--relief-log] [--relief-prep] [--dump-roles LAYOUT_ID] [--dump-model NAME]
  *
  * Writes OUTDIR/regions.bin, signposts.bin, buildings.bin and relief.bin (--relief ledges, the S3a file; default).
  * --relief-layout ID prints that layout's relief.bin row and every cell's 25 heights. --dump-model NAME prints one model's summary and
@@ -16,6 +16,7 @@
 #include <time.h>
 
 #include "rg_rdrawn.h"
+#include "rg_rprep.h"
 #include "rg_run.h"
 #include "rg_bspecs.h"
 #include "rg_world.h"
@@ -238,6 +239,82 @@ static int DumpDrawn(const uint8_t *rom, size_t n)
     return 0;
 }
 
+/* --relief-prep (S3.4): canvas + drawn_prepare for every group in world_levels' order (the excluded group skipped), one
+ * line per group; with the mem build (`make -C tools/romgen mem`) the peak live heap of each group is printed too. The
+ * relief.bin writers do not run: this is the S3.4 measurement tool. */
+static int PrepAll(const uint8_t *rom, size_t n)
+{
+    RgWorld w;
+    RgRoles r;
+    RgDrawn *d = (RgDrawn *)malloc(sizeof *d);
+    RgRCtx *ctx = NULL;
+    RgErr e = RG_OK;
+    unsigned g, done = 0;
+    double t0 = NowMs(), tg;
+#ifdef RG_MEMCOUNT
+    size_t worst = 0;
+#endif
+
+    if (d == NULL || (e = rg_world_open(&w, rom, n)) != RG_OK)
+        goto fail0;
+    if ((e = rg_roles_init(&w, &r)) != RG_OK || (e = rg_roles_all(&w, &r, false, NULL, NULL)) != RG_OK)
+        goto fail1;
+    if ((e = rg_drawn_find(&w, d)) != RG_OK || (ctx = rg_rctx_new(&w, &r, &e)) == NULL)
+        goto fail2;
+    for (g = 0; g < d->nGroups; g++) {
+        const RgDrawnGroup *G = &d->groups[g];
+        RgPrep p;
+        unsigned i, big = 0;
+        uint64_t drops = 0;
+
+        if (rg_drawn_excluded(G))
+            continue;
+#ifdef RG_MEMCOUNT
+        rgm_reset();
+#endif
+        tg = NowMs();
+        e = rg_prepare(ctx, d, G, &p);
+        if (e != RG_OK) {
+            rg_prep_free(&p);
+            goto fail3;
+        }
+        for (i = 0; i < p.nRegions; i++)
+            big += p.big[i];
+        for (i = 0; i < p.nRuns; i++)
+            drops += p.runs[i].n;
+        printf("prep group %u%s: %ux%u px, %u regions (%u big), %u wrap cut(s), %u run keys, %llu drops, %u ties, %.0f ms",
+               G->key, G->isAlt ? " (alt)" : "", (unsigned)(G->cellsW * 16u), (unsigned)(G->cellsH * 16u), p.nRegions, big,
+               p.wrapCuts, p.nRuns, (unsigned long long)drops, p.nTies, NowMs() - tg);
+#ifdef RG_MEMCOUNT
+        printf(", peak %.1f MB", (double)rgm_peak() / 1048576.0);
+        worst = rgm_peak() > worst ? rgm_peak() : worst;
+#endif
+        printf("\n");
+        rg_prep_free(&p);
+        done++;
+    }
+    printf("prep: %u groups, %.0f ms total, %u role-cache disagreement(s)", done, NowMs() - t0, rg_rctx_conflicts(ctx));
+#ifdef RG_MEMCOUNT
+    printf(", worst peak %.1f MB (%zu bytes)", (double)worst / 1048576.0, worst);
+#endif
+    printf("\n");
+    rg_rctx_free(ctx);
+    rg_roles_free(&r);
+    rg_world_close(&w);
+    free(d);
+    return 0;
+fail3:
+    rg_rctx_free(ctx);
+fail2:
+fail1:
+    rg_roles_free(&r);
+    rg_world_close(&w);
+fail0:
+    fprintf(stderr, "romgen: --relief-prep: %s\n", rg_err_str(e));
+    free(d);
+    return 1;
+}
+
 int main(int argc, char **argv)
 {
     const char *romPath = NULL, *outDir = NULL;
@@ -245,7 +322,7 @@ int main(int argc, char **argv)
     bool wantRelief = true;
     RgReliefMode reliefMode = RG_RELIEF_LEDGES;
     int dumpId = 0, reliefId = 0, i;
-    bool reliefLog = false;
+    bool reliefLog = false, reliefPrep = false;
     const char *dumpModel = NULL;
     size_t n = 0;
     uint8_t *rom;
@@ -276,8 +353,11 @@ int main(int argc, char **argv)
             }
         } else if (strcmp(argv[i], "--relief-log") == 0) {
             reliefLog = true;
+        } else if (strcmp(argv[i], "--relief-prep") == 0) {
+            reliefPrep = true;
         } else if (strcmp(argv[i], "--relief-layout") == 0 && i + 1 < argc) {
-            reliefId = atoi(argv[++i]);        } else if (strcmp(argv[i], "--dump-roles") == 0 && i + 1 < argc) {
+            reliefId = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--dump-roles") == 0 && i + 1 < argc) {
             dumpId = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--dump-model") == 0 && i + 1 < argc) {
             dumpModel = argv[++i];
@@ -288,7 +368,7 @@ int main(int argc, char **argv)
         }
     }
     if (romPath == NULL || (outDir == NULL && dumpModel == NULL)) {
-        fprintf(stderr, "usage: romgen ROM.gba OUTDIR [--time] [--only regions,signposts,buildings,relief] [--relief ledges|off] [--relief-layout ID] [--relief-log] [--dump-roles LAYOUT_ID] [--dump-model NAME]\n");
+        fprintf(stderr, "usage: romgen ROM.gba OUTDIR [--time] [--only regions,signposts,buildings,relief] [--relief ledges|off] [--relief-layout ID] [--relief-log] [--relief-prep] [--dump-roles LAYOUT_ID] [--dump-model NAME]\n");
         return 2;
     }
     rom = ReadFile(romPath, &n);
@@ -298,6 +378,11 @@ int main(int argc, char **argv)
     }
     if (dumpModel != NULL) {
         int rc = DumpModel(rom, n, dumpModel);
+        free(rom);
+        return rc;
+    }
+    if (reliefPrep) {
+        int rc = PrepAll(rom, n);
         free(rom);
         return rc;
     }

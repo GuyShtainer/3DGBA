@@ -191,3 +191,35 @@ Deviations and decisions:
 3. Rock tiles are kept as one w*h bitmap per kept layout (alias applied) instead of the metatile list; `rock_near` reads it.
 4. `rg_seam_cells` takes ROM direction codes and layout sizes directly (no dict); edge codes are ROM codes.
 Open: nothing unresolved. Lead review of member order requested by the spec: the pinned list is in the test.
+
+## S3.4 Canvas and prepare
+
+New: `source/romgen/rg_rcanvas.{h,c}` (drawn_canvas, drawn_role + ROLE_REFERENCE, rocky water, the majority vote),
+`rg_rprep.{h,c}` (region flood, big, runs, WALKED ties, stats, edges), `rg_rwrap.c` (split_wrapped: _wrapped, _clusters,
+_rim_gaps, _neck; split out of rg_rprep for size), `test/host/test_romgen_relief_canvas.c` (+ `_pins.inc`), CLI `--relief-prep`.
+
+Results (ROM `roms/emerald.gba`, `ROMGEN_ROM` absolute, no suite printed a skip):
+```
+make -C tools/romgen test     # 16 suites, 0 failures; relief_canvas 1579 checks (ASan+UBSan, 16 s)
+make -C tools/romgen mem && build/romgen_mem $ROM OUT --relief-prep
+  prep: 34 groups, 1284 ms total, worst peak 67.2 MB (70441158 bytes)      (-O2, host)
+  group 7 (largest, 200x240 cells = 3200x3840 px): 1612 regions (192 big), 365 run keys, 31309 drops, 3 ties,
+    prepare 236 ms, peak 67.2 MB; histogram GROUND 7163315 TOP 749375 FACE 660166 RIM 21832 VOID 3686400 FREE 6912 FLECK 0
+  WRAP groups: key 20 -> 0 cuts, 21 -> 5, 22 -> 2; every other group 0 cuts (split_wrapped fires only on WRAP groups)
+```
+- Pinned per group (34): the 7-kind histogram, region/big/cut/run-key/drop/tie counts and an FNV hash over sizes, big, runs,
+  ties, stats and edges (`test_romgen_relief_canvas_pins.inc`); a second fresh context gives the same pins.
+- Independent oracles: FIFO-BFS labelling equals the regions exactly on non-WRAP groups (WRAP: regions == BFS + cuts);
+  VOID exactly where meta == 0xFFFF; waterfall cells are all FACE; no FLECK after the vote; kinds sum to W*H; the vote
+  equals a brute-force 5x5 window on a random canvas.
+- Synthetic: FACE column drops of 20 per column, RIM -16, 1000 WALKED zeros + one tie, pier/apart, wrap gate (keys 20/21/22, never alternates).
+- relief.bin SHA-1 unchanged `eb25a3835edf7ebbcc9d634dd199be955fb4d27e`; buildings `2929c764...`, regions `007a370f...`, signposts `38515605...`.
+- Device: hook-on build compiles (only pre-existing main.c warnings); release rebuilt: `3DGBA.3dsx` 4,582,344 and `3DGBA.cia`
+  2,156,992 bytes, identical to S3.3. Not run: Azahar.
+
+Deviations:
+1. `rg_rwrap.c` is an extra file. 2. `awash` (rel:2580-2595) deferred to S3.6 (its interface needs S3.6's mass/kind).
+3. Majority vote uses sliding column sums instead of prefix sums: identical integers, far less memory. 4. Upstream's
+`south_face` truthiness quirk (flat False vs None) ported faithfully. 5. drawn_role's first-wins cache gives 118
+disagreements when groups run in upstream order (alias layouts 13/136/292 vs layout 28 share a key); faithful, pinned by the
+verify flag. 6. The spec's ~74 MB prep estimate measured at 67.2 MB.
