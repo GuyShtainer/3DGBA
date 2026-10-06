@@ -333,3 +333,15 @@ interiors3d off).
   untracked harness artefact, not committed.
 - `--stage-roms` refuses while `sdmc:/3DGBA/gameA.gba` exists; I moved it to the scratchpad and put it back.
 - The movie `ML.ctm` takes about 5000 emulated frames to reach the overworld; shots need 150-300 s of wall time per run in the voxel renderer.
+
+## 2026-10-06: R2 merged (83274f7) + first in-game K1 models (lead)
+
+- The host CLI made `buildings.bin` from each ROM: FR → `sdmc:/3ds/3DGBA/voxel/BPRE/`, LG → `.../BPGE/`. Both are
+  76032 B, SHA-1 66b63ede… (= the K1 pin), 2 models, 3 placements.
+- Azahar, New-3DS mode, release build at 83274f7, Pallet saves:
+  - `evidence/m1-fr-pallet-models.png` and `evidence/m1-lg-pallet-models.png`. Both Pallet houses and Oak's Lab are
+    real 3D models, with walls, depth, a roof and the lab's vent and side wall. They cast shadows on the ground.
+  - The flowers, fences and signs are still ground art (no regions/signposts for FRLG until G2). The tree walls are
+    flat (T1).
+- M1 is not closed yet. Still needed: G2 (terrain/water/signs), T1 (trees), the 4-angle and door checks, and then the
+  hardware run.
