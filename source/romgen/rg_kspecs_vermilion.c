@@ -12,7 +12,7 @@
 
 #define L_VERMILION 83, 0x82FF5FADu
 #define L_ROUTE5 93, 0xA0C68725u
-#define L_ROUTE6 94, 0x00000000u
+#define L_ROUTE6 94, 0xD03FD324u
 #define L_ROUTE7 95, 0x00000000u
 #define L_ROUTE8 96, 0x00000000u
 #define VM_GROUND {0x001}
@@ -170,52 +170,59 @@ static bool k_daycare(const RgSpec *spec, int a0, int a1, RgPartList *out)
     return !out->failed;
 }
 
-/* ---- k_route5_gate: 96x112 art (rect (22,32), 6x7 on Route 5) -------------------------------------------------------- */
-/* The Route 5 south gatehouse (dest 17/1) seen from Route 5: the raised lip over the north door at rows 12-16, the flat
- * roof top 16-59, the cornice, a window band and brick facade down to row 104, a canopy (top 84-91, front 92-103)
- * between two white pillars, and the floor apron 104-111. The same shape as the Route 2 south half (k_route2_gate_s),
- * 96 px wide. The log posts and the sand path in the top and bottom rows stay flat ground. */
-static bool k_route5_gate(const RgSpec *spec, int a0, int a1, RgPartList *out)
+/* ---- the Route 5 / Route 6 gatehouse halves (96 px wide, one builder, arg0 = the row shift) --------------------------- */
+/* The Saffron gatehouses on Route 5 (south end) and Route 6 (north end) are one shape. k_route5_gate (rect (22,32), 6x7 = 96x112, arg0 0)
+ * is the Route 5 one: the raised lip over the north door at rows 12-16, the flat roof top 16-59, the cornice, a window
+ * band and brick facade down to row 104, a canopy (top 84-91, front 92-103) between two white pillars, the floor apron
+ * 104-111. k_route6_gate (rect (9,0), 8x6 = 128x96, arg0 16, arg1 16 = the x shift past the tree column) is the Route 6 one, where the map top cuts the
+ * roof: every row is 16 smaller and there is no lip. The rect takes one tree column each side so that it does not also match the Route 5 face (same 6x6 cells, which the Route 5 spec already owns). The same shape as the Route 2 south half (k_route2_gate_s). The log
+ * posts, the sand path and the porch floor of the cell row below the apron stay flat ground. */
+static bool k_gate_half(const RgSpec *spec, int a0, int a1, RgPartList *out)
 {
+    const double s = a0, dx = a1;
     RgPart *body = rg_parts_add(out, RG_P_PRISM, "body");
     RgPart *cn = rg_parts_add(out, RG_P_PRISM, "canopy");
     RgPrism *pr;
 
-    (void)spec; (void)a0; (void)a1;
+    (void)spec;
     if (body == NULL || cn == NULL)
         return false;
     pr = &body->u.prism;
-    pr->x0 = 0; pr->x1 = 96;
+    pr->x0 = dx; pr->x1 = dx + 96;
     pr->west = pr->east = true;
-    vm_box(pr, 104, 0, 45, 61);
+    vm_box(pr, 104 - s, 0, 45, 61 - s);
     pr->edges[0].kind = RG_EM_PROJ;
-    pr->edges[0].proj = rg_proj_rows(59, 104);      /* cornice, windows, brick */
+    pr->edges[0].proj = rg_proj_rows(59 - s, 104 - s);      /* cornice, windows, brick */
     pr->edges[1].kind = RG_EM_PROJ;
-    pr->edges[1].proj = rg_proj_rows(16, 59);       /* roof top */
+    pr->edges[1].proj = rg_proj_rows(16 - s, 59 - s);       /* roof top */
     pr->skip = (1u << 2) | (1u << 3);
 
     pr = &cn->u.prism;
-    pr->x0 = 23; pr->x1 = 73;
+    pr->x0 = dx + 23; pr->x1 = dx + 73;
     pr->west = pr->east = false;
-    vm_box(pr, 124, 20, 32, 116);
+    vm_box(pr, 124 - s, 20, 32, 116 - s);
     pr->edges[0].kind = RG_EM_PROJ;
-    pr->edges[0].proj = rg_proj_rows(92, 104);
+    pr->edges[0].proj = rg_proj_rows(92 - s, 104 - s);
     pr->edges[1].kind = RG_EM_PROJ;
-    pr->edges[1].proj = rg_proj_rows(84, 92);
+    pr->edges[1].proj = rg_proj_rows(84 - s, 92 - s);
     pr->skip = (1u << 2) | (1u << 3);
 
-    vm_vplane(out, "pillar_w", 17, 23, 124, 12, 40, 84, 112);
-    vm_vplane(out, "pillar_e", 73, 79, 124, 12, 40, 84, 112);
-    vm_vplane(out, "col_w", 0, 8, 112, 0, 8, 104, 112);
-    vm_vplane(out, "col_e", 88, 96, 112, 0, 8, 104, 112);
-    vm_hplane(out, "apron", 8, 88, 0, 104, 112);
-    vm_vplane(out, "lip", 22, 74, 61, 45, 49, 12, 16);      /* the raised lip over the north door */
+    vm_vplane(out, "pillar_w", dx + 17, dx + 23, 124 - s, 12, 40, 84 - s, 112 - s);
+    vm_vplane(out, "pillar_e", dx + 73, dx + 79, 124 - s, 12, 40, 84 - s, 112 - s);
+    vm_vplane(out, "col_w", dx, dx + 8, 112 - s, 0, 8, 104 - s, 112 - s);
+    vm_vplane(out, "col_e", dx + 88, dx + 96, 112 - s, 0, 8, 104 - s, 112 - s);
+    vm_hplane(out, "apron", dx + 8, dx + 88, 0, 104 - s, 112 - s);
+    if (a0 == 0)
+        vm_vplane(out, "lip", dx + 22, dx + 74, 61, 45, 49, 12, 16);  /* the raised lip over the north door */
     return !out->failed;
 }
 
 static const RgExact kGate5Exact[2] = {
     {0, 16, 96, 112, false},    /* roof, cornice, windows, brick, canopy, pillars, apron */
     {22, 12, 74, 16, false},    /* the lip over the door */
+};
+static const RgExact kGate6Exact[1] = {
+    {16, 0, 112, 96, false},    /* roof, cornice, windows, brick, canopy, pillars, apron */
 };
 static const RgExact kDayExact[13] = {
     {0, 14, 1, 80, false}, {1, 13, 3, 80, false}, {3, 12, 5, 80, false}, {5, 11, 7, 80, false}, {7, 10, 9, 80, false},
@@ -238,6 +245,8 @@ const RgSpec rg_kspecs_vermilion[] = {
     {"k_daycare", RG_SPEC_DIRECT, L_ROUTE5, {21, 21, 5, 5}, {0, 0}, VM_GROUND, 1, kDayExact, 13,
      k_daycare, 0, 0, NULL},
     {"k_route5_gate", RG_SPEC_DIRECT, L_ROUTE5, {22, 32, 6, 7}, {0, 0}, VM_GROUND, 1, kGate5Exact, 2,
-     k_route5_gate, 0, 0, NULL},
+     k_gate_half, 0, 0, NULL},
+    {"k_route6_gate", RG_SPEC_DIRECT, L_ROUTE6, {9, 0, 8, 6}, {0, 0}, VM_GROUND, 1, kGate6Exact, 1,
+     k_gate_half, 16, 16, NULL},
 };
 const unsigned rg_kspecs_vermilion_count = sizeof(rg_kspecs_vermilion) / sizeof(rg_kspecs_vermilion[0]);
