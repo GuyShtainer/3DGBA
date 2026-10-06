@@ -183,3 +183,11 @@ Dropped: none. Open: functions `room_setup`, `room_owner`, `pb_body` and the tab
 guide (straight transcriptions; not split here); the file doubled to 7.9 MB and 118 pages, on-device memory and load time are
 unmeasured and not yet seen in Azahar; the room tables were checked against the ROM only through the gate and room_check (they
 cannot cross-check each other).
+
+## 2026-10-06 — S2.6 visual check in the emulator (PASS)
+
+- Full S2.6 `buildings.bin` (7,898,476 B, = the test) on the emulator SD; app log: `286 models on 118 pages,
+  2894 placements, 80520 vertices`, no errors logged.
+- `evidence/s26-player-house.png`: the Littleroot player house 1F as a 3D room — walls, fridge, sink counter,
+  shelf, TV, table + chairs as modelled pieces. Lead-verified: interior 851/0, expand 1512/0 with the ROM.
+- Still open: device memory/load time for the 7.9 MB / 118-page file (hardware run).
