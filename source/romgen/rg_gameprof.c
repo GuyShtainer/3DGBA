@@ -59,12 +59,15 @@ static GameProfile sEmerald = {
     .cb2OverworldBasic = CB2_OverworldBasic,
     .emeraldIdTables = true,
     .interiors3d = true,
+    .rendererOn = true,
 };
 
-/* FireRed / LeafGreen rev 1 (Phase 34 G1): the ROM layer and the romgen behaviour sets. Numbers measured on the
- * user's ROMs (docs/phase34-frlg/SURVEY.md, M1) and, for the behaviour values, pokefirered@037335f
- * include/constants/metatile_behaviors.h (numbers only), see docs/PROVENANCE.md. The RAM anchors are R1's and stay 0,
- * which is what keeps gameprof_detect() (the renderer's entry) refusing these rows. */
+/* FireRed / LeafGreen rev 1 (Phase 34 G1 + R1): the ROM layer, the romgen behaviour sets and the renderer anchors.
+ * ROM-layer numbers measured on the user's ROMs (docs/phase34-frlg/SURVEY.md, M1) and, for the behaviour values,
+ * pokefirered@037335f include/constants/metatile_behaviors.h (numbers only), see docs/PROVENANCE.md. The R1 anchors
+ * (the RAM block and the five ROM anchors) are listed per value in docs/PROVENANCE.md and docs/phase34-frlg/BUILDLOG-P34.md
+ * with the method of each. `rendererOn` stays false until R2: gameprof_detect() (the renderer's entry) refuses these
+ * rows, vx_host runs only the anchor self-check on them. */
 static const uint8_t kFrlgGroupSizes[43] = {5, 123, 60, 66, 4, 6, 8, 10, 6, 8, 20, 10, 8, 2, 10, 4, 2, 2, 2, 1, 1, 2,
                                             2, 3, 2, 3, 2, 1, 1, 1, 1, 7, 5, 5, 8, 8, 5, 5, 1, 1, 1, 2, 1};
 
@@ -73,14 +76,21 @@ static const uint8_t kFrlgGroupSizes[43] = {5, 123, 60, 66, 4, 6, 8, 10, 6, 8, 2
     .nPrimTiles = 640, .nPrimPals = 7, .nMetatilesTotal = 1024, .tilesetAttrOff = 0x14, .attrBytes = 4,           \
     .behMask = 0x1FF, .layerMask = 0x60000000u, .layerShift = 29, .layoutBytes = 26, .houseHalfWidth = 5,          \
     .houseHeight = 7, .playerAvatarBytes = 0x20, .gfxInfoCount = 152, .fldeffCount = 36, .emeraldIdTables = false,  \
-    .interiors3d = false
+    .interiors3d = false, .rendererOn = false,                                                                      \
+    .gMain = 0x030030F0u, .sb1Ptr = 0x03005008u, .backupLayout = 0x03005040u, .backupMap = 0,                     \
+    .mapHeader = 0x02036DFCu, .objEvents = 0x02036E38u, .playerAvatar = 0x02037078u, .sprites = 0x0202063Cu,      \
+    .plttUnfaded = 0x020371F8u, .paletteFade = 0x02037AB8u, .weather = 0,                                          \
+    .weatherOff = {0x6D0, 0x6C6, 0x730, 0x6FB, 0x724},                                                             \
+    .cb2Overworld = 0x080565C9u, .cb2OverworldBasic = 0x080565BDu
 
 static GameProfile sFireRed = {GP_FRLG_COMMON, .game = GP_FIRERED, .code = {'B', 'P', 'R', 'E'}, .dataSubdir = "BPRE",
                                .mapGroups = 0x08352718u, .mapLayouts = 0x0834EBFCu, .tsGeneral = 0x082D4B04u,
-                               .tsBuilding = 0x082D4C24u};
+                               .tsBuilding = 0x082D4C24u, .weatherPtr = 0x083C2C2Cu, .gfxInfoPtrs = 0x0839FE20u,
+                               .fldeffTemplates = 0x083A0080u};
 static GameProfile sLeafGreen = {GP_FRLG_COMMON, .game = GP_LEAFGREEN, .code = {'B', 'P', 'G', 'E'},
                                  .dataSubdir = "BPGE", .mapGroups = 0x083526F8u, .mapLayouts = 0x0834EBDCu,
-                                 .tsGeneral = 0x082D4AE4u, .tsBuilding = 0x082D4C04u};
+                                 .tsGeneral = 0x082D4AE4u, .tsBuilding = 0x082D4C04u, .weatherPtr = 0x083C2A68u,
+                                 .gfxInfoPtrs = 0x0839FE00u, .fldeffTemplates = 0x083A0060u};
 
 static void set_bit(GpBehSet *s, unsigned b)
 {
@@ -214,8 +224,8 @@ static const GameProfile *detect(const uint8_t *rom, size_t size, bool renderer)
             continue;
         if (r->game != GP_EMERALD && rom[GP_HDR_REV] != r->rev)
             continue;
-        if (renderer && r->game != GP_EMERALD && r->gMain == 0)
-            continue;   /* RAM anchors not harvested yet (R1): the renderer must not run on this row */
+        if (renderer && !r->rendererOn)
+            continue;   /* anchors harvested (R1) but the renderer path is R2's: refuse until it is switched on */
         return r;
     }
     return NULL;
