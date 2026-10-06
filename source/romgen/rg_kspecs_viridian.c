@@ -350,6 +350,57 @@ static bool k_route2_gate_n(const RgSpec *spec, int a0, int a1, RgPartList *out)
     return !out->failed;
 }
 
+/* ---- Viridian Forest gate halves (layout 117) ---------------------------------------------------------------------- */
+/* k_forest_gate_n: 176x96 art (cells (0,4), 11x6), the same flat-roofed gatehouse as Route 2 seen from its front: roof
+ * rows 0-43, cornice 44-48, windows and brick, a canopy (top 67-74, front 75-87) between two pillars. The rect stops
+ * at row 88: the bushes at the bottom edge stay flat ground. */
+static bool k_forest_gate_n(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    RgPart *body = rg_parts_add(out, RG_P_PRISM, "body");
+    RgPrism *pr;
+
+    (void)spec; (void)a0; (void)a1;
+    if (body == NULL)
+        return false;
+    pr = &body->u.prism;
+    pr->x0 = 0; pr->x1 = 176;
+    pr->west = pr->east = true;
+    vr_box(pr, 88, 0, 44, 44);
+    pr->edges[0].kind = RG_EM_PROJ;
+    pr->edges[0].proj = rg_proj_rows(44, 88);
+    pr->edges[1].kind = RG_EM_PROJ;
+    pr->edges[1].proj = rg_proj_rows(0, 44);
+    pr->skip = (1u << 2) | (1u << 3);
+    {
+        RgPart *cn = rg_parts_add(out, RG_P_PRISM, "canopy");
+
+        if (cn == NULL)
+            return false;
+        pr = &cn->u.prism;
+        pr->x0 = 54; pr->x1 = 122;
+        pr->west = pr->east = false;
+        vr_box(pr, 116, 28, 41, 108);
+        pr->edges[0].kind = RG_EM_PROJ;
+        pr->edges[0].proj = rg_proj_rows(75, 88);
+        pr->edges[1].kind = RG_EM_PROJ;
+        pr->edges[1].proj = rg_proj_rows(67, 75);
+        pr->skip = (1u << 2) | (1u << 3);
+    }
+    vr_vplane(out, "pillar_w", 48, 54, 116, 28, 49, 67, 88);
+    vr_vplane(out, "pillar_e", 122, 128, 116, 28, 49, 67, 88);
+    return !out->failed;
+}
+
+/* k_forest_gate_s: 160x112 art (cells (24,62), 10x7), the roof of the south half seen from above: a level slab over
+ * rows 16-111 with the raised lip over the door at rows 12-15. */
+static bool k_forest_gate_s(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    (void)spec; (void)a0; (void)a1;
+    vr_hplane(out, "roof", 0, 160, 45, 61, 157);
+    vr_vplane(out, "lip", 54, 122, 61, 45, 49, 12, 16);
+    return !out->failed;
+}
+
 static const RgExact kViridianHouseExact[4] = {
     {47, 8, 65, 40, false},     /* chimney, top and front face */
     {0, 20, 47, 48, false},     /* front slope, fascia (west of the chimney) */
@@ -375,6 +426,13 @@ static const RgExact kRoute2GateNExact[2] = {
     {0, 16, 128, 96, false},    /* roof, cornice, windows, brick */
     {38, 12, 90, 16, false},    /* the lip over the door */
 };
+static const RgExact kForestGateNExact[1] = {
+    {0, 0, 176, 88, false},     /* roof, cornice, windows, brick, canopy, pillars */
+};
+static const RgExact kForestGateSExact[2] = {
+    {0, 16, 160, 112, false},   /* the roof */
+    {54, 12, 122, 16, false},   /* the lip over the door */
+};
 static const RgExact kViridianHouse2Exact[7] = {
     {47, 8, 65, 40, false},     /* chimney, top and front face */
     {0, 20, 47, 48, false},     /* front slope, fascia */
@@ -386,6 +444,7 @@ static const RgExact kViridianHouse2Exact[7] = {
 };
 
 #define L_ROUTE2 90, 0x5E505C50u
+#define L_FOREST 117, 0x1DED0623u
 
 const RgSpec rg_kspecs_viridian[] = {
     {"k_viridian_house", RG_SPEC_DIRECT, L_VIRIDIAN_K3, {24, 8, 5, 4}, {0, 0}, {VR_GRASS}, 1, kViridianHouseExact, 4,
@@ -400,5 +459,9 @@ const RgSpec rg_kspecs_viridian[] = {
      k_route2_gate_s, 0, 0, NULL},
     {"k_route2_gate_n", RG_SPEC_DIRECT, L_ROUTE2, {2, 13, 8, 6}, {0, 0}, {0x010, 0x011}, 2, kRoute2GateNExact, 2,
      k_route2_gate_n, 0, 0, NULL},
+    {"k_forest_gate_n", RG_SPEC_DIRECT, L_FOREST, {0, 4, 11, 6}, {0, 0}, {0x010, 0x011}, 2, kForestGateNExact, 1,
+     k_forest_gate_n, 0, 0, NULL},
+    {"k_forest_gate_s", RG_SPEC_DIRECT, L_FOREST, {24, 62, 10, 7}, {0, 0}, {0x010, 0x011}, 2, kForestGateSExact, 2,
+     k_forest_gate_s, 0, 0, NULL},
 };
 const unsigned rg_kspecs_viridian_count = sizeof(rg_kspecs_viridian) / sizeof(rg_kspecs_viridian[0]);
