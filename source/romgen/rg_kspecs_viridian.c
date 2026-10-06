@@ -5,7 +5,9 @@
  * renderer's oblique camera). The builders reuse the Emerald part library (rg_geom) unchanged; most faces are PROJ
  * edges, which copy the art by row, so the ortho check holds by construction where the geometry is right.
  *
- *   k_viridian_house   5x4 cells (80x64): gabled shingle house with a chimney (layout 79). */
+ *   k_viridian_house   5x4 cells (80x64): gabled shingle house with a chimney (layout 79).
+ *   k_viridian_house2  the same house with flower boxes (5x5 cells).
+ *   k_route2_house     5x3 cells (80x48): blue hip-roofed house on Route 2 (layout 90). */
 #include "rg_bspecs.h"
 
 #include <string.h>
@@ -17,6 +19,33 @@ static void vr_pt(double (*poly)[2], unsigned i, double z, double y)
 {
     poly[i][0] = z;
     poly[i][1] = y;
+}
+
+static RgStrip vr_strip2(double a, double b)
+{
+    RgStrip s;
+
+    memset(&s, 0, sizeof(s));
+    s.fixed[0] = a;
+    s.fixed[1] = b;
+    return s;
+}
+
+static RgStrip vr_wrap(RgStrip s, double lo, double hi)
+{
+    s.hasWrap = true;
+    s.wrap[0] = lo;
+    s.wrap[1] = hi;
+    return s;
+}
+
+static void vr_box(RgPrism *p, double front, double ylo, double yhi, double back)
+{
+    p->nPoly = 4;
+    vr_pt(p->poly, 0, front, ylo);
+    vr_pt(p->poly, 1, front, yhi);
+    vr_pt(p->poly, 2, back, yhi);
+    vr_pt(p->poly, 3, back, ylo);
 }
 
 /* One x-slice of the gable roof. The slice under the chimney takes a clean strip instead of the art, so the painted
@@ -130,6 +159,44 @@ static bool k_viridian_house(const RgSpec *spec, int a0, int a1, RgPartList *out
     return !out->failed;
 }
 
+/* ---- k_route2_house: 80x48 art (rect rows = art rows 16-63 of the 5x5 picture) ----------------------------------- */
+/* Rows: ridge 0-1, front slope 1-23 (a stripe every 7-8 rows), eave 24-31, facade 32-47. Hip ends at columns 0-11 and
+ * 67-77. The hip builder textures its end faces from the slope strip, so the ends are not pinned by the exact rects. */
+static bool k_route2_house(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    double front_z = 48, back_z = 12, over = 2, wall_top = 18;
+    RgPart *base = rg_parts_add(out, RG_P_PRISM, "ground_floor");
+    RgPart *rf = rg_parts_add(out, RG_P_HIPROOF, "roof");
+    RgHip *roof;
+    RgPrism *pr;
+
+    (void)spec; (void)a0; (void)a1;
+    if (base == NULL || rf == NULL)
+        return false;
+    roof = &rf->u.hip;
+    roof->x0 = 0; roof->x1 = 78;
+    roof->zf = front_z + over; roof->zb = 32; roof->y0 = wall_top;
+    roof->fascia = rg_strip_fin(vr_wrap(vr_strip2(24, 32), 14, 62));
+    roof->slope = rg_strip_fin(vr_wrap(vr_strip2(1, 24), 14, 62));
+    roof->teeth[0] = 0; roof->teeth[1] = 1;
+    roof->cap[0] = 0; roof->cap[1] = 1;
+    roof->pitch = 59.6; roof->run = 11;
+    roof->ridgeU[0] = 0; roof->ridgeU[1] = 78;
+    roof->endTile = rg_tile(11, 0, 12, 1);
+    roof->ridge = true;
+    roof->hasRidgeWrap = true; roof->ridgeWrap[0] = 14; roof->ridgeWrap[1] = 62;
+    rg_hip_init(roof);
+
+    pr = &base->u.prism;
+    pr->x0 = 1; pr->x1 = 80;
+    pr->west = pr->east = true;
+    vr_box(pr, front_z, 0, wall_top, back_z);
+    pr->edges[0].kind = RG_EM_PROJ;
+    pr->edges[0].proj = rg_proj_rows(32, 48);
+    pr->skip = (1u << 1) | (1u << 2) | (1u << 3);
+    return !out->failed;
+}
+
 static const RgExact kViridianHouseExact[4] = {
     {47, 8, 65, 40, false},     /* chimney, top and front face */
     {0, 20, 47, 48, false},     /* front slope, fascia (west of the chimney) */
@@ -137,6 +204,10 @@ static const RgExact kViridianHouseExact[4] = {
     {0, 48, 80, 64, false},     /* facade */
 };
 
+static const RgExact kRoute2HouseExact[2] = {
+    {1, 32, 80, 48, false},     /* facade */
+    {14, 1, 62, 32, false},     /* front slope and eave between the hip ends (the stripe ends at the hip edge differ by 1-2 px) */
+};
 static const RgExact kViridianHouse2Exact[7] = {
     {47, 8, 65, 40, false},     /* chimney, top and front face */
     {0, 20, 47, 48, false},     /* front slope, fascia */
@@ -147,10 +218,14 @@ static const RgExact kViridianHouse2Exact[7] = {
     {32, 56, 80, 72, false},    /* flower boxes, east */
 };
 
+#define L_ROUTE2 90, 0x5E505C50u
+
 const RgSpec rg_kspecs_viridian[] = {
     {"k_viridian_house", RG_SPEC_DIRECT, L_VIRIDIAN_K3, {24, 8, 5, 4}, {0, 0}, {VR_GRASS}, 1, kViridianHouseExact, 4,
      k_viridian_house, 0, 0, NULL},
     {"k_viridian_house2", RG_SPEC_DIRECT, L_VIRIDIAN_K3, {24, 15, 5, 5}, {0, 0}, {VR_GRASS}, 1, kViridianHouse2Exact, 7,
      k_viridian_house, 1, 0, NULL},
+    {"k_route2_house", RG_SPEC_DIRECT, L_ROUTE2, {14, 20, 5, 3}, {0, 0}, {0x010, 0x011}, 2, kRoute2HouseExact, 2,
+     k_route2_house, 0, 0, NULL},
 };
 const unsigned rg_kspecs_viridian_count = sizeof(rg_kspecs_viridian) / sizeof(rg_kspecs_viridian[0]);
