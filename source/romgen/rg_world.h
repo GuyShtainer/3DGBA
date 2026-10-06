@@ -1,7 +1,8 @@
 /* rg_world.h -- the ROM world romgen generators read (3DGBA, GPLv3). Pure C.
  *
  * Replaces the upstream Layout / MapEvents / pair_for inputs, read from the ROM image instead of a
- * decomp tree. Spec: docs/phase33-romgen/SPEC-S0-S1.md section 1. BPEE only. */
+ * decomp tree. Spec: docs/phase33-romgen/SPEC-S0-S1.md section 1. Emerald, plus (Phase 34 G1) FireRed and
+ * LeafGreen rev 1 through the game profile (rg_gameprof.h): every ROM-layout constant is read from RgWorld.prof. */
 #ifndef RG_WORLD_H
 #define RG_WORLD_H
 
@@ -9,12 +10,17 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "rg_gameprof.h"
+
 #define RG_NONE 0xFFFFu
+/* Emerald only (the relief S3 modules): generic code reads prof->nPrimMetatiles instead. */
 #define RG_NUM_PRIMARY 512u
+#define RG_MAX_GROUPS 64u
 
 typedef enum {
     RG_OK = 0,
-    RG_ERR_NOT_BPEE,
+    RG_ERR_GAME,                 /* not a supported cartridge (Emerald, FireRed rev 1, LeafGreen rev 1), or its tables are missing */
+    RG_ERR_NOT_BPEE = RG_ERR_GAME,   /* the pre-Phase-34 name: same value, so the CLI exit codes do not move */
     RG_ERR_LAYOUT_ORDER,
     RG_ERR_LAYOUT_TABLE,
     RG_ERR_MAP_GROUPS,
@@ -49,7 +55,7 @@ typedef struct RgTileset {
     uint32_t tilesBytes;         /* decoded length (exact if compressed) */
     const uint8_t *palettes;     /* 512 B, read with rg_rd16 */
     const uint8_t *metatiles;    /* 16 B per metatile */
-    const uint8_t *attrs;        /* 2 B per metatile */
+    const uint8_t *attrs;        /* profile attrBytes (2 on Emerald, 4 on FRLG) per metatile */
     uint16_t metatileCount;
 } RgTileset;
 
@@ -65,7 +71,13 @@ typedef struct RgLayout {
     uint16_t altOf;              /* base layout id this one inherits from, 0 = none */
     const RgCell *warps; uint16_t warpCount;   /* union, sorted (y, x), unique */
     const RgCell *signs; uint16_t signCount;   /* union, sorted (y, x), unique */
+    const GameProfile *prof;     /* set by rg_world_open; NULL (hand-built layouts) means the Emerald row */
 } RgLayout;
+
+static inline const GameProfile *rg_lprof(const RgLayout *L)
+{
+    return L->prof != NULL ? L->prof : gameprof_emerald();
+}
 
 typedef struct RgMap {
     uint8_t group, num, mapType;
@@ -86,21 +98,27 @@ typedef struct RgBlock RgBlock;
 typedef struct RgWorld {
     const uint8_t *rom;
     size_t romSize;
-    uint16_t layoutCount;        /* 442 on BPEE */
+    const GameProfile *prof;     /* the detected game (rg_world_open) */
+    uint32_t layoutTable;        /* GBA address of gMapLayouts as used */
+    uint16_t layoutCount;        /* 442 on BPEE, 384 on FRLG */
     RgLayout *layouts;           /* [id-1] */
     uint16_t tilesetCount;
     RgTileset *tilesets;         /* index 0 = the NULL tileset */
     uint16_t pairCount;
     struct { uint16_t ts[2]; } *pairs;
-    uint16_t mapCount;           /* 518 on BPEE */
+    uint16_t mapCount;           /* 518 on BPEE, 425 on FRLG */
     RgMap *maps;                 /* group-major order */
-    uint16_t groupStart[34], groupCount[34];
+    uint16_t groupStart[RG_MAX_GROUPS], groupCount[RG_MAX_GROUPS];   /* [prof->groupCount] used */
     uint32_t outdoorMaps;
     uint32_t warpEvents, signEvents;   /* raw event totals over all maps */
     RgBlock *arena;              /* every allocation above lives here */
 } RgWorld;
 
 RgErr rg_world_open(RgWorld *w, const uint8_t *rom, size_t romSize);
+/* SPEC-P34 1.3: finds gMapLayouts by searching the ROM for the layout pointer of header (3, 0) (aligned, table + 4*(id-1)),
+ * accepting the first hit that agrees with EVERY map header (rd32(table + 4*(layoutId-1)) == header.layout). 0 = not found.
+ * Needs w->prof and w->rom only (so it can run on an opened world). */
+uint32_t rg_find_map_layouts(const RgWorld *w);
 void  rg_world_close(RgWorld *w);
 const char *rg_err_str(RgErr e);
 
@@ -119,13 +137,13 @@ static inline bool rg_off(const RgLayout *L, int x, int y)
 uint16_t rg_metatile(const RgLayout *L, int x, int y);
 bool     rg_blocked(const RgLayout *L, int x, int y);
 uint8_t  rg_elev(const RgLayout *L, int x, int y);
-uint16_t rg_attr(const RgLayout *L, uint16_t metatile);   /* 0 past metatileCount / RG_NONE */
-uint8_t  rg_behaviour(const RgLayout *L, int x, int y);
+uint32_t rg_attr(const RgLayout *L, uint16_t metatile);   /* u16 on Emerald, u32 on FRLG; 0 past metatileCount / RG_NONE */
+uint16_t rg_behaviour(const RgLayout *L, int x, int y);   /* attribute & prof->behMask (0xFF Emerald, 0x1FF FRLG) */
 bool     rg_touches_walkable(const RgLayout *L, int x, int y);
 bool     rg_has_warp(const RgLayout *L, int x, int y);
 bool     rg_has_sign(const RgLayout *L, int x, int y);
 /* G3: the 8 raw u16 entries of a metatile (lower layer 0..3, upper 4..7), from the primary tileset for
- * ids < 512 else the secondary. False when out of range (upstream `entries` returning None, props:80). */
+ * ids < prof->nPrimMetatiles (512 / 640) else the secondary. False when out of range (upstream `entries` returning None, props:80). */
 bool rg_metatile_entries(const RgLayout *L, uint16_t metatile, uint16_t out[8]);
 /* The tileset address a metatile id is drawn from (cells post_key). */
 uint32_t rg_tileset_addr_of(const RgLayout *L, uint16_t metatile);

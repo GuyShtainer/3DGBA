@@ -61,9 +61,26 @@ static GameProfile sEmerald = {
     .interiors3d = true,
 };
 
-/* FireRed / LeafGreen rev 1: placeholders. game == GP_NONE keeps gameprof_detect() refusing them until R2. */
-static const GameProfile sFireRed = {.game = GP_NONE, .code = {'B', 'P', 'R', 'E'}, .rev = 1, .dataSubdir = "BPRE"};
-static const GameProfile sLeafGreen = {.game = GP_NONE, .code = {'B', 'P', 'G', 'E'}, .rev = 1, .dataSubdir = "BPGE"};
+/* FireRed / LeafGreen rev 1 (Phase 34 G1): the ROM layer and the romgen behaviour sets. Numbers measured on the
+ * user's ROMs (docs/phase34-frlg/SURVEY.md, M1) and, for the behaviour values, pokefirered@037335f
+ * include/constants/metatile_behaviors.h (numbers only), see docs/PROVENANCE.md. The RAM anchors are R1's and stay 0,
+ * which is what keeps gameprof_detect() (the renderer's entry) refusing these rows. */
+static const uint8_t kFrlgGroupSizes[43] = {5, 123, 60, 66, 4, 6, 8, 10, 6, 8, 20, 10, 8, 2, 10, 4, 2, 2, 2, 1, 1, 2,
+                                            2, 3, 2, 3, 2, 1, 1, 1, 1, 7, 5, 5, 8, 8, 5, 5, 1, 1, 1, 2, 1};
+
+#define GP_FRLG_COMMON                                                                                              \
+    .rev = 1, .groupCount = 43, .groupSizes = kFrlgGroupSizes, .layoutSlots = 384, .nPrimMetatiles = 640,         \
+    .nPrimTiles = 640, .nPrimPals = 7, .nMetatilesTotal = 1024, .tilesetAttrOff = 0x14, .attrBytes = 4,           \
+    .behMask = 0x1FF, .layerMask = 0x60000000u, .layerShift = 29, .layoutBytes = 26, .houseHalfWidth = 5,          \
+    .houseHeight = 7, .playerAvatarBytes = 0x20, .gfxInfoCount = 152, .fldeffCount = 36, .emeraldIdTables = false,  \
+    .interiors3d = false
+
+static GameProfile sFireRed = {GP_FRLG_COMMON, .game = GP_FIRERED, .code = {'B', 'P', 'R', 'E'}, .dataSubdir = "BPRE",
+                               .mapGroups = 0x08352718u, .mapLayouts = 0x0834EBFCu, .tsGeneral = 0x082D4B04u,
+                               .tsBuilding = 0x082D4C24u};
+static GameProfile sLeafGreen = {GP_FRLG_COMMON, .game = GP_LEAFGREEN, .code = {'B', 'P', 'G', 'E'},
+                                 .dataSubdir = "BPGE", .mapGroups = 0x083526F8u, .mapLayouts = 0x0834EBDCu,
+                                 .tsGeneral = 0x082D4AE4u, .tsBuilding = 0x082D4C04u};
 
 static void set_bit(GpBehSet *s, unsigned b)
 {
@@ -118,6 +135,57 @@ static void build_emerald_sets(GameProfile *p)
     }
 }
 
+static void set_range(GpBehSet *s, unsigned lo, unsigned hi)
+{
+    unsigned b;
+
+    for (b = lo; b <= hi; b++)
+        set_bit(s, b);
+}
+
+/* SPEC-P34 section 2, FRLG column. FR and LG share every set. */
+static void build_frlg_sets(GameProfile *p)
+{
+    static const uint16_t kWater[] = {0x10, 0x11, 0x12, 0x13, 0x15, 0x16, 0x17, 0x19, 0x1B, 0x22, 0x28};
+    static const uint16_t kSurf[] = {0x10, 0x11, 0x12, 0x13, 0x15, 0x19, 0x1B, 0x22};
+    unsigned i;
+    GpBehSet zero;
+
+    memset(&zero, 0, sizeof zero);
+    p->water = p->jump = p->houseDoor = p->sand = p->tallGrass = p->signpost = zero;
+    p->surfable = p->reflective = p->ice = p->shallowFlowing = p->furniture = zero;
+    for (i = 0; i < sizeof kWater / sizeof kWater[0]; i++)
+        set_bit(&p->water, kWater[i]);
+    set_range(&p->water, 0x50, 0x53);
+    for (i = 0; i < sizeof kSurf / sizeof kSurf[0]; i++)
+        set_bit(&p->surfable, kSurf[i]);
+    set_range(&p->surfable, 0x50, 0x53);
+    set_range(&p->jump, 0x38, 0x3B);              /* E, W, N, S: no diagonals in Kanto */
+    set_bit(&p->houseDoor, 0x69);                 /* 0x8B / 0x8D are a dresser / the cable-club monitor here */
+    set_bit(&p->sand, 0x21);
+    set_bit(&p->tallGrass, 0x02);
+    set_bit(&p->signpost, 0x84);
+    set_bit(&p->reflective, 0x10);
+    set_bit(&p->reflective, 0x16);
+    set_bit(&p->reflective, 0x23);
+    set_bit(&p->ice, 0x23);
+    set_bit(&p->shallowFlowing, 0x17);
+    set_bit(&p->furniture, 0x80);
+    set_bit(&p->furniture, 0x83);
+    set_bit(&p->furniture, 0x86);
+}
+
+static void frlg_rows_init(void)
+{
+    static bool built;
+
+    if (!built) {
+        build_frlg_sets(&sFireRed);
+        build_frlg_sets(&sLeafGreen);
+        built = true;
+    }
+}
+
 const GameProfile *gameprof_emerald(void)
 {
     static bool built;
@@ -129,13 +197,14 @@ const GameProfile *gameprof_emerald(void)
     return &sEmerald;
 }
 
-const GameProfile *gameprof_detect(const uint8_t *rom, size_t size)
+static const GameProfile *detect(const uint8_t *rom, size_t size, bool renderer)
 {
     const GameProfile *rows[3];
     unsigned i;
 
     if (rom == NULL || size < GP_HDR_MIN)
         return NULL;
+    frlg_rows_init();
     rows[0] = gameprof_emerald();
     rows[1] = &sFireRed;
     rows[2] = &sLeafGreen;
@@ -145,7 +214,19 @@ const GameProfile *gameprof_detect(const uint8_t *rom, size_t size)
             continue;
         if (r->game != GP_EMERALD && rom[GP_HDR_REV] != r->rev)
             continue;
+        if (renderer && r->game != GP_EMERALD && r->gMain == 0)
+            continue;   /* RAM anchors not harvested yet (R1): the renderer must not run on this row */
         return r;
     }
     return NULL;
+}
+
+const GameProfile *gameprof_detect(const uint8_t *rom, size_t size)
+{
+    return detect(rom, size, true);
+}
+
+const GameProfile *gameprof_detect_romgen(const uint8_t *rom, size_t size)
+{
+    return detect(rom, size, false);
 }

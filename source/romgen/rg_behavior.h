@@ -9,6 +9,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+/* PHASE 34: these predicates are the EMERALD sets and keep their exact meaning for the Emerald-only relief modules
+ * (rg_ralias, rg_r*). Generic romgen code reads the per-game sets from the profile instead: gp_beh(&rg_lprof(L)->water, b),
+ * see rg_gameprof.h (the Emerald row is generated from these predicates and a test pins the equality). */
+
 /* "Drawn as water", not the surfable set (MB_WATER_DOOR 0x6C, 0x6D, 0x6F, 0x1A are not water). */
 static inline bool rg_is_water(unsigned b)
 {

@@ -14,6 +14,7 @@
 static double rg_fabs(double v) { return v < 0.0 ? -v : v; }
 
 struct RgPair {
+    const GameProfile *prof;
     const RgTileset *ts[2];
     uint8_t *tiles[2];
     uint32_t tilesLen[2];
@@ -33,6 +34,7 @@ RgPair *rg_pair_open(const RgWorld *w, uint16_t pairIndex)
     p = (RgPair *)calloc(1, sizeof(*p));
     if (p == NULL)
         return NULL;
+    p->prof = w->prof != NULL ? w->prof : gameprof_emerald();
     for (k = 0; k < 2; k++) {
         const RgTileset *t = &w->tilesets[w->pairs[pairIndex].ts[k]];
         p->ts[k] = t;
@@ -74,9 +76,9 @@ void rg_pair_close(RgPair *p)
 
 static void build_layer(const RgPair *p, uint16_t metatile, int layer, RgLayer *out)
 {
-    unsigned which = metatile < RG_NUM_PRIMARY ? 0u : 1u;
+    unsigned which = metatile < p->prof->nPrimMetatiles ? 0u : 1u;
     const RgTileset *t = p->ts[which];
-    unsigned index = metatile - which * RG_NUM_PRIMARY;
+    unsigned index = metatile - which * p->prof->nPrimMetatiles;
     unsigned quad;
 
     memset(out, 0, sizeof(*out));
@@ -85,9 +87,9 @@ static void build_layer(const RgPair *p, uint16_t metatile, int layer, RgLayer *
     for (quad = 0; quad < 4; quad++) {
         uint16_t entry = rg_rd16(t->metatiles + 16u * index + 2u * (unsigned)(layer * 4 + (int)quad));
         unsigned tile = entry & 0x3FFu, pal = entry >> 12;
-        unsigned tw = tile < 512u ? 0u : 1u;
-        unsigned local = tile - tw * 512u;
-        const RgTileset *pt = p->ts[pal < 6u ? 0u : 1u];
+        unsigned tw = tile < p->prof->nPrimTiles ? 0u : 1u;
+        unsigned local = tile - tw * p->prof->nPrimTiles;
+        const RgTileset *pt = p->ts[pal < p->prof->nPrimPals ? 0u : 1u];
         const uint8_t *src;
         unsigned x, y, ox = (quad & 1u) * 8u, oy = (quad >> 1) * 8u;
 
@@ -262,9 +264,9 @@ bool rg_covers(RgPair *p, uint16_t metatile) { return feature(p, metatile, 2) ==
 /* voxel_art Tilesets.subtile: the colour is read from palette (pal < 6 primary, else secondary). */
 static void subtile_px(const RgPair *p, uint16_t tile, unsigned pal, uint16_t c[64], uint8_t idx[64])
 {
-    unsigned tw = tile < RG_NUM_PRIMARY ? 0u : 1u;
-    unsigned local = tile - tw * RG_NUM_PRIMARY;
-    const RgTileset *pt = p->ts[pal < 6u ? 0u : 1u];
+    unsigned tw = tile < p->prof->nPrimTiles ? 0u : 1u;
+    unsigned local = tile - tw * p->prof->nPrimTiles;
+    const RgTileset *pt = p->ts[pal < p->prof->nPrimPals ? 0u : 1u];
     const uint8_t *src;
     unsigned x, y;
 
@@ -304,16 +306,16 @@ void rg_subtile_px(RgPair *p, uint16_t tile, uint8_t pal, uint16_t c[64], uint8_
 
 void rg_cell_px(RgPair *p, uint16_t metatile, int layer, RgCellPx *out)
 {
-    unsigned which = metatile < RG_NUM_PRIMARY ? 0u : 1u;
-    unsigned quad, i;
+    unsigned which, quad, i;
     const RgTileset *t;
     unsigned index;
 
     memset(out, 0, sizeof(*out));
     if (p == NULL || (layer != 0 && layer != 1))
         return;
+    which = metatile < p->prof->nPrimMetatiles ? 0u : 1u;
     t = p->ts[which];
-    index = metatile - which * RG_NUM_PRIMARY;
+    index = metatile - which * p->prof->nPrimMetatiles;
     if (t->metatiles == NULL || index >= t->metatileCount) {
         /* upstream entries() would hand back a short list: the lower layer paints nothing real, so it is magenta */
         if (layer == 0) {

@@ -101,3 +101,69 @@ in the touched files.
   with `ROMGEN_DEV_HOOK=1` and without (this also covers S3.6's skipped hook compile). Release `.cia` rebuilt.
 - Xcode license gotcha: once Xcode updated, /usr/bin/git and clang refuse to run until `sudo xcodebuild -license
   accept`. The workaround is `export DEVELOPER_DIR=/Library/Developer/CommandLineTools`.
+
+## G1 romgen profile + FRLG world open (2026-10-06)
+
+Worktree branch based on main `3e09081`. Romgen track. Commits: `9ebf3d3` (code + suite), then the docs commit.
+Env: `DEVELOPER_DIR=/Library/Developer/CommandLineTools`; `ROMGEN_ROM` absolute. The new suite finds `firered.gba` /
+`leafgreen.gba` beside `ROMGEN_ROM` (or via `ROMGEN_ROM_FR` / `ROMGEN_ROM_LG`, defined in `rg_fixture.h`).
+
+### What changed
+- `rg_gameprof.{h,c}`: real FR/LG rev 1 rows (ROM layer: 43 groups + sizes, gMapGroups, gMapLayouts, 384 slots, 640/640/7,
+  attrs u32 at +0x14, mask 0x1FF, MapLayout 26 B, General/Building primaries) and the 11 romgen behaviour sets of SPEC
+  section 2. RAM anchors stay 0 (R1's). New `gameprof_detect_romgen()` returns the FRLG rows; `gameprof_detect()` (the
+  renderer's entry) still refuses a non-Emerald row until `gMain != 0`, so R0's test and the renderer are unchanged.
+- `rg_world.{h,c}`: `RgWorld.prof`, `RgLayout.prof` (`rg_lprof()` falls back to Emerald for hand-built layouts),
+  `groupStart/Count[RG_MAX_GROUPS 64]`, `RG_ERR_GAME` (`RG_ERR_NOT_BPEE` kept as alias), `layout_plausible`/tileset
+  reads/caps/attr bytes from the profile, `rg_attr` -> u32, `rg_behaviour` -> u16 masked by `behMask`,
+  `rg_metatile_entries` / `rg_tileset_addr_of` split at `nPrimMetatiles`, new `rg_find_map_layouts(w)` (search for header
+  (3,0)'s layout pointer, accept the first hit consistent with every header). `rg_world_open` uses the stored value and
+  falls back to the search only when a row stores 0.
+- `rg_art.c` (palette/tile/metatile splits from `RgPair.prof`), `rg_buildings.c` (3 sites), `rg_roles.c` (six behaviour
+  tests via `gp_beh`, house window from the profile), `rg_behavior.h` (pointer comment only).
+- `rg_run.c`: non-Emerald games open the world, fill counts and return (no roles/regions/signs/buildings/relief). Specs: if
+  `prof->specs` is set use it, else `rg_specs` (the Emerald row leaves `specs` NULL on purpose: pointing it at `rg_specs` would
+  make `rg_gameprof.c` link `rg_bspecs.c`, which the vtest/renderer builds do not have).
+- `romgen_cli.c`: include + one added line (prints `game: ...`; for non-Emerald sets `wantRegions = false` so no empty file
+  is written).
+- `test/host/rg_fixture.h` (`fxr_load_rom`, `FXR_ENV_FR/LG`), `test/host/test_romgen_frlg_world.c`: 14685 checks, 0 failures,
+  0 skipped.
+
+### Census (identical on FR and LG)
+43 groups with the 43 sizes; 425 maps; 384 layout slots, 18 NULL, 309 referenced; 63 tilesets; 62 tileset pairs; 76 outdoor
+maps; 1294 warps; gMapLayouts search = 0x0834EBFC (FR) / 0x0834EBDC (LG) and every header consistent; General primary
+0x082D4B04 / 0x082D4AE4 used by 181 layouts, Building 0x082D4C24 / 0x082D4C04 used by 184; General has 640 metatiles; all
+tileset counts within 640 / 384; Pallet (6,7),(15,7),(16,13) behaviour 0x69, collision-blocked, attribute is a u32 (> 0xFFFF);
+pond metatiles carry 0x15; behaviour census over present layouts: 0x15 x40507, 0x1B x751, 0x02 x5701, 0x21 x2878, 0x38 x41,
+0x39 x46, 0x3A x0, 0x3B x1022, no 0x3C-0x3F; largest value used 0xE0. FR and LG blockdata byte-identical in all 366 present
+layouts (384 - 18 NULL).
+
+### SPEC / SURVEY mismatches (true values pinned)
+- Sign events: SURVEY says 506; the true count with the `kind <= 4` rule is **519** (= bg kinds 0 x422 + 1 x73 + 3 x14 +
+  4 x10; the SURVEY's own kind histogram sums to 519). Pinned 519.
+- "Identical blockdata in all 384 layouts": 18 slots are NULL, so it is 366 present layouts (pinned).
+- Added pins: 62 tileset pairs, 184 Building-primary layouts (logged, not pinned).
+
+### Gate (SPEC 0.3), before vs after
+Before = `3e09081` untouched; the suite list now has 28 romgen+vtest suites (relief_solve, relief_world exist since R0 merge).
+`diff` of the count lines: the only difference is the added `test_romgen_frlg_world`.
+
+    2929c7642be7ef83aad7cbb1619e062900ca4c74  buildings.bin   (before and after)
+    007a370f440fa3c36cf0056440f05c025a386c4f  regions.bin
+    eb25a3835edf7ebbcc9d634dd199be955fb4d27e  relief.bin
+    385156050629ee50724bf3f6504991b10e48c7c1  signposts.bin
+
+Suites (before = after): art 33149, bimg 10481, buildings 4400, expand 1512, export 580568, gameprof 5681, geom 585,
+interior 851, pyset 28, regions 474, relief_canvas 1579, relief_drawn 1388, relief_ledge 55159, relief_solve 379,
+relief_world 691, roles 656013, rtables 9981, signs 1751, world 612; vtest: entities 35, mesh 20, world 133, adapter 122,
+gate 37, lz77 173, overlay 23, shims 69. New: frlg_world 14685.
+
+`romgen roms/firered.gba OUT` -> `game: FireRed rev 1`, `world: 384 layouts, 425 maps, 63 tilesets, 62 pairs, 76 outdoor maps`,
+exit 0, OUT empty. Same for leafgreen (`LeafGreen rev 1`).
+
+Device: `make -j8 ROMGEN_DEV_HOOK=1` then `make -j8` both link (3DGBA.3dsx); only pre-existing warnings.
+
+### Notes for the lead
+- Other test files' header command lines that list `rg_world.c` alone now also need `rg_gameprof.c` + `vx_behavior.c`
+  (make targets already do).
+- `romgen --dump-roles` on a non-Emerald ROM would dereference NULL regions (not guarded; G2 enables regions).

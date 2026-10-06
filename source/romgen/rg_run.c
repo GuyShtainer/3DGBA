@@ -104,7 +104,11 @@ static RgErr run_buildings(const RgWorld *w, const RgRunOpts *o, RgOutput *out)
 
     if (cancelled(o))
         return RG_ERR_CANCELLED;
-    e = rg_build_models(w, rg_specs, rg_spec_count, &ms);
+    /* the profile's recipe table; the Emerald row leaves it NULL (rg_gameprof.c must not link rg_bspecs.c) and uses rg_specs */
+    if (w->prof->specs != NULL)
+        e = rg_build_models(w, w->prof->specs, w->prof->nSpecs, &ms);
+    else
+        e = rg_build_models(w, rg_specs, rg_spec_count, &ms);
     out->msBuildModels = now(o) - t0;
     if (e != RG_OK) {
         rg_models_free(&ms);
@@ -170,6 +174,17 @@ RgErr rg_run(const uint8_t *rom, size_t romSize, const RgRunOpts *opts, RgOutput
     if (e != RG_OK)
         return e;
     out->msWorld = now(opts) - t0;
+    if (w.prof->game != GP_EMERALD) {
+        /* Phase 34 G1: FireRed / LeafGreen open the world and write nothing yet (regions, signposts, buildings arrive in
+         * G2/B0; relief stays OFF until L1, so the Emerald-only relief modules are never reached). */
+        out->layouts = w.layoutCount;
+        out->maps = w.mapCount;
+        out->tilesets = w.tilesetCount - 1u;
+        out->pairs = w.pairCount;
+        out->outdoorMaps = w.outdoorMaps;
+        rg_world_close(&w);
+        return RG_OK;
+    }
     e = rg_roles_init(&w, &r);
     if (e != RG_OK) {
         rg_world_close(&w);
