@@ -91,6 +91,21 @@ static const RgSideCfg kHouseSide[1] = {
     {NULL, {8, 57, 88, 59}, {8, 10, 40, 12}, 999, true},
 };
 
+/* ---- k_fuchsia_safari: 96x96 art (rect (22,0), 6x6 at the top edge of Fuchsia) --------------------------------------------- */
+/* The Safari Zone entrance, entered from the Fuchsia side (door (24,5)). The map top cuts the roof: rows 0-60 gold tiled
+ * roof (a level top, the roof is deeper than the art shows), a darker eave 60-64, the facade with the cream stripes, the
+ * two small windows and the pale canopy over the red Poke Ball door 64-96. One flat block, 32 high, roof 64 deep. The
+ * canopy and its pillars (a few px past row 96) stay painted: the art has them no deeper than the facade itself. */
+static bool k_fuchsia_safari(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    (void)spec; (void)a0; (void)a1;
+    return fz_block(out, "safari", 0, 96, 96, 64, 0) && !out->failed;
+}
+static const RgExact kSafariExact[1] = {{0, 0, 96, 96, false}};
+static const RgSideCfg kSafariSide[1] = {
+    {NULL, {8, 65, 88, 67}, {8, 57, 40, 59}, 999, true},
+};
+
 /* ---- k_safari_rest: 80x64 art (rect (28,22), 5x4 on the Safari Zone centre area) -------------------------------------- */
 /* The Safari Zone rest houses: the same gold-roofed house as Fuchsia's, one cell narrower. Rows: grass 0-7, the gold roof
  * 8-40 (a level top edge at row 8), the facade with the grey awning, two arched windows and the door 40-64. */
@@ -104,6 +119,8 @@ const RgSpec rg_kspecs_fuchsia[] = {
      k_fuchsia_hall, 0, 0, kHallSide},
     {"k_fuchsia_house", RG_SPEC_DIRECT, L_FUCHSIA, {26, 12, 6, 5}, {0, 0}, FZ_GROUND, 1, kHouseExact, 1,
      k_fuchsia_house, 96, 48, kHouseSide},
+    {"k_fuchsia_safari", RG_SPEC_DIRECT, L_FUCHSIA, {22, 0, 6, 6}, {0, 0}, FZ_GROUND, 1, kSafariExact, 1,
+     k_fuchsia_safari, 0, 0, kSafariSide},
     {"k_safari_rest", RG_SPEC_DIRECT, L_SAFARI_C, {28, 22, 5, 4}, {1, 3}, FZ_GROUND, 1, kRestExact, 1,
      k_fuchsia_house, 80, 32, kRestSide},
 };
