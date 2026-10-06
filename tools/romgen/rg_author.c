@@ -973,7 +973,8 @@ static void usage(void)
             "  preview SPEC\n"
             "  check [SPEC|TOWN|all] [--expect N]\n"
             "  placements SPEC\n"
-            "  trees [LO HI]   (list the tree metatiles; or a contact sheet PNG of metatiles LO..HI-1)\n"
+            "  trees [LO HI [LAYOUT]]   (list the tree metatiles; or a contact sheet PNG of metatiles LO..HI-1, LAYOUT's tilesets)\n"
+            "  shrubs [TS]     (one-cell foliage candidates, primary and secondary, + contact sheet shrubs.png; TS: every id of that tileset)\n"
             "images land in tools/romgen/out/author/<BPRE|BPGE|BPEE>/ (next to the build directory unless --out is given)\n");
 }
 
@@ -1071,8 +1072,11 @@ int rg_author_main(int argc, char **argv)
         } else {
             rc = rg_author_placements(&w, s, stdout);
         }
-    } else if (strcmp(cmd, "trees") == 0 && (nargs == 0 || nargs == 2)) {
-        rc = rg_author_trees(&w, stdout, outDir, nargs ? (int)strtol(args[0], NULL, 0) : 0, nargs ? (int)strtol(args[1], NULL, 0) : 0);
+    } else if (strcmp(cmd, "trees") == 0 && (nargs == 0 || nargs == 2 || nargs == 3)) {
+        rc = rg_author_trees(&w, stdout, outDir, nargs ? (int)strtol(args[0], NULL, 0) : 0, nargs ? (int)strtol(args[1], NULL, 0) : 0,
+                             nargs == 3 ? atoi(args[2]) : 0);
+    } else if (strcmp(cmd, "shrubs") == 0 && nargs <= 1) {
+        rc = rg_author_shrubs(&w, stdout, outDir, nargs ? (uint32_t)strtoul(args[0], NULL, 0) : 0u);
     } else if (strcmp(cmd, "check") == 0 && nargs <= 1) {
         const char *key = nargs == 1 ? args[0] : "all";
         unsigned matched = 0, failed = 0;

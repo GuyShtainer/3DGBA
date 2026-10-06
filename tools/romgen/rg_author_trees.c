@@ -92,7 +92,7 @@ static uint16_t ground_key(RgPair *p, unsigned count)
 }
 
 /* `trees LO HI`: a contact sheet of metatiles LO..HI-1 (8 per row, composite of both layers, 4x) for the reviewer. */
-static int sheet(const RgWorld *w, const char *outDir, unsigned lo, unsigned hi)
+static int sheet(const RgWorld *w, const char *outDir, unsigned lo, unsigned hi, unsigned layout)
 {
     unsigned l, m, x, y, n = hi - lo, rows = (n + 7u) / 8u;
     int W = 8 * 64, H = (int)rows * 64, rc = 1;
@@ -100,6 +100,8 @@ static int sheet(const RgWorld *w, const char *outDir, unsigned lo, unsigned hi)
     RgPair *p = NULL;
     char path[1100];
 
+    if (layout >= 1u && layout <= w->layoutCount && w->layouts[layout - 1u].present)
+        p = rg_pair_open(w, w->layouts[layout - 1u].pairIndex);   /* L1: that layout's secondary tileset */
     for (l = 0; l < w->layoutCount && p == NULL; l++)
         if (w->layouts[l].present && w->layouts[l].ts[0]->addr == w->prof->tsGeneral)
             p = rg_pair_open(w, w->layouts[l].pairIndex);
@@ -134,10 +136,10 @@ static int sheet(const RgWorld *w, const char *outDir, unsigned lo, unsigned hi)
     return rc;
 }
 
-int rg_author_trees(const RgWorld *w, FILE *fp, const char *outDir, int sheetLo, int sheetHi)
+int rg_author_trees(const RgWorld *w, FILE *fp, const char *outDir, int sheetLo, int sheetHi, int layout)
 {
     if (sheetHi > sheetLo)
-        return sheet(w, outDir, (unsigned)sheetLo, (unsigned)sheetHi);
+        return sheet(w, outDir, (unsigned)sheetLo, (unsigned)sheetHi, layout > 0 ? (unsigned)layout : 0u);
     return rg_author_trees_list(w, fp);
 }
 
@@ -263,5 +265,145 @@ int rg_author_trees_list(const RgWorld *w, FILE *fp)
         if (gf[m] && !inBlock[m])
             fprintf(fp, "single 0x%03X uses %u blocked %u z=%d g=%d gpct=%u\n", m, uses[m], bUses[m], zf[m], gf[m], gpct[m]);
     free(blk);
+    return 0;
+}
+
+/* L1 (look backlog): `romgen author ROM shrubs`: one-cell foliage candidates on every General-primary layout, primary
+ * AND secondary metatiles (a secondary id means nothing without its tileset, so each candidate is the pair
+ * (tileset address, id)). A candidate is a metatile whose composite drawing has at least 60 pixels away from the ground
+ * colour, at least 50 % of them leaf green (g >= r + 8 and g >= b + 24, stricter than T1: olive rock passes T1), collision-blocked on at least half of its uses (a bush is an
+ * obstacle; grass, flowers and tall grass are walkable), that is not tall grass (profile behaviour set) and not already in the tree tables. The list is for a human to review against the
+ * contact sheet <out>/shrubs.png (8 per row, in list order); it is not committed and decides nothing by itself.
+ * `shrubs TS` lists every id used with tileset address TS instead (1 = the primary), unfiltered: a family's walkable
+ * members (a bush drawn over the sand in front of a hedge) do not pass the collision rule. */
+typedef struct { uint32_t ts; uint16_t m, pair, beh, lay, sx, sy; unsigned uses, blocked, pct, other; } ShCand;
+
+static bool sh_in_tables(const GameProfile *gp, unsigned m)
+{
+    unsigned i;
+    for (i = 0; gp->treePart != NULL && i < gp->treePartCount; i++)
+        if ((unsigned)gp->treePart[2 * i] == m) return true;
+    for (i = 0; gp->treeGround != NULL && i < gp->treeGroundCount; i++)
+        if ((unsigned)gp->treeGround[2 * i] == m) return true;
+    return false;
+}
+
+static void sh_composite(RgPair *p, uint16_t m, uint16_t out[16][16])
+{
+    RgCellPx a, b;
+    unsigned x, y;
+    rg_cell_px(p, m, 0, &a);
+    rg_cell_px(p, m, 1, &b);
+    for (y = 0; y < 16; y++)
+        for (x = 0; x < 16; x++)
+            out[y][x] = ((b.drawn[y] >> x) & 1u) ? b.c[y][x] : a.c[y][x];
+}
+
+int rg_author_shrubs(const RgWorld *w, FILE *fp, const char *outDir, uint32_t onlyTs)
+{
+    const GameProfile *gp = w->prof;
+    unsigned prim = gp->nPrimMetatiles, l, x, y, i, n = 0, cap = 0, kept = 0;
+    ShCand *c = NULL;
+    RgPair *p0 = NULL;
+    uint16_t key;
+    unsigned kr, kg, kb;
+
+    for (l = 0; l < w->layoutCount && p0 == NULL; l++)
+        if (w->layouts[l].present && w->layouts[l].ts[0]->addr == gp->tsGeneral)
+            p0 = rg_pair_open(w, w->layouts[l].pairIndex);
+    if (p0 == NULL)
+        return 1;
+    key = ground_key(p0, prim);
+    rg_pair_close(p0);
+    rgb888(key, &kr, &kg, &kb);
+    for (l = 0; l < w->layoutCount; l++) {
+        const RgLayout *L = &w->layouts[l];
+        if (!L->present || !L->outdoor || L->ts[0]->addr != gp->tsGeneral)
+            continue;
+        for (y = 0; y < L->h; y++)
+            for (x = 0; x < L->w; x++) {
+                unsigned m = rg_metatile(L, (int)x, (int)y);
+                uint32_t ts = m < prim ? 0u : L->ts[1]->addr;
+                for (i = 0; i < n && !(c[i].ts == ts && c[i].m == m); i++) {}
+                if (i == n) {
+                    if (n == cap) {
+                        ShCand *nc;
+                        cap = cap ? cap * 2u : 256u;
+                        nc = (ShCand *)realloc(c, cap * sizeof *c);
+                        if (nc == NULL) { free(c); return 1; }
+                        c = nc;
+                    }
+                    memset(&c[n], 0, sizeof c[n]);
+                    c[n].ts = ts; c[n].m = (uint16_t)m; c[n].pair = L->pairIndex;
+                    c[n].beh = rg_behaviour(L, (int)x, (int)y);
+                    c[n].lay = L->id; c[n].sx = (uint16_t)x; c[n].sy = (uint16_t)y;
+                    n++;
+                }
+                c[i].uses++;
+                c[i].blocked += rg_blocked(L, (int)x, (int)y);
+            }
+    }
+    for (i = 0; i < n; i++) {
+        RgPair *p = rg_pair_open(w, c[i].pair);
+        uint16_t px[16][16];
+        unsigned other = 0, green = 0;
+        if (p == NULL) continue;
+        sh_composite(p, c[i].m, px);
+        rg_pair_close(p);
+        for (y = 0; y < 16; y++)
+            for (x = 0; x < 16; x++) {
+                unsigned r, g, b;
+                if (near_key(px[y][x], kr, kg, kb)) continue;
+                other++;
+                rgb888(px[y][x], &r, &g, &b);
+                green += (g >= r + 8u && g >= b + 24u);   /* leaf green: olive rock and sand fail */
+            }
+        c[i].other = other;
+        c[i].pct = other ? 100u * green / other : 0u;
+    }
+    /* keep the candidates, most used first; with onlyTs, every id of that tileset (0x1 = the primary), unfiltered */
+    for (i = 0; i < n; i++)
+        if (onlyTs != 0u ? c[i].ts == (onlyTs == 1u ? 0u : onlyTs) : c[i].other >= 60u && 2u * c[i].pct >= 100u && 2u * c[i].blocked >= c[i].uses && !gp_beh(&gp->tallGrass, c[i].beh)
+            && !(c[i].ts == 0u && sh_in_tables(gp, c[i].m)))
+            c[kept++] = c[i];
+    for (i = 1; i < kept; i++) {
+        ShCand t = c[i];
+        unsigned j = i;
+        while (j > 0 && c[j - 1].uses < t.uses) { c[j] = c[j - 1]; j--; }
+        c[j] = t;
+    }
+    fprintf(fp, "# shrubs: %s, ground key 0x%04X, %u candidates (idx ts id uses blocked beh pct other)\n",
+            gp->dataSubdir, key, kept);
+    for (i = 0; i < kept; i++)
+        fprintf(fp, "cand %3u ts 0x%08X 0x%03X uses %u blocked %u beh 0x%02X pct %u other %u at L%u %u,%u\n", i, c[i].ts,
+                c[i].m, c[i].uses, c[i].blocked, c[i].beh, c[i].pct, c[i].other, c[i].lay, c[i].sx, c[i].sy);
+    if (outDir != NULL && kept > 0) {
+        unsigned rows = (kept + 7u) / 8u;
+        int W = 8 * 64, H = (int)rows * 64;
+        uint8_t *img = (uint8_t *)calloc((size_t)W * (size_t)H, 4);
+        char path[1100];
+        if (img == NULL || rg_author_mkdir_p(outDir) != 0) { free(img); free(c); return 1; }
+        for (i = 0; i < kept; i++) {
+            RgPair *p = rg_pair_open(w, c[i].pair);
+            uint16_t px[16][16];
+            unsigned cx = (i % 8u) * 64u, cy = (i / 8u) * 64u;
+            if (p == NULL) continue;
+            sh_composite(p, c[i].m, px);
+            rg_pair_close(p);
+            for (y = 0; y < 64; y++)
+                for (x = 0; x < 64; x++) {
+                    uint8_t *o = img + ((size_t)(cy + y) * (size_t)W + cx + x) * 4u;
+                    unsigned r, g, b;
+                    rgb888(px[y / 4u][x / 4u], &r, &g, &b);
+                    o[0] = (uint8_t)r; o[1] = (uint8_t)g; o[2] = (uint8_t)b; o[3] = 255;
+                    if (x == 0 || y == 0) { o[0] = 255; o[1] = 0; o[2] = 255; }
+                }
+        }
+        snprintf(path, sizeof path, "%s/shrubs.png", outDir);
+        if (!rg_png_write_rgba(path, img, W, H)) { free(img); free(c); return 1; }
+        fprintf(stderr, "sheet %s: %u candidates, 8 per row, list order\n", path, kept);
+        free(img);
+    }
+    free(c);
     return 0;
 }
