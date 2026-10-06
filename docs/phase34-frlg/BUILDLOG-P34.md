@@ -167,3 +167,56 @@ Device: `make -j8 ROMGEN_DEV_HOOK=1` then `make -j8` both link (3DGBA.3dsx); onl
 - Other test files' header command lines that list `rg_world.c` alone now also need `rg_gameprof.c` + `vx_behavior.c`
   (make targets already do).
 - `romgen --dump-roles` on a non-Emerald ROM would dereference NULL regions (not guarded; G2 enables regions).
+
+## R1 - FR/LG anchors, the self-check, the voxel.log line (branch worktree-agent-a9388853c0d669c13, based on 1a879a3)
+
+Added: FR and LG rows in `rg_gameprof.c` (`rendererOn = false`, so `gameprof_detect()` still refuses them and the app renders 2D),
+`source/romgen/rg_anchor.{h,c}` (pure C, 20 numbered checks), `vx_host.c` probe (ROM checks once per bind, RAM checks once per
+settled map, one `voxel.log` line each, no retry), tests in `test_romgen_gameprof.c`, PROVENANCE rows (one per value).
+
+### Harvested anchors (value, method, live status)
+Live = the anchor's RAM/ROM check passed on the running game in Azahar (New-3DS mode), Pallet Town save copies
+`roms/firered-pallet.sav`, `roms/leafgreen-pallet.sav` (3/0, 12,12; continue-game warp; checksum lengths self-calibrated).
+I did not dump raw RAM values through gdbio: gdb reads the 3DS process, not GBA address space, so "live" means the in-app check.
+
+| anchor | FR | LG | method | live FR | live LG |
+|---|---|---|---|---|---|
+| gMain / sb1Ptr / backupLayout | 0x030030F0 / 0x03005008 / 0x03005040 | same | gamestate.c (V-GS) | checks 11-13 | checks 11-13 |
+| mapHeader / objEvents / playerAvatar / sprites | 0x02036DFC / 0x02036E38 / 0x02037078 / 0x0202063C | same | gamestate.c (V-GS) | checks 15-17 | checks 15-17 |
+| plttUnfaded / paletteFade | 0x020371F8 / 0x02037AB8 | same | ROM literal in CB2_Overworld; gamestate.c | check 18 | check 18 |
+| weatherPtr | 0x083C2C2C | 0x083C2A68 | literal pool + Thumb disassembly (LG not a constant shift: -0x1C4) | check 19 | check 19 |
+| weatherOff | {0x6D0,0x6C6,0x730,0x6FB,0x724} | same | struct arithmetic, ROM immediates | check 19 | check 19 |
+| gfxInfoPtrs (152) | 0x0839FE20 | 0x0839FE00 | ROM pointer-run scan, +0x1C ROM pointer | ROM check 7 (real ROM) | same |
+| fldeffTemplates (36) | 0x083A0080 | 0x083A0060 | ROM scan, template pointers after the gfx table | ROM check 8 (real ROM) | same |
+| cb2Overworld / cb2OverworldBasic | 0x080565C9 / 0x080565BD | same | ROM literal scan | checks 10, 20 | checks 10, 20 |
+| backupMap | 0 | 0 | derived (read from backupLayout.map) | check 13 | check 13 |
+
+### Check numbering (rg_anchor.c; each returns the first failing number, 0 = ok)
+ROM: 1 header code/rev, 2 extents in ROM, 3 mapGroups, 4 header layout == mapLayouts[id-1], 5 General primary, 6 Building primary,
+7 gfx table, 8 fldeff table, 9 weatherPtr + weatherOff, 10 both cb2 + the &gPaletteFade literal.
+RAM: 11 gMain+4 ROM pointer, 12 sb1Ptr, 13 backupLayout map, 14 w/h == layout+15/+14, 15 live layoutId == ROM, 16 player object
+(id, isPlayer, coords == pos+7), 17 player sprite anim table is a ROM pointer, 18 paletteFade y <= 16, 19 weather curr/palState,
+20 callback2 is cb2 and not in battle.
+voxel.log, FR: `vx: rom anchors ok (BPRE rev 1)` then `vx: anchors ok (BPRE rev 1) map 3.0`; LG: `(BPGE rev 1)` ... `map 3.0`;
+the game stays 2D (screenshot: Pallet Town, no voxel).
+
+### Gate
+- Romgen tests: every count identical except gameprof 5681 -> 5798. vtest: all lines identical.
+- Emerald Littleroot (emerald-littleroot, voxel on, pre-change build 1a879a3 vs this branch): the pixel diff is ~780 pixels
+  in small specks (NPCs, sparkles, fps digits); no terrain or model difference.
+- Device: `make -j8 ROMGEN_DEV_HOOK=1`, touch main.c + romgen_dev.c, `make -j8`: all link.
+
+### Deviations from the SPEC
+- `vx_anchor_check_ram(prof, rom, size, ram)` takes the ROM too (checks 14, 15, 19 need it); the ROM check takes `size`.
+- New field `rendererOn` in GameProfile (the gate that keeps FRLG 2D until R2); lives in `source/romgen/` with the rest.
+- Check 17 tests the sprite's anim table (+0x08), not the template (+0x14): live, the player's template pointer is
+  0x03007DAC, a stack copy in IWRAM, so SPEC 3.3's "template is a ROM pointer" is wrong for FRLG.
+- The RAM checks run once the map has been stable for 45 candidate frames: a map load updates the saved location a few frames
+  before the backup layout, and the first live run logged a false check-14 failure (w/h still the previous map's).
+
+### Notes for the lead
+- Test setup: `roms/` in a worktree is a symlink to the main tree's, so the Pallet saves land there (gitignored).
+- The emutest state dir path is too long for the AF_UNIX socket in a worktree: set `EMUTEST_STATE_DIR=/tmp/<short>`.
+- A pre-existing `sdmc:/3DGBA/gameA.gba` (an Emerald copy) and `gameA.sav` blocked `--stage-roms`; I moved them to
+  the session scratchpad (`sd-backup/`), they are not restored in the Azahar SD.
+- Not live-verified: the raw weather/palette values (only through the checks), the fldeff and gfx tables (ROM-only).
