@@ -97,6 +97,14 @@ bool rg_relief_outdoor(uint16_t layoutId)
     return rg_name_rank(layoutId) != 0xFFFFu;
 }
 
+bool rg_relief_outdoor_layout(const RgWorld *w, uint16_t layoutId)
+{
+    assert(w != NULL);
+    if (w->prof == NULL || w->prof->game == GP_EMERALD)
+        return rg_relief_outdoor(layoutId);
+    return layoutId >= 1u && layoutId <= w->layoutCount && w->layouts[layoutId - 1u].outdoor != 0;
+}
+
 /* T1: the named layouts' dimensions (A.1) plus Route 101 (17), the test place. */
 static bool check_t1(const RgWorld *w, const char **why)
 {

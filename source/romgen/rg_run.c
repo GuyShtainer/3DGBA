@@ -195,9 +195,9 @@ RgErr rg_run(const uint8_t *rom, size_t romSize, const RgRunOpts *opts, RgOutput
         e = run_pair(&w, &r, &signs, pi, opts, out, &done, total);
     if (e == RG_OK && opts != NULL && opts->wantBuildings)
         e = run_buildings(&w, opts, out);
-    /* Phase 34 G2: FireRed / LeafGreen get roles, regions, signposts and buildings; relief stays OFF until L1 (the Emerald-only
-     * relief modules are never reached on them). */
-    if (e == RG_OK && opts != NULL && opts->relief != RG_RELIEF_OFF && w.prof->game == GP_EMERALD)
+    /* Phase 34 G2: FireRed / LeafGreen get roles, regions, signposts and buildings; relief is the ledges file (L1; the Emerald-only
+     * drawn-relief modules are never reached on them: rg_relief_build turns FULL into LEDGES there). */
+    if (e == RG_OK && opts != NULL && opts->relief != RG_RELIEF_OFF)
         e = run_relief(&w, &r, opts, out);
     t0 = now(opts);
     if (e == RG_OK)

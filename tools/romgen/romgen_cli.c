@@ -568,8 +568,8 @@ int main(int argc, char **argv)
     }
     if (wantRelief && out.relief != NULL && WriteFile(outDir, "relief.bin", out.relief, out.reliefSize))
         printf("relief.bin: %zu bytes, %u rows, %u cells, %u ledge layouts, %u ledge cells (mode %s)\n", out.reliefSize,
-               out.rst.rows, out.rst.cells, out.rst.ledgeLayouts, out.rst.ledgeCells, reliefMode == RG_RELIEF_FULL ? "full" : "ledges");
-    if (wantRelief && out.relief != NULL && reliefMode == RG_RELIEF_FULL)
+               out.rst.rows, out.rst.cells, out.rst.ledgeLayouts, out.rst.ledgeCells, (reliefMode == RG_RELIEF_FULL && out.rst.drawnRows > 0) ? "full" : "ledges");
+    if (wantRelief && out.relief != NULL && reliefMode == RG_RELIEF_FULL && out.rst.drawnRows > 0)
         printf("relief full: %u drawn rows, %u cut variants, %u cut table cells, %u groups (%u kept)\n", out.rst.drawnRows,
                out.rst.variants, out.rst.cuts, out.rst.groups, out.rst.groupsOk);
     if (timing)

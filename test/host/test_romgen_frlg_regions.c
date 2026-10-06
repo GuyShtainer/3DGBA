@@ -451,9 +451,9 @@ static void RunCart(Cart *c)
     CHECK(rg_world_open(&c->w, c->rom, c->n) == RG_OK && c->w.prof->game == c->game);
     memset(&opts, 0, sizeof(opts));
     opts.wantSigns = true;
-    opts.relief = RG_RELIEF_FULL;   /* must be ignored on FRLG: relief is Emerald-only until L1 */
+    opts.relief = RG_RELIEF_FULL;   /* L1: on FRLG FULL is built as LEDGES (see test_romgen_frlg_relief) */
     CHECK(rg_run(c->rom, c->n, &opts, &c->out) == RG_OK);
-    CHECK(c->out.regions != NULL && c->out.regionsSize == 246995u && c->out.relief == NULL && c->out.reliefSize == 0);
+    CHECK(c->out.regions != NULL && c->out.regionsSize == 246995u && c->out.relief != NULL && c->out.reliefSize == 26320u);
     CHECK(c->out.layouts == 384 && memcmp(c->out.regions, "VXR5", 4) == 0);
     CHECK(c->out.regions[4] == (366 & 0xFF) && c->out.regions[5] == (366 >> 8));   /* 384 slots - 18 NULL */
     Sha1(c->out.regions, c->out.regionsSize, c->regionsSha);

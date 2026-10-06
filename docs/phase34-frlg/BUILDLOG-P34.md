@@ -508,3 +508,42 @@ Baseline = main e3a7c32 built from `git archive` in a scratch directory; ROMGEN_
 - Azahar, FireRed, warp-save copy `roms/firered-viridian.sav` (3/1 at 30,28; gitignored, Guy's save untouched):
   `evidence/k2-fr-viridian.png`. The Viridian Pokémon Center stands as the K2 model with its sign and door; the Mart roof
   shows at the top edge. Flowers and the fence row are still flat (known, later slices). LG check pending.
+
+## L1 Kanto ledges, `relief.bin` LEDGES mode for FireRed / LeafGreen (2026-10-06)
+
+Branch `worktree-agent-a842df80d0dc18db5` on main `415119d`. Commit `ac29a11` (code + tests) plus this entry.
+
+### What changed
+- `rg_rtables.{h,c}`: new `rg_relief_outdoor_layout(w, id)`. Emerald returns `rg_relief_outdoor(id)` (test: equal for every id of the fixture); FRLG returns `RgLayout.outdoor`, which `rg_world.c` already sets from map types 1/2/3/5/6 (plus alternate inheritance) = SPEC 7.1's rule.
+- `rg_ledge.{h,c}`: jump cells and `rg_ledge_layouts` read the profile's `jump` set (`gp_beh(&rg_lprof(L)->jump, b)`; FRLG 0x38-0x3B); `rg_ledge_enabled` now takes the layout and is false unless the game is Emerald (the ENABLED list is Emerald ids 20 and 4); `rg_ledge_layouts` calls `rg_relief_outdoor_layout`. Ascending id order unchanged.
+- `rg_relief.c`: the T1-T9 tables check runs on Emerald only; on any other game FULL is built as LEDGES (Kanto has no drawn relief, so FULL = LEDGES there; `off` still writes nothing).
+- `rg_run.c`: the `GP_EMERALD` gate on relief is gone. The device dev hook (`romgen_dev.c`, `opts.relief = RG_RELIEF_LEDGES`, writes to the per-game dir `voxel/BPRE|BPGE`) therefore writes `relief.bin` for FRLG too with no change to it. The renderer loads `relief.bin` through `VoxelFile_Open` like regions.bin, so the per-game dir needed no change (voxel.log: `VOXEL relief: 31 layouts`).
+- `romgen_cli.c`: the status line says `ledges` for a FULL request that built no drawn rows.
+- No profile fields `ledgeLip/ledgeWidth/ledgeBack` (see measurement).
+
+### Lip measurement (Route 1 = layout 89, `romgen author ROM art 89 0 4 14 4`; an east/west ledge on layout 95, `art 95 8 2 6 6`)
+Kanto's ledge strip is the same drawing geometry as Hoenn's: 8 px deep (a light top edge row and a dark shadow row inside the 8), half a cell, south ledge in rows 8-15 of the cell and east/west in columns 8-15. Numbers read from the stored heights (cells of all 31 rows, 27 distinct 25-height patterns): the south ledge cell is `0 | 3 2 3 2 3 | 6 5 6 5 6 | 3 3 3 3 3 | 0` (rows j=0..4), peak 6 = RG_LIP, ramp 3 at 4 px = 6*(1 - 4/RG_LIP_BACK); the east/west column is `0 3 6 3 0`. RG_LIP 6, RG_LIP_WIDTH 8, RG_LIP_BACK 8 all fit, so the Emerald constants stay and the profile carries nothing. The 5/6 alternation is the drawing's 1-px top-edge jitter, as on Emerald. (The 6 itself is a rendering choice, not a measurement of the art.)
+
+### Numbers
+- Route 1 (layout 89, 24x40): 61 ledge cells (61 jump cells, no junction), relief row of 61 cells.
+- Whole file, FR = LG: 26320 bytes, 31 rows, 958 cells, 31 ledge layouts, 960 ledge cells; SHA-1 `32c24146974e720620e97906024d8a60d2f6e09c` (FR and LG byte-identical; the cart differs only in code/header, not in blockdata or attributes).
+- Pins in `test/host/test_romgen_frlg_relief.c` (51714 checks): synthetic 3x3 (the S3.1 hand computation, column 0, 2.25, 4.5, 1.5, 0 -> stored 0 2 4 2 0) under an Emerald row recoloured as FireRed; 0x3C is not a jump in Kanto; indoor / underground layouts get no row; ENABLED false for FRLG even at id 20; every row an outdoor layout and every outdoor layout with a jump cell has a row; FULL == LEDGES == pinned bytes, OFF writes nothing; vendored `VoxelRelief_Init` reads every cell back; Route 1 first cell (2,5) heights.
+- `test_romgen_frlg_regions.c`: its G2 assertion `relief == NULL` for FULL on FRLG became `relief != NULL && size 26320` (the expected L1 change, count unchanged).
+
+### Gate (actual output)
+    2929c7642be7ef83aad7cbb1619e062900ca4c74  buildings.bin   (Emerald, default run)
+    007a370f440fa3c36cf0056440f05c025a386c4f  regions.bin
+    385156050629ee50724bf3f6504991b10e48c7c1  signposts.bin
+    21a837f091c6b4764ad284e02438f7113c829cbf  relief.bin (FULL)
+    eb25a3835edf7ebbcc9d634dd199be955fb4d27e  relief.bin (--relief ledges)
+    FR = LG: dec0c711992d4b9186249f298e4f10bac9d7393f buildings, 3716874d6ba477acbdaaecc079fd7dc77526cd1b regions, ba2fde451aa9612c10f7a7a80cf0d9b06f007e06 signposts, 32c24146974e720620e97906024d8a60d2f6e09c relief
+`make -C tools/romgen test` (ROMGEN_ROM, 0 skipped): every suite count identical to K2 (art 33149, bimg 10481, buildings 4400, export 580568, frlg_buildings 2543, frlg_regions 1639412, frlg_trees 61, frlg_world 14685, gameprof 5799, geom 585, interior 851, regions 474, relief_canvas 1579, relief_drawn 1388, relief_faults 221, relief_full 1538098, relief_ledge 55159, relief_solve 379, relief_world 691, roles 656013, rtables 9981, signs 1751, world 612, pyset 28); new frlg_relief 51714; 0 failures. `vtest` (with ROMGEN_ROM_FR/_LG): entities 35, mesh 20, world 6347, frlg 94, adapter 562, gate 37, lz77 173, overlay 23, shims 69, 0 failures, 0 skipped. Device `make -j8 ROMGEN_DEV_HOOK=1` then `make -j8` both link (3DGBA.3dsx).
+
+### Azahar (New 3DS, voxel on, FireRed + LeafGreen, warp-save copies `roms/firered-ledge.sav`, `roms/leafgreen-ledge.sav` = Pallet saves warped to 3/19 at 13,28; gitignored)
+Ran on a private harness instance (`--instance l`, own bundle clone and sdmc under the git-ignored `tools/emutest/az-l/`, state dir /tmp/l1) because `--stage-roms` on the default instance refuses while the user's `sdmc:/3DGBA/gameA.*` exist and I must not remove them. The files `relief.bin` were copied into the default instance's `voxel/BPRE` and `voxel/BPGE` too (neither held one before; `BPRE/buildings.bin` etc. untouched); the instance-l tree has its own copies.
+- `evidence/l1-fr-route1-ledges.png`: Route 1 FR, the ledge rows run across the path with the sandy gap; the ledge strips read as raised ridges with a smooth top edge, no floating or sunken cells, signs/fence at its end sit on the ground.
+- `evidence/l1-fr-route1-ledge-with-vs-without-relief.png`: same view with relief.bin (top) and without it (bottom): without, the ledge is a flat jagged band; with, it has a soft raised ridge profile and the neighbouring ground does not move.
+- `evidence/l1-lg-route1-ledges.png`: LG, same place, same look (`VOXEL relief: 31 layouts` in voxel.log).
+- `evidence/l1-fr-route1-south.png`: Route 1's south end by the Pallet houses (the first, non-ledge view): trees and grass unchanged by the relief file.
+- Not done: the hop. A DOWN-hold movie (`HOP.ctm`) over 5 minutes never moved the player (CTM timing, as the R2 entry noted), so no frame of the player crossing a ledge. The ledge cells keep their `0x3B` behaviour, so the game's own hop is unchanged; only the visual ridge was verified.
+- Cleanup: `azctl stop` ran, instance l idle. The default instance's sdmc (gameA.gba/.sav, settings.bin, recent.bin) was not modified; hashes before: gameA.gba dd5945db, gameA.sav a40e4025, settings.bin 762ee064, recent.bin dcf15e18 (backup in the session scratchpad `l1bak/`).
