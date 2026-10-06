@@ -1,0 +1,22 @@
+romgen -- host CLI for the voxel data files (3DGBA, GPLv3)
+
+Build:   make -C tools/romgen                  -> tools/romgen/build/romgen
+Tests:   export ROMGEN_ROM=$PWD/roms/emerald.gba   (ABSOLUTE, or the real-ROM tests skip)
+         make -C tools/romgen test             (ASan+UBSan host suites; T=relief_faults for one)
+         make -C tools/romgen vtest            (renderer suites)
+
+Usage:   romgen ROM.gba OUTDIR [--time] [--only regions,signposts,buildings,relief]
+               [--relief full|ledges|off]      full is the default; ledges is the small ledges-only file
+               [--relief-layout ID]            one layout's relief.bin row and every cell's 25 heights
+               [--relief-log]                  the drawn groups (members, offsets, canvas)
+               [--relief-prep] [--relief-world] [--relief-sum neumaier|naive|both]   S3.4/S3.5 measurement tools
+               [--dump-roles LAYOUT_ID] [--dump-model NAME]
+
+Writes regions.bin, signposts.bin, buildings.bin, relief.bin. The output is derived from your ROM: keep it outside
+the repo (it is git-ignored under build/ and never committed).
+
+PC fallback for the FULL relief (the device only builds the ledges-only file):
+  1. romgen roms/emerald.gba OUT            (default = --relief full, ~3.5 s)
+  2. copy OUT/relief.bin to the SD card at  sdmc:/3ds/3DGBA/voxel/relief.bin
+The device hook (ROMGEN_DEV_HOOK=1 builds) leaves an existing FULL relief.bin alone: a file whose row table has any
+drawn row (bit 15) is not overwritten by a ledges-only run. A missing or ledges-only file is regenerated as before.

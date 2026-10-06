@@ -330,3 +330,37 @@ Requests for Phase 34 files: none. Azahar visual check: not run.
   the New 3DS.
 - Build gotcha: `ROMGEN_DEV_HOOK` is not a make dependency. After a hook build, `touch source/main.c
   source/romgen_dev.c` before the release `make`.
+
+## S3.8 - fault oracle, CLI default, PC fallback (2026-10-06)
+
+Built: `test/host/test_romgen_relief_faults.c` (O2), `rg_relief_head_drawn_rows` / `rg_relief_keep_existing` (pure, in
+`rg_relief_write.{h,c}`), `--relief full` as the CLI default, the device-hook keep guard (`source/romgen_dev.c`),
+`tools/romgen/README`, and a Makefile rebuild trigger for `ROMGEN_DEV_HOOK`.
+
+**O2 (rchk:118-170 re-implemented over the decoded file; upstream read as specification only, never run).** Scores every written
+cell of every drawn row from its own 5x5 grid (stored int8 x unit; base cancels), skipping fully clear quads of the cut variant's
+mask. Scores are kept in half-pixels so the pins are exact integers. Global: 56 drawn rows, 50,573 cells, 2,758 flagged
+(total > 0.01), 1,192 severe (>= 16 px), of which 385 in non-cut cells. Pinned per group (33 groups): rows, cells, flagged,
+severe, northBad (a "north" fault over 2 px in a non-cut cell) and the four kind totals. Reference group (seed 32, Route 116):
+2 rows, 998 cells, 37 flagged, 18 severe (1.8%), northBad 0. Counts are our baseline, not comparable to upstream's floats.
+
+Deviations from SPEC O2 (both are the "Q5: adjust after the first look" clause, the emulator look having passed):
+1. The 5% severe bound fails on 5 groups of the faithful port (worst: group 292, 12.6%) that look right in Azahar. Moved to 15%
+   per group; the REFERENCE group is still held to 5%.
+2. "Fail on any north fault > 2 px in a non-cut cell" fails in 22 of 33 groups (upstream's own tool only boxes them). It is a
+   pin instead (per-group northBad), so a new one is a regression.
+
+Device: the hook leaves an existing FULL relief.bin alone (drawnRows > 0 in its row table); unit-tested as a pure function.
+Makefile: `romgen_hook.stamp` in `build/` holds the flag value, rewritten only when it changes; `main.o` and `romgen_dev.o`
+depend on it. Proof: `make ROMGEN_DEV_HOOK=1` recompiled main.c + romgen_dev.c, a repeat recompiled nothing, then plain `make`
+recompiled both again (no manual touch). Hook ELF exports `romgen_dev_poll`, `romgen_dev_stop`; the release ELF has no `romgen_dev` symbol.
+
+### O5 emulator checklist (relief FULL, Azahar New-3DS, FULL relief.bin in sdmc:/3ds/3DGBA/voxel/)
+
+| # | Check | Status |
+|---|---|---|
+| 1 | Ledges (the S3a ledge rows) still draw | lead-verified 2026-10-06 |
+| 2 | Route 104 (0:19) and Route 106 (0:21) drawn cliffs, Granite Cave massif | lead-verified 2026-10-06 |
+| 3 | Lavaridge alias (layouts 13/136/292) stepped walls | lead-verified 2026-10-06 |
+| 4 | Rustboro: flat city, no artifacts | lead-verified 2026-10-06 |
+| 5 | Seam 13/28 warp and the I6 seam steps (~26 map-edge points, pinned 104 bad lattice points) | OPEN |
