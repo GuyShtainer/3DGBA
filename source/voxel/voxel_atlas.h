@@ -74,7 +74,18 @@ void VoxelAtlas_SolidUV(VoxelSolidColor color, float *u0, float *v0, float *u1, 
  */
 #define VOXEL_CUTS 512u
 #define VOXEL_CUT_FIRST (VOXEL_METATILE_REAL + VOXEL_VARIANTS)
-#define VOXEL_METATILE_IDS (VOXEL_CUT_FIRST + VOXEL_CUTS)
+/*
+ * 3DGBA (look backlog L1): then the shrub layers (voxel_tree.h): shrub k of
+ * the game profile's table, split in two - VOXEL_SHRUB_GROUND(k) its lower
+ * layer alone, the ground under the bush, and VOXEL_SHRUB_LEAVES(k) its upper
+ * layer alone, clear wherever that layer draws nothing, for the card the bush
+ * stands up as. Composed once with the atlas, never per frame.
+ */
+#define VOXEL_SHRUBS 32u
+#define VOXEL_SHRUB_FIRST (VOXEL_CUT_FIRST + VOXEL_CUTS)
+#define VOXEL_SHRUB_GROUND(k) (VOXEL_SHRUB_FIRST + 2u * (unsigned)(k))
+#define VOXEL_SHRUB_LEAVES(k) (VOXEL_SHRUB_FIRST + 2u * (unsigned)(k) + 1u)
+#define VOXEL_METATILE_IDS (VOXEL_SHRUB_FIRST + 2u * VOXEL_SHRUBS)
 #define VOXEL_SLOT_ABSENT  0xFFFFu
 #define VOXEL_SLOT_PENDING 0xFFFEu
 #define VOXEL_ATLAS_PAGES ((VOXEL_METATILE_IDS + VOXEL_SOLID_BASE - 1u) / VOXEL_SOLID_BASE)

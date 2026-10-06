@@ -19,6 +19,7 @@
 #include "vx_fixture.h"
 #include "voxel_world.h"
 #include "voxel_tree.h"
+#include "voxel_atlas.h"
 #include "rg_gameprof.h"
 
 static int sChecks, sFails;
@@ -264,6 +265,79 @@ static void TestTreeTables(void)
     CHECK(VoxelTree_Part(0x1D4) == 0 && VoxelTree_Part(0x1C) == -1);   /* and back: the Emerald table again */
 }
 
+/* Look backlog L1: the shrub tables and their lookup. A secondary id is a shrub only with its own secondary tileset,
+ * compared by ROM address; a primary one only on the General tileset; nothing indoors; never a tree part. */
+static void TestShrubTables(void)
+{
+    const VoxelMapInstance *i0;
+    VoxelMapInstance inst;
+    struct Tileset dewford, slateport, general;
+    const GameProfile *em = gameprof_emerald();
+    uint8_t hdr[0xC0];
+    unsigned m = 0;
+
+    Take();
+    i0 = VoxelWorld_Instance(0);
+    CHECK(i0 != NULL);
+    if (i0 == NULL)
+        return;
+    gVxProf = NULL;
+    CHECK(em->shrubs != NULL && em->shrubCount == 11 && em->shrubCount <= VOXEL_SHRUBS);
+    for (unsigned k = 0; k < em->shrubCount; ++k)      /* every Emerald shrub is a secondary id with its tileset */
+        CHECK(em->shrubs[k].tileset != 0 && em->shrubs[k].metatile >= em->nPrimMetatiles && em->shrubs[k].metatile < 1024);
+    memset(&dewford, 0, sizeof dewford);
+    dewford.gbaAddr = 0x083DF74Cu;
+    slateport = dewford;
+    slateport.gbaAddr = 0x083DF764u;
+    inst = *i0;                                        /* the fixture's General + Fortree instance, outdoors */
+    CHECK(VoxelTree_Shrub(&inst, 0x243) == -1);        /* Fortree's 0x243 is not Dewford's */
+    inst.secondaryTileset = &dewford;
+    CHECK(VoxelTree_Shrub(&inst, 0x239) == 0 && VoxelTree_Shrub(&inst, 0x23A) == 1 && VoxelTree_Shrub(&inst, 0x242) == 2);
+    CHECK(VoxelTree_Shrub(&inst, 0x243) == 3 && VoxelTree_Shrub(&inst, 0x247) == 4);
+    CHECK(VoxelTree_Shrub(&inst, 0x244) == -1 && VoxelTree_Shrub(&inst, 0x220) == -1 && VoxelTree_Shrub(&inst, 0x005) == -1);
+    CHECK(VoxelTree_Shrub(&inst, -1) == -1 && VoxelTree_Shrub(&inst, 1024) == -1);
+    CHECK(VoxelTree_Part(0x243) == -1 && VoxelTree_Part(0x239) == -1);   /* not a tree part: drawn with the terrain */
+    inst.secondaryTileset = &slateport;
+    CHECK(VoxelTree_Shrub(&inst, 0x243) == 8);         /* the same id, the other tileset's entry */
+    CHECK(VoxelTree_ShrubSource(inst.primaryTileset, &slateport, 8, &m) && m == 0x243);
+    CHECK(!VoxelTree_ShrubSource(inst.primaryTileset, &dewford, 8, &m));
+    CHECK(VoxelTree_ShrubSource(inst.primaryTileset, &dewford, 3, &m) && m == 0x243);
+    CHECK(!VoxelTree_ShrubSource(inst.primaryTileset, &dewford, VOXEL_SHRUBS, &m));
+    inst.indoor = true;
+    CHECK(VoxelTree_Shrub(&inst, 0x243) == -1);        /* indoors: no tree sprites, no shrubs */
+    inst.indoor = false;
+    inst.primaryTileset = NULL;
+    CHECK(VoxelTree_Shrub(&inst, 0x243) == -1);        /* not the General tileset */
+
+    /* FireRed / LeafGreen: the General round bush 0x005 plus two secondary bushes at per-game addresses. */
+    for (int game = 0; game < 2; ++game)
+    {
+        const GameProfile *p;
+
+        memset(hdr, 0, sizeof hdr);
+        memcpy(hdr + 0xAC, game == 0 ? "BPRE" : "BPGE", 4);
+        hdr[0xBC] = 1;
+        p = gameprof_detect(hdr, sizeof hdr);
+        CHECK(p != NULL && p->shrubs != NULL && p->shrubCount == 3);
+        if (p == NULL || p->shrubs == NULL)
+            continue;
+        CHECK(p->shrubs[0].tileset == 0 && p->shrubs[0].metatile == 0x005);
+        CHECK(p->shrubs[1].metatile == 0x2F4 && p->shrubs[2].metatile == 0x2E0);
+        CHECK(p->shrubs[1].tileset == (game == 0 ? 0x082D4BC4u : 0x082D4BA4u));
+        CHECK(p->shrubs[2].tileset == (game == 0 ? 0x082D4B7Cu : 0x082D4B5Cu));
+        gVxProf = p;
+        memset(&general, 0, sizeof general);
+        general.gbaAddr = p->tsGeneral;
+        CHECK(VoxelTree_ShrubSource(&general, NULL, 0, &m) && m == 0x005);
+        dewford.gbaAddr = p->shrubs[1].tileset;
+        CHECK(VoxelTree_ShrubSource(&general, &dewford, 1, &m) && m == 0x2F4);
+        CHECK(!VoxelTree_ShrubSource(&general, &dewford, 2, &m));
+        general.gbaAddr = em->tsGeneral;                /* Emerald's General address is not Kanto's */
+        CHECK(!VoxelTree_ShrubSource(&general, NULL, 0, &m));
+    }
+    gVxProf = NULL;
+}
+
 int main(void)
 {
     CHECK(fxInit() == 0);
@@ -273,6 +347,7 @@ int main(void)
     TestReflectionAndFortree();
     TestHashes();
     TestTreeTables();
+    TestShrubTables();
     printf("test_voxel_world: %d checks, %d failures\n", sChecks, sFails);
     return sFails != 0;
 }

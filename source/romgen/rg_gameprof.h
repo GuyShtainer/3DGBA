@@ -27,6 +27,11 @@ static inline bool gp_beh(const GpBehSet *s, unsigned b)
 
 struct RgSpec;
 
+/* Look backlog L1: a one-cell shrub (a bush drawn on a metatile's upper layer over its ground). `tileset` is the GBA
+ * address of the secondary tileset the id belongs to (a secondary id means nothing without it), 0 for a primary id;
+ * `metatile` < 1024. */
+typedef struct GpShrub { uint32_t tileset; uint16_t metatile; } GpShrub;
+
 typedef struct GameProfile {
     GpGame game;
     char code[4];                  /* header 0xAC game code */
@@ -71,6 +76,11 @@ typedef struct GameProfile {
     uint16_t treePartCount;
     const int16_t *treeGround;
     uint16_t treeGroundCount;
+    /* Renderer shrub table (look backlog L1), read by voxel_tree.c: the one-cell bushes that stand up as a card of their
+     * own upper layer over their lower layer (VOXEL_TREE_SHRUB). Not part of treePart: a tree crown is drawn from the
+     * fixed General tree texture by id alone, a shrub from the cell's own atlas art and keyed by tileset too. */
+    const GpShrub *shrubs;
+    uint8_t shrubCount;
     bool emeraldIdTables;          /* Fortree puddles, GenericBuilding interior ids: Emerald only */
     bool interiors3d;              /* false on FRLG: indoor maps hand back to the 2D frame */
     bool rendererOn;               /* gameprof_detect() returns the row only when set (Emerald; FRLG from R2) */

@@ -46,9 +46,12 @@ int rg_author_art(const RgWorld *w, const char *outDir, unsigned layout, int x, 
 int rg_author_preview(const RgWorld *w, const char *outDir, const RgSpec *spec);
 int rg_author_check(const RgWorld *w, const RgSpec *spec, int expect, FILE *fp);   /* 0 pass, 1 fail */
 int rg_author_placements(const RgWorld *w, const RgSpec *spec, FILE *fp);
-/* T1: foliage metatiles and 2x2 tree blocks of the General tileset; with sheetHi > sheetLo a contact-sheet PNG instead. */
-int rg_author_trees(const RgWorld *w, FILE *fp, const char *outDir, int sheetLo, int sheetHi);
+/* T1: foliage metatiles and 2x2 tree blocks of the General tileset; with sheetHi > sheetLo a contact-sheet PNG instead
+ * (layout > 0: drawn with that layout's tileset pair, so secondary ids show their own art). */
+int rg_author_trees(const RgWorld *w, FILE *fp, const char *outDir, int sheetLo, int sheetHi, int layout);
 int rg_author_trees_list(const RgWorld *w, FILE *fp);
+/* L1: one-cell foliage candidates (primary and secondary ids) for the shrub table; contact sheet <outDir>/shrubs.png. */
+int rg_author_shrubs(const RgWorld *w, FILE *fp, const char *outDir, uint32_t onlyTs);
 
 /* Pixel helpers shared with the tests. */
 int rg_author_mkdir_p(const char *path);

@@ -189,6 +189,8 @@ static bool MetatileUV(VoxelBuilder *builder, int metatileId,
     return true;
 }
 
+static bool ShrubSlotsReady(const VoxelBuilder *builder, int shrub);
+
 bool VoxelMesh_TileUV(VoxelBuilder *builder, int x, int y,
                    float *u0, float *v0, float *u1, float *v1)
 {
@@ -206,7 +208,15 @@ bool VoxelMesh_TileUV(VoxelBuilder *builder, int x, int y,
         return false;
     metatile = VoxelWorld_GetMetatileId(x, y);
     if (VoxelWorld_UsesTreeSprites(VoxelWorld_GetInstanceAt(x, y)))
-        metatile = VoxelTree_GroundMetatile(metatile);
+    {
+        /* 3DGBA (look L1): a shrub's ground is its lower layer alone; the bush stands as a card (EmitShrubCard) */
+        int shrub = VoxelTree_Shrub(VoxelWorld_GetInstanceAt(x, y), metatile);
+
+        if (shrub >= 0 && ShrubSlotsReady(builder, shrub))
+            metatile = (int)VOXEL_SHRUB_GROUND(shrub);
+        else
+            metatile = VoxelTree_GroundMetatile(metatile);
+    }
     slot = builder->atlas->slotOf[metatile];
 
     if (slot == 0 || slot == VOXEL_SLOT_PENDING)
@@ -985,6 +995,38 @@ void VoxelMesh_DraftCell(VoxelBuilder *b, const VoxelMapInstance *inst, int x, i
     b->shift = 0.0f;
 }
 
+/*
+ * 3DGBA (look backlog L1): a shrub cell's bush (voxel_tree.h), its upper layer
+ * stood up as a card at the level the cell's relief puts it. Its ground is
+ * drawn by the ground pass as for any cell: VoxelMesh_TileUV gives a shrub
+ * cell its lower layer alone, flat or laid on its relief. Nothing on a
+ * modelled building's cells, nor when the atlas has no slot for either layer
+ * (a full atlas): the cell is then drawn as it is.
+ */
+static bool ShrubSlotsReady(const VoxelBuilder *builder, int shrub)
+{
+    unsigned g = builder->atlas->slotOf[VOXEL_SHRUB_GROUND(shrub)];
+    unsigned l = builder->atlas->slotOf[VOXEL_SHRUB_LEAVES(shrub)];
+
+    return g != 0 && g != VOXEL_SLOT_PENDING && g != VOXEL_SLOT_ABSENT
+        && l != 0 && l != VOXEL_SLOT_PENDING && l != VOXEL_SLOT_ABSENT;
+}
+
+static void EmitShrubCard(VoxelBuilder *builder, const VoxelMapInstance *inst, int x, int y)
+{
+    int shrub = VoxelTree_Shrub(inst, VoxelWorld_GetMetatileId(x, y));
+    float u0, v0, u1, v1;
+
+    if (shrub < 0 || !ShrubSlotsReady(builder, shrub) || VoxelBuildings_CellAt(inst, x, y, NULL, NULL)
+     || !MetatileUV(builder, (int)VOXEL_SHRUB_LEAVES(shrub), &u0, &v0, &u1, &v1))
+        return;
+    builder->lift = VoxelRelief_CellLift(inst, x, y);
+    builder->shift = VoxelRelief_CellShift(inst, x, y);
+    VoxelTree_EmitShrubCard(builder, x, y, u0, v0, u1, v1);
+    builder->lift = 0.0f;
+    builder->shift = 0.0f;
+}
+
 /* One row of the ground pass over [x0,x1), already clipped to the instance. */
 void VoxelMesh_EmitGroundRow(VoxelBuilder *builder, const VoxelMapInstance *inst,
                              int x0, int x1, int y)
@@ -1003,6 +1045,7 @@ void VoxelMesh_EmitGroundRow(VoxelBuilder *builder, const VoxelMapInstance *inst
             continue;
         if (shape == VOXEL_SHAPE_VOID)
             continue;
+        EmitShrubCard(builder, inst, x, y);   /* L1: the bush; its ground follows as any cell's */
         /* A lifted cell lays its own drawing on its relief. A slope - rock,
          * stairs - is nothing but that; a level lifted cell still carries
          * whatever stands on it, drawn below with the same lift. */
@@ -1289,6 +1332,24 @@ static bool BorderAt(int x, int y)
     return VoxelMesh_Classify(x, y) == VOXEL_SHAPE_VOID;
 }
 
+/* 3DGBA (look L1): a border of bushes - Route 106's south belt, Dewford's
+ * wood - is not a two-course box with the bushes painted flat on its top:
+ * like a border tree, each cell is its ground, flat at the ground's level,
+ * and its bush stood up as a card. */
+static bool EmitBorderShrub(VoxelBuilder *builder, int x, int y)
+{
+    int shrub = VoxelTree_Shrub(VoxelWorld_Instance(0), VoxelWorld_BorderMetatile(x, y));
+    float g0, h0, g1, h1, u0, v0, u1, v1;
+
+    if (shrub < 0 || !ShrubSlotsReady(builder, shrub)
+     || !MetatileUV(builder, (int)VOXEL_SHRUB_GROUND(shrub), &g0, &h0, &g1, &h1)
+     || !MetatileUV(builder, (int)VOXEL_SHRUB_LEAVES(shrub), &u0, &v0, &u1, &v1))
+        return false;
+    VoxelMesh_Top(builder, (float)x, (float)y, 0.0f, 0.0f, g0, h0, g1, h1, SHADE_TOP);
+    VoxelTree_EmitShrubCard(builder, x, y, u0, v0, u1, v1);
+    return true;
+}
+
 void VoxelMesh_EmitBorder(VoxelBuilder *builder, int x0, int y0, int x1, int y1)
 {
     float u0, v0, u1, v1;
@@ -1314,6 +1375,8 @@ void VoxelMesh_EmitBorder(VoxelBuilder *builder, int x0, int y0, int x1, int y1)
             if (VoxelWorld_UsesTreeSprites(VoxelWorld_Instance(0))
              && VoxelTree_Part(VoxelWorld_BorderMetatile(x, y)) >= 0)
                 continue; /* flat trunks and tilted crowns are appended later */
+            if (EmitBorderShrub(builder, x, y))
+                continue;
             south = !BorderAt(x, y + 1);
             east = !BorderAt(x + 1, y);
             west = !BorderAt(x - 1, y);

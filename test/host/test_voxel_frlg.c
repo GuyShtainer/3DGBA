@@ -13,6 +13,8 @@
 #include "vx_fixture_frlg.h"
 #include "voxel_world.h"
 #include "voxel_tree.h"
+#include "voxel_atlas.h"
+#include "voxel_mesh_builder.h"
 
 static int sChecks, sFails, sSkips;
 #define CHECK(c) do { ++sChecks; if (!(c)) { ++sFails; printf("FAIL %s:%d  %s\n", __FILE__, __LINE__, #c); } } while (0)
@@ -21,6 +23,59 @@ static uint32_t Rd32R(const uint8_t *rom, uint32_t addr)
 {
     const uint8_t *p = rom + (addr - 0x08000000u);
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+/* Look backlog L1: the General round bush 0x005 is Kanto's shrub 0. On the instances built around Pallet (Pallet and
+ * Route 1) every shrub cell is 0x005, the atlas composes its ground and leaves slots on the pair that has one, and an
+ * interior shrub cell emits its flat ground plus one standing card: 12 vertices. */
+static VoxelVertex sVerts[64];
+
+static void ShrubsAround(const char *label)
+{
+    static uint16_t atlas[VOXEL_ATLAS_PIXELS];
+    static VoxelAtlasMap map;
+    const VoxelMapInstance *with = NULL;
+    unsigned m = 0;
+    int shrubs = 0, sx = 0, sy = 0;
+
+    for (int i = 0; i < (int)VoxelWorld_InstanceCount(); ++i)
+    {
+        const VoxelMapInstance *in = VoxelWorld_Instance(i);
+
+        CHECK(VoxelTree_ShrubSource(in->primaryTileset, in->secondaryTileset, 0, &m) && m == 0x005u);
+        for (int y = in->originY + 1; y < in->originY + in->height - 1; ++y)
+            for (int x = in->originX + 1; x < in->originX + in->width - 1; ++x)
+            {
+                if (VoxelWorld_GetInstanceAt(x, y) != in || VoxelTree_Shrub(in, VoxelWorld_GetMetatileId(x, y)) < 0)
+                    continue;
+                CHECK(VoxelTree_Shrub(in, VoxelWorld_GetMetatileId(x, y)) == 0 && VoxelWorld_GetMetatileId(x, y) == 0x005);
+                if (with == NULL) { with = in; sx = x; sy = y; }
+                ++shrubs;
+            }
+    }
+    printf("  %s: %d interior shrub cells on %u instances, first at %d,%d\n", label, shrubs, VoxelWorld_InstanceCount(), sx, sy);
+    CHECK(shrubs > 0 && with != NULL && VoxelTree_Part(0x005) == -1);
+    if (with == NULL)
+        return;
+    CHECK(VoxelAtlas_Build(with, atlas, &map, false) && !map.overflowed);
+    CHECK(map.slotOf[VOXEL_SHRUB_GROUND(0)] != 0 && map.slotOf[VOXEL_SHRUB_GROUND(0)] != VOXEL_SLOT_ABSENT);
+    CHECK(map.slotOf[VOXEL_SHRUB_LEAVES(0)] != 0 && map.slotOf[VOXEL_SHRUB_LEAVES(0)] != VOXEL_SLOT_ABSENT);
+    CHECK(map.slotOf[VOXEL_SHRUB_GROUND(0)] != map.slotOf[VOXEL_SHRUB_LEAVES(0)]);
+    CHECK(map.slotOf[0x005] != 0 && map.slotOf[0x005] != map.slotOf[VOXEL_SHRUB_GROUND(0)]);
+    {
+        VoxelBuilder b;
+        float top = -1.0f;
+
+        VoxelMesh_BeginWindow(sx, sy, sx + 1, sy + 1);
+        VoxelBuilder_Init(&b, sVerts, 64);
+        VoxelBuilder_SetAtlas(&b, &map);
+        VoxelMesh_EmitGroundRow(&b, with, sx, sx + 1, sy);
+        for (unsigned i = 0; i < b.count; ++i)
+            if (sVerts[i].y > top) top = sVerts[i].y;
+        printf("  %s: shrub cell %d,%d emits %u vertices, card top %.3f\n", label, sx, sy, b.count, top);
+        CHECK(b.count == 12 && b.dropped == 0);
+        CHECK(top > 0.7f && top < 0.9f);
+    }
 }
 
 static void RunGame(const char *env, GpGame game, const char *label)
@@ -143,6 +198,7 @@ static void RunGame(const char *env, GpGame game, const char *label)
         CHECK(doors == 3);
         CHECK(trees > 0);        /* Pallet's tree wall resolves to tree parts (Kanto's table, slice T1) */
         CHECK(VoxelWorld_BorderMetatile(-2, -2) >= 0 && VoxelWorld_BorderMetatile(30, 30) >= 0);
+        ShrubsAround(label);
         free(snap);
     }
     FrFree(&st);
