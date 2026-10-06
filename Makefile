@@ -192,6 +192,13 @@ $(OUTPUT).elf	:	$(OFILES)
 # romgen (phase 33) compares floating-point thresholds: no FMA contraction, so host and device agree.
 rg_%.o : CFLAGS += -ffp-contract=off
 
+# ROMGEN_DEV_HOOK is a real rebuild trigger: the value lives in a stamp file that is rewritten (new mtime) only when
+# the value changes, and the two objects that read the flag depend on it. Switching hook <-> release recompiles
+# main.o and romgen_dev.o; an unchanged value leaves them alone. (Runs inside $(BUILD), where the stamp lives.)
+HOOK_STAMP := romgen_hook.stamp
+$(if $(filter $(ROMGEN_DEV_HOOK),$(shell cat $(HOOK_STAMP) 2>/dev/null)),,$(shell echo $(ROMGEN_DEV_HOOK) > $(HOOK_STAMP)))
+main.o romgen_dev.o : $(HOOK_STAMP)
+
 -include $(DEPENDS)
 
 endif
