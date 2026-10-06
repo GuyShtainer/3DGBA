@@ -193,7 +193,7 @@ static void TestCensus(const char *name, const char *env, int idx)
     CHECK(c->doorWarps == 191 && c->mapWarps == 55 && c->caveWarps == 31);
     CHECK(c->n == 152);
     CHECK(c->mainland == 108 && c->sevii == 44);
-    CHECK(c->covered == 50);                                              /* K1 Pallet 3 + K2 landmarks 36 + K3 Viridian, Route 2, Forest gates 8 + K4 Pewter 3 */
+    CHECK(c->covered == 57);                                              /* K1 Pallet 3 + K2 landmarks 36 + K3 Viridian, Route 2, Forest gates 8 + K4 Pewter 3 + K5 Cerulean 6, Route 25 1 */
     memset(cnt, 0, sizeof(cnt));
     for (i = 0; i < c->n; i++) {
         const RgCensusRow *r = &c->row[i];
@@ -242,7 +242,7 @@ static void TestCensus(const char *name, const char *env, int idx)
 
         census_print(&w, c, rg_kspecs_table(w.prof, &nkt), -1, -1, fp);
         fclose(fp);
-        CHECK(buf != NULL && strstr(buf, "covered 50 / 152\n") != NULL && strstr(buf, "152 placements (108 mainland, 44 sevii)") != NULL);
+        CHECK(buf != NULL && strstr(buf, "covered 57 / 152\n") != NULL && strstr(buf, "152 placements (108 mainland, 44 sevii)") != NULL);
         free(buf);
     }
     rg_world_close(&w);
@@ -305,8 +305,8 @@ static void Sha1(const uint8_t *d, size_t n, char hex[41])
     free(m);
 }
 
-/* The FR buildings.bin of the Kanto models so far (K1 Pallet, K2 landmarks, K3 Viridian, K4 Pewter); FR = LG. Re-pinned by the lead after the visual check, if the look changes. */
-#define PALLET_BUILDINGS_SHA1 "beca820c9f1d5d7ae9d4fb5770e69ccf270a3183"
+/* The FR buildings.bin of the Kanto models so far (K1 Pallet, K2 landmarks, K3 Viridian, K4 Pewter, K5 Cerulean); FR = LG. Re-pinned by the lead after the visual check, if the look changes. */
+#define PALLET_BUILDINGS_SHA1 "0b7fb62f971284d253557b16a776db90e29e0ab9"
 
 static uint8_t *sPalletBin[2];
 static size_t sPalletBinSize[2];
@@ -345,8 +345,8 @@ static void TestPallet(const char *name, const char *env, GpGame game, int idx)
     }
     CHECK(rg_world_open(&w, rom, n) == RG_OK && w.prof->game == game);
     k = rg_kspecs_table(w.prof, &nk);
-    CHECK(k != NULL && nk == 17);                                          /* K1 Pallet x2 + K2 center, mart, gym x3 + K3 eight Viridian/Route 2/Forest */
-    if (k != NULL && nk == 17) {
+    CHECK(k != NULL && nk == 24);                                          /* K1 Pallet x2 + K2 center, mart, gym x3 + K3 eight Viridian/Route 2/Forest */
+    if (k != NULL && nk == 24) {
         char *buf = NULL;
         size_t sz = 0;
         FILE *mem;
@@ -443,13 +443,36 @@ static void TestPallet(const char *name, const char *env, GpGame game, int idx)
                 free(buf);
             }
         }
+        /* K5: Cerulean City (five blue-roofed houses, the Bike Shop) and the Route 25 Sea Cottage. Route 4 has only the Center. */
+        {
+            static const char *const nm[7] = {"k_cerulean_house_a", "k_cerulean_house_b", "k_cerulean_house_c", "k_cerulean_house_d",
+                                              "k_cerulean_house_e", "k_cerulean_bike", "k_route25_cottage"};
+            static const char *const first[7] = {"L81 8 8  (map 3/3)\n", "L81 15 8  (map 3/3)\n", "L81 28 8  (map 3/3)\n",
+                                                 "L81 13 14  (map 3/3)\n", "L81 21 25  (map 3/3)\n", "L81 12 23  (map 3/3)\n",
+                                                 "L113 49 1  (map 3/44)\n"};
+
+            for (i = 0; i < 7; i++) {
+                char line[96];
+
+                CHECK(strcmp(k[17 + i].name, nm[i]) == 0);
+                CHECK(k[17 + i].layoutFnv == (i == 6 ? 0xBBAC050Au : 0xB952CCF4u));
+                CheckSpecText(&w, &k[17 + i], 1);
+                buf = NULL; sz = 0;
+                mem = open_memstream(&buf, &sz);
+                CHECK(rg_author_placements(&w, &k[17 + i], mem) == 0);
+                fclose(mem);
+                snprintf(line, sizeof(line), "%s: 1 placement(s) across 384 layouts", nm[i]);
+                CHECK(strstr(buf, line) != NULL && strstr(buf, first[i]) != NULL);
+                free(buf);
+            }
+        }
     }
     rg_world_close(&w);
     memset(&opts, 0, sizeof(opts));
     opts.wantBuildings = true;
     CHECK(rg_run(rom, n, &opts, &out) == RG_OK);
     CHECK(out.buildings != NULL && out.buildingsSize > 24 && memcmp(out.buildings, "VXB7", 4) == 0);
-    CHECK(out.bModels == 17 && out.bPlacements == 52 && out.buildingsFailed == 0);
+    CHECK(out.bModels == 24 && out.bPlacements == 59 && out.buildingsFailed == 0);
     CHECK(out.regions != NULL && out.signs == NULL && out.relief == NULL);   /* G2: regions are always made; signposts only on wantSigns; relief stays off for FRLG */
     CHECK(out.layouts == 384 && out.maps == 425 && out.outdoorMaps == 76);
     if (out.buildings != NULL) {
