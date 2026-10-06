@@ -230,11 +230,19 @@ static const RgExact kPlantExact[11] = {
 
 static const RgExact kHouseExact[1] = {{0, 10, 80, 68, false}};
 
+/* Phase 34 side walls: the end-face patches of each model (art coordinates), see rg_close_sides. */
+static const RgSideCfg kTowerSide[1] = {
+    {NULL, {45, 61, 49, 63}, {45, 61, 49, 63}, 999, true},
+};
+static const RgSideCfg kPlantSide[1] = {
+    {NULL, {31, 75, 35, 77}, {31, 75, 35, 77}, 999, true},
+};
+
 const RgSpec rg_kspecs_lavender[] = {
     {"k_pokemon_tower", RG_SPEC_DIRECT, L_LAVENDER, {14, 0, 9, 7}, {0, 0}, LV_GROUND, 1, kTowerExact, 7,
-     k_pokemon_tower, 0, 0, NULL},
+     k_pokemon_tower, 0, 0, kTowerSide},
     {"k_power_plant", RG_SPEC_DIRECT, L_ROUTE10, {2, 34, 11, 8}, {0, 0}, LV_GROUND, 1, kPlantExact, 11,
-     k_power_plant, 0, 0, NULL},
+     k_power_plant, 0, 0, kPlantSide},
     {"k_lavender_house", RG_SPEC_DIRECT, L_LAVENDER, {8, 8, 5, 5}, {1, 4}, LV_GROUND, 1, kHouseExact, 1,
      k_lavender_house, 0, 0, NULL},
 };
