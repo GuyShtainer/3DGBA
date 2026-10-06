@@ -184,25 +184,6 @@ RgErr rg_run(const uint8_t *rom, size_t romSize, const RgRunOpts *opts, RgOutput
     if (e != RG_OK)
         return e;
     out->msWorld = now(opts) - t0;
-    if (w.prof->game != GP_EMERALD) {
-        /* Phase 34: FireRed / LeafGreen. B0 turns the buildings on (the Kanto table, empty until the K slices; it needs
-         * no roles). Regions and signposts arrive in G2; relief stays OFF until L1, so the Emerald-only relief modules
-         * are never reached. */
-        if (opts != NULL && opts->wantBuildings)
-            e = run_buildings(&w, opts, out);
-        if (e != RG_OK) {
-            rg_output_free(out);
-            rg_world_close(&w);
-            return e;
-        }
-        out->layouts = w.layoutCount;
-        out->maps = w.mapCount;
-        out->tilesets = w.tilesetCount - 1u;
-        out->pairs = w.pairCount;
-        out->outdoorMaps = w.outdoorMaps;
-        rg_world_close(&w);
-        return RG_OK;
-    }
     e = rg_roles_init(&w, &r);
     if (e != RG_OK) {
         rg_world_close(&w);
@@ -214,7 +195,9 @@ RgErr rg_run(const uint8_t *rom, size_t romSize, const RgRunOpts *opts, RgOutput
         e = run_pair(&w, &r, &signs, pi, opts, out, &done, total);
     if (e == RG_OK && opts != NULL && opts->wantBuildings)
         e = run_buildings(&w, opts, out);
-    if (e == RG_OK && opts != NULL && opts->relief != RG_RELIEF_OFF)
+    /* Phase 34 G2: FireRed / LeafGreen get roles, regions, signposts and buildings; relief stays OFF until L1 (the Emerald-only
+     * relief modules are never reached on them). */
+    if (e == RG_OK && opts != NULL && opts->relief != RG_RELIEF_OFF && w.prof->game == GP_EMERALD)
         e = run_relief(&w, &r, opts, out);
     t0 = now(opts);
     if (e == RG_OK)
