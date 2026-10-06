@@ -11,6 +11,10 @@
 #include <string.h>
 
 #define L_VERMILION 83, 0x82FF5FADu
+#define L_ROUTE5 93, 0xA0C68725u
+#define L_ROUTE6 94, 0x00000000u
+#define L_ROUTE7 95, 0x00000000u
+#define L_ROUTE8 96, 0x00000000u
 #define VM_GROUND {0x001}
 
 static void vm_pt(double (*poly)[2], unsigned i, double z, double y)
@@ -73,6 +77,21 @@ static bool k_vermilion_green(const RgSpec *spec, int a0, int a1, RgPartList *ou
     return vm_profile(out, "green", 0, a0, true, 6, pts, rows) && !out->failed;
 }
 
+/* ---- k_path_hut: 48x64 art (rect (30,28), 3x4 on Route 5) ----------------------------------------------------------- */
+/* The Underground Path hut: a flat grey roof, a level face seen from above (rows 0-35, a roof-top edge at row 0),
+ * the cornice 35-42, and the brick facade with pillars and the wooden door 42-64. The rect starts one row above the
+ * census seed (the roof starts in the row above) and matches only rows 1-4, so the same cells on Routes 6, 7 and 8
+ * are found whatever their top row holds. */
+static bool k_path_hut(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    static const double pts[6][2] = {{64, 0}, {64, 22}, {64, 29}, {29, 29}, {29, 0}, {29, 0}};
+    static const double rows[6][2] = {{42, 64}, {35, 42}, {0, 35}, {0, 0}, {0, 0}, {0, 0}};
+
+    (void)spec; (void)a0; (void)a1;
+    return vm_profile(out, "hut", 0, 48, true, 5, pts, rows) && !out->failed;
+}
+
+static const RgExact kHutExact[1] = {{0, 0, 48, 64, false}};
 static const RgExact kHouseExact[1] = {{0, 12, 64, 64, false}};
 static const RgExact kGreenExact[1] = {{0, 0, 80, 64, false}};
 
@@ -83,5 +102,7 @@ const RgSpec rg_kspecs_vermilion[] = {
      k_vermilion_flat, 64, 0, NULL},
     {"k_vermilion_green", RG_SPEC_DIRECT, L_VERMILION, {11, 14, 5, 4}, {0, 0}, VM_GROUND, 1, kGreenExact, 1,
      k_vermilion_green, 80, 0, NULL},
+    {"k_path_hut", RG_SPEC_DIRECT, L_ROUTE5, {30, 28, 3, 4}, {1, 4}, VM_GROUND, 1, kHutExact, 1,
+     k_path_hut, 0, 0, NULL},
 };
 const unsigned rg_kspecs_vermilion_count = sizeof(rg_kspecs_vermilion) / sizeof(rg_kspecs_vermilion[0]);
