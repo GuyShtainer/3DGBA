@@ -287,3 +287,25 @@ make -C tools/romgen test      # 18 suites, 0 failures; relief_solve 379 checks,
 - layout_heights over 87 outdoor layouts finite and pinned; 30 non-drawn non-ENABLED layouts equal flat + berms.
 - Deviations: D3 hypot via sqrt (grid pin 0xed111a40d76c3471); S3.5 trimmed preps, so rg_solve_all re-prepares each ok group with the same RgRCtx.
 - Timing (host -O2, ASan test build): solve_drawn all groups ~3.8 s under ASan; layout_heights 70-80 ms.
+
+## S3.7 - FULL relief export (rg_rcut, rg_rshape, FULL mode, --relief full)
+
+Built: `source/romgen/rg_rcut.{h,c}` (cut_mask, lifted, plain_ground, behind, cut_cells), `source/romgen/rg_rshape.{h,c}` (spread, rim_cells, cell_shapes and its phases), FULL export in `rg_relief.c` (`full_build`), CLI `--relief ledges|full|off` (default stays LEDGES until S3.8), `test/host/test_romgen_relief_full.c`. Commits 68ca5a6, cd0ce3e, 1384521.
+
+Suites: 19 romgen suites, 0 failures. relief_full 1,538,098 checks; relief_ledge 55,159, relief_solve 379, relief_world 691 unchanged; vtest passes. Consumer round trip loads the FULL file; I5 holds; determinism (O4) holds.
+
+SHA-1: LEDGES relief.bin eb25a3835edf7ebbcc9d634dd199be955fb4d27e before and after (unchanged); buildings 2929c764..., regions 007a370f..., signposts 38515605... unchanged. FULL relief.bin 21a837f091c6b4764ad284e02438f7113c829cbf.
+
+FULL stats: 1,556,166 B; 61 rows, 56 drawn, 53 at unit 2; 50,858 cells; 252 variants; 12,361 cuts. CLI 3.47 s wall (relief 3.43 s); peak heap 79.4 MB (rg_memcount), RSS 212 MB. Dominant memory contributor not investigated (S3.9 concern).
+
+Deviations / notes:
+- I6 (seam continuity) is pinned at 104 bad points (~26 distinct, all >= 8 px apart), soft==0. Upstream's shared-point rule (no seam guard) raises map-edge points by a cliff top; behaviour is upstream-faithful, not a port bug.
+- I7: only 3 of 23 ledge layouts are neither drawn nor ENABLED, so the check requires same>=1.
+- FULL with empty roles is refused (RG_ERR_RELIEF) via the `r->data == NULL` guard, as the ledge test expects.
+- `VoxelRelief_CutCount` is the variant count.
+- Face Counter order assumed row-major, first max wins.
+- plain_ground's `ground` result is unused upstream; the call is kept for its shared `_PLAIN` cache side effect.
+
+Device: `make -j8`, `make -j8 ROMGEN_DEV_HOOK=1` (forced recompile), then `make -j8` (release last) and `make cia` all succeed with DEVKITPRO/DEVKITARM exported.
+
+Requests for Phase 34 files: none. Azahar visual check: not run.
