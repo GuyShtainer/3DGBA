@@ -110,15 +110,103 @@ static bool k_pallet_house(const RgSpec *spec, int a0, int a1, RgPartList *out)
 
 /* ---- k_pallet_lab: 112x64 art ------------------------------------------------------------------------------------- */
 /* Art rows: flat roof 0-23 (a 8x8 grid), cornice 24-31, yellow brick facade 32-63. A vent unit stands on the roof at
- * columns 80-104: its top 0-8, its front 9-20. rg_flat_block is the Emerald flat-roofed block builder. */
+ * columns 80-104: its top face 0-8, its front 9-20. The shape is rg_flat_block's (a front prism, a roof slab cut in
+ * three around the unit, the unit), written out here so the end walls take plain brick instead of a porthole. */
+#define LAB_W 112.0
+#define LAB_FRONT 64.0
+#define LAB_BACK 16.0
+#define LAB_WALL 32.0                       /* facade rows 32-63 */
+#define LAB_TOP 40.0                        /* wall + the 8 cornice rows */
+
+static void pl_roof_slab(RgPartList *out, const char *name, double x0, double x1, double offset)
+{
+    RgPart *sl = rg_parts_add(out, RG_P_PRISM, name);
+    RgPrism *pr;
+    RgStrip s;
+
+    if (sl == NULL)
+        return;
+    pr = &sl->u.prism;
+    pr->x0 = x0; pr->x1 = x1;
+    pr->west = (x0 == 0); pr->east = (x1 == LAB_W);
+    pl_box(pr, LAB_FRONT, LAB_WALL, LAB_TOP, LAB_BACK);
+    pr->edges[0].kind = RG_EM_PROJ;
+    pr->edges[0].proj = rg_proj_rows(24, 32);                       /* cornice */
+    memset(&s, 0, sizeof(s));
+    s.fixed[0] = 0; s.fixed[1] = 24;                                /* the visible roof, rows 0-23 */
+    s.hasRepeat = true; s.repeat[0] = 8; s.repeat[1] = 16;          /* the grid, one cell high, beyond the art */
+    s.hasTail = true; s.tail[0] = 0; s.tail[1] = 8;
+    if (offset != 0.0) {
+        s.hasRepeatOffset = true;
+        s.repeatOffset = offset;
+    }
+    pr->edges[1].kind = RG_EM_STRIP;
+    pr->edges[1].strip = rg_strip_fin(s);
+    pr->edges[2].kind = RG_EM_TILE;
+    pr->edges[2].tile = rg_tile_top(8, 24, 16, 32, LAB_TOP);
+    pr->skip = 1u << 3;
+    pr->hasCaps = true;
+    pr->caps[pr->nCaps++] = rg_band(LAB_WALL, LAB_TOP + 1, rg_tile_top(8, 24, 16, 32, LAB_TOP), LAB_FRONT);
+}
+
 static bool k_pallet_lab(const RgSpec *spec, int a0, int a1, RgPartList *out)
 {
-    static const double roof[3][2] = {{0, 24}, {8, 16}, {0, 8}};
-    static const double cornice[2] = {24, 32};
-    static const double unit[5] = {80, 104, 0, 9, 21};
+    static const double ux0 = 80, ux1 = 104, t0 = 0, t1 = 9, t2 = 21;   /* the vent: top rows t0-t1, front rows t1-t2 */
+    RgPart *bd, *un;
+    RgPrism *pr;
+    RgBand b;
+    RgTile brick, pilaster, side;
+    double zu;
 
     (void)spec; (void)a0; (void)a1;
-    return rg_flat_block(out, 112, 64, roof, cornice, 32, unit);
+    bd = rg_parts_add(out, RG_P_PRISM, "body");
+    if (bd == NULL)
+        return false;
+    brick = rg_tile_top(48, 32, 56, 48, LAB_WALL);      /* plain yellow brick above the door */
+    pilaster = rg_tile_top(0, 32, 8, 48, LAB_WALL);     /* the outlined corner column */
+    pr = &bd->u.prism;
+    pr->x0 = 0; pr->x1 = LAB_W;
+    pr->west = pr->east = true;
+    pl_box(pr, LAB_FRONT, -1, LAB_WALL, LAB_BACK);
+    pr->edges[0].kind = RG_EM_PROJ;
+    pr->edges[0].proj = rg_proj_rows(32, 64);                       /* facade */
+    pr->edges[2].kind = RG_EM_TILE;
+    pr->edges[2].tile = brick;
+    pr->skip = (1u << 1) | (1u << 3);
+    b = rg_band(-1, LAB_WALL, brick, LAB_FRONT);
+    b.hasFront = true; b.front = pilaster;
+    b.hasBack = true;  b.back = pilaster;
+    rg_band_z1(&b, LAB_BACK);
+    pr->hasCaps = true;
+    pr->caps[pr->nCaps++] = b;
+
+    pl_roof_slab(out, "roof_w", 0, ux0, 0.0);
+    pl_roof_slab(out, "roof_u", ux0, ux1, 8 - ux0);
+    pl_roof_slab(out, "roof_e", ux1, LAB_W, 0.0);
+
+    zu = t2 + LAB_TOP;
+    side = rg_tile_top(ux0 + 8, t1, ux0 + 16, t2, LAB_TOP + (t2 - t1));
+    un = rg_parts_add(out, RG_P_PRISM, "vent");
+    if (un == NULL)
+        return false;
+    pr = &un->u.prism;
+    pr->x0 = ux0; pr->x1 = ux1;
+    pr->west = pr->east = true;
+    pr->nPoly = 4;
+    pl_pt(pr->poly, 0, zu, LAB_TOP - 1);
+    pl_pt(pr->poly, 1, zu, LAB_TOP + (t2 - t1));
+    pl_pt(pr->poly, 2, zu - (t1 - t0), LAB_TOP + (t2 - t1));
+    pl_pt(pr->poly, 3, zu - (t1 - t0), LAB_TOP - 1);
+    pr->edges[0].kind = RG_EM_PROJ;
+    pr->edges[0].proj = rg_proj_rows(t1, t2);
+    pr->edges[1].kind = RG_EM_PROJ;
+    pr->edges[1].proj = rg_proj_rows(t0, t1);
+    pr->edges[2].kind = RG_EM_TILE;
+    pr->edges[2].tile = side;
+    pr->skip = 1u << 3;
+    pr->hasCaps = true;
+    pr->caps[pr->nCaps++] = rg_band(LAB_TOP - 1, LAB_TOP + (t2 - t1) + 1, side, zu);
+    return !out->failed;
 }
 
 /* x, y, x1, y1 in art pixels; the comments name the part each rectangle pins. */

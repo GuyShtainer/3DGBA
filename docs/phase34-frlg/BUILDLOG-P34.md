@@ -208,3 +208,4 @@ All 30 suite counts (22 romgen incl. pyset 28 and relief_faults 221, 8 vtest) id
 
 ## K1 Pallet Town recipes (2026-10-06), in progress
 - k_pallet_house banked: 80x64, hip-roof house (rg_hiproof + one Prism, kit_house shape), check PASS ortho 0/0/0 on both exact rects, density empty, round trip ok; placements (5,4) and (14,4) on layout 78.
+- k_pallet_lab banked: 112x64, flat roof + vent unit over a yellow-brick front (rg_flat_block shape written out locally for plain-brick end walls), check PASS ortho 0/0/0, density empty, round trip ok; placement (13,10).
