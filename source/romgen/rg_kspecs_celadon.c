@@ -144,6 +144,35 @@ static const RgSideCfg kPrizeSide[1] = {
     {NULL, {16, 10, 32, 30}, {16, 10, 32, 30}, 999, true},
 };
 
+/* ---- k_celadon_dept: 336x192 art (rect (4,4), 21x12) ------------------------------------------------------------------- */
+/* The Dept. Store and the two plain wings beside it (the census seed is one flood fill of all three). The ROM draws it
+ * as a true elevation: rows 16-78 the grey louvred roof seen from above (a yellow-panelled penthouse on it, front
+ * rows 56-70, top rows 17-56), a bevelled cornice 78-82, then six storeys of window bays down to the ledge at 178-181.
+ * The store is a flat block 103 high; its penthouse stands 14 higher on the roof. The wings (x 0-80 and 224-336) are
+ * flat blocks 69 high: roof rows 8-59, green facade 59-128. The doors at (11,14) and (15,14) are the two awnings. */
+static bool k_celadon_dept(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    static const double pen[4][2] = {{173, 0}, {173, 117}, {134, 117}, {134, 0}};
+    static const double penr[4][2] = {{56, 173}, {17, 56}, {0, 0}, {0, 0}};
+
+    (void)spec; (void)a0; (void)a1;
+    return cl_block(out, "dept", 81, 223, 181, 78, 16) &&
+           cl_profile(out, "pent", 112, 192, 4, pen, penr) &&
+           cl_block(out, "wing_w", 0, 80, 128, 59, 8) &&
+           cl_block(out, "wing_e", 224, 336, 128, 59, 8) && !out->failed;
+}
+static const RgExact kDeptExact[4] = {
+    {81, 16, 223, 181, false},      /* roof, cornice, the six storeys */
+    {112, 17, 192, 71, false},      /* the penthouse */
+    {0, 8, 80, 128, false},         /* the west wing */
+    {224, 8, 336, 128, false},      /* the east wing */
+};
+static const RgSideCfg kDeptSide[3] = {
+    {"pent", {113, 59, 191, 61}, {113, 59, 191, 61}, 999, false},
+    {"dept", {128, 82, 176, 87}, {128, 82, 176, 87}, 999, false},
+    {NULL, {3, 60, 5, 121}, {3, 60, 5, 121}, 999, true},
+};
+
 const RgSpec rg_kspecs_celadon[] = {
     {"k_celadon_house", RG_SPEC_DIRECT, L_CELADON, {36, 25, 4, 5}, {1, 5}, CL_GROUND, 1, kHouseExact, 1,
      k_celadon_house, 0, 0, kHouseSide},
@@ -151,5 +180,7 @@ const RgSpec rg_kspecs_celadon[] = {
      k_celadon_game_corner, 0, 0, kGameSide},
     {"k_celadon_prize", RG_SPEC_DIRECT, L_CELADON, {38, 17, 3, 4}, {0, 0}, CL_GROUND, 1, kPrizeExact, 1,
      k_celadon_prize, 0, 0, kPrizeSide},
+    {"k_celadon_dept", RG_SPEC_DIRECT, L_CELADON, {4, 4, 21, 12}, {0, 0}, CL_GROUND, 1, kDeptExact, 4,
+     k_celadon_dept, 0, 0, kDeptSide},
 };
 const unsigned rg_kspecs_celadon_count = sizeof(rg_kspecs_celadon) / sizeof(rg_kspecs_celadon[0]);
