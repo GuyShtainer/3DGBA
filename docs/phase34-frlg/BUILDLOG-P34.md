@@ -345,3 +345,76 @@ interiors3d off).
     flat (T1).
 - M1 is not closed yet. Still needed: G2 (terrain/water/signs), T1 (trees), the 4-angle and door checks, and then the
   hardware run.
+
+## T1 - Kanto trees (branch of e3a7c32)
+
+FireRed and LeafGreen rev 1 tree walls are now 3D trees: `voxel_tree.c` reads its tables from the game profile, and the
+FR/LG rows carry the Kanto table. Emerald is unchanged (every metatile id 0..1023 gives the same part and ground as the old
+switch statements; test_voxel_world compares them).
+
+### What changed
+- `tools/romgen/rg_author_trees.c` (+ `author ... trees [LO HI]` in rg_author.c, header, Makefile): lists the General-tileset
+  metatiles that are foliage by Gummygamer's rule (re-implemented from the description, credited in the file header; the
+  gen1recomp-voxel-frlg reference was read, never executed), with their counts, the 2x2 blocks they form, corner votes, and
+  the foliage metatiles that never sit in a block. `trees LO HI` writes a contact-sheet PNG of a metatile range (review aid).
+- `rg_gameprof.{h,c}`: `treePart` / `treePartCount`, `treeGround` / `treeGroundCount` as flat int16 pairs. Emerald row = the
+  old tables as data; FR and LG rows = `kFrlgTreePart`. PROVENANCE: "ROM-measured, no decomp" (two rows added).
+- `voxel_tree.c`: expands the profile's pairs into per-profile lookup tables (1024 ids), rebuilt when the profile pointer
+  changes. Part and ground are O(1) per cell. Out-of-range ids behave as before (-1 / identity).
+- Tests: `test_voxel_world.c` TestTreeTables (+6214 checks: every id 0..1023 against the old switches, FR/LG table rows via a
+  header-only fake image, the 12 ids primary and < 640, Pallet block quadrants); `test_voxel_frlg.c` (Route 1 3/19 real
+  layout: 278 tree-part cells, 138 top row + 140 bottom row, nothing outside the 12 ids; the old `trees == 0` on Pallet became
+  `trees > 0`); new suite `test_romgen_frlg_trees.c` (the tool on the real ROMs); `test_romgen_gameprof.c` one assertion flipped
+  (Emerald `treePart` is now non-NULL; same count). `test_romgen_frlg_buildings.c` gained one `#include` (it includes rg_author.c,
+  which now references the trees function).
+
+### The FRLG tree table (FR and LG rev 1 identical; metatile id -> part, 0 tl 1 tr 2 bl 3 br)
+| part | ids |
+|---|---|
+| 0 (top row, left) | 0x1C, 0x1E |
+| 1 (top row, right) | 0x1D, 0x1F |
+| 2 (bottom row, left) | 0x14, 0x16, 0x24, 0x26 |
+| 3 (bottom row, right) | 0x15, 0x17, 0x25, 0x27 |
+
+No `treeGround` entries (no Kanto tree metatile paints canopy over other ground that a replacement would clean up). Pallet's
+border block (SPEC T1) 1C 1D / 14 15 is quadrants 0 1 / 2 3 and is the most common block in the ROM. Reading the art: 0x14/0x15
+is the canopy apex, 0x1C/0x1D the canopy body, 0x24/0x25 the trunk row; in walls the tiles stack as 1C over 14 (or 1C over 24 at
+the map edge), so the table pairs each 1C-row tile with the tile below it.
+
+### Tool output summary (`romgen author firered.gba trees`; leafgreen.gba is identical apart from the header line)
+- Ground colour key BGR555 0x532E; 181 layouts use the General tileset; 1346 distinct 2x2 foliage blocks over them (blocks need all
+  four cells foliage AND collision-blocked, as in Gummygamer's rule, which only looks at wall cells; tall grass is green too but walkable).
+- 66 primary metatiles are foliage by the rule (119 with the older Zallax rule, which also flags plain grass); 14559 blocked-foliage cells
+  in all. The 12 table ids carry 13 879 of them (e.g. 0x1C 2489, 0x14 2454, 0x1D 2432, 0x15 2397, 0x1F 1023, 0x1E 963).
+- Most common blocks: 1C 1D 14 15 x1027, 14 15 1C 1D x572 (the same wall, other phase), 1C 1F 14 17 x245, 1E 1D 16 15 x232, 1E 1F 14 15 x219.
+
+### One-tile foliage and the rest: decisions
+Cut trees are object events, not metatiles (nothing to do). Every other foliage metatile the tool finds is left as flat ground art, by decision:
+| id(s) | what it is (contact sheets) | blocked uses | decision |
+|---|---|---|---|
+| 0x005 | one round bush | 193 of 193 | flat. The only heavily used leftover; a one-cell bush is not a small tree (the small-tree crown is two tiles tall). Candidate for the L1 "shrub" part, same family as the Emerald shrubs 0x124/0x239/0x242/0x243 |
+| 0x13D-0x13F, 0x145-0x147, 0x14D-0x14F | rectangular hedges (Gym / gate) | 0x13E 97, rest under 6 | flat (a hedge is not a tree) |
+| 0x0FA/0x0FB | round hedge cap over a tree's bottom row | 33 / 34 | flat |
+| 0x0D6/0x0D7, 0x0B4/0x0B5 (seen on the sheet), 0x10A/0x10B (not viewed) | a tree apex over a fence or a cliff | 62-65, 40, 5 | flat (their ground under the apex is not known without a replacement table; rare) |
+| 0x1A/0x1B, 0x22/0x23, 0x012/0x013, 0x00A | narrow one-column pines | 1-6 each | flat |
+| 0x255, 0x25D | secondary-tileset tree tops (ids >= 640) | 10, 11 | out of scope: the table is General-only (`VoxelWorld_UsesTreeSprites`) |
+The table is data, so L1 (Emerald shrubs) and a later Kanto shrub part only add pairs (`part 4` = VOXEL_TREE_SMALL exists already).
+
+### Gate (SPEC 0.3), before vs after
+Baseline = main e3a7c32 built from `git archive` in a scratch directory; ROMGEN_ROM / ROMGEN_ROM_FR / ROMGEN_ROM_LG absolute.
+- Emerald CLI SHA-1s unchanged: default run buildings 2929c764..., regions 007a370f..., signposts 38515605..., relief (FULL)
+  21a837f0...; `--relief ledges` relief eb25a383...
+- `make -C tools/romgen test`: 22 suites with identical counts (0 failures, 0 skipped), plus the new `test_romgen_frlg_trees` 61.
+- `make -C tools/romgen vtest`, before -> after: entities 35 -> 35, mesh 20 -> 20, **world 133 -> 6347** (TestTreeTables), **frlg 84 -> 94**
+  (Route 1 block; the Pallet `trees == 0` check became `trees > 0`, same count), adapter 562, gate 37, lz77 173, overlay 23, shims 69
+  unchanged; 0 failures, 0 skipped. (The SPEC gate said world only; the frlg growth is the Route 1 check, which needs the real-ROM
+  fixture that lives in that suite.)
+- Device: `make -j8` links (3DGBA.3dsx); no new warnings in the files touched.
+
+### Notes for the lead
+- Emulator check (yours): Pallet's border/edge trees and Route 1's two side walls and north end should be 3D trees. Things to look
+  at: the painted flat apex under the 3D crown (the floor keeps the tile's own art, as on Emerald), the trunk row 0x24/0x25 mapped as
+  the bottom part, and the round bushes 0x005 (still flat) near Route 1/2 tree edges.
+- Merge: `rg_gameprof.c` hunks are three: the two `kEmeraldTree*` / `kFrlgTreePart` arrays + `GP_FRLG_TREES` macro just above the Emerald row,
+  four fields in the Emerald row, and `, GP_FRLG_TREES` appended after `.cb2OverworldBasic = ...` at the end of `GP_FRLG_COMMON` (not near
+  the house-size fields). `rg_gameprof.h` gains `treeGroundCount` and a comment.
