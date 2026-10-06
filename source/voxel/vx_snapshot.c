@@ -36,7 +36,7 @@ static void DecodeU16(uint16_t *dst, const uint8_t *raw, size_t count)
 
 static void CopyPalettes(VxSnapshot *snap, const VxMemSrc *src)
 {
-    DecodeU16(snap->plttUnfaded, src->ewram + (GBA_ADDR_PLTT_UNFADED - GBA_EWRAM_BASE), 512);
+    DecodeU16(snap->plttUnfaded, src->ewram + (VXP(plttUnfaded) - GBA_EWRAM_BASE), 512);
     DecodeU16(snap->pltt, src->pltt, 512);
 }
 
@@ -46,7 +46,7 @@ bool vx_snapshot_take(VxSnapshot *snap, const VxMemSrc *src)
     uint32_t w, h;
 
     if (snap == NULL || src == NULL || src->ewram == NULL || src->iwram == NULL
-     || src->pltt == NULL || src->vram == NULL)
+     || src->pltt == NULL || src->vram == NULL || VXP(playerAvatarBytes) > sizeof(snap->playerAvatar))
         return false;
     snap->valid = false;
     ++snap->seq;
@@ -55,45 +55,41 @@ bool vx_snapshot_take(VxSnapshot *snap, const VxMemSrc *src)
     snap->bldalpha = src->bldalpha;
     snap->bldy = src->bldy;
 
-    if (!CopyIwram(src, GBA_ADDR_GMAIN + GBA_OFF_MAIN_CALLBACK2, ptr, 4))
+    if (!CopyIwram(src, VXP(gMain) + GBA_OFF_MAIN_CALLBACK2, ptr, 4))
         return false;
     snap->cb2 = Rd32(ptr);
-    snap->inBattle = (src->iwram[GBA_ADDR_GMAIN - GBA_IWRAM_BASE + GBA_OFF_MAIN_FLAGS]
+    snap->inBattle = (src->iwram[VXP(gMain) - GBA_IWRAM_BASE + GBA_OFF_MAIN_FLAGS]
                       & GBA_MAIN_INBATTLE_BIT) != 0;
 
     snap->sb1Valid = false;
-    if (CopyIwram(src, GBA_ADDR_SB1_PTR, ptr, 4))
+    if (CopyIwram(src, VXP(sb1Ptr), ptr, 4))
     {
         snap->sb1Ptr = Rd32(ptr);
         snap->sb1Valid = CopyEwram(src, snap->sb1Ptr, snap->sb1, sizeof(snap->sb1));
     }
 
-    if (!CopyIwram(src, GBA_ADDR_BACKUP_LAYOUT, snap->backupLayout, sizeof(snap->backupLayout)))
+    if (!CopyIwram(src, VXP(backupLayout), snap->backupLayout, sizeof(snap->backupLayout)))
         return false;
     w = Rd32(snap->backupLayout + GBA_OFF_BKL_WIDTH);
     h = Rd32(snap->backupLayout + GBA_OFF_BKL_HEIGHT);
     snap->backupMapCells = 0;
     if (w >= 1 && h >= 1 && w <= 271 && h <= 270 && w * h <= VX_BACKUP_MAP_MAX_CELLS)
     {
-        if (GBA_ADDR_BACKUP_MAP - GBA_EWRAM_BASE + (size_t)(w * h) * 2u > GBA_EWRAM_SIZE)
+        if (VXP(backupMap) - GBA_EWRAM_BASE + (size_t)(w * h) * 2u > GBA_EWRAM_SIZE)
             return false;
-        DecodeU16(snap->backupMap, src->ewram + (GBA_ADDR_BACKUP_MAP - GBA_EWRAM_BASE), w * h);
+        DecodeU16(snap->backupMap, src->ewram + (VXP(backupMap) - GBA_EWRAM_BASE), w * h);
         snap->backupMapCells = w * h;
     }
 
-    if (!CopyEwram(src, GBA_ADDR_MAP_HEADER, snap->mapHeader, sizeof(snap->mapHeader))
-     || !CopyEwram(src, GBA_ADDR_OBJECT_EVENTS, snap->objEvents, sizeof(snap->objEvents))
-     || !CopyEwram(src, GBA_ADDR_PLAYER_AVATAR, snap->playerAvatar, sizeof(snap->playerAvatar))
-     || !CopyEwram(src, GBA_ADDR_SPRITES, snap->sprites, sizeof(snap->sprites))
-     || !CopyEwram(src, GBA_ADDR_PALETTE_FADE, snap->paletteFade, sizeof(snap->paletteFade)))
+    if (!CopyEwram(src, VXP(mapHeader), snap->mapHeader, sizeof(snap->mapHeader))
+     || !CopyEwram(src, VXP(objEvents), snap->objEvents, sizeof(snap->objEvents))
+     || !CopyEwram(src, VXP(playerAvatar), snap->playerAvatar, VXP(playerAvatarBytes))
+     || !CopyEwram(src, VXP(sprites), snap->sprites, sizeof(snap->sprites))
+     || !CopyEwram(src, VXP(paletteFade), snap->paletteFade, sizeof(snap->paletteFade)))
         return false;
     {
-        static const uint32_t offs[5] = {GBA_OFF_WEATHER_CURR, GBA_OFF_WEATHER_PALSTATE,
-                                         GBA_OFF_WEATHER_EVA, GBA_OFF_WEATHER_FOGH,
-                                         GBA_OFF_WEATHER_FOGD};
-
         for (unsigned i = 0; i < 5; ++i)
-            if (!CopyEwram(src, GBA_ADDR_WEATHER + offs[i], &snap->weather[i], 1u))
+            if (!CopyEwram(src, VXP(weather) + VXP(weatherOff)[i], &snap->weather[i], 1u))
                 return false;
     }
     CopyPalettes(snap, src);

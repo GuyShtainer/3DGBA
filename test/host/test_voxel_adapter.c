@@ -3,7 +3,7 @@
 //
 //   clang -std=c11 -Wall -Wextra -O2 -fsanitize=address,undefined -I source/voxel -I test/host \
 //         test/host/test_voxel_adapter.c source/voxel/vx_adapter.c source/voxel/vx_snapshot.c \
-//         source/voxel/vx_lz77.c source/voxel/vx_behavior.c source/voxel/ctr_shims_pure.c \
+//         source/voxel/vx_lz77.c source/voxel/vx_behavior.c source/voxel/ctr_shims_pure.c source/romgen/rg_gameprof.c \
 //         -o /tmp/tvad && /tmp/tvad
 //
 // Optional: `/tmp/tvad --real DUMPDIR ROM.gba` decodes a real RAM dump made by tools/voxel/probe_ram.c

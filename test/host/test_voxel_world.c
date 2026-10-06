@@ -9,7 +9,7 @@
 //         source/voxel/voxel_lighting.c source/voxel/voxel_grade.c source/voxel/voxel_entities.c \
 //         source/voxel/voxel_camera.c source/voxel/vx_adapter.c source/voxel/vx_snapshot.c \
 //         source/voxel/vx_lz77.c source/voxel/vx_behavior.c source/voxel/vx_data.c \
-//         source/voxel/ctr_shims_pure.c source/voxel/vx_battle_stub.c -lm -o /tmp/tvwo && /tmp/tvwo
+//         source/voxel/ctr_shims_pure.c source/voxel/vx_battle_stub.c source/romgen/rg_gameprof.c -lm -o /tmp/tvwo && /tmp/tvwo
 //
 // (the world module drags the mesh/atlas modules in at link time; ctr_voxel.c is the only GPU file and
 // is never host-built.)

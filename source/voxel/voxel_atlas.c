@@ -89,7 +89,7 @@ struct AtlasSource
 
 static uint16_t LookupColor(const struct AtlasSource *src, unsigned paletteId, unsigned colorIdx)
 {
-    const uint16_t *palette = paletteId < NUM_PALS_IN_PRIMARY
+    const uint16_t *palette = paletteId < VXP(nPrimPals)
                             ? src->primaryPalettes : src->secondaryPalettes;
 
     if (palette == NULL)
@@ -129,7 +129,7 @@ static void InitMorton(void)
 /* The metatile's entry table, or NULL if this id has no composable data. */
 static const uint16_t *MetatileEntries(const struct AtlasSource *src, unsigned m)
 {
-    if (m < NUM_METATILES_IN_PRIMARY)
+    if (m < VXP(nPrimMetatiles))
     {
         if (src->primaryMetatiles == NULL || m >= src->primaryCount)
             return NULL;
@@ -137,7 +137,7 @@ static const uint16_t *MetatileEntries(const struct AtlasSource *src, unsigned m
     }
     else
     {
-        unsigned local = m - NUM_METATILES_IN_PRIMARY;
+        unsigned local = m - VXP(nPrimMetatiles);
 
         if (src->secondaryMetatiles == NULL || local >= src->secondaryCount)
             return NULL;
@@ -162,7 +162,7 @@ static const struct Tileset *TilesetOf(unsigned layoutId, unsigned metatile)
 
     if (layout == NULL)
         return NULL;
-    return metatile < NUM_METATILES_IN_PRIMARY ? layout->primaryTileset : layout->secondaryTileset;
+    return metatile < VXP(nPrimMetatiles) ? layout->primaryTileset : layout->secondaryTileset;
 }
 
 /* A cut tile (voxel_relief.h): its metatile and the rows of its background. */
@@ -186,7 +186,7 @@ static bool CutSourceOf(const struct Tileset *primary, const struct Tileset *sec
     if (i >= VOXEL_CUTS || !VoxelRelief_CutVariant(i, &layoutId, metatile, cut))
         return false;
     return sCutTileset[i] != NULL
-        && sCutTileset[i] == (*metatile < NUM_METATILES_IN_PRIMARY ? primary : secondary);
+        && sCutTileset[i] == (*metatile < VXP(nPrimMetatiles) ? primary : secondary);
 }
 
 static bool AtlasSourceOf(const struct Tileset *primary, const struct Tileset *secondary,
@@ -218,7 +218,7 @@ static bool AtlasSourceOf(const struct Tileset *primary, const struct Tileset *s
                 continue;
             layout = Port_GetMapLayoutById((u16)layoutId);
             if (layout != NULL)
-                sVariantTileset[k] = m < NUM_METATILES_IN_PRIMARY
+                sVariantTileset[k] = m < VXP(nPrimMetatiles)
                                    ? layout->primaryTileset : layout->secondaryTileset;
         }
         /* only once the file is read: an atlas composed before it would
@@ -229,7 +229,7 @@ static bool AtlasSourceOf(const struct Tileset *primary, const struct Tileset *s
     if (i >= VOXEL_VARIANTS || !VoxelBuildings_Variant(i, &layoutId, metatile, hidden))
         return false;
     return sVariantTileset[i] != NULL
-        && sVariantTileset[i] == (*metatile < NUM_METATILES_IN_PRIMARY ? primary : secondary);
+        && sVariantTileset[i] == (*metatile < VXP(nPrimMetatiles) ? primary : secondary);
 }
 
 /*
@@ -395,9 +395,9 @@ static void JobSource(const VoxelAtlasJob *job, struct AtlasSource *src)
     src->secondaryMetatiles = Voxel_ResolveMetatiles(job->secondary);
     src->primaryPalettes = Voxel_ResolvePalettes(job->primary);
     src->secondaryPalettes = Voxel_ResolvePalettes(job->secondary);
-    src->primaryCount = Voxel_MetatileCount(job->primary, NUM_METATILES_IN_PRIMARY);
+    src->primaryCount = Voxel_MetatileCount(job->primary, VXP(nPrimMetatiles));
     src->secondaryCount = Voxel_MetatileCount(job->secondary,
-                                              NUM_METATILES_TOTAL - NUM_METATILES_IN_PRIMARY);
+                                              VXP(nMetatilesTotal) - VXP(nPrimMetatiles));
 }
 
 void VoxelAtlas_JobCancel(VoxelAtlasJob *job)
@@ -616,9 +616,9 @@ unsigned VoxelAtlas_RefreshAnimatedPageRows(const VoxelMapInstance *inst, const 
     src.secondaryMetatiles = Voxel_ResolveMetatiles(inst->secondaryTileset);
     src.primaryPalettes = Voxel_ResolvePalettes(inst->primaryTileset);
     src.secondaryPalettes = Voxel_ResolvePalettes(inst->secondaryTileset);
-    src.primaryCount = Voxel_MetatileCount(inst->primaryTileset, NUM_METATILES_IN_PRIMARY);
+    src.primaryCount = Voxel_MetatileCount(inst->primaryTileset, VXP(nPrimMetatiles));
     src.secondaryCount = Voxel_MetatileCount(inst->secondaryTileset,
-                                             NUM_METATILES_TOTAL - NUM_METATILES_IN_PRIMARY);
+                                             VXP(nMetatilesTotal) - VXP(nPrimMetatiles));
     BuildColorTable(&src);
     InitMorton();
     voidBits = VoidBits(inst->primaryTileset, inst->secondaryTileset, true);
@@ -721,9 +721,9 @@ unsigned VoxelAtlas_AnimatedSlots(const VoxelMapInstance *inst, const VoxelAtlas
     src.secondaryMetatiles = Voxel_ResolveMetatiles(inst->secondaryTileset);
     src.primaryPalettes = Voxel_ResolvePalettes(inst->primaryTileset);
     src.secondaryPalettes = Voxel_ResolvePalettes(inst->secondaryTileset);
-    src.primaryCount = Voxel_MetatileCount(inst->primaryTileset, NUM_METATILES_IN_PRIMARY);
+    src.primaryCount = Voxel_MetatileCount(inst->primaryTileset, VXP(nPrimMetatiles));
     src.secondaryCount = Voxel_MetatileCount(inst->secondaryTileset,
-                                             NUM_METATILES_TOTAL - NUM_METATILES_IN_PRIMARY);
+                                             VXP(nMetatilesTotal) - VXP(nPrimMetatiles));
     BuildColorTable(&src);
     InitMorton();
     voidBits = VoidBits(inst->primaryTileset, inst->secondaryTileset, true);

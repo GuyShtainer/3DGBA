@@ -261,7 +261,7 @@ bool VoxelWorld_IsMapAvailable(void)
         return false;
     if (gBackupMapLayout.map == NULL)
         return false;
-    return gMain.callback2 == CB2_Overworld || gMain.callback2 == CB2_OverworldBasic;
+    return gMain.callback2 == VXP(cb2Overworld) || gMain.callback2 == VXP(cb2OverworldBasic);
 }
 
 bool VoxelWorld_IsBattleMapAvailable(void)
@@ -479,7 +479,7 @@ static u16 GetMetatileAttribute(const VoxelMapInstance *inst, int metatileId)
 
     if (inst == NULL)
         return 0;
-    if (metatileId < NUM_METATILES_IN_PRIMARY)
+    if (metatileId < VXP(nPrimMetatiles))
     {
         attributes = Voxel_ResolveAttributes(inst->primaryTileset);
         index = (unsigned)metatileId;
@@ -487,7 +487,7 @@ static u16 GetMetatileAttribute(const VoxelMapInstance *inst, int metatileId)
     else
     {
         attributes = Voxel_ResolveAttributes(inst->secondaryTileset);
-        index = (unsigned)metatileId - NUM_METATILES_IN_PRIMARY;
+        index = (unsigned)metatileId - VXP(nPrimMetatiles);
     }
     return attributes != NULL ? attributes[index] : 0;
 }
@@ -867,7 +867,7 @@ void VoxelWorld_MarkUsedMetatiles(const void *primaryTileset, const void *second
     /* The replacement removes canopy fringes even on maps that never used
      * their bare ground tile. Keep that material available in the atlas. */
     if (primaryTileset == &gTileset_General)
-        for (int m = 0; m < NUM_METATILES_TOTAL; ++m)
+        for (int m = 0; m < VXP(nMetatilesTotal); ++m)
             if (used[m] > used[VoxelTree_GroundMetatile(m)])
                 used[VoxelTree_GroundMetatile(m)] = used[m];
 }
