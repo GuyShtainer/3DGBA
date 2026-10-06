@@ -11,6 +11,12 @@ build/romgen: romgen_cli.c $(CORES) $(wildcard $(SRC)/*.h)
 	@mkdir -p build
 	$(CC) $(CFLAGS) romgen_cli.c $(CORES) -lm -o $@
 
+# Counting-allocator build: `make -C tools/romgen mem` -> build/romgen_mem; --time then also prints the peak heap.
+mem: build/romgen_mem
+build/romgen_mem: romgen_cli.c rg_memcount.c rg_memcount.h $(CORES) $(wildcard $(SRC)/*.h)
+	@mkdir -p build
+	$(CC) $(CFLAGS) -DRG_MEMCOUNT -I. -include rg_memcount.h romgen_cli.c rg_memcount.c $(CORES) -lm -o $@
+
 clean:
 	rm -rf build
-.PHONY: clean
+.PHONY: clean mem

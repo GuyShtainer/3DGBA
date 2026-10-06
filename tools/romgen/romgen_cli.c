@@ -1,9 +1,11 @@
 /* romgen_cli.c -- host tool: reads a Pokemon Emerald (BPEE) .gba and writes the voxel data files
  * (3DGBA, GPLv3). Pure host code around the romgen cores in source/romgen/.
  *
- *   romgen ROM.gba OUTDIR [--time] [--only regions,signposts,buildings] [--dump-roles LAYOUT_ID]
+ *   romgen ROM.gba OUTDIR [--time] [--only regions,signposts,buildings] [--dump-roles LAYOUT_ID] [--dump-model NAME]
  *
- * Writes OUTDIR/regions.bin and OUTDIR/signposts.bin. The output is derived from the user's ROM: write it
+ * Writes OUTDIR/regions.bin, signposts.bin and buildings.bin. --dump-model NAME prints one model's summary and
+ * writes nothing. Built with -DRG_MEMCOUNT (`make -C tools/romgen mem`, build/romgen_mem) --time also prints the
+ * peak live heap of rg_run. The output is derived from the user's ROM: write it
  * outside the repo or under an ignored path. --dump-roles prints a layout with upstream's letters
  * (. floor, ~ water, _ ledge, = stairs, W wall, T tree, o prop, % shelf, | fence, # cliff, S signpost). */
 #include <stdio.h>
@@ -12,12 +14,34 @@
 #include <time.h>
 
 #include "rg_run.h"
+#include "rg_bspecs.h"
+#include "rg_world.h"
+
+#ifdef RG_MEMCOUNT
+#include "rg_memcount.h"
+#endif
 
 static double NowMs(void)
 {
     struct timespec ts;
+    double ms;
+
     (void)clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1e6;
+    ms = (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1e6;
+#ifdef RG_MEMCOUNT
+    {   /* rg_run calls this at every phase boundary: log each time the peak has grown by >= 2 MB */
+        static size_t lastLogged;
+        static double first;
+
+        if (first == 0.0)
+            first = ms;
+        if (rgm_peak() >= lastLogged + 2u * 1048576u) {
+            lastLogged = rgm_peak();
+            printf("memory: peak reached %.1f MB at +%.0f ms\n", (double)lastLogged / 1048576.0, ms - first);
+        }
+    }
+#endif
+    return ms;
 }
 
 static uint8_t *ReadFile(const char *path, size_t *n)
@@ -82,11 +106,73 @@ static void DumpRoles(const RgOutput *o, unsigned id)
     fprintf(stderr, "romgen: layout %u is not in the output\n", id);
 }
 
+static const char *KindName(RgSpecKind k)
+{
+    static const char *const kN[] = {"direct", "components", "kit", "props", "interior"};
+    return (unsigned)k < 5u ? kN[k] : "?";
+}
+
+/* Builds every model (no output files), finds NAME and prints parts, triangles, the gate and its placements. */
+static int DumpModel(const uint8_t *rom, size_t n, const char *name)
+{
+    RgWorld w;
+    RgBuildModels ms;
+    RgErr e = rg_world_open(&w, rom, n);
+    unsigned i, k, found = 0;
+
+    if (e != RG_OK) {
+        fprintf(stderr, "romgen: %s\n", rg_err_str(e));
+        return 1;
+    }
+    e = rg_build_models(&w, rg_specs, rg_spec_count, &ms);
+    if (e != RG_OK) {
+        fprintf(stderr, "romgen: %s\n", rg_err_str(e));
+        rg_world_close(&w);
+        return 1;
+    }
+    for (i = 0; i < ms.n && !found; i++) {
+        const RgBuildModel *m = &ms.m[i];
+        RgOrthoResult ortho;
+        unsigned dens = 0;
+        RgPlacementList pl;
+
+        if (strcmp(m->spec->name, name) != 0)
+            continue;
+        found = 1;
+        memset(&pl, 0, sizeof(pl));
+        printf("model %s: kind %s, layout %u, %ux%u cells, art %dx%d px\n", name, KindName(m->spec->kind),
+               m->spec->layoutId, m->w, m->h, m->art.w, m->art.h);
+        printf("  parts %u, triangles %u\n", m->mesh.nNames, m->mesh.n);
+        for (k = 0; k < m->mesh.nNames && k < 24; k++)
+            printf("    part %u: %s\n", k, m->mesh.names[k]);
+        if (rg_model_gate(m, &ortho, &dens))
+            printf("  gate: ortho wrong %u missing %u extra %u, density %u -> %s\n", ortho.wrong, ortho.missing, ortho.extra,
+                   dens, (ortho.wrong || ortho.missing || ortho.extra || dens) ? "FAIL" : "pass");
+        else
+            printf("  gate: out of memory\n");
+        if (rg_find_placements(&w, m, &pl) == RG_OK) {
+            printf("  placements: %u\n", pl.n);
+            for (k = 0; k < pl.n && k < 16; k++)
+                printf("    layout %u at cell (%d,%d) ground 0x%04X%s, %u odd cell(s)\n", pl.p[k].layout, pl.p[k].px,
+                       pl.p[k].py, pl.p[k].ground, pl.p[k].patchAll ? " patchAll" : "", pl.p[k].nOdd);
+        } else {
+            printf("  placements: error\n");
+        }
+        rg_placements_free(&pl);
+    }
+    if (!found)
+        fprintf(stderr, "romgen: no model named %s (%u models built)\n", name, ms.n);
+    rg_models_free(&ms);
+    rg_world_close(&w);
+    return found ? 0 : 1;
+}
+
 int main(int argc, char **argv)
 {
     const char *romPath = NULL, *outDir = NULL;
     bool timing = false, wantRegions = true, wantSigns = true, wantBuildings = true;
     int dumpId = 0, i;
+    const char *dumpModel = NULL;
     size_t n = 0;
     uint8_t *rom;
     RgRunOpts opts;
@@ -104,14 +190,16 @@ int main(int argc, char **argv)
             wantBuildings = strstr(v, "buildings") != NULL;
         } else if (strcmp(argv[i], "--dump-roles") == 0 && i + 1 < argc) {
             dumpId = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--dump-model") == 0 && i + 1 < argc) {
+            dumpModel = argv[++i];
         } else if (romPath == NULL) {
             romPath = argv[i];
         } else if (outDir == NULL) {
             outDir = argv[i];
         }
     }
-    if (romPath == NULL || outDir == NULL) {
-        fprintf(stderr, "usage: romgen ROM.gba OUTDIR [--time] [--only regions,signposts,buildings] [--dump-roles LAYOUT_ID]\n");
+    if (romPath == NULL || (outDir == NULL && dumpModel == NULL)) {
+        fprintf(stderr, "usage: romgen ROM.gba OUTDIR [--time] [--only regions,signposts,buildings] [--dump-roles LAYOUT_ID] [--dump-model NAME]\n");
         return 2;
     }
     rom = ReadFile(romPath, &n);
@@ -119,10 +207,18 @@ int main(int argc, char **argv)
         fprintf(stderr, "romgen: cannot read %s\n", romPath);
         return 1;
     }
+    if (dumpModel != NULL) {
+        int rc = DumpModel(rom, n, dumpModel);
+        free(rom);
+        return rc;
+    }
     memset(&opts, 0, sizeof(opts));
     opts.nowMs = NowMs;
     opts.wantSigns = wantSigns;
     opts.wantBuildings = wantBuildings;
+#ifdef RG_MEMCOUNT
+    rgm_reset();   /* the ROM buffer read above is not rg_run's: count from here */
+#endif
     t0 = NowMs();
     e = rg_run(rom, n, &opts, &out);
     if (e != RG_OK) {
@@ -152,6 +248,11 @@ int main(int argc, char **argv)
     if (timing && wantBuildings)
         printf("time: buildings models %.1f ms, gates %.1f ms, placements+write %.1f ms\n", out.msBuildModels, out.msChecks,
                out.msWriteBuildings);
+#ifdef RG_MEMCOUNT
+    if (timing)
+        printf("memory: peak live heap of rg_run %.2f MB (%zu bytes), %zu allocations, %zu bytes still live (the outputs)\n",
+               (double)rgm_peak() / 1048576.0, rgm_peak(), rgm_count(), rgm_live());
+#endif
     if (dumpId > 0)
         DumpRoles(&out, (unsigned)dumpId);
     rg_output_free(&out);
