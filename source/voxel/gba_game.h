@@ -1,6 +1,7 @@
 /* gba_game.h -- the game-side vocabulary the voxel overworld reads (3DGBA, GPLv3).
  *
- * Written from docs/phase31-diorama/SPEC-data.md section 10 and docs/phase32-voxel/SPEC-port.md
+ * Written from docs/phase31-diorama/SPEC-data.md section 10 (deleted 2026-10-06 with the old diorama
+ * attempt; `git show f1c09c7:docs/phase31-diorama/SPEC-data.md`) and docs/phase32-voxel/SPEC-port.md
  * section 2, plus numbers measured from the user's own ROM (see the "measured" notes). It
  * replaces every pret header the vendored voxel code used to include. No pret source text, struct
  * definition or comment is copied here.
