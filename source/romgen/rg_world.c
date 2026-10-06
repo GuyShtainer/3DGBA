@@ -529,7 +529,7 @@ const RgMap *rg_world_map(const RgWorld *w, unsigned group, unsigned num)
     return &w->maps[w->groupStart[group] + num];
 }
 
-unsigned rg_map_connections(const RgWorld *w, unsigned group, unsigned num, RgConn *out, unsigned max)
+static unsigned map_connections(const RgWorld *w, unsigned group, unsigned num, RgConn *out, unsigned max, bool all)
 {
     const RgMap *m = rg_world_map(w, group, num);
     uint32_t cp, lp;
@@ -550,7 +550,7 @@ unsigned rg_map_connections(const RgWorld *w, unsigned group, unsigned num, RgCo
     l = rom_at(w, lp);
     for (i = 0; i < count; i++) {
         const uint8_t *e = l + (size_t)GBA_ROM_CONNECTION_STRIDE * i;
-        if (e[0] < CONNECTION_SOUTH || e[0] > CONNECTION_EAST)
+        if (!all && (e[0] < CONNECTION_SOUTH || e[0] > CONNECTION_EAST))
             continue;   /* dive / emerge */
         if (out != NULL && found < max) {
             out[found].dir = e[0];
@@ -561,6 +561,16 @@ unsigned rg_map_connections(const RgWorld *w, unsigned group, unsigned num, RgCo
         found++;
     }
     return found;
+}
+
+unsigned rg_map_connections(const RgWorld *w, unsigned group, unsigned num, RgConn *out, unsigned max)
+{
+    return map_connections(w, group, num, out, max, false);
+}
+
+unsigned rg_map_connections_all(const RgWorld *w, unsigned group, unsigned num, RgConn *out, unsigned max)
+{
+    return map_connections(w, group, num, out, max, true);
 }
 
 uint16_t rg_metatile(const RgLayout *L, int x, int y)

@@ -108,6 +108,8 @@ const RgMap *rg_world_map(const RgWorld *w, unsigned group, unsigned num);
 /* Writes up to max connections of dir 1..4 into out (out may be NULL with max 0); returns how many
  * exist (so a result > max means truncated). Unknown map or no connections: 0. */
 unsigned rg_map_connections(const RgWorld *w, unsigned group, unsigned num, RgConn *out, unsigned max);
+/* The same including dive (5) and emerge (6) entries, ROM order (S3.2: the T7 census). */
+unsigned rg_map_connections_all(const RgWorld *w, unsigned group, unsigned num, RgConn *out, unsigned max);
 
 /* Cell queries (cells:177-202). Off-map: metatile RG_NONE, blocked false, elevation 0. */
 static inline bool rg_off(const RgLayout *L, int x, int y)

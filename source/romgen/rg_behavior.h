@@ -34,4 +34,22 @@ static inline bool rg_is_house_door(unsigned b)
     return b == 0x69u || b == 0x8Du || b == 0x8Bu;
 }
 
+/* Behaviour sets of the relief generator (A.6, SPEC-S3; pokeemerald@731ad5b include/constants/metatile_behaviors.h,
+ * enum counted to 0xF0). Numbers only. ROM spot check: T9. */
+#define RG_MB_WATERFALL 0x13u
+#define RG_MB_BERRY_TREE_SOIL 0xA0u
+
+/* FLAT_BEHAVIOURS (rel:612-618): bridges, logs, doors and the no-running mat; 24 values. */
+static inline bool rg_is_flat_behaviour(unsigned b)
+{
+    return b == 0x0Au || b == 0x60u || b == 0x69u || b == 0x6Cu || (b >= 0x70u && b <= 0x78u)
+           || (b >= 0x7Au && b <= 0x7Fu) || b == 0x8Bu || b == 0x8Cu || b == 0x8Du || b == 0xBEu || b == 0xEAu;
+}
+
+/* SANDS (rel:619). */
+static inline bool rg_is_sand(unsigned b)
+{
+    return b == 0x06u || b == 0x21u || b == 0xBFu;
+}
+
 #endif
