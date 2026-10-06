@@ -8,7 +8,7 @@ CORES   := $(wildcard $(SRC)/rg_*.c) $(ROOT)/source/voxel/vx_lz77.c $(ROOT)/sour
 CFLAGS  ?= -std=c11 -Wall -Wextra -O2 -ffp-contract=off
 CFLAGS  += -I$(SRC) -I$(ROOT)/source/voxel
 # Phase 34 B0: the authoring tool (`romgen author ...`) and, for `author check`'s round trip, the vendored voxel consumer.
-AUTHOR  := rg_author.c rg_png.c
+AUTHOR  := rg_author.c rg_author_trees.c rg_png.c
 AUTHVOX := $(foreach v,voxel_world voxel_regions voxel_relief voxel_building voxel_sign voxel_arena voxel_atlas \
            voxel_mesh_builder voxel_tree voxel_lighting voxel_grade voxel_entities voxel_camera vx_adapter vx_snapshot \
            vx_data ctr_shims_pure vx_battle_stub,$(ROOT)/source/voxel/$(v).c)

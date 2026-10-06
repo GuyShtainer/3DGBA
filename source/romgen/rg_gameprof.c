@@ -11,6 +11,30 @@
 #define GP_HDR_MIN 0xC0u
 #define GP_BEH_VALUES 512u
 
+/* T1: the tree tables, flat pairs (see rg_gameprof.h). Emerald's are the tables voxel_tree.c carried before the
+ * profile had them (Zallax's General-tileset ids), unchanged; test_voxel_world pins every id 0..1023. */
+static const int16_t kEmeraldTreePart[] = {
+    0x1D4, 0, 0x1D6, 0, 0x1D5, 1, 0x1D7, 1,                       /* upper row of a large tree, incl. the forest edge */
+    0x1DC, 2, 0x1DE, 2, 0x1E4, 2, 0x1E6, 2, 0x1EC, 2,            /* lower row; 1EC under a small tree's canopy top */
+    0x1DD, 3, 0x1DF, 3, 0x1E5, 3, 0x1E7, 3, 0x1ED, 3,
+    0x016, 4, 0x017, 4, 0x0C6, 4, 0x0C7, 4, 0x1F4, 4, 0x1F5, 4,  /* small trees (4 = VOXEL_TREE_SMALL) */
+};
+static const int16_t kEmeraldTreeGround[] = {
+    0x1C6, 0x00D, 0x1C7, 0x00D, 0x1CE, 0x001, 0x1CF, 0x001,       /* canopy fringes: tall grass / grass beneath */
+    0x00E, 0x001, 0x00F, 0x001, 0x040, 0x001,                     /* a small tree's canopy top; fence feet: grass */
+    0x01D, 0x002, 0x025, 0x00D, 0x02D, 0x0A1, 0x035, 0x170, 0x193, 0x170, 0x0CE, 0x091,
+};
+/* FireRed / LeafGreen rev 1 (identical on both, measured with `romgen author ROM trees`, PROVENANCE "ROM-measured, no
+ * decomp"): the General tileset's tree wall. Top row (parts 0/1) 0x1C/0x1D with the edge variants 0x1E/0x1F; bottom row
+ * (parts 2/3) 0x14/0x15, the edge variants 0x16/0x17, and the trunk row 0x24/0x25 with its variants 0x26/0x27. Even ids
+ * are the left column, odd the right. No ground replacements: no tree metatile paints canopy over other ground. */
+static const int16_t kFrlgTreePart[] = {
+    0x1C, 0, 0x1E, 0, 0x1D, 1, 0x1F, 1,
+    0x14, 2, 0x16, 2, 0x24, 2, 0x26, 2,
+    0x15, 3, 0x17, 3, 0x25, 3, 0x27, 3,
+};
+#define GP_FRLG_TREES .treePart = kFrlgTreePart, .treePartCount = sizeof kFrlgTreePart / sizeof kFrlgTreePart[0] / 2u
+
 /* The Emerald row is built from the existing macros so it cannot drift (SPEC 1.2 rule 1). */
 static GameProfile sEmerald = {
     .game = GP_EMERALD,
@@ -57,6 +81,10 @@ static GameProfile sEmerald = {
     .fldeffCount = GBA_FLDEFF_TEMPLATE_COUNT,
     .cb2Overworld = CB2_Overworld,
     .cb2OverworldBasic = CB2_OverworldBasic,
+    .treePart = kEmeraldTreePart,
+    .treePartCount = sizeof kEmeraldTreePart / sizeof kEmeraldTreePart[0] / 2u,
+    .treeGround = kEmeraldTreeGround,
+    .treeGroundCount = sizeof kEmeraldTreeGround / sizeof kEmeraldTreeGround[0] / 2u,
     .emeraldIdTables = true,
     .interiors3d = true,
     .rendererOn = true,
@@ -83,7 +111,8 @@ static const uint8_t kFrlgGroupSizes[43] = {5, 123, 60, 66, 4, 6, 8, 10, 6, 8, 2
     .mapHeader = 0x02036DFCu, .objEvents = 0x02036E38u, .playerAvatar = 0x02037078u, .sprites = 0x0202063Cu,      \
     .plttUnfaded = 0x020371F8u, .paletteFade = 0x02037AB8u, .weather = 0,                                          \
     .weatherOff = {0x6D0, 0x6C6, 0x730, 0x6FB, 0x724},                                                             \
-    .cb2Overworld = 0x080565C9u, .cb2OverworldBasic = 0x080565BDu
+    .cb2Overworld = 0x080565C9u, .cb2OverworldBasic = 0x080565BDu,                                          \
+    GP_FRLG_TREES
 
 static GameProfile sFireRed = {GP_FRLG_COMMON, .game = GP_FIRERED, .code = {'B', 'P', 'R', 'E'}, .dataSubdir = "BPRE",
                                .mapGroups = 0x08352718u, .mapLayouts = 0x0834EBFCu, .tsGeneral = 0x082D4B04u,

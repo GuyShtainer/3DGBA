@@ -63,9 +63,14 @@ typedef struct GameProfile {
     uint8_t fldeffCount;           /* 37 / 36 */
     uint32_t cb2Overworld, cb2OverworldBasic;   /* thumb bit set */
     /* ---- per-game tables ---- */
+    /* Renderer tree tables (Phase 34 T1), read by voxel_tree.c; flat int16 pairs, NULL = no tree sprites.
+     * treePart: {metatile id, part}, treePartCount pairs. part 0..3 = quadrant (row * 2 + col) of a 2x2 tree, 4 = a
+     * one-cell small tree (VOXEL_TREE_SMALL). treeGround: {metatile id, replacement id}, treeGroundCount pairs: the
+     * metatile drawn instead, because its own art carries canopy over some other ground. Ids are < 1024. */
     const int16_t *treePart;
-    uint16_t treePartCount;        /* renderer tree table (T1); NULL = none */
+    uint16_t treePartCount;
     const int16_t *treeGround;
+    uint16_t treeGroundCount;
     bool emeraldIdTables;          /* Fortree puddles, GenericBuilding interior ids: Emerald only */
     bool interiors3d;              /* false on FRLG: indoor maps hand back to the 2D frame */
     bool rendererOn;               /* gameprof_detect() returns the row only when set (Emerald; FRLG from R2) */
