@@ -172,7 +172,7 @@ static void TestCensus(const char *name, const char *env, int idx)
     uint8_t *rom = fxr_load_rom(env, &n);
     RgWorld w;
     RgCensus *c = &sCen[idx];
-    unsigned cnt[256], i, towns = 0, others = 0, ms;
+    unsigned cnt[256], i, towns = 0, others = 0, ms, nModel = 0;
 
     if (rom == NULL) {
         printf("SKIP %s: set ROMGEN_ROM (firered.gba / leafgreen.gba beside it) or %s\n", name, env);
@@ -193,7 +193,7 @@ static void TestCensus(const char *name, const char *env, int idx)
     CHECK(c->doorWarps == 191 && c->mapWarps == 55 && c->caveWarps == 31);
     CHECK(c->n == 152);
     CHECK(c->mainland == 108 && c->sevii == 44);
-    CHECK(c->covered == 3);                                              /* K1: the two Pallet recipes cover the three Pallet placements */
+    CHECK(c->covered == 39);                                              /* K1: the two Pallet recipes cover the three Pallet placements */
     memset(cnt, 0, sizeof(cnt));
     for (i = 0; i < c->n; i++) {
         const RgCensusRow *r = &c->row[i];
@@ -201,11 +201,13 @@ static void TestCensus(const char *name, const char *env, int idx)
 
         cnt[r->mapsec]++;
         CHECK(dm != NULL && dm->mapType == 8);                          /* every destination is an indoor map */
-        CHECK(r->nDoors >= 1 && (r->mapsec == 0x58 ? r->model >= 0 : r->model == -1));   /* only Pallet Town is authored so far */
+        CHECK(r->nDoors >= 1 && r->model >= -1);
+        if (r->model >= 0) nModel++;                                    /* K2: Pallet + Center + Mart + Gym cover 39 of 152 */
         CHECK(r->rect[2] >= 1 && r->rect[3] >= 1 && r->rect[0] >= 0 && r->rect[1] >= 0);
         CHECK(r->rect[0] + r->rect[2] <= (int)w.layouts[r->layout - 1].w && r->rect[1] + r->rect[3] <= (int)w.layouts[r->layout - 1].h);
         CHECK(r->sevii == rg_author_mapsec_is_sevii(r->mapsec));
     }
+    CHECK(nModel == c->covered);
     for (i = 0; i < sizeof(kBySec) / sizeof(kBySec[0]); i++) {
         CHECK(cnt[kBySec[i].mapsec] == kBySec[i].count);                 /* per map section (towns, routes, Sevii islands) */
         cnt[kBySec[i].mapsec] = 0;
@@ -240,7 +242,7 @@ static void TestCensus(const char *name, const char *env, int idx)
 
         census_print(&w, c, rg_kspecs_table(w.prof, &nkt), -1, -1, fp);
         fclose(fp);
-        CHECK(buf != NULL && strstr(buf, "covered 3 / 152\n") != NULL && strstr(buf, "152 placements (108 mainland, 44 sevii)") != NULL);
+        CHECK(buf != NULL && strstr(buf, "covered 39 / 152\n") != NULL && strstr(buf, "152 placements (108 mainland, 44 sevii)") != NULL);
         free(buf);
     }
     rg_world_close(&w);
@@ -303,8 +305,8 @@ static void Sha1(const uint8_t *d, size_t n, char hex[41])
     free(m);
 }
 
-/* The FR buildings.bin of the two Pallet models (K1). Re-pinned by the lead after the visual check, if the look changes. */
-#define PALLET_BUILDINGS_SHA1 "66b63ede1e7eb54828654bf4a86f7a899b6c1aa7"
+/* The FR buildings.bin of the seven Kanto models (K1 Pallet x2 + K2 Center, Mart, Gym x3); FR = LG. Re-pinned by the lead after the visual check, if the look changes. */
+#define PALLET_BUILDINGS_SHA1 "dec0c711992d4b9186249f298e4f10bac9d7393f"
 
 static uint8_t *sPalletBin[2];
 static size_t sPalletBinSize[2];
@@ -343,8 +345,8 @@ static void TestPallet(const char *name, const char *env, GpGame game, int idx)
     }
     CHECK(rg_world_open(&w, rom, n) == RG_OK && w.prof->game == game);
     k = rg_kspecs_table(w.prof, &nk);
-    CHECK(k != NULL && nk == 2);                                          /* K1: the two Pallet Town recipes */
-    if (k != NULL && nk == 2) {
+    CHECK(k != NULL && nk == 7);                                          /* K1: two Pallet Town recipes + K2: center, mart, gym x3 widths */
+    if (k != NULL && nk == 7) {
         char *buf = NULL;
         size_t sz = 0;
         FILE *mem;
@@ -374,13 +376,35 @@ static void TestPallet(const char *name, const char *env, GpGame game, int idx)
         fclose(mem);
         CHECK(strstr(buf, "L78 13 10  (map 3/0)\n") != NULL && strstr(buf, "k_pallet_lab: 1 placement(s) across 384 layouts") != NULL);
         free(buf);
+        /* K2: the landmarks. Names, check results (ortho 0/0/0 on every exact rect, density empty, round trip) and the
+         * placement counts: Center 18 (16 census + Saffron L207 and One Island L88, pixel-identical on owned pixels),
+         * Mart 13 (11 + the same two), Gym 2 + 4 + 1 = 7 by width class. */
+        {
+            static const char *const nm[5] = {"k_center", "k_mart", "k_gym", "k_gym_7", "k_gym_8"};
+            static const int want[5] = {18, 13, 2, 4, 1};
+            static const char *const first[5] = {"L79 24 23  (map ", "L79 34 16  (map ", "L79 33 6  (map ", "L80 12 12  (map ", "L84 8 26  (map "};
+
+            for (i = 0; i < 5; i++) {
+                char line[96];
+
+                CHECK(strcmp(k[2 + i].name, nm[i]) == 0);
+                CheckSpecText(&w, &k[2 + i], want[i]);
+                buf = NULL; sz = 0;
+                mem = open_memstream(&buf, &sz);
+                CHECK(rg_author_placements(&w, &k[2 + i], mem) == 0);
+                fclose(mem);
+                snprintf(line, sizeof(line), "%s: %d placement(s) across 384 layouts", nm[i], want[i]);
+                CHECK(strstr(buf, line) != NULL && strstr(buf, first[i]) != NULL);
+                free(buf);
+            }
+        }
     }
     rg_world_close(&w);
     memset(&opts, 0, sizeof(opts));
     opts.wantBuildings = true;
     CHECK(rg_run(rom, n, &opts, &out) == RG_OK);
     CHECK(out.buildings != NULL && out.buildingsSize > 24 && memcmp(out.buildings, "VXB7", 4) == 0);
-    CHECK(out.bModels == 2 && out.bPlacements == 3 && out.buildingsFailed == 0);
+    CHECK(out.bModels == 7 && out.bPlacements == 41 && out.buildingsFailed == 0);
     CHECK(out.regions != NULL && out.signs == NULL && out.relief == NULL);   /* G2: regions are always made; signposts only on wantSigns; relief stays off for FRLG */
     CHECK(out.layouts == 384 && out.maps == 425 && out.outdoorMaps == 76);
     if (out.buildings != NULL) {
@@ -410,14 +434,17 @@ static void TestPallet(const char *name, const char *env, GpGame game, int idx)
             CHECK(i % 2 == 0 || top > 1.0f);                               /* the bottom corners stand under the model */
             CHECK(!VoxelBuildings_CellAt(&inst, outside[i][0], outside[i][1], &g, &top));
         }
-        inst.layoutId = 79;                                                /* any other layout places nothing */
+        inst.layoutId = 79;                                                /* K2: Viridian has the Center, Mart and Gym */
+        CHECK(VoxelBuildings_PageOf(&inst) >= 0);
+        CHECK(VoxelBuildings_CellAt(&inst, 24, 23, &g, &top) && VoxelBuildings_CellAt(&inst, 33, 6, &g, &top));
+        inst.layoutId = 1;                                                 /* a layout without a recipe places nothing */
         CHECK(VoxelBuildings_PageOf(&inst) < 0);
         VoxelBuildings_Shutdown();
         LeaveTemp();
     }
     rg_output_free(&out);
     free(rom);
-    printf("%s: Pallet Town -> 2 models, 3 placements, buildings.bin %zu bytes\n", name, sPalletBinSize[idx]);
+    printf("%s: Kanto K1+K2 -> 7 models, 41 placements, buildings.bin %zu bytes\n", name, sPalletBinSize[idx]);
 }
 
 /* ---- 4. the commands end to end, on Emerald (its table has real models) ---- */
@@ -553,7 +580,7 @@ int main(void)
         Sha1(sPalletBin[0], sPalletBinSize[0], hex[0]);
         Sha1(sPalletBin[1], sPalletBinSize[1], hex[1]);
         CHECK(strcmp(hex[0], hex[1]) == 0);
-        printf("Pallet buildings.bin sha1 %s\n", hex[0]);
+        printf("Kanto buildings.bin sha1 %s\n", hex[0]);
         CHECK(strcmp(hex[0], PALLET_BUILDINGS_SHA1) == 0);
     }
     free(sPalletBin[0]);
