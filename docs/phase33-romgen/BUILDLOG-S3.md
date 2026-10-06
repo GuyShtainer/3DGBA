@@ -309,3 +309,24 @@ Deviations / notes:
 Device: `make -j8`, `make -j8 ROMGEN_DEV_HOOK=1` (forced recompile), then `make -j8` (release last) and `make cia` all succeed with DEVKITPRO/DEVKITARM exported.
 
 Requests for Phase 34 files: none. Azahar visual check: not run.
+
+## 2026-10-06: S3.7 lead verification (after the G1 merge, fee4157)
+
+- Gate on main after merging Phase 34 G1:
+  - LEDGES outputs are byte-identical: relief eb25a383…, regions 007a370f…, signposts 38515605…, buildings 2929c764….
+  - FULL relief.bin `21a837f091c6b4764ad284e02438f7113c829cbf` matches the S3.7 agent's file.
+  - 29 suites (21 romgen + 8 voxel), 0 failures, none skipped.
+  - `romgen firered.gba` opens the world and writes nothing.
+- Azahar (New-3DS mode), release build, FULL relief.bin copied into the emulator's `sdmc:/3ds/3DGBA/voxel/`. Save warps:
+  Rustboro, Route 104 (0:19, 17,51), Route 106 (0:21, 48,17), Lavaridge.
+  - `evidence/s37-full-r104.png`: drawn cliffs. A raised grass plateau with rock faces down to the beach and the water,
+    and the cottage sits on its terrace.
+  - `evidence/s37-full-r106.png`: the Granite Cave massif is a large raised rock block, with the cave mouth cut into
+    its face where the player stands.
+  - `evidence/s37-full-lavaridge.png`: stepped red cliff walls around the town (the Lavaridge alias, layouts 13/136/292).
+  - `evidence/s37-full-rustboro.png`: the city is mostly flat ground, as expected. No artifacts.
+  - The I6 seam steps (about 26 map-edge points) were not visited in this pass. Check them with the seam 13/28 warp in S3.8.
+- Azahar showed 21–25 fps on these scenes (47 on the title menu). Azahar fps is not the hardware budget, so measure on
+  the New 3DS.
+- Build gotcha: `ROMGEN_DEV_HOOK` is not a make dependency. After a hook build, `touch source/main.c
+  source/romgen_dev.c` before the release `make`.
