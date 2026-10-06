@@ -11,6 +11,7 @@
 #include <sys/stat.h>
 #include <time.h>
 
+#include "romgen/rg_relief_write.h"
 #include "romgen/rg_run.h"
 
 #define GO_PATH   "sdmc:/cias/control/romgen_go.txt"
@@ -28,6 +29,7 @@ static volatile int s_state;     /* 0 idle, 1 running, 2 finished (thread still 
 static volatile int s_cancel;
 static unsigned s_tick;
 static unsigned s_romFrames;   /* consecutive frames an Emerald ROM has been loaded */
+static bool s_keptRelief;      /* the last run left an existing FULL relief.bin alone */
 static bool s_autoDone;        /* the automatic run happens once per app session */
 
 static double NowMs(void) { return (double)osGetTime(); }
@@ -112,6 +114,24 @@ static void Describe(char *t, size_t cap, RgErr e, const RgOutput *o, double tot
     (void)n;
 }
 
+/* PC fallback (SPEC-S3 1.7): the device only builds ledges, so a FULL relief.bin the user copied from the PC CLI to
+ * OUT_DIR is left alone. The check reads just the header and row table of the existing file. */
+static bool KeepExistingRelief(const RgOutput *o)
+{
+    static uint8_t head[8 + 14 * 256];
+    char path[128];
+    FILE *fp;
+    size_t n;
+
+    snprintf(path, sizeof path, "%s/relief.bin", OUT_DIR);
+    fp = fopen(path, "rb");
+    if (fp == NULL)
+        return false;
+    n = fread(head, 1, sizeof head, fp);
+    (void)fclose(fp);
+    return rg_relief_keep_existing(head, n, o->rst.drawnRows) != 0;
+}
+
 static bool WriteOutputs(const RgOutput *o)
 {
     bool ok = o->regions != NULL && WriteAtomic("regions.bin", o->regions, o->regionsSize);
@@ -120,7 +140,8 @@ static bool WriteOutputs(const RgOutput *o)
         ok = WriteAtomic("signposts.bin", o->signs, o->signsSize) && ok;
     if (o->buildings != NULL)
         ok = WriteAtomic("buildings.bin", o->buildings, o->buildingsSize) && ok;
-    if (o->relief != NULL)
+    s_keptRelief = o->relief != NULL && KeepExistingRelief(o);
+    if (o->relief != NULL && !s_keptRelief)
         ok = WriteAtomic("relief.bin", o->relief, o->reliefSize) && ok;
     return ok;
 }
@@ -151,6 +172,8 @@ static void WorkerMain(void *arg)
     t0 = NowMs() - t0;
     wrote = (e != RG_OK) || WriteOutputs(&out);
     Describe(text, sizeof text, e, &out, t0, a0, Arena(), u0, Used(), j->size);
+    if (s_keptRelief)
+        (void)strncat(text, "relief.bin: an existing FULL file (drawn rows > 0) was left in place, not overwritten with ledges\n", sizeof text - strlen(text) - 1u);
     if (!wrote)
         (void)strncat(text, "WRITE FAILED: at least one output file could not be written to " OUT_DIR "\n", sizeof text - strlen(text) - 1u);
     if (e == RG_OK)
