@@ -5,6 +5,7 @@
 #include "voxel_tree.h"
 #include "voxel_relief.h"
 #include "gba_game.h" /* 3DGBA: VXP() */
+#include "voxel_atlas.h" /* 3DGBA: VOXEL_SHRUBS */
 
 /* 3DGBA (Phase 34 T1): the tables live in the game profile (treePart / treeGround, flat int16 pairs, see
  * rg_gameprof.h) so each game brings its own metatile ids. They are expanded once per profile into two lookup tables:
@@ -14,6 +15,9 @@
 static const GameProfile *sLutFor;
 static int8_t sPartLut[TREE_LUT_IDS];
 static int16_t sGroundLut[TREE_LUT_IDS];
+/* 3DGBA (look L1): the profile's shrubs by id: for a primary id its shrub index, for a secondary id the first entry with
+ * that id (the tileset is then checked along the run of entries with the same id). -1 = none. */
+static int8_t sShrubLut[TREE_LUT_IDS];
 
 static void TreeLut(void)
 {
@@ -26,7 +30,11 @@ static void TreeLut(void)
     {
         sPartLut[i] = -1;
         sGroundLut[i] = (int16_t)i;
+        sShrubLut[i] = -1;
     }
+    for (i = 0; p->shrubs != NULL && i < p->shrubCount && i < VOXEL_SHRUBS; ++i)
+        if (p->shrubs[i].metatile < TREE_LUT_IDS && sShrubLut[p->shrubs[i].metatile] < 0)
+            sShrubLut[p->shrubs[i].metatile] = (int8_t)i;
     for (i = 0; p->treePart != NULL && i < p->treePartCount; ++i)
         if ((unsigned)p->treePart[2 * i] < TREE_LUT_IDS)
             sPartLut[p->treePart[2 * i]] = (int8_t)p->treePart[2 * i + 1];
@@ -46,6 +54,77 @@ int VoxelTree_GroundMetatile(int metatileId)
 {
     TreeLut();
     return (unsigned)metatileId < TREE_LUT_IDS ? sGroundLut[metatileId] : metatileId;
+}
+
+/* 3DGBA (look L1): whether shrub entry k is drawn by this tileset pair. A primary entry needs the General tileset, a
+ * secondary one its own secondary tileset, compared by ROM address (the interned pointers are reused across ROMs). */
+static bool ShrubOnPair(const GameProfile *p, unsigned k, const struct Tileset *primary,
+                        const struct Tileset *secondary)
+{
+    const GpShrub *e = &p->shrubs[k];
+
+    if (e->tileset == 0)
+        return e->metatile < VXP(nPrimMetatiles) && primary != NULL && primary->gbaAddr == VXP(tsGeneral);
+    return e->metatile >= VXP(nPrimMetatiles) && secondary != NULL && secondary->gbaAddr == e->tileset;
+}
+
+static int ShrubOf(const struct Tileset *primary, const struct Tileset *secondary, int metatileId)
+{
+    const GameProfile *p = vx_prof();
+    unsigned k;
+
+    TreeLut();
+    if ((unsigned)metatileId >= TREE_LUT_IDS || sShrubLut[metatileId] < 0)
+        return -1;
+    /* the same id can stand in several secondary tilesets: walk its entries (the table is short) */
+    for (k = (unsigned)sShrubLut[metatileId]; k < p->shrubCount && k < VOXEL_SHRUBS; ++k)
+        if (p->shrubs[k].metatile == metatileId && ShrubOnPair(p, k, primary, secondary))
+            return (int)k;
+    return -1;
+}
+
+int VoxelTree_Shrub(const VoxelMapInstance *inst, int metatileId)
+{
+    if (!VoxelWorld_UsesTreeSprites(inst))
+        return -1;
+    return ShrubOf((const struct Tileset *)inst->primaryTileset, (const struct Tileset *)inst->secondaryTileset,
+                   metatileId);
+}
+
+bool VoxelTree_ShrubSource(const void *primaryTileset, const void *secondaryTileset,
+                           unsigned k, unsigned *metatileId)
+{
+    const GameProfile *p = vx_prof();
+
+    if (p->shrubs == NULL || k >= p->shrubCount || k >= VOXEL_SHRUBS
+     || !ShrubOnPair(p, k, (const struct Tileset *)primaryTileset, (const struct Tileset *)secondaryTileset))
+        return false;
+    *metatileId = p->shrubs[k].metatile;
+    return true;
+}
+
+/*
+ * A shrub: its leaves stood up as one card, the tile's own 16x16 at its own
+ * scale (one tile along the slant), leaning back at 60 degrees from the
+ * cell's south edge - the bush's foot where the drawing has it - so its top
+ * reaches 0.87 tiles. Like a crown card it is lit as the rounded volume it
+ * stands for, and sunk a little so its foot meets the ground without a seam.
+ * Two triangles; the ground under it is drawn flat by the terrain pass.
+ */
+void VoxelTree_EmitShrubCard(VoxelBuilder *builder, int x, int y,
+                             float u0, float v0, float u1, float v1)
+{
+    const float rise = 0.866025f, run = 0.5f;   /* sin, cos 60 degrees */
+    const float sink = -0.06f;
+    float wx = (float)x, foot = (float)y + 1.0f;
+
+    builder->rounded = true;
+    VoxelBuilder_Quad(builder,
+        &(VoxelVertex){wx,        sink + rise, foot - run, u0, v0, 1.0f},
+        &(VoxelVertex){wx + 1.0f, sink + rise, foot - run, u1, v0, 1.0f},
+        &(VoxelVertex){wx + 1.0f, sink,        foot,       u1, v1, 1.0f},
+        &(VoxelVertex){wx,        sink,        foot,       u0, v1, 1.0f});
+    builder->rounded = false;
 }
 
 /* The small crown is 16:32: width 1, length 2 tiles, at the same 50 degrees

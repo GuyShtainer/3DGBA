@@ -985,6 +985,25 @@ void VoxelMesh_DraftCell(VoxelBuilder *b, const VoxelMapInstance *inst, int x, i
     b->shift = 0.0f;
 }
 
+/*
+ * 3DGBA (look backlog L1): a shrub cell (voxel_tree.h) - its lower layer flat,
+ * the ground under the bush, and its upper layer, the bush, stood up as a
+ * card. False when the atlas has no slot for either layer (a full atlas) or
+ * the cell carries relief or a model: the cell is then drawn as it is.
+ */
+static bool EmitShrub(VoxelBuilder *builder, const VoxelMapInstance *inst, int x, int y, int shrub)
+{
+    float g0, h0, g1, h1, u0, v0, u1, v1;
+
+    if (VoxelRelief_Cell(inst, x, y) != NULL || VoxelBuildings_CellAt(inst, x, y, NULL, NULL)
+     || !MetatileUV(builder, (int)VOXEL_SHRUB_GROUND(shrub), &g0, &h0, &g1, &h1)
+     || !MetatileUV(builder, (int)VOXEL_SHRUB_LEAVES(shrub), &u0, &v0, &u1, &v1))
+        return false;
+    VoxelMesh_Top(builder, (float)x, (float)y, 0.0f, 0.0f, g0, h0, g1, h1, SHADE_TOP);
+    VoxelTree_EmitShrubCard(builder, x, y, u0, v0, u1, v1);
+    return true;
+}
+
 /* One row of the ground pass over [x0,x1), already clipped to the instance. */
 void VoxelMesh_EmitGroundRow(VoxelBuilder *builder, const VoxelMapInstance *inst,
                              int x0, int x1, int y)
@@ -1003,6 +1022,12 @@ void VoxelMesh_EmitGroundRow(VoxelBuilder *builder, const VoxelMapInstance *inst
             continue;
         if (shape == VOXEL_SHAPE_VOID)
             continue;
+        {
+            int shrub = VoxelTree_Shrub(inst, VoxelWorld_GetMetatileId(x, y));
+
+            if (shrub >= 0 && EmitShrub(builder, inst, x, y, shrub))
+                continue;
+        }
         /* A lifted cell lays its own drawing on its relief. A slope - rock,
          * stairs - is nothing but that; a level lifted cell still carries
          * whatever stands on it, drawn below with the same lift. */

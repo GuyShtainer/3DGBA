@@ -33,6 +33,24 @@ static const int16_t kFrlgTreePart[] = {
     0x14, 2, 0x16, 2, 0x24, 2, 0x26, 2,
     0x15, 3, 0x17, 3, 0x25, 3, 0x27, 3,
 };
+/* Look backlog L1: one-cell shrubs, ROM-measured with `romgen author ROM shrubs` (+ `shrubs TS` for a family's walkable
+ * members) and checked by eye on its contact and context sheets (PROVENANCE "ROM-measured, no decomp"). Every one draws
+ * its bush on the upper layer and its ground on the lower one (test_romgen_shrubs pins that). Emerald: the Dewford
+ * tileset's hedge bushes (Dewford Town, Route 106), with 0x239 the bush over the sand in front of a hedge and 0x23A the
+ * trunk cell under a bush; three round bushes of the tileset at 0x083DF80C (layout 9); Slateport's round bush; two round
+ * bushes of the tileset at 0x083DF86C (layout 345). */
+static const GpShrub kEmeraldShrubs[] = {
+    {0x083DF74Cu, 0x239}, {0x083DF74Cu, 0x23A}, {0x083DF74Cu, 0x242}, {0x083DF74Cu, 0x243}, {0x083DF74Cu, 0x247},
+    {0x083DF80Cu, 0x220}, {0x083DF80Cu, 0x23B}, {0x083DF80Cu, 0x23F},
+    {0x083DF764u, 0x243},
+    {0x083DF86Cu, 0x202}, {0x083DF86Cu, 0x203},
+};
+/* FireRed / LeafGreen rev 1: the General round bush 0x005 (Pallet Town, Route 1 and on), and the round bushes 0x2F4 and
+ * 0x2E0 of two secondary tilesets (layouts 147 and 100), whose addresses differ by 0x20 between the two games. */
+static const GpShrub kFireRedShrubs[] = {{0, 0x005}, {0x082D4BC4u, 0x2F4}, {0x082D4B7Cu, 0x2E0}};
+static const GpShrub kLeafGreenShrubs[] = {{0, 0x005}, {0x082D4BA4u, 0x2F4}, {0x082D4B5Cu, 0x2E0}};
+#define GP_SHRUBS(t) .shrubs = t, .shrubCount = (uint8_t)(sizeof t / sizeof t[0])
+
 #define GP_FRLG_TREES .treePart = kFrlgTreePart, .treePartCount = sizeof kFrlgTreePart / sizeof kFrlgTreePart[0] / 2u
 
 /* The Emerald row is built from the existing macros so it cannot drift (SPEC 1.2 rule 1). */
@@ -85,6 +103,7 @@ static GameProfile sEmerald = {
     .treePartCount = sizeof kEmeraldTreePart / sizeof kEmeraldTreePart[0] / 2u,
     .treeGround = kEmeraldTreeGround,
     .treeGroundCount = sizeof kEmeraldTreeGround / sizeof kEmeraldTreeGround[0] / 2u,
+    GP_SHRUBS(kEmeraldShrubs),
     .emeraldIdTables = true,
     .interiors3d = true,
     .rendererOn = true,
@@ -117,11 +136,12 @@ static const uint8_t kFrlgGroupSizes[43] = {5, 123, 60, 66, 4, 6, 8, 10, 6, 8, 2
 static GameProfile sFireRed = {GP_FRLG_COMMON, .game = GP_FIRERED, .code = {'B', 'P', 'R', 'E'}, .dataSubdir = "BPRE",
                                .mapGroups = 0x08352718u, .mapLayouts = 0x0834EBFCu, .tsGeneral = 0x082D4B04u,
                                .tsBuilding = 0x082D4C24u, .weatherPtr = 0x083C2C2Cu, .gfxInfoPtrs = 0x0839FE20u,
-                               .fldeffTemplates = 0x083A0080u};
+                               .fldeffTemplates = 0x083A0080u, GP_SHRUBS(kFireRedShrubs)};
 static GameProfile sLeafGreen = {GP_FRLG_COMMON, .game = GP_LEAFGREEN, .code = {'B', 'P', 'G', 'E'},
                                  .dataSubdir = "BPGE", .mapGroups = 0x083526F8u, .mapLayouts = 0x0834EBDCu,
                                  .tsGeneral = 0x082D4AE4u, .tsBuilding = 0x082D4C04u, .weatherPtr = 0x083C2A68u,
-                                 .gfxInfoPtrs = 0x0839FE00u, .fldeffTemplates = 0x083A0060u};
+                                 .gfxInfoPtrs = 0x0839FE00u, .fldeffTemplates = 0x083A0060u,
+                                 GP_SHRUBS(kLeafGreenShrubs)};
 
 static void set_bit(GpBehSet *s, unsigned b)
 {

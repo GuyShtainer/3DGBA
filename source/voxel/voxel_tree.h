@@ -13,11 +13,32 @@
 /* A small tree is one cell: its trunk, with the whole crown standing on it. */
 #define VOXEL_TREE_SMALL 4
 
+/* 3DGBA (look backlog L1): a one-cell bush, the game profile's shrub table.
+ * It stands up as a card of its own upper layer over its lower layer, both
+ * from the map's atlas (VOXEL_SHRUB_GROUND / VOXEL_SHRUB_LEAVES), so unlike
+ * the parts above it is drawn with the terrain, not with the tree texture,
+ * and VoxelTree_Part never returns it. */
+#define VOXEL_TREE_SHRUB 5
+
 /* General-only IDs: -1 for other art, the 2x2 quadrant (row*2+col) of a
  * large tree, or VOXEL_TREE_SMALL. */
 int VoxelTree_Part(int metatileId);
 /* Remove the old canopy from the cell above a tree, leaving its ground. */
 int VoxelTree_GroundMetatile(int metatileId);
+
+/* The shrub (VOXEL_TREE_SHRUB) a cell's metatile is: its index in the game
+ * profile's shrub table (< VOXEL_SHRUBS), or -1. Only where tree sprites are
+ * drawn (VoxelWorld_UsesTreeSprites); a secondary id counts only with its own
+ * secondary tileset. */
+int VoxelTree_Shrub(const VoxelMapInstance *inst, int metatileId);
+/* For the atlas: whether shrub `k` belongs to this tileset pair, and its
+ * metatile id. */
+bool VoxelTree_ShrubSource(const void *primaryTileset, const void *secondaryTileset,
+                           unsigned k, unsigned *metatileId);
+/* The bush card standing on cell (x, y), textured with the leaves at
+ * [u0,u1] x [v0,v1] (v0 the top row). The builder's lift applies. */
+void VoxelTree_EmitShrubCard(VoxelBuilder *builder, int x, int y,
+                             float u0, float v0, float u1, float v1);
 
 /* Appended after the ordinary terrain; these vertices use the tree texture. */
 void VoxelTree_EmitInstance(VoxelBuilder *builder, const VoxelMapInstance *inst,

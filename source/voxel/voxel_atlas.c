@@ -15,6 +15,7 @@
 #include "voxel_building.h"
 #include "voxel_grade.h"
 #include "voxel_relief.h"
+#include "voxel_tree.h" /* 3DGBA: shrub layers (look L1) */
 
 /* Largest 4bpp tileset payload: 512 tiles of 32 bytes, doubled for headroom
  * because a compressed payload only declares its size at run time. */
@@ -189,6 +190,10 @@ static bool CutSourceOf(const struct Tileset *primary, const struct Tileset *sec
         && sCutTileset[i] == (*metatile < VXP(nPrimMetatiles) ? primary : secondary);
 }
 
+/* `hidden` beyond the four upper quarters: the upper layer alone, clear
+ * where it draws nothing (a shrub's leaves, voxel_atlas.h). */
+#define SHRUB_LEAVES_ONLY 0x10u
+
 static bool AtlasSourceOf(const struct Tileset *primary, const struct Tileset *secondary,
                           unsigned id, unsigned *metatile, unsigned *hidden, const uint8_t **cut)
 {
@@ -200,6 +205,15 @@ static bool AtlasSourceOf(const struct Tileset *primary, const struct Tileset *s
         *metatile = id;
         *hidden = 0;
         return true;
+    }
+    if (id >= VOXEL_SHRUB_FIRST)
+    {
+        /* a shrub's ground: its upper layer hidden; its leaves: the upper
+         * layer alone (SHRUB_LEAVES_ONLY) */
+        unsigned k = (id - VOXEL_SHRUB_FIRST) / 2u;
+
+        *hidden = ((id - VOXEL_SHRUB_FIRST) & 1u) ? SHRUB_LEAVES_ONLY : 0xFu;
+        return VoxelTree_ShrubSource(primary, secondary, k, metatile);
     }
     if (id >= VOXEL_CUT_FIRST)
     {
@@ -244,8 +258,13 @@ static bool ComposeAt(const struct AtlasSource *src, const uint16_t *entries,
                       unsigned hidden, const uint8_t *cut)
 {
     bool black = true;
+    bool leavesOnly = (hidden & SHRUB_LEAVES_ONLY) != 0u;
 
-    for (unsigned layer = 0; layer < 2; ++layer)
+    /* the leaves start clear: the alpha test shows the ground through them */
+    for (unsigned y = 0; leavesOnly && y < VOXEL_ATLAS_SLOT; ++y)
+        for (unsigned x = 0; x < VOXEL_ATLAS_SLOT; ++x)
+            dest[CtrVideo_Texel(baseX + x, baseY + y, width)] = 0;
+    for (unsigned layer = leavesOnly ? 1u : 0u; layer < 2; ++layer)
     {
         for (unsigned quadrant = 0; quadrant < 4; ++quadrant)
         {
@@ -302,6 +321,8 @@ static bool ComposeAt(const struct AtlasSource *src, const uint16_t *entries,
             }
         }
     }
+    if (leavesOnly)
+        black = false;   /* never the void filler: that is read off whole tiles */
     /* a cut tile's background is clear: the alpha test leaves the ground
      * drawn flat under it to show */
     for (unsigned y = 0; cut != NULL && y < VOXEL_ATLAS_SLOT && y < 16; ++y)
