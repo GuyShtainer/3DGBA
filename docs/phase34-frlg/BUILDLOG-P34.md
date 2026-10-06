@@ -492,3 +492,6 @@ Baseline = main e3a7c32 built from `git archive` in a scratch directory; ROMGEN_
 - `evidence/t1-fr-pallet.png`: Pallet's border trees are 3D (top corners); the signs, mailboxes and K1 models are as
   in G2.
 - Still flat: tall grass (look backlog L2), flowers, fences and the round bush 0x005.
+
+## K2 landmark recipes (2026-10-06), in progress
+- k_center banked: 80x64 (rect (24,23,5,4) on layout 79 = rows 23-26 of the Viridian Center; the roof's top lip, 6 art rows in row 22, is outside the rect because Seven Island's Center stands at y=0 and a 5-row rect cannot place there). Emerald's center_or_mart shape: chamfered Frustum (plan front 65 / back 28, wallTop 28, bandRise 4), no crown vault. check PASS ortho 0/0/0 on 3 exact rects (the hip-side strips x<8 and x>=72 above row 28 are excluded: the frustum inset is 4 px, the art side slope is 7), density empty, round trip ok. placements 18 = the 16 census ones + Saffron (L207) and One Island (L88), whose Center is pixel-identical on every owned pixel. viewed: red roof, chamfered body, Poke Ball plate over the entrance read right from fl, fr and top.
