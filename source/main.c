@@ -3917,20 +3917,8 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 							}
 						}
 					}
-#if CTL_D4_ENABLE || CTL_D5_ENABLE
-					// ---- D4 file-driven tile-exact movement (SPEC-control-replay.md §D4 / C.4)
-					// + D5 record/replay, which share this one CtlIn snapshot and injection seam.
-					// Runs HERE, at the existing parked-window read site, because the two
-					// GameState snapshots above are exactly what the closed loop needs — the
-					// player's live tile + map (SaveBlock1 pos/location) — so D4 adds NO game-RAM
-					// reads and no new race class (SPEC §0). The scheduler clock is the scripted
-					// core's EMULATED frame counter, so a paused seat / open pause menu /
-					// backgrounded app freezes the script in place instead of blind-firing.
-					// Output = a key mask ORed into the assembly below (the emulated keypad).
-					// The outer gate is the OR of the two bisect gates so either slice can be
-					// compiled out alone (review fix 2026-08-03).
 #if ROMGEN_DEV_HOOK
-					if (s_ctlOn) {   // S2.8 dev hook: runtime opt-in = the control dir + a dropped romgen_go.txt
+					{   // S2.8 dev hook: runs once by itself ~10 s after Emerald loads; romgen_go.txt re-runs it
 						const EmuInstance* rgE[2] = { &emuA, &emuB };
 						const uint8_t* rgRom = NULL;
 						size_t rgSz = 0;
@@ -3943,6 +3931,18 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 						romgen_dev_poll(rgRom, rgSz);   // the worker only READS mGBA's ROM buffer; see romgen_dev.h
 					}
 #endif
+#if CTL_D4_ENABLE || CTL_D5_ENABLE
+					// ---- D4 file-driven tile-exact movement (SPEC-control-replay.md §D4 / C.4)
+					// + D5 record/replay, which share this one CtlIn snapshot and injection seam.
+					// Runs HERE, at the existing parked-window read site, because the two
+					// GameState snapshots above are exactly what the closed loop needs — the
+					// player's live tile + map (SaveBlock1 pos/location) — so D4 adds NO game-RAM
+					// reads and no new race class (SPEC §0). The scheduler clock is the scripted
+					// core's EMULATED frame counter, so a paused seat / open pause menu /
+					// backgrounded app freezes the script in place instead of blind-firing.
+					// Output = a key mask ORed into the assembly below (the emulated keypad).
+					// The outer gate is the OR of the two bisect gates so either slice can be
+					// compiled out alone (review fix 2026-08-03).
 					if (s_ctlOn) {
 						const GameState* gsFor[2] = { swapped ? &gsb : &gst, swapped ? &gst : &gsb };
 						GbaCore*         coFor[2] = { emuA.core, emuB.core };

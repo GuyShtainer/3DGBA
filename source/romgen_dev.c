@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 
 #include "romgen/rg_run.h"
 
@@ -16,6 +17,8 @@
 #define OUT_DIR   "sdmc:/3ds/3DGBA/voxel"
 #define STACK     (128 * 1024)
 #define POLL_EVERY 120u          /* frames between stats of the go file */
+#define AUTO_AFTER 600u          /* frames with Emerald loaded before the one automatic run (~10 s: past boot) */
+#define LOG_DIR   "sdmc:/cias/netlogs"
 
 typedef struct Job { const uint8_t *rom; size_t size; } Job;
 
@@ -24,6 +27,8 @@ static Thread s_thr;
 static volatile int s_state;     /* 0 idle, 1 running, 2 finished (thread still to be joined) */
 static volatile int s_cancel;
 static unsigned s_tick;
+static unsigned s_romFrames;   /* consecutive frames an Emerald ROM has been loaded */
+static bool s_autoDone;        /* the automatic run happens once per app session */
 
 static double NowMs(void) { return (double)osGetTime(); }
 
@@ -47,6 +52,24 @@ static bool WriteAtomic(const char *name, const void *b, size_t n)
     return ok;
 }
 
+/* The report goes to two places: the voxel dir (next to the files it describes) and the netlogs folder, so the usual
+ * "copy all of sdmc:/cias/netlogs after a run" picks it up with the other logs. One timestamped netlog per run. */
+static void ReportLog(const char *text)
+{
+    char path[96];
+    time_t tt = time(NULL);
+    struct tm *lt = localtime(&tt);
+    FILE *fp;
+
+    snprintf(path, sizeof path, LOG_DIR "/3DGBA_romgen_%02d%02d_%02d%02d%02d.txt", lt ? lt->tm_mon + 1 : 0,
+             lt ? lt->tm_mday : 0, lt ? lt->tm_hour : 0, lt ? lt->tm_min : 0, lt ? lt->tm_sec : 0);
+    fp = fopen(path, "w");
+    if (fp == NULL)
+        return;
+    (void)fputs(text, fp);
+    (void)fclose(fp);
+}
+
 static void Report(const char *text) { (void)WriteAtomic("romgen_timings.txt", text, strlen(text)); }
 
 static void MakeDirs(void)
@@ -54,6 +77,8 @@ static void MakeDirs(void)
     (void)mkdir("sdmc:/3ds", 0777);
     (void)mkdir("sdmc:/3ds/3DGBA", 0777);
     (void)mkdir(OUT_DIR, 0777);
+    (void)mkdir("sdmc:/cias", 0777);
+    (void)mkdir(LOG_DIR, 0777);
 }
 
 /* Heap numbers are newlib's view (mallinfo): arena = bytes taken from the OS heap (it does not shrink), uordblks =
@@ -126,6 +151,7 @@ static void WorkerMain(void *arg)
     if (e == RG_OK)
         rg_output_free(&out);
     Report(text);
+    ReportLog(text);
     s_state = 2;
 }
 
@@ -164,11 +190,20 @@ void romgen_dev_poll(const uint8_t *rom, size_t romSize)
         Reap();
         return;
     }
-    if (s_state != 0 || rom == NULL || romSize == 0 || ++s_tick % POLL_EVERY != 0)
+    if (rom == NULL || romSize == 0) {
+        s_romFrames = 0;
         return;
-    if (stat(GO_PATH, &st) != 0)
+    }
+    if (s_state != 0)
         return;
-    remove(GO_PATH);   /* consumed on pickup, like every control file */
+    if (!s_autoDone && ++s_romFrames >= AUTO_AFTER) {
+        s_autoDone = true;
+        Start(rom, romSize);
+        return;
+    }
+    if (++s_tick % POLL_EVERY != 0 || stat(GO_PATH, &st) != 0)
+        return;
+    remove(GO_PATH);   /* a manual re-run: consumed on pickup, like every control file */
     Start(rom, romSize);
 }
 
