@@ -93,8 +93,44 @@ static const RgSideCfg kMansionSide[1] = {
     {NULL, {8, 45, 40, 48}, {64, 0, 80, 24}, 999, true},
 };
 
+/* ---- k_cinnabar_lab: 112x64 art (rect (5,6), 7x4; door (8,9)) --------------------------------------------------------- */
+/* The Pokemon Lab, a rounded hall drawn as a front elevation: the roof is a cream barrel with a red walkway down the
+ * middle (rows 0-40, x 48-64), the wall below it carries the small windows and the glass door (rows 40-64), four
+ * pilasters run the full height. The silhouette is round at both ends, so the ends are 4-px slices that step in and
+ * get lower: slice i has its roof top at row t[i] and its wall bottom at row b[i]; the centre is one block. The art
+ * outside the silhouette is the sand and grass of the ground, which the model never covers. */
+static bool k_cinnabar_lab(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    static const double t[4] = {14, 8, 5, 2};
+    static const double b[4] = {50, 54, 57, 60};
+    unsigned i;
+
+    (void)spec; (void)a0; (void)a1;
+    for (i = 0; i < 4; i++)
+        if (!cb_block(out, "end_w", 4.0 * i, 4.0 * i + 4, b[i], 40, t[i]) ||
+            !cb_block(out, "end_e", 112.0 - 4.0 * i - 4, 112.0 - 4.0 * i, b[i], 40, t[i]))
+            return false;
+    return cb_block(out, "body", 16, 96, 64, 40, 0) && !out->failed;
+}
+static const RgExact kLabExact[9] = {
+    {16, 0, 96, 64, false},         /* the body: roof, walkway, pilasters, wall, door */
+    {1, 15, 4, 49, false},          /* the rounded ends, one margin pixel inside the silhouette */
+    {5, 9, 8, 53, false},
+    {9, 6, 12, 56, false},
+    {13, 3, 16, 59, false},
+    {108, 15, 111, 49, false},
+    {104, 9, 107, 53, false},
+    {100, 6, 103, 56, false},
+    {96, 3, 99, 59, false},
+};
+static const RgSideCfg kLabSide[1] = {
+    {NULL, {17, 41, 23, 62}, {26, 26, 40, 32}, 999, true},
+};
+
 const RgSpec rg_kspecs_cinnabar[] = {
     {"k_cinnabar_mansion", RG_SPEC_DIRECT, L_CINNABAR, {5, 0, 7, 4}, {0, 0}, CB_GROUND, 1, kMansionExact, 1,
      k_cinnabar_mansion, 0, 0, kMansionSide},
+    {"k_cinnabar_lab", RG_SPEC_DIRECT, L_CINNABAR, {5, 6, 7, 4}, {0, 0}, CB_GROUND, 1, kLabExact, 9,
+     k_cinnabar_lab, 0, 0, kLabSide},
 };
 const unsigned rg_kspecs_cinnabar_count = sizeof(rg_kspecs_cinnabar) / sizeof(rg_kspecs_cinnabar[0]);
