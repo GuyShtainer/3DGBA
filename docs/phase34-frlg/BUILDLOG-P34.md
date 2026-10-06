@@ -167,3 +167,41 @@ Device: `make -j8 ROMGEN_DEV_HOOK=1` then `make -j8` both link (3DGBA.3dsx); onl
 - Other test files' header command lines that list `rg_world.c` alone now also need `rg_gameprof.c` + `vx_behavior.c`
   (make targets already do).
 - `romgen --dump-roles` on a non-Emerald ROM would dereference NULL regions (not guarded; G2 enables regions).
+
+## B0 authoring toolchain + FRLG buildings plumbing (2026-10-06)
+
+Worktree branch on main `dd248f4`. Romgen track. Commits: Kanto table + FRLG buildings pass, the authoring tool, the suite, docs.
+Env: `DEVELOPER_DIR=/Library/Developer/CommandLineTools`; ROM env vars absolute (`ROMGEN_ROM`, `_FR`, `_LG`).
+
+### What changed
+- `tools/romgen/rg_png.{h,c}`: PNG writer (RGBA8, filter 0, stored deflate blocks, CRC-32 + Adler-32), no dependency.
+- `tools/romgen/rg_author.{h,c}`: `romgen author ROM <census [--map G/N] | art LAYOUT X Y W H | preview SPEC | check [SPEC|TOWN|all] [--expect N] | placements SPEC> [--out DIR]`.
+  Images go to `tools/romgen/out/author/<BPRE|BPGE|BPEE>/` (next to the build dir; git-ignored, checked with `git check-ignore -v`).
+  `check` = ortho wrong/missing/extra per exact rect, density list, placements (vs `--expect`), consumer round trip of a one-model file; exit 1 on a failure.
+  `preview` = ortho, diff (red wrong / blue missing / yellow extra), fl, fr, top (textured z-buffer, pitch 40 deg). Works on Emerald specs too (precedents).
+- `Makefile`: one hunk, links `rg_author.c rg_png.c` plus the voxel consumer sources (for the round trip) into `build/romgen` and `build/romgen_mem`.
+- `romgen_cli.c`: `author` dispatch. `source/romgen/rg_kspecs.{h,c}`: `rg_kspecs_table(prof, &n)`, the empty Kanto table.
+- `rg_run.c`: FRLG runs the buildings pass over the Kanto table (no roles needed); regions, signposts, relief stay off.
+- `test/host/test_romgen_frlg_buildings.c` (2390 checks, 0 skipped).
+
+### Census (FR rev 1; LG identical row for row), counts only
+76 outdoor maps; 277 warps on them = 191 doors (destination type 8) + 55 map-to-map (type 3) + 31 cave (type 4); 152 placements = 108 mainland + 44 Sevii.
+Per map section (hex: count): Pallet 58:3, Viridian 59:5, Pewter 5A:6, Cerulean 5B:9, Lavender 5C:6, Vermilion 5D:8, Celadon 5E:9, Fuchsia 5F:9,
+Cinnabar 60:5, Indigo 61:1, Saffron 62:13 (towns 74); Route 2 4, R4 1, R5 3, R6 2, R7 2, R8 2, R10 2, R11 1, R12 2, R15 1, R16 2, R18 1, R22 1,
+R23 1, R25 1, Forest 2, Safari 6 (34); Sevii sections 8F:4, 90:4, 91:7, 92:7, 93:4, 94:4, 95:4, 98:1, 9A:1, 9F:1, A1:1, A5:2, A7:1, A9:1, AE:1, BB:1 (44).
+All of SPEC section 6's per-town numbers hold.
+
+### Discrepancies (true values pinned)
+- SPEC 5.1 "277 door warps": 277 is every warp on an outdoor map. By the SPEC's own rule (destination type 8) there are **191** doors; the 152 / 108 / 44 are unaffected.
+- `rg_buildings.c` needed **no change**: the direct-spec path has no CPython-order site (found order, id order, stable sorts by (layout, x, y), first-seen ties). The CPython order lives in the props / name-order expanders, which a Kanto table does not use.
+- `rg_gameprof.c` is **untouched**: setting `specs` there would make every renderer-only build (vtest, VADAPT) link `rg_kspecs.c` and the builders. `rg_run.c` selects the table by game instead (`rg_kspecs_table`), so the profile hunk R1 owns cannot conflict. `GameProfile.specs` stays NULL for all rows.
+- Seed rects in `census` are a starting heuristic (blocked secondary-tileset cells touching the door); the author fixes the rect from `art`.
+
+### Gate (SPEC 0.3), before vs after: identical
+    2929c7642be7ef83aad7cbb1619e062900ca4c74  buildings.bin
+    007a370f440fa3c36cf0056440f05c025a386c4f  regions.bin
+    21a837f091c6b4764ad284e02438f7113c829cbf  relief.bin (FULL)
+    eb25a3835edf7ebbcc9d634dd199be955fb4d27e  relief.bin (--relief ledges)
+    385156050629ee50724bf3f6504991b10e48c7c1  signposts.bin
+All 30 suite counts (22 romgen incl. pyset 28 and relief_faults 221, 8 vtest) identical; only addition: test_romgen_frlg_buildings 2390, 0 failures, 0 skipped.
+`romgen firered.gba OUT` -> `buildings.bin: 24 bytes, 0 models`, exit 0, loaded by the vendored consumer (test). Device `make -j8 ROMGEN_DEV_HOOK=1` and `make -j8` link.
