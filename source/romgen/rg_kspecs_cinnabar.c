@@ -13,6 +13,8 @@
 
 #define L_CINNABAR 86, 0xC8348D4Bu
 #define L_INDIGO 87, 0x7014A55Cu
+#define L_ROUTE22 110, 0x5424564Fu
+#define L_ROUTE23 111, 0xC64404D8u
 #define CB_GROUND {0x001}
 
 static void cb_pt(double (*poly)[2], unsigned i, double z, double y)
@@ -181,6 +183,49 @@ static const RgSideCfg kLeagueSide[1] = {
     {NULL, {37, 66, 43, 80}, {162, 0, 166, 56}, 999, true},
 };
 
+/* ---- k_route22_gate: 144x112 art (rect (4,0), 9x7 on layout 110; doors (8,5), (9,5)) ----------------------------------- */
+/* The south half of the Route 22 / Route 23 gatehouse (one building across the two maps): the pale green ribbed roof
+ * 0-48 (the map top clips it), the cornice 48-56, the orange shuttered wall with its blue windows 56-96 (40 high,
+ * x 0-144). The centre porch (x 52-92) is a profile prism: front face rows 78-100 (the pillars and the dark door
+ * under the canopy, 22 high, 4 px proud of the wall), the cream canopy top rows 58-78, a riser rows 40-58 up to the
+ * roof. The wings carry end caps on both ends (the porch is lower than they are, so their inner faces show). */
+static bool k_route22_gate(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    static const double mid[6][2] = {{100, 0}, {100, 22}, {80, 22}, {80, 40}, {40, 40}, {40, 0}};
+    static const double midr[6][2] = {{78, 100}, {58, 78}, {40, 58}, {0, 40}, {0, 0}, {0, 0}};
+
+    (void)spec; (void)a0; (void)a1;
+    sCap[0] = 37; sCap[1] = 58; sCap[2] = 43; sCap[3] = 69;      /* the orange shutter wall */
+    return cb_block_e(out, "wing_w", 0, 52, CB_W | CB_E, 96, 56, 0) &&
+           cb_block_e(out, "wing_e", 92, 144, CB_W | CB_E, 96, 56, 0) &&
+           cb_profile(out, "porch", 52, 92, 6, mid, midr) && !out->failed;
+}
+static const RgExact kGate22Exact[3] = {
+    {1, 0, 52, 96, false},          /* west wing: roof, cornice, shutters */
+    {92, 0, 143, 96, false},        /* east wing */
+    {52, 0, 92, 100, false},        /* the porch, its canopy and the riser */
+};
+static const RgSideCfg kGate22Side[1] = {
+    {NULL, {37, 58, 43, 69}, {130, 0, 134, 40}, 999, true},
+};
+
+/* ---- k_route23_gate: 144x112 art (rect (4,153), 9x7 on layout 111; doors (8,153), (9,154)) --------------------------- */
+/* The north half of the same gatehouse: only its roof shows, a level slab 40 high (the wall height of the south half)
+ * from the parapet at row 17 (the lintel box at x 54-90, the fence above it, are ground and props) down to the map
+ * bottom, where it joins the Route 22 half's roof. No front face is drawn: the slab runs on into the next map. */
+static bool k_route23_gate(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    static const double pts[4][2] = {{152, 0}, {152, 40}, {57, 40}, {57, 0}};
+    static const double rows[4][2] = {{0, 0}, {17, 112}, {0, 0}, {0, 0}};
+
+    (void)spec; (void)a0; (void)a1;
+    return cb_profile(out, "roof", 0, 144, 4, pts, rows) && !out->failed;
+}
+static const RgExact kGate23Exact[1] = {{1, 17, 143, 112, false}};
+static const RgSideCfg kGate23Side[1] = {
+    {NULL, {130, 18, 134, 112}, {130, 18, 134, 112}, 999, true},
+};
+
 const RgSpec rg_kspecs_cinnabar[] = {
     {"k_cinnabar_mansion", RG_SPEC_DIRECT, L_CINNABAR, {5, 0, 7, 4}, {0, 0}, CB_GROUND, 1, kMansionExact, 1,
      k_cinnabar_mansion, 0, 0, kMansionSide},
@@ -188,5 +233,9 @@ const RgSpec rg_kspecs_cinnabar[] = {
      k_cinnabar_lab, 0, 0, kLabSide},
     {"k_indigo_league", RG_SPEC_DIRECT, L_INDIGO, {6, 0, 11, 7}, {0, 0}, CB_GROUND, 1, kLeagueExact, 3,
      k_indigo_league, 0, 0, kLeagueSide},
+    {"k_route22_gate", RG_SPEC_DIRECT, L_ROUTE22, {4, 0, 9, 7}, {0, 0}, CB_GROUND, 1, kGate22Exact, 3,
+     k_route22_gate, 0, 0, kGate22Side},
+    {"k_route23_gate", RG_SPEC_DIRECT, L_ROUTE23, {4, 153, 9, 7}, {0, 0}, CB_GROUND, 1, kGate23Exact, 1,
+     k_route23_gate, 0, 0, kGate23Side},
 };
 const unsigned rg_kspecs_cinnabar_count = sizeof(rg_kspecs_cinnabar) / sizeof(rg_kspecs_cinnabar[0]);
