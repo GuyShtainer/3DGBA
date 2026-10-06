@@ -11,14 +11,16 @@
 #include <sys/stat.h>
 #include <time.h>
 
+#include "romgen/rg_gameprof.h"
 #include "romgen/rg_relief_write.h"
 #include "romgen/rg_run.h"
+#include "voxel/vx_adapter.h"
 
 #define GO_PATH   "sdmc:/cias/control/romgen_go.txt"
-#define OUT_DIR   "sdmc:/3ds/3DGBA/voxel"
+#define OUT_ROOT  "sdmc:/3ds/3DGBA/voxel"   /* Emerald writes here; FireRed / LeafGreen into OUT_ROOT/BPRE or /BPGE (vx_profile_data_dir) */
 #define STACK     (128 * 1024)
 #define POLL_EVERY 120u          /* frames between stats of the go file */
-#define AUTO_AFTER 600u          /* frames with Emerald loaded before the one automatic run (~10 s: past boot) */
+#define AUTO_AFTER 600u          /* frames with a supported game loaded before its one automatic run (~10 s: past boot) */
 #define LOG_DIR   "sdmc:/cias/netlogs"
 
 typedef struct Job { const uint8_t *rom; size_t size; } Job;
@@ -28,9 +30,11 @@ static Thread s_thr;
 static volatile int s_state;     /* 0 idle, 1 running, 2 finished (thread still to be joined) */
 static volatile int s_cancel;
 static unsigned s_tick;
-static unsigned s_romFrames;   /* consecutive frames an Emerald ROM has been loaded */
+static unsigned s_romFrames;   /* consecutive frames the same supported ROM (Emerald, FireRed rev 1, LeafGreen rev 1) has been loaded */
 static bool s_keptRelief;      /* the last run left an existing FULL relief.bin alone */
-static bool s_autoDone;        /* the automatic run happens once per app session */
+static unsigned s_autoDone;    /* bit per GpGame: the automatic run happens once per game per app session */
+static int s_curGame;          /* the GpGame of the ROM the frame counter is counting (0 = none / unsupported) */
+static char s_outDir[64] = OUT_ROOT;   /* where this run writes: the voxel data dir of the ROM being processed */
 
 static double NowMs(void) { return (double)osGetTime(); }
 
@@ -40,8 +44,8 @@ static bool WriteAtomic(const char *name, const void *b, size_t n)
     FILE *fp;
     bool ok;
 
-    snprintf(tmp, sizeof tmp, "%s/%s.tmp", OUT_DIR, name);
-    snprintf(dst, sizeof dst, "%s/%s", OUT_DIR, name);
+    snprintf(tmp, sizeof tmp, "%s/%s.tmp", s_outDir, name);
+    snprintf(dst, sizeof dst, "%s/%s", s_outDir, name);
     fp = fopen(tmp, "wb");
     if (fp == NULL)
         return false;
@@ -78,7 +82,8 @@ static void MakeDirs(void)
 {
     (void)mkdir("sdmc:/3ds", 0777);
     (void)mkdir("sdmc:/3ds/3DGBA", 0777);
-    (void)mkdir(OUT_DIR, 0777);
+    (void)mkdir(OUT_ROOT, 0777);
+    (void)mkdir(s_outDir, 0777);
     (void)mkdir("sdmc:/cias", 0777);
     (void)mkdir(LOG_DIR, 0777);
 }
@@ -115,7 +120,7 @@ static void Describe(char *t, size_t cap, RgErr e, const RgOutput *o, double tot
 }
 
 /* PC fallback (SPEC-S3 1.7): the device only builds ledges, so a FULL relief.bin the user copied from the PC CLI to
- * OUT_DIR is left alone. The check reads just the header and row table of the existing file. */
+ * the voxel dir is left alone. The check reads just the header and row table of the existing file. */
 static bool KeepExistingRelief(const RgOutput *o)
 {
     static uint8_t head[8 + 14 * 256];
@@ -123,7 +128,7 @@ static bool KeepExistingRelief(const RgOutput *o)
     FILE *fp;
     size_t n;
 
-    snprintf(path, sizeof path, "%s/relief.bin", OUT_DIR);
+    snprintf(path, sizeof path, "%s/relief.bin", s_outDir);
     fp = fopen(path, "rb");
     if (fp == NULL)
         return false;
@@ -174,8 +179,11 @@ static void WorkerMain(void *arg)
     Describe(text, sizeof text, e, &out, t0, a0, Arena(), u0, Used(), j->size);
     if (s_keptRelief)
         (void)strncat(text, "relief.bin: an existing FULL file (drawn rows > 0) was left in place, not overwritten with ledges\n", sizeof text - strlen(text) - 1u);
-    if (!wrote)
-        (void)strncat(text, "WRITE FAILED: at least one output file could not be written to " OUT_DIR "\n", sizeof text - strlen(text) - 1u);
+    if (!wrote) {
+        (void)strncat(text, "WRITE FAILED: at least one output file could not be written to ", sizeof text - strlen(text) - 1u);
+        (void)strncat(text, s_outDir, sizeof text - strlen(text) - 1u);
+        (void)strncat(text, "\n", sizeof text - strlen(text) - 1u);
+    }
     if (e == RG_OK)
         rg_output_free(&out);
     Report(text);
@@ -186,6 +194,9 @@ static void WorkerMain(void *arg)
 static void Start(const uint8_t *rom, size_t size)
 {
     s32 prio = 0x30;
+    const GameProfile *gp = gameprof_detect_romgen(rom, size);
+
+    snprintf(s_outDir, sizeof s_outDir, "%s", gp != NULL ? vx_profile_data_dir(gp) : OUT_ROOT);
 
     s_job.rom = rom;
     s_job.size = size;
@@ -218,14 +229,21 @@ void romgen_dev_poll(const uint8_t *rom, size_t romSize)
         Reap();
         return;
     }
-    if (rom == NULL || romSize == 0) {
-        s_romFrames = 0;
-        return;
+    {
+        const GameProfile *gp = (rom != NULL && romSize != 0) ? gameprof_detect_romgen(rom, romSize) : NULL;
+        int game = gp != NULL ? (int)gp->game : 0;
+
+        if (game != s_curGame) {   /* nothing loaded, or a different game: the settle counter starts over */
+            s_curGame = game;
+            s_romFrames = 0;
+        }
+        if (game == 0)
+            return;
     }
     if (s_state != 0)
         return;
-    if (!s_autoDone && ++s_romFrames >= AUTO_AFTER) {
-        s_autoDone = true;
+    if (!(s_autoDone & (1u << s_curGame)) && ++s_romFrames >= AUTO_AFTER) {
+        s_autoDone |= 1u << s_curGame;
         Start(rom, romSize);
         return;
     }
