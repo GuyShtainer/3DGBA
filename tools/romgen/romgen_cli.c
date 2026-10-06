@@ -2,7 +2,7 @@
  * (3DGBA, GPLv3). Pure host code around the romgen cores in source/romgen/.
  *
  *   romgen ROM.gba OUTDIR [--time] [--only regions,signposts,buildings,relief] [--relief ledges|off] [--relief-layout ID]
- *         [--relief-log] [--relief-prep] [--dump-roles LAYOUT_ID] [--dump-model NAME]
+ *         [--relief-log] [--relief-prep] [--relief-world] [--relief-sum neumaier|naive|both] [--dump-roles LAYOUT_ID] [--dump-model NAME]
  *
  * Writes OUTDIR/regions.bin, signposts.bin, buildings.bin and relief.bin (--relief ledges, the S3a file; default).
  * --relief-layout ID prints that layout's relief.bin row and every cell's 25 heights. --dump-model NAME prints one model's summary and
@@ -17,6 +17,7 @@
 
 #include "rg_rdrawn.h"
 #include "rg_rprep.h"
+#include "rg_rworld.h"
 #include "rg_run.h"
 #include "rg_bspecs.h"
 #include "rg_world.h"
@@ -315,6 +316,126 @@ fail0:
     return 1;
 }
 
+static int CmpI32(const void *a, const void *b)
+{
+    int32_t x = *(const int32_t *)a, y = *(const int32_t *)b;
+
+    return (x > y) - (x < y);
+}
+
+/* One group's terrace levels: "level:count" over its big regions, ascending. */
+static void PrintGroupLevels(const RgPrep *p, const RgLevels *lv, unsigned g)
+{
+    int32_t *v = (int32_t *)malloc(((size_t)p->nRegions + 1u) * sizeof(int32_t));
+    unsigned i, nv = 0, j;
+
+    if (v == NULL)
+        return;
+    for (i = 0; i < p->nRegions; i++)
+        if (p->big[i])
+            v[nv++] = lv->level[g][i];
+    qsort(v, nv, sizeof(int32_t), CmpI32);
+    printf("   levels (px:terraces):");
+    for (i = 0; i < nv; i = j) {
+        for (j = i; j < nv && v[j] == v[i]; j++) {}
+        printf(" %d:%u", (int)v[i], j - i);
+    }
+    printf("\n");
+    free(v);
+}
+
+static void PrintLevels(const RgDrawn *d, const RgPrep *preps, const RgLevels *lv, const char *mode)
+{
+    unsigned g, i;
+
+    printf("world levels (%s sums): %u ground-spread round(s), %u nodes, %u samples, %u seam pair(s) given up\n", mode,
+           lv->solves, lv->nodes, lv->samples, lv->seamsDropped);
+    for (g = 0; g < d->nGroups; g++) {
+        const RgDrawnGroup *G = &d->groups[g];
+
+        printf("  group %u%s: %s", G->key, G->isAlt ? " (alt)" : "",
+               rg_drawn_excluded(G) ? "EXCLUDED (DRAWN_EXCLUDED)" : lv->ok[g] ? "ok" : "DROPPED (ground spread)");
+        if (!rg_drawn_excluded(G))
+            printf(", spread %.2f%%", 100.0 * lv->quality[g]);
+        printf("\n");
+        if (lv->ok[g])
+            PrintGroupLevels(&preps[g], lv, g);
+    }
+    for (i = 0; i < 512; i++)
+        if (lv->hasBase[i] && lv->base[i] != 0)
+            printf("  plain map layout %u stands at %+d px\n", i, (int)lv->base[i]);
+    printf("  seam cells given up: %u over %u pair(s)\n", lv->brokenCells, lv->nBroken);
+    for (i = 0; i < lv->nBroken; i++)
+        printf("    step at the seam %s %u / %s %u: %u cells\n", lv->broken[i].kindA ? "layout" : "group",
+               lv->broken[i].kindA ? lv->broken[i].idA : d->groups[lv->broken[i].idA].key,
+               lv->broken[i].kindB ? "layout" : "group",
+               lv->broken[i].kindB ? lv->broken[i].idB : d->groups[lv->broken[i].idB].key, lv->broken[i].cells);
+    printf("  R2: %u pre-rounding level(s) within %.1f px of a half level (smallest distance seen %.6g px)\n", lv->nNear,
+           RG_HALF_LOG_PX, lv->minHalfDistPx);
+    for (i = 0; i < lv->nNear; i++)
+        printf("    near-half kind %u group-key %u idx %d value %.17g dist %.6g px\n", lv->near_[i].kind,
+               lv->near_[i].kind == 2 ? 0u : (unsigned)d->groups[lv->near_[i].group].key, (int)lv->near_[i].idx, lv->near_[i].value, lv->near_[i].distPx);
+}
+
+/* --relief-world (S3.5): canvas + prepare for every group, then world_levels under both sum modes; prints the levels
+ * per group, the plain-map bases, the groups dropped by the ground-spread rule, the seams given up and the R2 log. */
+static int WorldAll(const uint8_t *rom, size_t n, int sumMode)
+{
+    RgWorld w;
+    RgRoles r;
+    RgDrawn *d = (RgDrawn *)malloc(sizeof *d);
+    RgRCtx *ctx = NULL;
+    RgPrep *preps = NULL;
+    RgErr e = RG_OK;
+    double t0 = NowMs();
+    unsigned m;
+
+    if (d == NULL || (e = rg_world_open(&w, rom, n)) != RG_OK)
+        goto fail0;
+    if ((e = rg_roles_init(&w, &r)) != RG_OK || (e = rg_roles_all(&w, &r, false, NULL, NULL)) != RG_OK)
+        goto fail1;
+    if ((e = rg_drawn_find(&w, d)) != RG_OK || (ctx = rg_rctx_new(&w, &r, &e)) == NULL)
+        goto fail2;
+    preps = (RgPrep *)calloc(d->nGroups, sizeof(RgPrep));
+    if (preps == NULL) {
+        e = RG_ERR_NOMEM;
+        goto fail3;
+    }
+    if ((e = rg_world_prep_all(ctx, d, preps)) != RG_OK)
+        goto fail4;
+    printf("prepared %u groups in %.0f ms\n", d->nGroups, NowMs() - t0);
+    for (m = 0; m < (sumMode == 2 ? 2u : 1u); m++) {
+        RgLevels lv;
+        RgWorldOpts o = rg_world_opts_default();
+        double t1 = NowMs();
+
+        if (sumMode == 2)
+            o.naiveSum = m == 1;
+        else
+            o.naiveSum = sumMode == 1;
+        e = rg_world_levels(&w, d, preps, &o, &lv);
+        if (e != RG_OK)
+            goto fail4;
+        PrintLevels(d, preps, &lv, o.naiveSum ? "naive" : "Neumaier");
+        printf("  world_levels: %.0f ms\n", NowMs() - t1);
+        rg_levels_free(&lv);
+    }
+fail4:
+    rg_world_prep_free(preps, d->nGroups);
+    free(preps);
+fail3:
+    rg_rctx_free(ctx);
+fail2:
+fail1:
+    rg_roles_free(&r);
+    rg_world_close(&w);
+fail0:
+    if (e != RG_OK)
+        fprintf(stderr, "romgen: --relief-world: %s\n", rg_err_str(e));
+    free(d);
+    return e != RG_OK;
+}
+
 int main(int argc, char **argv)
 {
     const char *romPath = NULL, *outDir = NULL;
@@ -322,7 +443,8 @@ int main(int argc, char **argv)
     bool wantRelief = true;
     RgReliefMode reliefMode = RG_RELIEF_LEDGES;
     int dumpId = 0, reliefId = 0, i;
-    bool reliefLog = false, reliefPrep = false;
+    bool reliefLog = false, reliefPrep = false, reliefWorld = false;
+    int sumMode = 2;                      /* --relief-sum neumaier|naive|both */
     const char *dumpModel = NULL;
     size_t n = 0;
     uint8_t *rom;
@@ -355,6 +477,12 @@ int main(int argc, char **argv)
             reliefLog = true;
         } else if (strcmp(argv[i], "--relief-prep") == 0) {
             reliefPrep = true;
+        } else if (strcmp(argv[i], "--relief-world") == 0) {
+            reliefWorld = true;
+        } else if (strcmp(argv[i], "--relief-sum") == 0 && i + 1 < argc) {
+            const char *v = argv[++i];
+
+            sumMode = strcmp(v, "naive") == 0 ? 1 : strcmp(v, "neumaier") == 0 ? 0 : 2;
         } else if (strcmp(argv[i], "--relief-layout") == 0 && i + 1 < argc) {
             reliefId = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--dump-roles") == 0 && i + 1 < argc) {
@@ -368,7 +496,7 @@ int main(int argc, char **argv)
         }
     }
     if (romPath == NULL || (outDir == NULL && dumpModel == NULL)) {
-        fprintf(stderr, "usage: romgen ROM.gba OUTDIR [--time] [--only regions,signposts,buildings,relief] [--relief ledges|off] [--relief-layout ID] [--relief-log] [--relief-prep] [--dump-roles LAYOUT_ID] [--dump-model NAME]\n");
+        fprintf(stderr, "usage: romgen ROM.gba OUTDIR [--time] [--only regions,signposts,buildings,relief] [--relief ledges|off] [--relief-layout ID] [--relief-log] [--relief-prep] [--relief-world] [--relief-sum neumaier|naive|both] [--dump-roles LAYOUT_ID] [--dump-model NAME]\n");
         return 2;
     }
     rom = ReadFile(romPath, &n);
@@ -378,6 +506,11 @@ int main(int argc, char **argv)
     }
     if (dumpModel != NULL) {
         int rc = DumpModel(rom, n, dumpModel);
+        free(rom);
+        return rc;
+    }
+    if (reliefWorld) {
+        int rc = WorldAll(rom, n, sumMode);
         free(rom);
         return rc;
     }
