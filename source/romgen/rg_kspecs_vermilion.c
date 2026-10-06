@@ -50,6 +50,50 @@ static bool vm_profile(RgPartList *out, const char *name, double x0, double x1, 
     return true;
 }
 
+static void vm_box(RgPrism *p, double front, double ylo, double yhi, double back)
+{
+    p->nPoly = 4;
+    vm_pt(p->poly, 0, front, ylo);
+    vm_pt(p->poly, 1, front, yhi);
+    vm_pt(p->poly, 2, back, yhi);
+    vm_pt(p->poly, 3, back, ylo);
+}
+
+/* A thin upright plane at depth z, heights y0..y1, PROJ-textured from art rows rlo..rhi. */
+static void vm_vplane(RgPartList *out, const char *name, double x0, double x1, double z, double y0, double y1,
+                      double rlo, double rhi)
+{
+    RgPart *pt = rg_parts_add(out, RG_P_PRISM, name);
+    RgPrism *pr;
+
+    if (pt == NULL)
+        return;
+    pr = &pt->u.prism;
+    pr->x0 = x0; pr->x1 = x1;
+    pr->west = pr->east = false;
+    vm_box(pr, z, y0, y1, z - 1);
+    pr->edges[0].kind = RG_EM_PROJ;
+    pr->edges[0].proj = rg_proj_rows(rlo, rhi);
+    pr->skip = (1u << 1) | (1u << 2) | (1u << 3);
+}
+
+/* A level face at height y spanning depths z0..z1: art rows z0 - y .. z1 - y. */
+static void vm_hplane(RgPartList *out, const char *name, double x0, double x1, double y, double z0, double z1)
+{
+    RgPart *pt = rg_parts_add(out, RG_P_PRISM, name);
+    RgPrism *pr;
+
+    if (pt == NULL)
+        return;
+    pr = &pt->u.prism;
+    pr->x0 = x0; pr->x1 = x1;
+    pr->west = pr->east = false;
+    vm_box(pr, z1, y - 1, y, z0);
+    pr->edges[1].kind = RG_EM_PROJ;
+    pr->edges[1].proj = rg_proj_rows(z0 - y, z1 - y);
+    pr->skip = (1u << 0) | (1u << 2) | (1u << 3);
+}
+
 /* ---- k_vermilion_fanclub (80x64, rect (8,3), 5x4) and k_vermilion_house (64x64, rect (18,14), 4x4) ----------------- */
 /* One builder, arg0 = width. The house's rect starts one row above its census seed (the roof edge starts 10 px into the
  * cell row above) and matches only rows 1-4, because that top row differs between its two placements. */
@@ -126,6 +170,53 @@ static bool k_daycare(const RgSpec *spec, int a0, int a1, RgPartList *out)
     return !out->failed;
 }
 
+/* ---- k_route5_gate: 96x112 art (rect (22,32), 6x7 on Route 5) -------------------------------------------------------- */
+/* The Route 5 south gatehouse (dest 17/1) seen from Route 5: the raised lip over the north door at rows 12-16, the flat
+ * roof top 16-59, the cornice, a window band and brick facade down to row 104, a canopy (top 84-91, front 92-103)
+ * between two white pillars, and the floor apron 104-111. The same shape as the Route 2 south half (k_route2_gate_s),
+ * 96 px wide. The log posts and the sand path in the top and bottom rows stay flat ground. */
+static bool k_route5_gate(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    RgPart *body = rg_parts_add(out, RG_P_PRISM, "body");
+    RgPart *cn = rg_parts_add(out, RG_P_PRISM, "canopy");
+    RgPrism *pr;
+
+    (void)spec; (void)a0; (void)a1;
+    if (body == NULL || cn == NULL)
+        return false;
+    pr = &body->u.prism;
+    pr->x0 = 0; pr->x1 = 96;
+    pr->west = pr->east = true;
+    vm_box(pr, 104, 0, 45, 61);
+    pr->edges[0].kind = RG_EM_PROJ;
+    pr->edges[0].proj = rg_proj_rows(59, 104);      /* cornice, windows, brick */
+    pr->edges[1].kind = RG_EM_PROJ;
+    pr->edges[1].proj = rg_proj_rows(16, 59);       /* roof top */
+    pr->skip = (1u << 2) | (1u << 3);
+
+    pr = &cn->u.prism;
+    pr->x0 = 23; pr->x1 = 73;
+    pr->west = pr->east = false;
+    vm_box(pr, 124, 20, 32, 116);
+    pr->edges[0].kind = RG_EM_PROJ;
+    pr->edges[0].proj = rg_proj_rows(92, 104);
+    pr->edges[1].kind = RG_EM_PROJ;
+    pr->edges[1].proj = rg_proj_rows(84, 92);
+    pr->skip = (1u << 2) | (1u << 3);
+
+    vm_vplane(out, "pillar_w", 17, 23, 124, 12, 40, 84, 112);
+    vm_vplane(out, "pillar_e", 73, 79, 124, 12, 40, 84, 112);
+    vm_vplane(out, "col_w", 0, 8, 112, 0, 8, 104, 112);
+    vm_vplane(out, "col_e", 88, 96, 112, 0, 8, 104, 112);
+    vm_hplane(out, "apron", 8, 88, 0, 104, 112);
+    vm_vplane(out, "lip", 22, 74, 61, 45, 49, 12, 16);      /* the raised lip over the north door */
+    return !out->failed;
+}
+
+static const RgExact kGate5Exact[2] = {
+    {0, 16, 96, 112, false},    /* roof, cornice, windows, brick, canopy, pillars, apron */
+    {22, 12, 74, 16, false},    /* the lip over the door */
+};
 static const RgExact kDayExact[13] = {
     {0, 14, 1, 80, false}, {1, 13, 3, 80, false}, {3, 12, 5, 80, false}, {5, 11, 7, 80, false}, {7, 10, 9, 80, false},
     {9, 9, 11, 80, false}, {11, 8, 69, 80, false}, {69, 9, 71, 80, false}, {71, 10, 73, 80, false},
@@ -146,5 +237,7 @@ const RgSpec rg_kspecs_vermilion[] = {
      k_path_hut, 0, 0, NULL},
     {"k_daycare", RG_SPEC_DIRECT, L_ROUTE5, {21, 21, 5, 5}, {0, 0}, VM_GROUND, 1, kDayExact, 13,
      k_daycare, 0, 0, NULL},
+    {"k_route5_gate", RG_SPEC_DIRECT, L_ROUTE5, {22, 32, 6, 7}, {0, 0}, VM_GROUND, 1, kGate5Exact, 2,
+     k_route5_gate, 0, 0, NULL},
 };
 const unsigned rg_kspecs_vermilion_count = sizeof(rg_kspecs_vermilion) / sizeof(rg_kspecs_vermilion[0]);
