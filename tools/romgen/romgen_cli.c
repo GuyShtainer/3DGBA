@@ -15,6 +15,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "rg_rdrawn.h"
 #include "rg_run.h"
 #include "rg_bspecs.h"
 #include "rg_world.h"
@@ -203,6 +204,40 @@ static int DumpModel(const uint8_t *rom, size_t n, const char *name)
     return found ? 0 : 1;
 }
 
+/* --relief-log (S3.3): the drawn groups find_drawn makes (members in BFS order with their cell offsets, canvas in cells). */
+static int DumpDrawn(const uint8_t *rom, size_t n)
+{
+    RgWorld w;
+    RgDrawn *d = (RgDrawn *)malloc(sizeof *d);
+    RgErr e;
+    unsigned g, i;
+
+    if (d == NULL || (e = rg_world_open(&w, rom, n)) != RG_OK) {
+        free(d);
+        return 1;
+    }
+    e = rg_drawn_find(&w, d);
+    if (e != RG_OK) {
+        fprintf(stderr, "romgen: find_drawn: %s\n", rg_err_str(e));
+        rg_world_close(&w);
+        free(d);
+        return 1;
+    }
+    printf("find_drawn: %u seeds, %u links, %u groups\n", d->nSeeds, d->nLinks, d->nGroups);
+    for (g = 0; g < d->nGroups; g++) {
+        const RgDrawnGroup *G = &d->groups[g];
+
+        printf("  group %u%s%s: %ux%u cells, %u member(s):", G->key, G->isAlt ? " (alternate)" : "",
+               rg_drawn_excluded(G) ? " (excluded)" : "", G->cellsW, G->cellsH, G->nMembers);
+        for (i = 0; i < G->nMembers; i++)
+            printf(" %u@%d,%d", d->pool[G->first + i].layout, d->pool[G->first + i].x, d->pool[G->first + i].y);
+        printf("\n");
+    }
+    rg_world_close(&w);
+    free(d);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     const char *romPath = NULL, *outDir = NULL;
@@ -210,6 +245,7 @@ int main(int argc, char **argv)
     bool wantRelief = true;
     RgReliefMode reliefMode = RG_RELIEF_LEDGES;
     int dumpId = 0, reliefId = 0, i;
+    bool reliefLog = false;
     const char *dumpModel = NULL;
     size_t n = 0;
     uint8_t *rom;
@@ -238,6 +274,8 @@ int main(int argc, char **argv)
                 fprintf(stderr, "romgen: --relief %s is not available yet (ledges|off)\n", v);
                 return 2;
             }
+        } else if (strcmp(argv[i], "--relief-log") == 0) {
+            reliefLog = true;
         } else if (strcmp(argv[i], "--relief-layout") == 0 && i + 1 < argc) {
             reliefId = atoi(argv[++i]);        } else if (strcmp(argv[i], "--dump-roles") == 0 && i + 1 < argc) {
             dumpId = atoi(argv[++i]);
@@ -250,7 +288,7 @@ int main(int argc, char **argv)
         }
     }
     if (romPath == NULL || (outDir == NULL && dumpModel == NULL)) {
-        fprintf(stderr, "usage: romgen ROM.gba OUTDIR [--time] [--only regions,signposts,buildings,relief] [--relief ledges|off] [--relief-layout ID] [--dump-roles LAYOUT_ID] [--dump-model NAME]\n");
+        fprintf(stderr, "usage: romgen ROM.gba OUTDIR [--time] [--only regions,signposts,buildings,relief] [--relief ledges|off] [--relief-layout ID] [--relief-log] [--dump-roles LAYOUT_ID] [--dump-model NAME]\n");
         return 2;
     }
     rom = ReadFile(romPath, &n);
@@ -263,6 +301,8 @@ int main(int argc, char **argv)
         free(rom);
         return rc;
     }
+    if (reliefLog && DumpDrawn(rom, n) != 0)
+        fprintf(stderr, "romgen: --relief-log failed\n");
     memset(&opts, 0, sizeof(opts));
     opts.nowMs = NowMs;
     opts.wantSigns = wantSigns;

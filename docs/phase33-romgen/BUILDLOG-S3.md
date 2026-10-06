@@ -136,3 +136,58 @@ Deviations and decisions:
 6. The T9 jump check is on Route 101 only and "every FLAT value < 0xF0" is the spec's; the extra test that FLAT and S0's
    water set do not overlap passes.
 Open: nothing unresolved. The group-existence assertions for seeds 20/21/22/38 wait for find_drawn (S3.3, O3).
+
+## 2026-10-06 S3.3 find_drawn, links, groups, seams
+
+Built: `rg_rdrawn.{h,c}` (find_drawn: seeds, A.5-folder-order links, rock_near, FIFO BFS groups, alternate groups;
+`rg_drawn_group` / `rg_drawn_excluded`; `rg_map_links_sorted`; `rg_seam_cells`), `--relief-log` in the CLI (prints the
+groups), `test/host/test_romgen_relief_drawn.c`, two PROVENANCE rows updated (group-existence assertion now made).
+No new decomp table; nothing from pret added.
+
+Results (ROM `roms/emerald.gba`, `ROMGEN_ROM` absolute, no suite printed a skip):
+```
+make -C tools/romgen test     # 15 suites, 0 failures
+  relief_drawn 1388 checks (the 14 earlier suites unchanged: art 33149, bimg 10481, buildings 4400, expand 1512,
+  export 580568, geom 585, interior 851, pyset 28, regions 474, relief_ledge 55152, roles 656013, rtables 9981,
+  signs 1751, world 612)
+romgen ROM OUT --relief-log   # relief.bin SHA-1 eb25a3835edf7ebbcc9d634dd199be955fb4d27e (unchanged); other three files unchanged
+```
+find_drawn on the user's ROM: **54 seeds, 96 recorded links (48 connections, both sides), 35 groups = 31 seed groups + 4
+alternate groups, 66 pool members.** Largest group: seed 7, members {7, 40-45} (7 layouts), canvas **200 x 240 cells**
+(= 3200 x 3840 px = 12.3 M px). Others: 6 {6,37,36} 200x110; 27 {27,29,28} 140x140; 16 {16,48,47,263} 240x40;
+239 {239,238,241,394,240,395} 120x80; 345 {345,265} 128x72; 34 {34,35} 80x160; 19 {19,26} 120x100; 12 {12,23}
+80x20; 32 {32,15} 100x40; every other seed group is a single layout. Alternate groups (392, 46, 319, 357) copy their base's
+group with the base swapped for the alternate. The full list is pinned in the test (`kGroups`), and the ordered link list
+by an FNV hash (0xbca01a91), because they fix variant numbering.
+
+Against the survey's approximate probe (51 seeds / 28 groups / largest {7, 40-45} 200x240): the survey did not alias, and
+the three Lavaridge-art layouts 13, 136, 292 have **no** General rock tile raw (0) but 56 / 745 / 316 after `alias_of`, so
+they become seeds and form 3 single-layout groups: 51 + 3 = 54 seeds, 28 + 3 = 31 groups. The largest group and its canvas are
+identical. (Raw count with alternates 55 = 51 + the 4 alternates, which upstream skips as seeds.)
+
+Spec points that did not hold on this ROM (recorded, not "fixed"):
+1. **SPEC-S3 O3 "the group whose seed is 20 contains 4, 21, 22" is false.** Layouts 20, 21, 22 are each a single-layout
+   group (no link at all: the seams between them meet no rock within DRAWN_SEAM). Layout 4 (Rustboro) has **no** rock tile
+   (not a block layout, in no group). So the WRAP groups are three singletons and the ENABLED fallback `solve()` for 4
+   will be the only path for Rustboro. The group-existence assertion for 20/21/22/38 holds (all four exist; 38 is
+   excluded). The test asserts the real facts above instead of the spec sentence.
+2. The link list of 20 is empty; T8's order is therefore checked on `rg_map_links_sorted` (20 -> 4 up o0, 20 -> 21 down o0,
+   20 -> 1 right o50 all present; the list is sorted by rank, not ROM order).
+
+Oracles: the links are cross-checked by an **independent formulation** (b placed in a's frame, global cells within 2 of the
+edge, over all 64 ROM connections between block layouts): the recorded link set equals the independent seam set exactly.
+map_links: 148 sorted, unique, every outdoor-to-outdoor connection of every ROM map (all maps, not the A.5 table) present,
+alternates mirrored. Determinism: two `rg_drawn_find` runs are memcmp-equal.
+
+Device builds: `make clean && make -j8 ROMGEN_DEV_HOOK=1` compiles (no warning in rg_rdrawn.c); release rebuilt with
+`make clean && make -j8 && make cia`: `3DGBA.3dsx` 4,582,344 B, `3DGBA.cia` 2,156,992 B, same as S3.2 (find_drawn is not called
+by the device path until S3.7). Hook 0, `VX_DEV_ALLOW_O3DS` 0. Not run: Azahar.
+
+Deviations and decisions:
+1. **`drawn_ok`** needs `world_levels()["regions"]` (S3.5). `rg_drawn_group(d, id, checked, regionOk)` takes that membership as an
+   optional per-group array (NULL = exclusion only); S3.5 supplies it.
+2. Groups are named by the seed's layout id; DRAWN_EXCLUDED is "key == 38 and not an alternate group" (an alternate group's
+   Python name is the alternate's own, never "route122").
+3. Rock tiles are kept as one w*h bitmap per kept layout (alias applied) instead of the metatile list; `rock_near` reads it.
+4. `rg_seam_cells` takes ROM direction codes and layout sizes directly (no dict); edge codes are ROM codes.
+Open: nothing unresolved. Lead review of member order requested by the spec: the pinned list is in the test.
