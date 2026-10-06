@@ -640,4 +640,5 @@ Resolves K6's "Route 5 at (31,33) rendered plain 2D". Renderer only: no romgen d
   pair is the one in linear. However, an atlas does not move back to VRAM when the player crosses into the neighbour,
   so after a crossing the current map can be the one sampled from FCRAM. On hardware, check the fps at a town edge
   and after walking into the neighbour. If it is slow, the next step is migrating the current map's atlas into VRAM
-  (evict or swap the off-view one), or moving `preTex` (1 MiB, 2D prescale only) out of VRAM while voxel is on.
+  (evict or swap the off-view one). Shrinking `preTex` (1 MiB) is not free: it is the render target of the
+  sharp-bilinear pass for every 2D GBA frame, including the bottom screen while the top screen is in voxel.
