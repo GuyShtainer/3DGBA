@@ -16,6 +16,8 @@
 #define L_SAFARI_W 150, 0xFEAD1C27u
 #define L_ROUTE11 99, 0xEB2A5FB3u
 #define L_ROUTE18 106, 0x45402064u
+#define L_ROUTE12 100, 0xC0CE28C3u
+#define L_ROUTE16 104, 0xB570D855u
 #define FZ_GROUND {0x001}
 
 static void fz_pt(double (*poly)[2], unsigned i, double z, double y)
@@ -139,6 +141,49 @@ static const RgSideCfg kGateSide[1] = {
     {NULL, {24, 73, 104, 76}, {24, 73, 104, 76}, 999, true},
 };
 
+/* ---- the blue-roofed cottages: 80x48 art (rect (11,84) on Route 12, (9,3) on Route 16, both 5x3) ----------------------- */
+/* A hip-roofed cottage: the blue slate roof (rows 0-24; the end faces are drawn as 2-px diagonal steps, top row 6 at the
+ * corners down to row 0 along the ridge), a dark eave band 24-27, and the pale facade with the wooden door and the
+ * window 27-48. The roof is cut into x-slices whose first row follows the diagonal (as the Day Care does). */
+static const struct { int x0, x1, r0; } kCotSl[13] = {
+    {0, 1, 6}, {1, 3, 5}, {3, 5, 4}, {5, 7, 3}, {7, 9, 2}, {9, 11, 1}, {11, 69, 0},
+    {69, 71, 1}, {71, 73, 2}, {73, 75, 3}, {75, 77, 4}, {77, 79, 5}, {79, 80, 6},
+};
+
+static bool k_cottage(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    unsigned i;
+
+    (void)spec; (void)a0; (void)a1;
+    for (i = 0; i < 13; i++) {
+        double d = (24.0 - kCotSl[i].r0) / 2;
+        double pts[6][2], rows[6][2];
+
+        pts[0][0] = 48; pts[0][1] = 0;
+        pts[1][0] = 48; pts[1][1] = 21;
+        pts[2][0] = 48; pts[2][1] = 24;
+        pts[3][0] = 48 - d; pts[3][1] = 24 + d;
+        pts[4][0] = 24; pts[4][1] = 24 + d;
+        pts[5][0] = 24; pts[5][1] = 0;
+        rows[0][0] = 27; rows[0][1] = 48;           /* facade */
+        rows[1][0] = 24; rows[1][1] = 27;           /* eave band */
+        rows[2][0] = kCotSl[i].r0; rows[2][1] = 24; /* roof slope */
+        rows[3][0] = rows[3][1] = rows[4][0] = rows[4][1] = rows[5][0] = rows[5][1] = 0;
+        if (!fz_profile(out, "cottage", kCotSl[i].x0, kCotSl[i].x1, 6, (const double (*)[2])pts,
+                        (const double (*)[2])rows))
+            return false;
+    }
+    return !out->failed;
+}
+static const RgExact kCotExact[13] = {
+    {0, 6, 1, 48, false}, {1, 5, 3, 48, false}, {3, 4, 5, 48, false}, {5, 3, 7, 48, false}, {7, 2, 9, 48, false},
+    {9, 1, 11, 48, false}, {11, 0, 69, 48, false}, {69, 1, 71, 48, false}, {71, 2, 73, 48, false},
+    {73, 3, 75, 48, false}, {75, 4, 77, 48, false}, {77, 5, 79, 48, false}, {79, 6, 80, 48, false},
+};
+static const RgSideCfg kCotSide[1] = {
+    {NULL, {34, 42, 62, 44}, {14, 13, 66, 18}, 24, true},
+};
+
 /* ---- k_safari_rest: 80x64 art (rect (28,22), 5x4 on the Safari Zone centre area) -------------------------------------- */
 /* The Safari Zone rest houses: the same gold-roofed house as Fuchsia's, one cell narrower. Rows: grass 0-7, the gold roof
  * 8-40 (a level top edge at row 8), the facade with the grey awning, two arched windows and the door 40-64. */
@@ -162,6 +207,10 @@ const RgSpec rg_kspecs_fuchsia[] = {
      k_route_gate, 0, 0, kGateSide},
     {"k_route18_gate", RG_SPEC_DIRECT, L_ROUTE18, {41, 6, 8, 5}, {0, 0}, FZ_GROUND, 1, kGateExact, 1,
      k_route_gate, 0, 0, kGateSide},
+    {"k_route12_cottage", RG_SPEC_DIRECT, L_ROUTE12, {11, 84, 5, 3}, {0, 0}, FZ_GROUND, 1, kCotExact, 13,
+     k_cottage, 0, 0, kCotSide},
+    {"k_route16_cottage", RG_SPEC_DIRECT, L_ROUTE16, {9, 3, 5, 3}, {0, 0}, FZ_GROUND, 1, kCotExact, 13,
+     k_cottage, 0, 0, kCotSide},
     {"k_safari_rest", RG_SPEC_DIRECT, L_SAFARI_C, {28, 22, 5, 4}, {1, 3}, FZ_GROUND, 1, kRestExact, 1,
      k_fuchsia_house, 80, 32, kRestSide},
 };
