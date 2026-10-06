@@ -218,5 +218,5 @@ the game stays 2D (screenshot: Pallet Town, no voxel).
 - Test setup: `roms/` in a worktree is a symlink to the main tree's, so the Pallet saves land there (gitignored).
 - The emutest state dir path is too long for the AF_UNIX socket in a worktree: set `EMUTEST_STATE_DIR=/tmp/<short>`.
 - A pre-existing `sdmc:/3DGBA/gameA.gba` (an Emerald copy) and `gameA.sav` blocked `--stage-roms`; I moved them to
-  the session scratchpad (`sd-backup/`), they are not restored in the Azahar SD.
+  the session scratchpad (`sd-backup/`) and put back after the runs.
 - Not live-verified: the raw weather/palette values (only through the checks), the fldeff and gfx tables (ROM-only).
