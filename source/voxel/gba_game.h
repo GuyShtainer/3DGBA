@@ -13,6 +13,10 @@
  *      the snapshot. Struct tags and field names keep the vendored spelling so the vendored
  *      lines need no edits (names are interface facts, not expression).
  *
+ * Phase 34: the GBA_ADDR_* / NUM_*_IN_PRIMARY / ... numbers below are now "the Emerald row" of the game profile
+ * (source/romgen/rg_gameprof.c builds that row FROM these macros). The vendored renderer reads the active
+ * profile through VXP(field) instead of the macros, so FireRed/LeafGreen can be another row.
+ *
  * Pure C: no libctru. Host tests include this file directly. */
 #ifndef VX_GBA_GAME_H
 #define VX_GBA_GAME_H
@@ -20,6 +24,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+
+#include "../romgen/rg_gameprof.h"
 
 typedef uint8_t u8;
 typedef uint16_t u16;
@@ -75,6 +81,7 @@ typedef uint32_t GbaPtr;
 #define GBA_ADDR_GFX_INFO_PTRS 0x08505620u
 #define GBA_ADDR_FLDEFF_TEMPLATES 0x085059F8u
 #define GBA_ADDR_TILESET_GENERAL 0x083DF704u
+#define GBA_ADDR_TILESET_BUILDING 0x083DF884u
 #define GBA_ADDR_TILESET_FORTREE 0x083DF7C4u
 #define GBA_ADDR_TILESET_GENERIC_BUILDING 0x083DFB6Cu
 /* Field callbacks, with the thumb bit set as they appear in gMain.callback2. */
@@ -176,7 +183,10 @@ typedef uint32_t GbaPtr;
 #define MAPGRID_COLLISION_SHIFT 10
 #define MAPGRID_ELEVATION_MASK 0xF000
 #define MAPGRID_ELEVATION_SHIFT 12
-#define UNPACK_BEHAVIOR(attr) ((attr) & 0x00FFu)
+#define GBA_BEHAVIOR_MASK 0x00FFu
+#define GBA_ATTR_LAYER_MASK 0xF000u /* metatile-attribute layer type, Emerald packing */
+#define GBA_ATTR_LAYER_SHIFT 12
+#define UNPACK_BEHAVIOR(attr) ((attr) & (unsigned)VXP(behMask))
 
 #define MAP_TYPE_NONE 0
 #define MAP_TYPE_TOWN 1
@@ -261,6 +271,16 @@ typedef uint32_t GbaPtr;
 /* BGR555 from 5-bit components (r,g,b in 0..31). */
 #define GBA_RGB5(r, g, b) ((u16)((r) | ((g) << 5) | ((b) << 10)))
 #define RGB2(r, g, b) GBA_RGB5(r, g, b)
+
+/* ---- The active game profile --------------------------------------------------------------- */
+/* gVxProf is set by vx_host.c Rebind() (defined in vx_adapter.c). NULL = the Emerald row, so host tests and
+ * every pre-Phase-34 caller behave exactly as before. */
+extern const GameProfile *gVxProf;
+static inline const GameProfile *vx_prof(void)
+{
+    return gVxProf != NULL ? gVxProf : gameprof_emerald();
+}
+#define VXP(field) (vx_prof()->field)
 
 /* ---- Host mirror structs ----------------------------------------------------------------- */
 struct Tileset
@@ -422,7 +442,7 @@ extern GbaPtr gFieldEffectObjectTemplatePointers[GBA_FLDEFF_TEMPLATE_COUNT];
 
 /* ---- Adapter functions (vx_adapter.c / vx_behavior.c) ------------------------------------- */
 const struct Tileset *vx_tileset_at(GbaPtr addr);
-#define gTileset_General (*vx_tileset_at(GBA_ADDR_TILESET_GENERAL))
+#define gTileset_General (*vx_tileset_at(VXP(tsGeneral)))
 #define gTileset_Fortree (*vx_tileset_at(GBA_ADDR_TILESET_FORTREE))
 #define gTileset_GenericBuilding (*vx_tileset_at(GBA_ADDR_TILESET_GENERIC_BUILDING))
 

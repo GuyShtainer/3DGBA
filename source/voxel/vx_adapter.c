@@ -61,6 +61,7 @@ struct Weather *gWeatherPtr;
 struct PaletteFade gPaletteFade;
 u16 gPlttBufferUnfaded[512];
 GbaPtr gFieldEffectObjectTemplatePointers[GBA_FLDEFF_TEMPLATE_COUNT];
+const GameProfile *gVxProf; /* the active game profile; NULL = the Emerald row (see gba_game.h VXP) */
 
 static struct SaveBlock1 sSaveBlock1;
 static struct Weather sWeather;
@@ -255,8 +256,8 @@ static const struct Tileset *InternTileset(uint32_t addr)
         tilesBytes = Clip(tiles, 512u * TILE_SIZE_4BPP);
     {
         const u16 *palP = RomU16Array(pal, 16u * 16u * 2u);
-        const u16 *metaP = RomU16Array(meta, (size_t)NUM_METATILES_IN_PRIMARY * 16u);
-        const u16 *attrP = RomU16Array(attr, (size_t)NUM_METATILES_IN_PRIMARY * 2u);
+        const u16 *metaP = RomU16Array(meta, (size_t)VXP(nPrimMetatiles) * 16u);
+        const u16 *attrP = RomU16Array(attr, (size_t)VXP(nPrimMetatiles) * 2u);
 
         if (palP == NULL || metaP == NULL || attrP == NULL)
             return NULL;
@@ -273,8 +274,8 @@ static const struct Tileset *InternTileset(uint32_t addr)
     }
     RegisterSize(ts->tiles, (uint32_t)tilesBytes);
     RegisterSize(ts->palettes, (uint32_t)Clip(pal, 512u));
-    RegisterSize(ts->metatiles, (uint32_t)Clip(meta, (size_t)NUM_METATILES_IN_PRIMARY * 16u));
-    RegisterSize(ts->metatileAttributes, (uint32_t)Clip(attr, (size_t)NUM_METATILES_IN_PRIMARY * 2u));
+    RegisterSize(ts->metatiles, (uint32_t)Clip(meta, (size_t)VXP(nPrimMetatiles) * 16u));
+    RegisterSize(ts->metatileAttributes, (uint32_t)Clip(attr, (size_t)VXP(nPrimMetatiles) * 2u));
     return InternPut(addr, K_TILESET, ts) ? ts : NULL;
 }
 
@@ -410,7 +411,7 @@ static const struct MapConnections *InternConnections(uint32_t addr)
         int32_t off = (int32_t)Rd32(e + 4);
 
         /* A8: direction 1..6, group < 34, |offset| <= 512; a bad entry is skipped. */
-        if (e[0] < 1 || e[0] > 6 || e[8] >= GBA_MAP_GROUP_COUNT || off > 512 || off < -512)
+        if (e[0] < 1 || e[0] > 6 || e[8] >= VXP(groupCount) || off > 512 || off < -512)
             continue;
         dst[kept].direction = e[0];
         dst[kept].offset = off;
@@ -470,9 +471,9 @@ const struct MapHeader *GetMapHeaderFromConnection(const struct MapConnection *c
 {
     uint32_t groupPtr, headerPtr;
 
-    if (conn == NULL || conn->mapGroup >= GBA_MAP_GROUP_COUNT)
+    if (conn == NULL || conn->mapGroup >= VXP(groupCount))
         return NULL;
-    if (!RomWord(GBA_ADDR_MAP_GROUPS + 4u * conn->mapGroup, &groupPtr)
+    if (!RomWord(VXP(mapGroups) + 4u * conn->mapGroup, &groupPtr)
      || !RomWord(groupPtr + 4u * conn->mapNum, &headerPtr))
         return NULL;
     return InternHeader(headerPtr);
@@ -482,7 +483,7 @@ const struct MapLayout *Port_GetMapLayoutById(u16 layoutId)
 {
     uint32_t addr;
 
-    if (layoutId == 0 || !RomWord(GBA_ADDR_MAP_LAYOUTS + 4u * (layoutId - 1u), &addr))
+    if (layoutId == 0 || !RomWord(VXP(mapLayouts) + 4u * (layoutId - 1u), &addr))
         return NULL;
     return InternLayout(addr);
 }
@@ -495,9 +496,9 @@ const struct ObjectEventGraphicsInfo *GetObjectEventGraphicsInfo(u8 graphicsId)
     uint32_t imagesAddr, dataAddr;
 
     /* Ids past the table (variable-driven ids included) fall back to entry 0. */
-    if (graphicsId >= GBA_GFX_INFO_COUNT)
+    if (graphicsId >= VXP(gfxInfoCount))
         graphicsId = 0;
-    if (!RomWord(GBA_ADDR_GFX_INFO_PTRS + 4u * graphicsId, &addr))
+    if (!RomWord(VXP(gfxInfoPtrs) + 4u * graphicsId, &addr))
         return NULL;
     info = InternFind(addr, K_GFX);
     if (info != NULL)
@@ -557,8 +558,8 @@ void vx_adapter_set_rom(const uint8_t *rom, size_t size)
     sError = rom != NULL ? VX_OK : VX_ERR_NO_ROM;
     if (rom == NULL)
         return;
-    for (unsigned i = 0; i < GBA_FLDEFF_TEMPLATE_COUNT; ++i)
-        (void)RomWord(GBA_ADDR_FLDEFF_TEMPLATES + 4u * i, &gFieldEffectObjectTemplatePointers[i]);
+    for (unsigned i = 0; i < VXP(fldeffCount); ++i)
+        (void)RomWord(VXP(fldeffTemplates) + 4u * i, &gFieldEffectObjectTemplatePointers[i]);
 }
 
 /* ---- per-snapshot decode ------------------------------------------------------------------------ */
@@ -656,19 +657,19 @@ static bool DecodeMap(const VxSnapshot *s)
     uint32_t bh = Rd32(s->backupLayout + GBA_OFF_BKL_HEIGHT);
     uint32_t bmap = Rd32(s->backupLayout + GBA_OFF_BKL_MAP);
 
-    if (bmap < GBA_ADDR_BACKUP_MAP || bmap >= GBA_ADDR_BACKUP_MAP + GBA_BACKUP_MAP_BYTES
-     || ((bmap - GBA_ADDR_BACKUP_MAP) & 1u) != 0)
+    if (bmap < VXP(backupMap) || bmap >= VXP(backupMap) + GBA_BACKUP_MAP_BYTES
+     || ((bmap - VXP(backupMap)) & 1u) != 0)
         return Fail(VX_ERR_A1_MAP_PTR);
     if (s->backupMapCells == 0 || bw * bh != s->backupMapCells)
         return Fail(VX_ERR_A2_DIMS);
-    if (!DecodeHeader(s->mapHeader, GBA_ADDR_MAP_HEADER, &gMapHeader))
+    if (!DecodeHeader(s->mapHeader, VXP(mapHeader), &gMapHeader))
         return Fail(VX_ERR_A4_ROM_PTR);
     if ((uint32_t)gMapHeader.mapLayout->width + 15u != bw
      || (uint32_t)gMapHeader.mapLayout->height + 14u != bh)
         return Fail(VX_ERR_A3_MISMATCH);
     gBackupMapLayout.width = (s32)bw;
     gBackupMapLayout.height = (s32)bh;
-    gBackupMapLayout.map = (u16 *)(uintptr_t)(const void *)(s->backupMap + (bmap - GBA_ADDR_BACKUP_MAP) / 2u);
+    gBackupMapLayout.map = (u16 *)(uintptr_t)(const void *)(s->backupMap + (bmap - VXP(backupMap)) / 2u);
     return true;
 }
 
@@ -710,7 +711,7 @@ bool vx_adapter_decode(const VxSnapshot *snap)
      || !gObjectEvents[gPlayerAvatar.objectEventId].active
      || !gObjectEvents[gPlayerAvatar.objectEventId].isPlayer)
         return Fail(VX_ERR_A9_PLAYER);
-    if (gMain.callback2 != CB2_Overworld && gMain.callback2 != CB2_OverworldBasic)
+    if (gMain.callback2 != VXP(cb2Overworld) && gMain.callback2 != VXP(cb2OverworldBasic))
     {
         /* Decoded fine (battle stub and the gate read cb2); the world reports unavailable
          * through VoxelWorld_IsMapAvailable() itself. */

@@ -5,6 +5,7 @@
 #include <sys/stat.h>
 #include <string.h>
 
+#include "romgen/rg_gameprof.h"
 #include "voxel/ctr_shims.h"
 #include "voxel/ctr_voxel.h"
 #include "voxel/vx_adapter.h"
@@ -21,7 +22,8 @@ static const int VX_ZOOM_PCT[4] = { 90, 100, 110, 120 };
 
 static VxSnapshot sSnap;
 static GbaCore *sBound;        /* the core whose ROM the adapter holds */
-static bool sBpee, sDataOk;
+static GpGame sGame;           /* the detected game profile row; GP_NONE = voxel off for this ROM */
+static bool sDataOk;
 static bool sInitTried, sInitOk;
 static GbaCore *sMasked[2];    /* cores currently masked (parked-window state mirror) */
 static bool sOvInit;
@@ -55,28 +57,29 @@ static void LogSink(int channel, const char *line)
 
 static void Rebind(GbaCore *top)
 {
-    char code[5] = { 0 };
     size_t sz = 0;
     const uint8_t *rom;
+    const GameProfile *prof;
 
     sBound = top;
-    sBpee = sDataOk = false;
+    sGame = GP_NONE;
+    sDataOk = false;
+    gVxProf = NULL;
     vx_adapter_set_rom(NULL, 0);
     if (top == NULL)
         return;
-    gbacore_game_code(top, code);
-    sBpee = memcmp(code, "BPEE", 4) == 0;
-#if VX_DEV_FORCE_OVERLAY
-    sBpee = true;
-#endif
-    if (!sBpee)
-        return;
     rom = gbacore_mem_block(top, 8, &sz);
     if (rom == NULL || sz == 0)
-    {
-        sBpee = false;
         return;
-    }
+    prof = gameprof_detect(rom, sz);
+#if VX_DEV_FORCE_OVERLAY
+    if (prof == NULL)
+        prof = gameprof_emerald();
+#endif
+    if (prof == NULL)
+        return;
+    sGame = prof->game;
+    gVxProf = prof;
     vx_log_set_sink(LogSink);
     vx_adapter_set_rom(rom, sz);
     {
@@ -98,7 +101,7 @@ bool vx_host_candidate(GbaCore *top, bool userOn, bool isN3DS, bool linkAny)
         return false;
     if (top != sBound)
         Rebind(top);
-    return sBpee && sDataOk;
+    return sGame != GP_NONE && sDataOk;
 }
 
 bool vx_host_snapshot(GbaCore *top)
@@ -420,7 +423,7 @@ const char *vx_host_status(bool userOn, bool isN3DS, bool linkAny, GbaCore *top)
     if (top != sBound && userOn)
         Rebind(top);
     if (!isN3DS && !VX_DEV_ALLOW_O3DS) return "Voxel 3D: needs a New 3DS";
-    if (top == NULL || !sBpee) return "Voxel 3D: Emerald only";
+    if (top == NULL || sGame == GP_NONE) return "Voxel 3D: Emerald only";
     if (linkAny) return "Voxel 3D: paused during link";
     switch (vx_data_status())
     {
@@ -437,7 +440,9 @@ const char *vx_host_status(bool userOn, bool isN3DS, bool linkAny, GbaCore *top)
 void vx_host_reset(void)
 {
     sBound = NULL;
-    sBpee = sDataOk = false;
+    sGame = GP_NONE;
+    sDataOk = false;
+    gVxProf = NULL;
     sMasked[0] = sMasked[1] = NULL;
     vx_adapter_set_rom(NULL, 0);
 }
