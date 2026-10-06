@@ -173,6 +173,20 @@ static const RgSideCfg kDeptSide[3] = {
     {NULL, {3, 60, 5, 121}, {3, 60, 5, 121}, 999, true},
 };
 
+/* ---- k_celadon_mansion: 112x144 art (rect (27,3), 7x9) ----------------------------------------------------------------- */
+/* Celadon Mansion (the Condominiums): a flat-roofed block, a roof of olive tiles seen from above (rows 24-75, a vent
+ * hood on it) over four storeys of windows between two purple pilaster strips, the wooden door at the foot (rows
+ * 128-144). One flat block 69 high. The three roof doors above it (cells (29,5), (30,4), (31,5)) are ground art. */
+static bool k_celadon_mansion(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    (void)spec; (void)a0; (void)a1;
+    return cl_block(out, "mansion", 0, 112, 144, 75, 24) && !out->failed;
+}
+static const RgExact kMansionExact[1] = {{0, 24, 112, 144, false}};
+static const RgSideCfg kMansionSide[1] = {
+    {NULL, {3, 76, 5, 136}, {3, 76, 5, 136}, 999, true},
+};
+
 const RgSpec rg_kspecs_celadon[] = {
     {"k_celadon_house", RG_SPEC_DIRECT, L_CELADON, {36, 25, 4, 5}, {1, 5}, CL_GROUND, 1, kHouseExact, 1,
      k_celadon_house, 0, 0, kHouseSide},
@@ -182,5 +196,7 @@ const RgSpec rg_kspecs_celadon[] = {
      k_celadon_prize, 0, 0, kPrizeSide},
     {"k_celadon_dept", RG_SPEC_DIRECT, L_CELADON, {4, 4, 21, 12}, {0, 0}, CL_GROUND, 1, kDeptExact, 4,
      k_celadon_dept, 0, 0, kDeptSide},
+    {"k_celadon_mansion", RG_SPEC_DIRECT, L_CELADON, {27, 3, 7, 9}, {0, 0}, CL_GROUND, 1, kMansionExact, 1,
+     k_celadon_mansion, 0, 0, kMansionSide},
 };
 const unsigned rg_kspecs_celadon_count = sizeof(rg_kspecs_celadon) / sizeof(rg_kspecs_celadon[0]);
