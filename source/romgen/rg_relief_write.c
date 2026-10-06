@@ -124,3 +124,22 @@ RgErr rg_relief_write(const RgReliefRow *rows, unsigned nRows, const RgVariant *
     memcpy(p + 4, "CUTS", 4);
     return RG_OK;
 }
+
+int rg_relief_head_drawn_rows(const uint8_t *head, size_t n)
+{
+    unsigned rows, i, drawn = 0;
+
+    if (head == NULL || n < 8u || memcmp(head, "VXL4", 4) != 0 || head[6] != 5 || head[7] != 0)
+        return -1;
+    rows = (unsigned)head[4] | ((unsigned)head[5] << 8);
+    if (n < 8u + 14u * (size_t)rows)
+        return -1;
+    for (i = 0; i < rows; i++)
+        drawn += (head[8 + 14u * i + 7] & 0x80u) != 0;   /* u16 at +6 is h | flags: bit 15 = the high byte's top bit */
+    return (int)drawn;
+}
+
+int rg_relief_keep_existing(const uint8_t *head, size_t n, unsigned newDrawnRows)
+{
+    return newDrawnRows == 0 && rg_relief_head_drawn_rows(head, n) > 0;
+}

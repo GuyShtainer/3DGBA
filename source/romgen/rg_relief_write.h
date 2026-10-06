@@ -41,4 +41,13 @@ typedef struct RgVariant {
 RgErr rg_relief_write(const RgReliefRow *rows, unsigned nRows, const RgVariant *v, unsigned nV, RgCut *cuts,
                       unsigned nCuts, uint8_t *out, size_t cap, size_t *size);
 
+/* PC-fallback guard (S3.8). `head` = the first `n` bytes of an existing relief.bin. Returns the number of drawn rows
+ * (bit 15 of the row heights), or -1 when the head is not a VXL4 file with its whole row table. */
+int rg_relief_head_drawn_rows(const uint8_t *head, size_t n);
+
+/* 1 when a generator that would write `newDrawnRows` drawn rows must leave the existing file alone: the existing head
+ * is a FULL file (drawnRows > 0) and the new output is ledges-only (newDrawnRows == 0). An absent (NULL), malformed or
+ * ledges-only existing file is replaced. */
+int rg_relief_keep_existing(const uint8_t *head, size_t n, unsigned newDrawnRows);
+
 #endif
