@@ -282,6 +282,50 @@ static bool k_route2_gate(const RgSpec *spec, int a0, int a1, RgPartList *out)
     return !out->failed;
 }
 
+/* ---- k_route2_gate_s: 128x112 art (cells (2,45), 8x7) -- the south half of the Route 2 gatehouse -------------------- */
+/* Rows: roof top 0-58, cornice 59-63, windows and brick 64-103, canopy over the door (top 84-91, front 92-103) between
+ * two pillars, floor apron 104-111, side columns to the bottom edge. All PROJ, so ortho holds by construction. */
+static bool k_route2_gate_s(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    RgPart *body = rg_parts_add(out, RG_P_PRISM, "body");
+    RgPrism *pr;
+
+    (void)spec; (void)a0; (void)a1;
+    if (body == NULL)
+        return false;
+    pr = &body->u.prism;
+    pr->x0 = 0; pr->x1 = 128;
+    pr->west = pr->east = true;
+    vr_box(pr, 104, 0, 45, 45);
+    pr->edges[0].kind = RG_EM_PROJ;
+    pr->edges[0].proj = rg_proj_rows(59, 104);      /* cornice and facade */
+    pr->edges[1].kind = RG_EM_PROJ;
+    pr->edges[1].proj = rg_proj_rows(0, 59);        /* roof top */
+    pr->skip = (1u << 2) | (1u << 3);
+
+    {
+        RgPart *cn = rg_parts_add(out, RG_P_PRISM, "canopy");
+
+        if (cn == NULL)
+            return false;
+        pr = &cn->u.prism;
+        pr->x0 = 38; pr->x1 = 90;
+        pr->west = pr->east = false;
+        vr_box(pr, 124, 20, 32, 116);
+        pr->edges[0].kind = RG_EM_PROJ;
+        pr->edges[0].proj = rg_proj_rows(92, 104);
+        pr->edges[1].kind = RG_EM_PROJ;
+        pr->edges[1].proj = rg_proj_rows(84, 92);
+        pr->skip = (1u << 2) | (1u << 3);
+    }
+    vr_vplane(out, "pillar_w", 32, 38, 124, 12, 40, 84, 112);
+    vr_vplane(out, "pillar_e", 90, 96, 124, 12, 40, 84, 112);
+    vr_vplane(out, "col_w", 0, 8, 112, 0, 8, 104, 112);
+    vr_vplane(out, "col_e", 120, 128, 112, 0, 8, 104, 112);
+    vr_hplane(out, "apron", 8, 120, 0, 104, 112);
+    return !out->failed;
+}
+
 static const RgExact kViridianHouseExact[4] = {
     {47, 8, 65, 40, false},     /* chimney, top and front face */
     {0, 20, 47, 48, false},     /* front slope, fascia (west of the chimney) */
@@ -299,6 +343,9 @@ static const RgExact kRoute2GateExact[5] = {
     {17, 96, 79, 112, false},   /* south mat and porch floor */
     {0, 0, 17, 16, false},      /* posts, west */
     {79, 0, 96, 16, false},     /* posts, east */
+};
+static const RgExact kRoute2GateSExact[1] = {
+    {0, 0, 128, 112, false},    /* the whole building */
 };
 static const RgExact kViridianHouse2Exact[7] = {
     {47, 8, 65, 40, false},     /* chimney, top and front face */
@@ -321,5 +368,7 @@ const RgSpec rg_kspecs_viridian[] = {
      k_route2_house, 0, 0, NULL},
     {"k_route2_gate", RG_SPEC_DIRECT, L_ROUTE2, {16, 41, 6, 7}, {0, 0}, {0x010, 0x011}, 2, kRoute2GateExact, 5,
      k_route2_gate, 0, 0, NULL},
+    {"k_route2_gate_s", RG_SPEC_DIRECT, L_ROUTE2, {2, 45, 8, 7}, {0, 0}, {0x010, 0x011}, 2, kRoute2GateSExact, 1,
+     k_route2_gate_s, 0, 0, NULL},
 };
 const unsigned rg_kspecs_viridian_count = sizeof(rg_kspecs_viridian) / sizeof(rg_kspecs_viridian[0]);
