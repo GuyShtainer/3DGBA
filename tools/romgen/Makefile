@@ -7,16 +7,22 @@ SRC     := $(ROOT)/source/romgen
 CORES   := $(wildcard $(SRC)/rg_*.c) $(ROOT)/source/voxel/vx_lz77.c $(ROOT)/source/voxel/vx_behavior.c
 CFLAGS  ?= -std=c11 -Wall -Wextra -O2 -ffp-contract=off
 CFLAGS  += -I$(SRC) -I$(ROOT)/source/voxel
+# Phase 34 B0: the authoring tool (`romgen author ...`) and, for `author check`'s round trip, the vendored voxel consumer.
+AUTHOR  := rg_author.c rg_png.c
+AUTHVOX := $(foreach v,voxel_world voxel_regions voxel_relief voxel_building voxel_sign voxel_arena voxel_atlas \
+           voxel_mesh_builder voxel_tree voxel_lighting voxel_grade voxel_entities voxel_camera vx_adapter vx_snapshot \
+           vx_data ctr_shims_pure vx_battle_stub,$(ROOT)/source/voxel/$(v).c)
+AUTHFLAGS := -DVOXEL_HOST_FILES -DCTR_VOXEL_LIGHTING=1 -DRG_AUTHOR_CONSUMER
 
-build/romgen: romgen_cli.c $(CORES) $(wildcard $(SRC)/*.h)
+build/romgen: romgen_cli.c $(AUTHOR) rg_author.h rg_png.h $(CORES) $(wildcard $(SRC)/*.h) $(wildcard $(ROOT)/source/voxel/*.[ch])
 	@mkdir -p build
-	$(CC) $(CFLAGS) romgen_cli.c $(CORES) -lm -o $@
+	$(CC) $(CFLAGS) $(AUTHFLAGS) romgen_cli.c $(AUTHOR) $(CORES) $(AUTHVOX) -lm -o $@
 
 # Counting-allocator build: `make -C tools/romgen mem` -> build/romgen_mem; --time then also prints the peak heap.
 mem: build/romgen_mem
-build/romgen_mem: romgen_cli.c rg_memcount.c rg_memcount.h $(CORES) $(wildcard $(SRC)/*.h)
+build/romgen_mem: romgen_cli.c $(AUTHOR) rg_author.h rg_png.h rg_memcount.c rg_memcount.h $(CORES) $(wildcard $(SRC)/*.h) $(wildcard $(ROOT)/source/voxel/*.[ch])
 	@mkdir -p build
-	$(CC) $(CFLAGS) -DRG_MEMCOUNT -I. -include rg_memcount.h romgen_cli.c rg_memcount.c $(CORES) -lm -o $@
+	$(CC) $(CFLAGS) $(AUTHFLAGS) -DRG_MEMCOUNT -I. -include rg_memcount.h romgen_cli.c $(AUTHOR) rg_memcount.c $(CORES) $(AUTHVOX) -lm -o $@
 
 # Host suites: `make -C tools/romgen test` builds every test/host/test_romgen_*.c with ASan+UBSan against all of
 # source/romgen and the voxel consumer, and runs it (the real-ROM parts when ROMGEN_ROM is exported, else SKIP).

@@ -62,3 +62,6 @@ voxel/*.bin
 
 # phase 33: host romgen CLI build output
 tools/romgen/build/
+
+# Phase 34 B0: ROM-derived authoring pictures (tools/romgen/out/) are never committed
+tools/romgen/out/
