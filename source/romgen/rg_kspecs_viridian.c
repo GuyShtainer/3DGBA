@@ -446,21 +446,42 @@ static const RgExact kViridianHouse2Exact[7] = {
 #define L_ROUTE2 90, 0x5E505C50u
 #define L_FOREST 117, 0x1DED0623u
 
+/* Phase 34 side walls: the end-face patches of each model (art coordinates), see rg_close_sides. */
+static const RgSideCfg kR2GateSide[1] = {
+    {NULL, {23, 68, 73, 74}, {23, 68, 73, 74}, 999, true},
+};
+static const RgSideCfg kR2GateSSide[1] = {
+    {NULL, {39, 84, 89, 90}, {39, 84, 89, 90}, 999, true},
+};
+static const RgSideCfg kR2GateNSide[1] = {
+    {NULL, {8, 20, 15, 70}, {8, 20, 15, 70}, 999, true},
+};
+static const RgSideCfg kForestGateNSide[1] = {
+    {NULL, {55, 68, 121, 74}, {55, 68, 121, 74}, 999, true},
+};
+static const RgSideCfg kViridianHouseSide[2] = {
+    {"chimney", {50, 24, 62, 32}, {50, 24, 62, 32}, 999, false},
+    {NULL, {32, 48, 41, 56}, {1, 20, 3, 40}, 18, true},
+};
+static const RgSideCfg kR2HouseSide[1] = {
+    {NULL, {39, 32, 48, 42}, {39, 32, 48, 42}, 999, true},
+};
+
 const RgSpec rg_kspecs_viridian[] = {
     {"k_viridian_house", RG_SPEC_DIRECT, L_VIRIDIAN_K3, {24, 8, 5, 4}, {0, 0}, {VR_GRASS}, 1, kViridianHouseExact, 4,
-     k_viridian_house, 0, 0, NULL},
+     k_viridian_house, 0, 0, kViridianHouseSide},
     {"k_viridian_house2", RG_SPEC_DIRECT, L_VIRIDIAN_K3, {24, 15, 5, 5}, {0, 0}, {VR_GRASS}, 1, kViridianHouse2Exact, 7,
-     k_viridian_house, 1, 0, NULL},
+     k_viridian_house, 1, 0, kViridianHouseSide},
     {"k_route2_house", RG_SPEC_DIRECT, L_ROUTE2, {14, 20, 5, 3}, {0, 0}, {0x010, 0x011}, 2, kRoute2HouseExact, 2,
-     k_route2_house, 0, 0, NULL},
+     k_route2_house, 0, 0, kR2HouseSide},
     {"k_route2_gate", RG_SPEC_DIRECT, L_ROUTE2, {16, 41, 6, 7}, {0, 0}, {0x010, 0x011}, 2, kRoute2GateExact, 5,
-     k_route2_gate, 0, 0, NULL},
+     k_route2_gate, 0, 0, kR2GateSide},
     {"k_route2_gate_s", RG_SPEC_DIRECT, L_ROUTE2, {2, 45, 8, 7}, {0, 0}, {0x010, 0x011}, 2, kRoute2GateSExact, 1,
-     k_route2_gate_s, 0, 0, NULL},
+     k_route2_gate_s, 0, 0, kR2GateSSide},
     {"k_route2_gate_n", RG_SPEC_DIRECT, L_ROUTE2, {2, 13, 8, 6}, {0, 0}, {0x010, 0x011}, 2, kRoute2GateNExact, 2,
-     k_route2_gate_n, 0, 0, NULL},
+     k_route2_gate_n, 0, 0, kR2GateNSide},
     {"k_forest_gate_n", RG_SPEC_DIRECT, L_FOREST, {0, 4, 11, 6}, {0, 0}, {0x010, 0x011}, 2, kForestGateNExact, 1,
-     k_forest_gate_n, 0, 0, NULL},
+     k_forest_gate_n, 0, 0, kForestGateNSide},
     {"k_forest_gate_s", RG_SPEC_DIRECT, L_FOREST, {24, 62, 10, 7}, {0, 0}, {0x010, 0x011}, 2, kForestGateSExact, 2,
      k_forest_gate_s, 0, 0, NULL},
 };
