@@ -86,3 +86,53 @@ under about 60 lines; `ledge_row` carries an unused `e` that is harmless.
   relief.bin (`evidence/s31-route101-ledges-relief.png` vs `-norelief.png`). The pixel difference
   (`s31-route101-diff.png`) sits exactly on the three ledge runs, plus sparkle-particle noise. With relief the lips
   stand up as a thicker raised band. It is subtle by design (LIP 6 px) from the default camera. **PASS.**
+
+## 2026-10-06 S3.2 Tables, CPython order, S0 additions, alias
+
+Built: `rg_pyset.{h,c}` (hash64 int/tuple, set_order, commonest + int/rgb wrappers; caller-provided scratch via
+`rg_set_scratch_bytes` / `rg_commonest_scratch_bytes`), `rg_rtables` completed (A.1 ids, A.5 `RG_OUTDOOR_MAPS_BY_FOLDER`,
+A.7 `rg_dir_sort_key`, `rg_relief_alt_base`, T1-T9 all in `rg_rtables_check`), `rg_behavior.h` A.6 sets, G7
+`rg_cell_image_layers` (`rg_cell_image` now calls it), G8 `rg_props_cells_in` (+ `rg_props_open/_cells/_close` to hold the
+connection table), `rg_ralias.{h,c}` (alias_of, AliasArt metatile/cell_image, own_id), `rg_rrock.h` (the rock id sets
+and colours of rel:559-631, numeric, header only), `docs/PROVENANCE.md` (10 new rows, one per table/encoded rule),
+`test/host/test_romgen_pyset.c`, `test/host/test_romgen_rtables.c`.
+
+Results (ROM `roms/emerald.gba`, `ROMGEN_ROM` absolute, no suite printed "skipped"):
+```
+make -C tools/romgen test     # 14 suites, 0 failures
+  art 33149, bimg 10481, buildings 4400, expand 1512, export 580568, geom 585, interior 851, pyset 28 (no ROM part),
+  regions 474, relief_ledge 55152, roles 656013, rtables 9981 (3515 without the ROM), signs 1751, world 612
+```
+- A.8: every vector passes exactly (6 hashes, 4 set orders incl. the 30-tuple one); recomputed with CPython 3.14.0
+  builtins before coding, they match the spec. Extra: 1000-key resize run, duplicates, commonest tie goes to first in set order.
+- T1-T9 pass on the real ROM on the first run, including T7 (down 27 up 27 left 40 right 40 dive 7 emerge 7) and T8
+  (Route 104: up->0/3, down->0/20 offset 0, right->0/0 offset 50). Refusals tested by tampering the opened world: T1
+  (a width), T2/T3 (a map's layout id), T5, T6 each make `rg_rtables_check` fail; restored, it passes again.
+- G7: of the 512 primary metatiles of Route 101's pair, 171 have an empty upper layer (lower-only == two-layer image,
+  exactly), 335 differ; `rg_cell_image` equals `rg_cell_image_layers(false)` for all.
+- G8: 56 layouts carry prop cells, 8194 cells (sea_rock 4440, sand_boulder 210, sea_stack 3544); every copy the S2 props
+  models record (5 models) has its min cell marked; one-shot and held-context forms agree.
+- Alias: 13 has 7 mapped ids, 136 has 9, 292 has 13 (colours 6, 7, 12). `own_id(general(m)) == m` holds on every mapped id
+  (no General id has two own ids, so the more-used-twin rule never fires on this ROM); the colour map is a function; the
+  recoloured own image of each aliased id equals the reference layout's image of its General id exactly (29 of 29).
+- relief.bin in LEDGES mode unchanged: SHA-1 of the CLI's relief.bin (`--only relief`) before `eb25a3835edf7ebbcc9d634dd199be955fb4d27e`,
+  after `eb25a3835edf7ebbcc9d634dd199be955fb4d27e`.
+- Device builds: `make clean && make -j8 ROMGEN_DEV_HOOK=1` compiles (no warning in any romgen file); release rebuilt with
+  `make clean && make -j8 && make cia`: `3DGBA.3dsx` 4,582,344 bytes and `3DGBA.cia` 2,156,992 bytes, both identical to the
+  S3.1 release sizes (the new modules are not linked in until S3.3+ calls them). Hook 0, `VX_DEV_ALLOW_O3DS` 0.
+  Not run: Azahar.
+
+Deviations and decisions:
+1. **`rg_map_connections_all`** added to rg_world (the dive/emerge-including reader) because T7 needs the raw census and
+   `rg_map_connections` filters those entries. `rg_map_connections` itself is unchanged in behaviour.
+2. **G8 has two forms.** The spec's one-shot `rg_props_cells_in(w, id, flags)` exists, and `RgProps` (open/cells/close) holds
+   the connection table so S3.4 does not rebuild it for each of the 87 layouts. Flags are one bit per object (sea_rock 1,
+   sand_boulder 2, sea_stack 4), nonzero = any; the spec's "names filter = all three" holds.
+3. **Rock sets live in `rg_rrock.h`, not `rg_rtables`**: they are numeric upstream (no decomp), so they carry the Zallax
+   header, not the pret one. The colours are there too (verbatim 8-bit triples) for S3.4.
+4. **Sets of ids are predicates** (`rg_is_rock_tile` etc.); alias_of's sorted(roles) is "ids 0..511 for which `rg_is_alias_role`".
+   Colour votes are kept in upstream's insertion order so `most_common(1)` ties break to the first inserted pair.
+5. `rg_alias_of` also keeps dense lookup tables (`toGen`, `toOwn`, 1024 ids) so the per-cell calls of S3.3/S3.4 are O(1).
+6. The T9 jump check is on Route 101 only and "every FLAT value < 0xF0" is the spec's; the extra test that FLAT and S0's
+   water set do not overlap passes.
+Open: nothing unresolved. The group-existence assertions for seeds 20/21/22/38 wait for find_drawn (S3.3, O3).
