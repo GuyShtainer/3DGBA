@@ -659,8 +659,10 @@ static bool build_one(const RgWorld *w, const RgSpec *spec, RgBuildModels *ms)
         return false;
     }
     if (ms->n == 0) {
-        fprintf(stderr, "romgen author: %s: the layout %u fingerprint does not match (spec pin %08X)\n", spec->name,
-                spec->layoutId, spec->layoutFnv);
+        fprintf(stderr, "romgen author: %s: the layout %u fingerprint does not match (spec pin %08X, layout is %08X)\n",
+                spec->name, spec->layoutId, spec->layoutFnv,
+                spec->layoutId >= 1 && spec->layoutId <= w->layoutCount && w->layouts[spec->layoutId - 1].present
+                    ? (unsigned)rg_layout_fnv(&w->layouts[spec->layoutId - 1]) : 0u);
         rg_models_free(ms);
         return false;
     }
