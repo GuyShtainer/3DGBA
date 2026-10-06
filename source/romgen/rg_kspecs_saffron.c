@@ -111,8 +111,31 @@ static const RgSideCfg kSilphSide[2] = {
     {NULL, {4, 120, 8, 124}, {4, 20, 10, 70}, 154, true},
 };
 
+/* ---- the green-roofed houses: 64x80 / 48x80 / 80x80 art (rects (21,10) 4x5, (46,17) 4x5, (26,17) 3x5, (41,34) 5x5) ------- */
+/* Rows: ground 0-7, the green roof seen from above 8-40 (a level top edge at row 8; the slanted end faces are painted),
+ * a dark eave 40-43, the grey band and the yellow facade with its windows and the purple door 43-78, a dark base line
+ * 78-80. One flat block 37 high, a0 wide (the third house is cut off by Silph Co. on its east side, the fourth is a
+ * cell wider). */
+static bool k_saffron_house(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    (void)spec; (void)a1;
+    return sf_block(out, "house", 0, a0, 80, 43, 8) && !out->failed;
+}
+static const RgExact kHouse4Exact[1] = {{0, 8, 64, 80, false}};
+static const RgExact kHouse3Exact[1] = {{0, 8, 48, 80, false}};
+static const RgExact kHouse5Exact[1] = {{0, 8, 80, 80, false}};
+static const RgSideCfg kHouseSide[1] = {
+    {NULL, {8, 57, 56, 60}, {12, 29, 51, 35}, 999, true},
+};
+
 const RgSpec rg_kspecs_saffron[] = {
     {"k_saffron_silph", RG_SPEC_DIRECT, L_SAFFRON, {29, 16, 9, 15}, {0, 0}, SF_GROUND, 1, kSilphExact, 4,
      k_saffron_silph, 0, 0, kSilphSide},
+    {"k_saffron_house", RG_SPEC_DIRECT, L_SAFFRON, {21, 10, 4, 5}, {1, 5}, SF_GROUND, 1, kHouse4Exact, 1,
+     k_saffron_house, 64, 0, kHouseSide},
+    {"k_saffron_house3", RG_SPEC_DIRECT, L_SAFFRON, {26, 17, 3, 5}, {1, 5}, SF_GROUND, 1, kHouse3Exact, 1,
+     k_saffron_house, 48, 0, kHouseSide},
+    {"k_saffron_house5", RG_SPEC_DIRECT, L_SAFFRON, {41, 34, 5, 5}, {1, 5}, SF_GROUND, 1, kHouse5Exact, 1,
+     k_saffron_house, 80, 0, kHouseSide},
 };
 const unsigned rg_kspecs_saffron_count = sizeof(rg_kspecs_saffron) / sizeof(rg_kspecs_saffron[0]);
