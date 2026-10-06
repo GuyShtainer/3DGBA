@@ -223,3 +223,51 @@ Deviations:
 `south_face` truthiness quirk (flat False vs None) ported faithfully. 5. drawn_role's first-wins cache gives 118
 disagreements when groups run in upstream order (alias layouts 13/136/292 vs layout 28 share a key); faithful, pinned by the
 verify flag. 6. The spec's ~74 MB prep estimate measured at 67.2 MB.
+
+## S3.5 World levels
+
+New: `source/romgen/rg_rworld.{h,c}` (`_gauss_seidel`, `_robust`, `_give_up_seams`, `_blocks`, `world_levels` with the GROUND_SPREAD
+loop; `rg_world_prep_all` prepares + trims every non-excluded group to what the world solve reads; `rg_world_levels`; the R2 log),
+`test/host/test_romgen_relief_world.c` (+ `_pins.inc`), CLI `--relief-world [--relief-sum neumaier|naive|both]`. No pret table: nothing
+added to PROVENANCE (RG_WORLD_ROOT was already row 4).
+
+Results (ROM `roms/emerald.gba`, `ROMGEN_ROM` absolute, no suite printed a skip):
+```
+make -C tools/romgen test      # 17 suites, 0 failures; relief_world 691 checks (ASan+UBSan)
+romgen ROM OUT --relief-world  # prepare 35 groups 1.1 s, world_levels 45 ms (Neumaier) / 36 ms (naive), host -O2
+```
+- relief.bin SHA-1 unchanged `eb25a3835edf7ebbcc9d634dd199be955fb4d27e`; buildings `2929c764...`, regions `007a370f...`, signposts `38515605...`.
+- 35 groups: 33 ok, **1 dropped by GROUND_SPREAD/MASSIF: group 302 (12.69 % of its ground a massif)**, 1 excluded (38, DRAWN_EXCLUDED).
+  2 ground-spread rounds (all 35 less 38; then without 302: every group <= 0.00 % spread). 74 nodes, 3110 samples.
+- Levels per group (px:terraces over big regions), seed keys: 345 `-16:3 0:29 16:34 32:23 48:7 64:3`; 12 `0:1 16:7`; 9 `0..192` (13 levels);
+  292 `-48..112`; 13 `32:1 48:4 64:2 80:3`; 6 `-32..64`; 7 `-16:4 0:29 16:141 32:14 48:3 64:1`; 136 `-96..32`; 303 `-64..48`; 16 `-32..48`;
+  19; 20 `-16:1 0:11`; 21 `-16:2 0:10 16:2`; 22 `-16:1 0:8 16:1`; 25; 27 `0..80`; 30 `0:32` (flat); 31; 32; 33; 34 `-16..80`; 39; 49; 50;
+  239 `-32..112`; 321 `-48..32`; 2; 8; 290; alternates 392, 46, 319, 357. Full list: `romgen ROM OUT --relief-world`.
+- **Plain-map bases (nonzero): layout 14 stands at +48 px**; every other plain map 0 (layout 10, Littleroot, 0 as the fixed root).
+- **Seams given up: 102 cells over 4 seams (each listed both ways)**: groups 12 / 22 (19 cells), 9 / 7 (1), layout 14 / group 30 (11),
+  layout 5 / group 34 (20). Unlike the loop the upstream comment names, these are the maps the loop leaves a step between.
+- **R2: 90 pre-rounding values within 1 px of a half level, 6 of them EXACT ties** (group 345: three terraces at 8 and three at 24 px
+  off their anchor = 0.5 / 1.5 levels; `round` half-even gives 0 and 2; they are integers from integer drop medians, so exact under
+  any sum order). Every other entry is >= 0.0101 px from a boundary, i.e. 1e11 times the ulp noise between sum modes: nothing
+  can flip. The log is `--relief-world` (kind 0 terrace by group key + region, 1 group fallback, 2 plain map).
+- **Both sum modes agree on every level, base, seam and the near-log membership.** Only the unrounded values differ, at 1e-13
+  (e.g. 168.35856349361484 vs ...472). 
+
+Oracles: GS vs an independent dense normal-equation solve (20 random graphs, within 0.1); weighted-mean, chain, robust (outlier
+dropped, tie keeps a pair level), give-up (a 33-off loop and a 16-short loop each drop exactly one pair); `wsum` known answers from
+CPython 3.14's builtin sum on mixed int/float lists; seam re-walk: of 1000+ compared seam cells 104 disagree, 102 of them in the
+given-up pairs, and **1 seam cell (both directions, layouts 13 / 28, 32 vs 48 px) disagrees without being given up** (its two region
+values straddle a half level while the node offsets are within 8 px: upstream's per-region rounding, pinned `unc == 2`). Pinned: per group
+level hash for all 35 groups, a whole-result hash, 90 near entries, 102 cells, base {14: +48}.
+Device: hook-on build compiles (only pre-existing main.c warnings); release rebuilt `3DGBA.3dsx` 4,582,344 B, `3DGBA.cia` 2,156,992 B,
+identical to S3.4 (world_levels is not linked into the device path until S3.7). Not run: Azahar.
+
+Deviations and decisions:
+1. **CPython 3.14 `sum()` typing is modelled**: an int sum is exact; the first float after ints is added plainly; later ints are compensated
+   as floats (verified against the interpreter, not guessed: the first draft assumed 3.12's naive int adds in the float path). Weights keep
+   their Python type (int 1 / 16 vs float 0.01 / 1e6). `RgWorldOpts.naiveSum` is a runtime switch (default `!RG_PYSUM_COMPENSATED`), so both
+   modes run in one binary; the spec's Q4 = Neumaier on is the default.
+2. Candidate groups are prepared one at a time and trimmed (the pixel arrays freed) so only the 35 digests stay live.
+3. Nodes are keyed (kind, group-or-layout, block) and looked up linearly (74 nodes); the sample dict is a hash set in insertion order.
+4. The R2 log counts terrace regions that are `big`, each group's fallback level and the plain maps (not every pixel-less region).
+5. A seam side whose edge pixel has no terrace skips the cell, as upstream's `None` does, but the other side's node is still created first.
