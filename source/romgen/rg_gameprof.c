@@ -71,10 +71,12 @@ static GameProfile sEmerald = {
 static const uint8_t kFrlgGroupSizes[43] = {5, 123, 60, 66, 4, 6, 8, 10, 6, 8, 20, 10, 8, 2, 10, 4, 2, 2, 2, 1, 1, 2,
                                             2, 3, 2, 3, 2, 1, 1, 1, 1, 7, 5, 5, 8, 8, 5, 5, 1, 1, 1, 2, 1};
 
+/* G2: houseHalfWidth 8 / houseHeight 7 are measured: door-to-building extents over the 191 census doors (SPEC section 5.1 seeds),
+ * 8 columns cover 98 % and 7 rows cover 97 % (the Emerald placeholders 5 / 7 cover 83 % / 97 %). */
 #define GP_FRLG_COMMON                                                                                              \
     .rev = 1, .groupCount = 43, .groupSizes = kFrlgGroupSizes, .layoutSlots = 384, .nPrimMetatiles = 640,         \
     .nPrimTiles = 640, .nPrimPals = 7, .nMetatilesTotal = 1024, .tilesetAttrOff = 0x14, .attrBytes = 4,           \
-    .behMask = 0x1FF, .layerMask = 0x60000000u, .layerShift = 29, .layoutBytes = 26, .houseHalfWidth = 5,          \
+    .behMask = 0x1FF, .layerMask = 0x60000000u, .layerShift = 29, .layoutBytes = 26, .houseHalfWidth = 8,          \
     .houseHeight = 7, .playerAvatarBytes = 0x20, .gfxInfoCount = 152, .fldeffCount = 36, .emeraldIdTables = false,  \
     .interiors3d = false, .rendererOn = true,                                                                      \
     .gMain = 0x030030F0u, .sb1Ptr = 0x03005008u, .backupLayout = 0x03005040u, .backupMap = 0,                     \

@@ -95,7 +95,13 @@ static void DumpRoles(const RgOutput *o, unsigned id)
 {
     static const char kLetters[11] = {'.', '~', '_', '=', 'W', 'T', 'o', '%', '|', '#', 'S'};
     const uint8_t *b = o->regions;
-    unsigned count = (unsigned)(b[4] | (b[5] << 8)), i, x, y;
+    unsigned count, i, x, y;
+
+    if (b == NULL) {   /* e.g. --only buildings: no regions were made */
+        fprintf(stderr, "romgen: --dump-roles needs regions in the run (not --only without regions)\n");
+        return;
+    }
+    count = (unsigned)(b[4] | (b[5] << 8));
 
     for (i = 0; i < count; i++) {
         const uint8_t *row = b + 8 + 12u * i;
@@ -511,7 +517,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "romgen: cannot read %s\n", romPath);
         return 1;
     }
-    { const GameProfile *gp = gameprof_detect_romgen(rom, n); printf("game: %s\n", gp == NULL ? "unsupported" : gp->game == GP_EMERALD ? "Emerald" : gp->game == GP_FIRERED ? "FireRed rev 1" : "LeafGreen rev 1"); if (gp != NULL && gp->game != GP_EMERALD) wantRegions = false; /* G1: FRLG writes nothing yet */ }
+    { const GameProfile *gp = gameprof_detect_romgen(rom, n); printf("game: %s\n", gp == NULL ? "unsupported" : gp->game == GP_EMERALD ? "Emerald" : gp->game == GP_FIRERED ? "FireRed rev 1" : "LeafGreen rev 1"); }
     if (dumpModel != NULL) {
         int rc = DumpModel(rom, n, dumpModel);
         free(rom);

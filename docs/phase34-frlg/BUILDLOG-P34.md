@@ -345,3 +345,70 @@ interiors3d off).
     flat (T1).
 - M1 is not closed yet. Still needed: G2 (terrain/water/signs), T1 (trees), the 4-angle and door checks, and then the
   hardware run.
+
+## G2 - FRLG art, regions.bin and signposts.bin (branch of e3a7c32; commits 72733f0, b4c2ceb + this entry)
+
+FireRed and LeafGreen rev 1 now make `regions.bin` (VXR5, 246995 B, 366 layouts) and `signposts.bin` (VXS2, 10376 B, 144 records) with the host
+CLI and with the device hook; relief stays off until L1. FR and LG produce byte-identical files (asserted).
+
+### What changed
+- `rg_run.c`: the FRLG early-return is gone. Roles, regions, signposts and buildings run for every game; only the relief call is gated on
+  `GP_EMERALD` (the Emerald-only relief modules are never reached).
+- `rg_art.c` and the `is_house` window were already profile-driven since G1 (7 primary palettes, tile split 640, `houseHalfWidth/Height` read from the
+  profile). G2 only had to prove them: `test_romgen_frlg_regions` re-derives every Pallet metatile colour (98 distinct metatiles, 37922 pixels) straight
+  from the ROM tables (pal < 7 from the primary palette block, pal >= 7 from the secondary; 14036 of those pixels use palettes 7-12 and 18553 would come out
+  different from the wrong tileset, so the check can fail).
+- `rg_roles.c` (is_signpost): on FRLG a sign is **a blocked outdoor cell with behaviour 0x84 and a walkable cell south**. The Emerald lantern / open-post
+  heuristics are not used there: they missed Pallet's two mailboxes (metatile 0x2AD touches the house wall, role came out WALL) and produced 12 cells that are not
+  signs. Emerald branch unchanged (its output is pinned). The door rule needed no change: `build_houses` never required a walkable door, and the three Pallet doors
+  (collision-blocked, 0x69) make WALL roles (tested).
+- `rg_gameprof.c`: `houseHalfWidth` 5 -> **8**, `houseHeight` stays 7, both measured: door-to-building extents over the 191 census doors (SPEC 5.1 seeds,
+  door to the far edge / rows above the door): 8 columns cover 98 %, 7 rows cover 97 % (the Emerald placeholders 5 / 7 cover 83 % / 97 %). The census seeds merge
+  touching buildings, so no window is tight; the value only decides how far a house mass may spread and changes no pinned Emerald byte.
+- `romgen_cli.c`: FRLG no longer forces `wantRegions = false`; `--dump-roles` returns with a message when there is no regions buffer instead of dereferencing NULL.
+- `romgen_dev.c/.h`, `main.c`: the device hook writes to `vx_profile_data_dir(prof)` of the ROM (Emerald `sdmc:/3ds/3DGBA/voxel`, FR `.../BPRE`, LG `.../BPGE`),
+  runs once per game per session (bit per `GpGame`), and `main.c` offers BPRE / BPGE ROMs to it (rev 0 is refused inside via `gameprof_detect_romgen`).
+  S3.8 is merged, so this hunk may land.
+- `test_romgen_frlg_regions.c` (new, 1639412 checks); `test_romgen_frlg_buildings.c` one assertion updated (FRLG now has regions; 2467 checks unchanged).
+
+### Pinned numbers (FR rev 1 = LG)
+    regions.bin   246995 B  3716874d6ba477acbdaaecc079fd7dc77526cd1b
+    signposts.bin  10376 B  ba2fde451aa9612c10f7a7a80cf0d9b06f007e06   (144 records, 6 with a head, 0 empty masks)
+    buildings.bin  76032 B  66b63ede1e7eb54828654bf4a86f7a899b6c1aa7   (the K1 pin still holds)
+    Pallet (layout 78) roles slab  f438cc30f0033f119e7bc4731722794311ba2739   floor 260 water 12 stair 10 wall 68 tree 116 fence 9 sign 5
+    Route 24 (layout 112, map 3/43) slab  2d5f4d6cefd72d858956364f23e2ade5c7ca7229
+    Pallet house door metatile 0x2A3 as rg_cell_image (16x16 RGBA)  f0e58e8686e7e54af622e5bfe3bb38953ed16430
+Kanto roles: floor 78167 water 46563 ledge 1109 stair 3372 wall 4541 tree 23994 fence 5673 cliff 25042 signpost 144.
+Signs: 151 outdoor sign BgEvents, 138 on a 0x84 cell, 135 land on a record (89.4 %); the 3 events on 0x84 that miss have no walkable cell south, the 13 that are
+not on 0x84 are not signs. 147 outdoor 0x84 cells (138 with an event, 9 without), 144 have a south cell = the 144 records. Pallet: exactly the 5 census cells
+(4,7) (13,7) mailboxes, (9,11) (5,14) (16,16) fence/post signs. Route 24: the Nugget Bridge deck is x 10-12, y 17-39; row 17 is behaviour 0x2A (never water on
+FRLG), rows 18-39 behaviour 0, none of the 69 cells is water; the sea (0x15) is water everywhere and collision-walkable; the role is water iff the behaviour is in
+the water set, asserted for every cell of all 366 layouts. SURVEY's "506 signs" / G1's 519 are all-layout event counts; the test counts outdoor events (151).
+
+### Gate (SPEC 0.3), before vs after: identical
+    2929c7642be7ef83aad7cbb1619e062900ca4c74  buildings.bin
+    007a370f440fa3c36cf0056440f05c025a386c4f  regions.bin
+    21a837f091c6b4764ad284e02438f7113c829cbf  relief.bin (default run = FULL)
+    eb25a3835edf7ebbcc9d634dd199be955fb4d27e  relief.bin (--relief ledges)
+    385156050629ee50724bf3f6504991b10e48c7c1  signposts.bin
+`make -C tools/romgen test` + `vtest`: 31 suites before, 32 after; every count equal (art 33149, bimg 10481, buildings 4400, expand 1512, export 580568,
+frlg_buildings 2467, frlg_world 14685, gameprof 5799, geom 585, interior 851, regions 474, relief_canvas 1579, relief_drawn 1388, relief_faults 221,
+relief_full 1538098, relief_ledge 55159, relief_solve 379, relief_world 691, roles 656013, rtables 9981, signs 1751, world 612; vtest adapter 562, entities 35,
+frlg 84, gate 37, lz77 173, mesh 20, overlay 23, shims 69, world 133); the only addition is `frlg_regions` 1639412. 0 failures, 0 skipped.
+Device: `make -j8 ROMGEN_DEV_HOOK=1` then `make -j8` (release last) both link (3DGBA.3dsx).
+
+### Azahar (New-3DS mode, release build, harness state dir /tmp/g2emu, host-CLI files in sdmc `3ds/3DGBA/voxel/BPRE` and `BPGE`)
+- `evidence/g2-fr-pallet-signs.png`, `evidence/g2-lg-pallet-signs.png`: Pallet with the K1 house and lab models, both mailboxes and the three fence/post signs as 3D
+  cut-outs, the pond as water. The ground itself is flat (no relief on FRLG until L1; the "terrain" the spec mentions is the ground art, the pond and the models).
+- `evidence/g2-fr-route24-bridge.png` (warp save `roms/firered-r24.sav`, 3/43 at 11,27): the Nugget Bridge deck is solid planking over the water, the trainers stand on
+  it, the river and the sea are water on both sides.
+- SD restored: gameA.gba/.sav, recent.bin, settings.bin re-hashed identical to the pre-run backup; `azctl clean-fixtures` ran; Emerald's `voxel/*.bin` untouched
+  (regions.bin still 007a370f...). The BPRE/BPGE dirs now hold the full G2 output (overwriting the K1 buildings.bin with an identical file).
+
+### Deviations / notes for the lead
+- `rg_art.c` needed no edit (G1 did the palette/tile splits); G2 added the proof. SPEC's "FRLG art" for G2 is therefore a test-only change.
+- The FRLG sign rule replaces, not extends, the Emerald heuristics (see above). It is a `game != GP_EMERALD` branch in `is_signpost`, not a profile flag.
+- `houseHalfWidth` 5 -> 8 is the one profile value that changed; nothing in the renderer reads the WALL role on FRLG, so it only moves regions.bin bytes.
+- A new warp save `roms/firered-r24.sav` (+ symlink `firered-r24.gba`) was made in the gitignored `roms/`; Guy's originals untouched.
+- Merge: `rg_gameprof.c` has two tiny hunks (a 2-line comment above `#define GP_FRLG_COMMON` and `.houseHalfWidth = 5` -> `8` on one line of that macro); T1's
+  `treePart/treeGround` edits live in the FRLG row initialisers below it, so the hunks should not overlap.
