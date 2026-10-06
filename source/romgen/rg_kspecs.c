@@ -19,11 +19,14 @@ extern const RgSpec rg_kspecs_landmarks[];
 extern const unsigned rg_kspecs_landmarks_count;
 extern const RgSpec rg_kspecs_viridian[];
 extern const unsigned rg_kspecs_viridian_count;
+extern const RgSpec rg_kspecs_pewter[];
+extern const unsigned rg_kspecs_pewter_count;
 
 static const KTown sTowns[] = {
     {rg_kspecs_pallet, &rg_kspecs_pallet_count},   /* K1 */
     {rg_kspecs_landmarks, &rg_kspecs_landmarks_count},   /* K2 */
     {rg_kspecs_viridian, &rg_kspecs_viridian_count},   /* K3 */
+    {rg_kspecs_pewter, &rg_kspecs_pewter_count},   /* K4 */
 };
 
 static RgSpec sTable[RG_KSPECS_MAX];
