@@ -1,4 +1,4 @@
-// test_voxel_gate.c -- host test for voxel_gate() (source/tilt.c). Phase 32 P3, SPEC-port 5.3, 9.2.
+// test_voxel_gate.c -- host test for voxel_gate() (source/vx_gate.c). Phase 32 P3, SPEC-port 5.3, 9.2.
 //
 //   clang -std=c11 -Wall -Wextra -O2 -I source test/host/test_voxel_gate.c -o /tmp/tvg && /tmp/tvg
 //
@@ -8,7 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "../../source/tilt.c"
+#include "../../source/vx_gate.c"
 
 static int sChecks, sFails;
 #define CHECK(c) do { ++sChecks; if (!(c)) { ++sFails; printf("FAIL %s:%d  %s\n", __FILE__, __LINE__, #c); } } while (0)

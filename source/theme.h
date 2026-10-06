@@ -7,7 +7,7 @@
 // PHASE 17 / SPEC-widgets W4.4: theme.c is pure arithmetic over u32 colours, so the palette + the
 // custom builder dual-compile on the PC host harness (test/host/test_theme.c) — the only libctru
 // surface it uses is `u32` and `C2D_Color32`, both provided by test/host/ctr_shim.h under this
-// define. Nothing else in the file changes. (CLAUDE.md rule #4, the same seam tilt/control use.)
+// define. Nothing else in the file changes. (CLAUDE.md rule #4, the same seam control uses.)
 #ifndef THEME_HOST_SHIM
 #include <citro2d.h>
 #endif
@@ -48,14 +48,10 @@ typedef struct {
 	int gameMode;         // 0 = dual (two games), 1 = single (one game + touch controller)
 	int padColor;         // gamepad tint index into PAD_COLORS[]
 	int padEdge;          // 0 = round, 1 = soft, 2 = sharp
-	// phase 14 (HD-2D diorama tilt, SPEC-integration I4.8): the SAVED preference, 0 = Off ..
-	// TILT_LEVELS-1. Lives here rather than in the settings_load/save parameter list for the
-	// documented reason above — zero call-site churn across the ~12 settings_save() calls. The
-	// LIVE level is clamped per tier (Old 3DS / link / frameskip / stereo) inside
-	// tilt_target_level(); this value is NEVER rewritten by a clamp (I5.1, gen1recomp
-	// Game.lua:841-857), so an SD card moved to a New 3DS still has what the user picked.
-	// Ships 0 (I5.8): unlike dofOn/bloomOn/lightOn this effect is not hardware-proven yet.
-	int tiltLevel;
+	// RESERVED: was the phase-14 tilt level (deleted 2026-10-06, docs/REMOVED-3D-ATTEMPTS.md).
+	// Unused; kept so the later fields keep their offsets (the emutest harness reads g_prefs by
+	// offset over GDB).
+	int rsvTilt;
 	// phase 22.2 (SPEC-family-traversal T4.1): HM-aware routing for SMART touch.
 	//   0 = Off (SHIP DEFAULT) — the router is exactly the phase-18 walker; a tap that needs Cut
 	//       or Surf plans nothing, as it does today.
@@ -65,7 +61,7 @@ typedef struct {
 	//       never routes THROUGH one and never pushes one). Dive is planned by fieldtrav_dive but
 	//       is NOT wired to touch, so no level plans it.
 	//   2 = HM+Via — plus single-warp out-and-back excursions (the Lavaridge class).
-	// Ships Off for the tiltLevel reason (theme.h:57): a feature that MOVES THE PLAYER and answers
+	// Ships Off: a feature that MOVES THE PLAYER and answers
 	// the game's own yes/no prompts is not something to switch on for everyone before it has
 	// survived a hardware session (CLAUDE.md #6). Only consulted in SMART touch mode; PAD/OFF are
 	// unaffected. Persisted through the size-tolerant Settings append, so a settings file written

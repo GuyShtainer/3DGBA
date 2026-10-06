@@ -25,10 +25,11 @@
 // (SPEC-data D4.5) and does NOT invent a second, divergent field predicate.
 #pragma once
 
+// (2026-10-06: the phase-14 tilt was deleted — docs/REMOVED-3D-ATTEMPTS.md. The tilt.c/test_tilt.c
+//  references above are historical; presence is now this predicate's only user.)
 // == GCTX_OVERWORLD (gamestate.h:12). The enum crosses this boundary pinned at the CALL SITE by
-//    _Static_assert(GCTX_OVERWORLD == TILT_CTX_FIELD, ...)      // main.c:1130
-// so a future insert into GameCtx is a COMPILE ERROR, not a silent mis-gate. TILT_CTX_FIELD is
-// now an alias of this constant (tilt.h), which keeps that existing assert covering both users.
+//    _Static_assert(GCTX_OVERWORLD == FIELD_CTX_OVERWORLD, ...)   // main.c
+// so a future insert into GameCtx is a COMPILE ERROR, not a silent mis-gate.
 #define FIELD_CTX_OVERWORLD 1
 
 // All args are plain ints so this header stays free of GameCtx/libctru/stdint types.
