@@ -15,9 +15,12 @@ typedef struct KTown { const RgSpec *rows; const unsigned *count; } KTown;
  *   extern const RgSpec rg_kspecs_pallet[]; extern const unsigned rg_kspecs_pallet_count;   and   {rg_kspecs_pallet, &rg_kspecs_pallet_count}, */
 extern const RgSpec rg_kspecs_pallet[];
 extern const unsigned rg_kspecs_pallet_count;
+extern const RgSpec rg_kspecs_landmarks[];
+extern const unsigned rg_kspecs_landmarks_count;
 
 static const KTown sTowns[] = {
     {rg_kspecs_pallet, &rg_kspecs_pallet_count},   /* K1 */
+    {rg_kspecs_landmarks, &rg_kspecs_landmarks_count},   /* K2 */
 };
 
 static RgSpec sTable[RG_KSPECS_MAX];
