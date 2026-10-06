@@ -155,10 +155,20 @@ static const RgExact kPewterMuseumExact[5] = {
     {112, 96, 176, 112, false}, /* hedge, east */
 };
 
+/* Phase 34 side walls: the end-face patches of each model (art coordinates), see rg_close_sides. */
+static const RgSideCfg kPewterHouseSide[1] = {
+    {NULL, {55, 51, 72, 54}, {4, 24, 76, 27}, 16, true},
+};
+static const RgSideCfg kMuseumSide[3] = {
+    {"hall", {71, 84, 107, 89}, {16, 24, 19, 48}, 40, false},
+    {"wing", {199, 64, 208, 74}, {16, 24, 19, 48}, 22, false},
+    {"porch", {71, 84, 107, 89}, {71, 84, 107, 89}, 16, true},
+};
+
 const RgSpec rg_kspecs_pewter[] = {
     {"k_pewter_house", RG_SPEC_DIRECT, L_PEWTER, {32, 8, 5, 4}, {0, 0}, {0x001}, 1, kPewterHouseExact, 2,
-     k_pewter_house, 0, 0, NULL},
+     k_pewter_house, 0, 0, kPewterHouseSide},
     {"k_pewter_museum", RG_SPEC_DIRECT, L_PEWTER, {12, 0, 16, 7}, {0, 0}, {0x001}, 1, kPewterMuseumExact, 5,
-     k_pewter_museum, 0, 0, NULL},
+     k_pewter_museum, 0, 0, kMuseumSide},
 };
 const unsigned rg_kspecs_pewter_count = sizeof(rg_kspecs_pewter) / sizeof(rg_kspecs_pewter[0]);

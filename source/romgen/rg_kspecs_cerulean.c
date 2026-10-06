@@ -113,20 +113,31 @@ static const RgExact kCottageExact[9] = {
     {20, 2, 24, 64, false}, {24, 0, 72, 64, false}, {72, 9, 76, 64, false}, {76, 11, 80, 64, false},
 };
 
+/* Phase 34 side walls: the end-face patches of each model (art coordinates), see rg_close_sides. */
+static const RgSideCfg kCeruleanHouseSide[1] = {
+    {NULL, {8, 51, 24, 54}, {12, 12, 83, 15}, 24, true},
+};
+static const RgSideCfg kBikeSide[1] = {
+    {NULL, {5, 58, 59, 64}, {5, 58, 59, 64}, 999, true},
+};
+static const RgSideCfg kCottageSide[1] = {
+    {NULL, {16, 47, 27, 58}, {24, 4, 55, 30}, 29, true},
+};
+
 const RgSpec rg_kspecs_cerulean[] = {
     {"k_cerulean_house_a", RG_SPEC_DIRECT, L_CERULEAN, {8, 8, 7, 4}, {0, 0}, CE_GROUND, 1, kHouse7, 3,
-     k_cerulean_house, 112, 0, NULL},
+     k_cerulean_house, 112, 0, kCeruleanHouseSide},
     {"k_cerulean_house_b", RG_SPEC_DIRECT, L_CERULEAN, {15, 8, 6, 4}, {0, 0}, CE_GROUND, 1, kHouse6, 3,
-     k_cerulean_house, 96, 0, NULL},
+     k_cerulean_house, 96, 0, kCeruleanHouseSide},
     {"k_cerulean_house_c", RG_SPEC_DIRECT, L_CERULEAN, {28, 8, 7, 4}, {0, 0}, CE_GROUND, 1, kHouse7, 3,
-     k_cerulean_house, 112, 0, NULL},
+     k_cerulean_house, 112, 0, kCeruleanHouseSide},
     {"k_cerulean_house_d", RG_SPEC_DIRECT, L_CERULEAN, {13, 14, 7, 4}, {0, 0}, CE_GROUND, 1, kHouse7, 3,
-     k_cerulean_house, 112, 0, NULL},
+     k_cerulean_house, 112, 0, kCeruleanHouseSide},
     {"k_cerulean_house_e", RG_SPEC_DIRECT, L_CERULEAN, {21, 25, 6, 4}, {0, 0}, CE_GROUND, 1, kHouse6, 3,
-     k_cerulean_house, 96, 0, NULL},
+     k_cerulean_house, 96, 0, kCeruleanHouseSide},
     {"k_cerulean_bike", RG_SPEC_DIRECT, L_CERULEAN, {12, 23, 4, 6}, {0, 0}, CE_GROUND, 1, kBikeExact, 1,
-     k_cerulean_bike, 0, 0, NULL},
+     k_cerulean_bike, 0, 0, kBikeSide},
     {"k_route25_cottage", RG_SPEC_DIRECT, L_ROUTE25, {49, 1, 5, 4}, {0, 0}, CE_GROUND, 1, kCottageExact, 9,
-     k_route25_cottage, 0, 0, NULL},
+     k_route25_cottage, 0, 0, kCottageSide},
 };
 const unsigned rg_kspecs_cerulean_count = sizeof(rg_kspecs_cerulean) / sizeof(rg_kspecs_cerulean[0]);

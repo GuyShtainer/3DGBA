@@ -185,7 +185,7 @@ RgErr rg_build_models(const RgWorld *w, const RgSpec *specs, unsigned nSpecs, Rg
                 break;
             }
             rg_parts_init(&parts);
-            ok = s->parts(s, s->arg0, s->arg1, &parts) && rg_parts_emit(&parts, &m->mesh);
+            ok = s->parts(s, s->arg0, s->arg1, &parts) && rg_close_sides(s, &parts) && rg_parts_emit(&parts, &m->mesh);
             rg_parts_free(&parts);
             if (!ok || m->mesh.failed)
                 err = RG_ERR_BUILDINGS;

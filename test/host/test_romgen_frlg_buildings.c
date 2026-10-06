@@ -305,8 +305,8 @@ static void Sha1(const uint8_t *d, size_t n, char hex[41])
     free(m);
 }
 
-/* The FR buildings.bin of the Kanto models so far (K1 Pallet, K2 landmarks, K3 Viridian, K4 Pewter, K5 Cerulean, K6 Vermilion and Routes 5-8, K7 Lavender and Route 10); FR = LG. Re-pinned by the lead after the visual check, if the look changes. */
-#define PALLET_BUILDINGS_SHA1 "d4038f346a9692569279f695d9e6b14a6e432ec7"
+/* The FR buildings.bin of the Kanto models so far (K1 Pallet, K2 landmarks, K3 Viridian, K4 Pewter, K5 Cerulean, K6 Vermilion and Routes 5-8, K7 Lavender and Route 10); FR = LG. Re-pinned for Phase 34 side walls (end faces closed). */
+#define PALLET_BUILDINGS_SHA1 "8b452134afdba2244129a5035939cca51e5754d5"
 
 static uint8_t *sPalletBin[2];
 static size_t sPalletBinSize[2];
@@ -326,6 +326,8 @@ static void CheckSpecText(const RgWorld *w, const RgSpec *sp, int expect)
     CHECK(found == sp->nExact);                                           /* ortho 0/0/0 on every exact rect */
     CHECK(strstr(buf, "density: 0 bad triangle(s)") != NULL);             /* density empty */
     CHECK(strstr(buf, "round trip: ok") != NULL && strstr(buf, "RESULT PASS") != NULL);
+    CHECK(strstr(buf, "FAIL: open side") == NULL && strstr(buf, "FAIL side") == NULL);   /* both ends closed */
+    CHECK(strstr(buf, "  side west:") != NULL && strstr(buf, "  side east:") != NULL);
     free(buf);
 }
 
@@ -575,6 +577,63 @@ static void TestPallet(const char *name, const char *env, GpGame game, int idx)
     printf("%s: Kanto K1-K7 -> 36 models, 80 placements, buildings.bin %zu bytes\n", name, sPalletBinSize[idx]);
 }
 
+/* ---- 3b. the side-closure check on synthetic models (no ROM): an open-sided prism fails, a capped one passes ---- */
+static void SideBox(RgPartList *pl, bool capped)
+{
+    static const double pts[4][2] = {{24, 0}, {24, 24}, {0, 24}, {0, 0}};
+    RgPart *pt = rg_parts_add(pl, RG_P_PRISM, "box");
+    RgPrism *pr;
+    unsigned i;
+
+    CHECK(pt != NULL);
+    if (pt == NULL)
+        return;
+    pr = &pt->u.prism;
+    pr->x0 = 0; pr->x1 = 40;
+    pr->nPoly = 4;
+    for (i = 0; i < 4; i++) {
+        pr->poly[i][0] = pts[i][0]; pr->poly[i][1] = pts[i][1];
+        if (i == 0) {
+            pr->edges[i].kind = RG_EM_PROJ;
+            pr->edges[i].proj = rg_proj_rows(0, 24);
+        } else {
+            pr->skip |= 1u << i;
+        }
+    }
+    pr->west = pr->east = capped;       /* an end face is drawn only through a cap band */
+    if (capped) {
+        pr->hasCaps = true;
+        pr->nCaps = 1;
+        pr->caps[0] = rg_band(-1, 25, rg_tile_top(0, 0, 4, 4, 24), 24);
+    }
+}
+
+static void TestSideCheck(void)
+{
+    unsigned c, side;
+
+    for (c = 0; c < 2; c++) {
+        RgPartList pl;
+        RgMesh m;
+
+        rg_mesh_init(&m);
+        rg_parts_init(&pl);
+        SideBox(&pl, c == 1);
+        CHECK(rg_parts_emit(&pl, &m) && m.n > 0);
+        for (side = 0; side < 2; side++) {
+            RgSideResult sr;
+
+            CHECK(rg_side_check(&pl, &m, side == 1, &sr) && sr.applicable && sr.expected > 0);
+            if (c == 0)
+                CHECK(sr.open > RG_SIDE_TOL(sr.expected));      /* the open-sided model must FAIL */
+            else
+                CHECK(sr.open <= RG_SIDE_TOL(sr.expected));     /* closing both ends passes */
+        }
+        rg_mesh_free(&m);
+        rg_parts_free(&pl);
+    }
+}
+
 /* ---- 4. the commands end to end, on Emerald (its table has real models) ---- */
 static void TestCommands(void)
 {
@@ -718,6 +777,7 @@ int main(void)
 
         CHECK(rg_kspecs_table(gameprof_emerald(), &nk) == NULL && nk == 0);
     }
+    TestSideCheck();
     TestCommands();
     printf("test_romgen_frlg_buildings: %d checks, %d failures, %d skipped\n", sChecks, sFails, sSkipped);
     return sFails != 0;

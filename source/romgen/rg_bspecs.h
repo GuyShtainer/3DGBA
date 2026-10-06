@@ -85,4 +85,19 @@ bool rg_flat_part(RgPartList *out, const char *name, double x0, double x1, doubl
 bool rg_flat_block(RgPartList *out, double width, double height, const double roof[3][2], const double cornice[2],
                    double facade_top, const double *unit);
 
+/* Phase 34 side walls (Kanto table only). A prism's end faces are drawn only through a cap band, so `west`/`east` alone
+ * leave a wall open. A DIRECT Kanto spec whose `ext` points at one of these gets every prism end that a camera due west or
+ * due east can see closed after its builder ran (rg_close_sides, rg_prism_exposed): the leftmost x-range west, the
+ * rightmost east, a step that stands out from the next prism too; the inner slices of a run stay open. A prism that sets
+ * its own caps is left alone. The end face is a plain patch of the model's own art: `wall` (u0, v0, u1, v1) below
+ * y = `eave`, `roof` above it. `ext` is an array of entries, the first whose `part` matches a prism wins. */
+typedef struct RgSideCfg {
+    const char *part;            /* applies to the prisms whose name starts with this; NULL = any prism */
+    double wall[4], roof[4];
+    double eave;
+    bool last;                   /* the last entry of the spec's array */
+} RgSideCfg;
+/* True (a no-op) for a spec without a RgSideCfg. False when a band could not be built. */
+bool rg_close_sides(const RgSpec *s, RgPartList *parts);
+
 #endif

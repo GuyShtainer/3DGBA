@@ -710,6 +710,88 @@ static void emit_cap_piece(RgMesh *m, const double (*piece)[2], unsigned np, con
     }
 }
 
+bool rg_prism_is_sheet(const RgPrism *pr)
+{
+    double zlo = 1e30, zhi = -1e30, ylo = 1e30, yhi = -1e30;
+    unsigned i;
+
+    for (i = 0; i < pr->nPoly; i++) {
+        if (pr->poly[i][0] < zlo) zlo = pr->poly[i][0];
+        if (pr->poly[i][0] > zhi) zhi = pr->poly[i][0];
+        if (pr->poly[i][1] < ylo) ylo = pr->poly[i][1];
+        if (pr->poly[i][1] > yhi) yhi = pr->poly[i][1];
+    }
+    return zhi - zlo < 4.0 || yhi - ylo < 4.0;
+}
+
+static double seg_dist(double px, double py, double ax, double ay, double bx, double by)
+{
+    double dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy, t = l2 > 1e-12 ? ((px - ax) * dx + (py - ay) * dy) / l2 : 0.0;
+
+    if (t < 0.0) t = 0.0;
+    if (t > 1.0) t = 1.0;
+    return hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+bool rg_poly_inside(const double (*poly)[2], unsigned n, double z, double y, double margin)
+{
+    bool in = false;
+    unsigned i, j;
+
+    for (i = 0, j = n - 1u; i < n; j = i++) {
+        double zi = poly[i][0], yi = poly[i][1], zj = poly[j][0], yj = poly[j][1];
+
+        if (margin > 0.0 && seg_dist(z, y, zi, yi, zj, yj) < margin)
+            return false;
+        if ((yi > y) != (yj > y) && z < (zj - zi) * (y - yi) / (yj - yi) + zi)
+            in = !in;
+    }
+    return in;
+}
+
+unsigned rg_prism_exposed(const RgPartList *parts, unsigned idx, bool east, RgCellFn cb, void *ctx)
+{
+    const RgPart *me = rg_parts_at(parts, idx);
+    const RgPrism *pr;
+    double zlo = 1e30, zhi = -1e30, ylo = 1e30, yhi = -1e30, edge;
+    unsigned i, count = 0;
+    int z, y;
+
+    if (me == NULL || me->kind != RG_P_PRISM || rg_prism_is_sheet(&me->u.prism))
+        return 0;
+    pr = &me->u.prism;
+    edge = east ? pr->x1 : pr->x0;
+    for (i = 0; i < pr->nPoly; i++) {
+        if (pr->poly[i][0] < zlo) zlo = pr->poly[i][0];
+        if (pr->poly[i][0] > zhi) zhi = pr->poly[i][0];
+        if (pr->poly[i][1] < ylo) ylo = pr->poly[i][1];
+        if (pr->poly[i][1] > yhi) yhi = pr->poly[i][1];
+    }
+    for (y = (int)floor(ylo); y < (int)ceil(yhi); y++)
+        for (z = (int)floor(zlo); z < (int)ceil(zhi); z++) {
+            double cz = z + 0.5, cy = y + 0.5;
+            bool hidden = false;
+
+            if (!rg_poly_inside(pr->poly, pr->nPoly, cz, cy, 0.75))
+                continue;
+            for (i = 0; i < parts->n && !hidden; i++) {
+                const RgPart *q = rg_parts_at(parts, i);
+
+                if (q == NULL || q == me || q->kind != RG_P_PRISM || rg_prism_is_sheet(&q->u.prism))
+                    continue;
+                if ((east ? q->u.prism.x1 > edge + 1e-6 : q->u.prism.x0 < edge - 1e-6) &&
+                    rg_poly_inside(q->u.prism.poly, q->u.prism.nPoly, cz, cy, 0.0))
+                    hidden = true;
+            }
+            if (hidden)
+                continue;
+            if (cb != NULL)
+                cb(ctx, cz, cy);
+            count++;
+        }
+    return count;
+}
+
 static bool emit_prism(const RgPrism *pr, const char *name, RgMesh *m)
 {
     const double (*poly)[2] = pr->poly;
