@@ -301,6 +301,19 @@ bool rg_side_check(const RgPartList *parts, const RgMesh *m, bool east, RgSideRe
             if (y < ylo) ylo = y;
             if (y > yhi) yhi = y;
         }
+    for (i = 0; i < parts->n; i++) {      /* a prism with no face toward the camera still owns its section: grow the grid to it */
+        const RgPart *p = rg_parts_at(parts, i);
+
+        if (p != NULL && p->kind == RG_P_PRISM)
+            for (k = 0; k < p->u.prism.nPoly; k++) {
+                double z = p->u.prism.poly[k][0], y = p->u.prism.poly[k][1];
+
+                if (z < zlo) zlo = z;
+                if (z > zhi) zhi = z;
+                if (y < ylo) ylo = y;
+                if (y > yhi) yhi = y;
+            }
+    }
     z0 = (int)floor(zlo); y0 = (int)floor(ylo);
     zw = (int)ceil(zhi) - z0 + 1; yh = (int)ceil(yhi) - y0 + 1;
     if (zw <= 0 || yh <= 0 || (size_t)zw * (size_t)yh > 4u * 1024u * 1024u)

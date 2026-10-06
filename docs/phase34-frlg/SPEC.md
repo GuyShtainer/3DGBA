@@ -568,6 +568,10 @@ Every image is written by `rg_png.c` (stored deflate, no compression dependency)
 6. Full Emerald 0.3 gate identical. A K slice adds only to the Kanto table, but the gate is cheap and catches shared
    helpers being touched.
 7. Azahar: a screenshot at the town's save-warp spot (section 8) on FR, and once per slice on LG.
+8. Side closure: `check` prints `side west` and `side east` lines and neither says `FAIL: open side`. A Prism's end face is
+   drawn only through a cap band (`hasCaps` + `west`/`east`), so a model built from x-slices with `ends=false` has open
+   ends that the ortho check cannot see (edge-on from the front). Close the outermost ends with a plain wall patch of the
+   model's own art (`RgSideCfg` in the town's recipe file, see BUILDLOG-P34 "Side walls"); inner slices stay open.
 
 ### 5.6 How a K slice is run (agent brief template)
 
