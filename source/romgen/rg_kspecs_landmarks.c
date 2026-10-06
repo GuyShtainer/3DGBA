@@ -11,6 +11,16 @@
 /* Viridian (layout 79): the donor layout of all three landmark rects; FNV-1a-32 of its blockdata. */
 #define L_VIRIDIAN 79, 0x9925DC24u
 
+/* [(front, ylo), (front, yhi), (back, yhi), (back, ylo)] */
+static void lm_box(RgPrism *p, double front, double ylo, double yhi, double back)
+{
+    p->nPoly = 4;
+    p->poly[0][0] = front; p->poly[0][1] = ylo;
+    p->poly[1][0] = front; p->poly[1][1] = yhi;
+    p->poly[2][0] = back;  p->poly[2][1] = yhi;
+    p->poly[3][0] = back;  p->poly[3][1] = ylo;
+}
+
 static RgStrip lm_strip2(double a, double b)
 {
     RgStrip s;
@@ -109,6 +119,94 @@ static bool k_mart(const RgSpec *spec, int a0, int a1, RgPartList *out)
     return !out->failed;
 }
 
+/* ---- k_gym: 96/112/128 x 80 art (the Gym; width = arg0 pixels) --------------------------------------------------- */
+/* The seven Kanto gyms share their left five cells (the door stands in the fourth) and differ in the roof's top lip
+ * and in how many middle cells (metatile 341) sit before the right end: 6 cells (Viridian, Cinnabar), 7 (Pewter,
+ * Cerulean, Vermilion, Fuchsia), 8 (Celadon). So the recipe is one builder with the width as its argument.
+ * Art rows: roof 1-41 (a slatted slab), roof front edge 41-47, facade 47-72 (windows, a plain wall), porch over the
+ * entrance 49-80 (the Poke Ball plate 49-63, the doors 63-80). Shape after Emerald's gym: body, roof slab, porch. */
+static bool k_gym(const RgSpec *spec, int width, int a1, RgPartList *out)
+{
+    double w = width, front = 72, porch = 80, back = 30, wall_top = 25, roof_top = 31, roof_back = 32;
+    double px0 = (w - 32) / 2 - 8 + 8, px1;
+    RgPart *bd = rg_parts_add(out, RG_P_PRISM, "body");
+    RgPart *rf = rg_parts_add(out, RG_P_PRISM, "roof");
+    RgPart *pf = rg_parts_add(out, RG_P_PRISM, "porch");
+    RgPrism *pr;
+    RgTile panel, lip;
+    RgBand b;
+    RgStrip s;
+
+    (void)spec; (void)a1;
+    if (bd == NULL || rf == NULL || pf == NULL)
+        return false;
+    px0 = 40;                                   /* the porch: columns 40-72 in every width (it sits by the left cells) */
+    px1 = 72;
+    panel = rg_tile_top(32, 47, 40, 72, wall_top);
+    lip = rg_tile_top(8, 41, 16, 47, roof_top);
+
+    pr = &bd->u.prism;
+    pr->x0 = 0; pr->x1 = w;
+    pr->west = pr->east = true;
+    lm_box(pr, front, -1, wall_top, back);
+    pr->edges[0].kind = RG_EM_PROJ;
+    pr->edges[0].proj = rg_proj_rows(47, 72);
+    pr->edges[2].kind = RG_EM_TILE;
+    pr->edges[2].tile = panel;
+    pr->skip = (1u << 1) | (1u << 3);
+    b = rg_band(-1, wall_top, panel, front);
+    b.hasFront = true; b.front = panel;
+    b.hasBack = true;  b.back = panel;
+    rg_band_z1(&b, back);
+    pr->hasCaps = true;
+    pr->caps[pr->nCaps++] = b;
+
+    pr = &rf->u.prism;
+    pr->x0 = 0; pr->x1 = w;
+    pr->west = pr->east = true;
+    lm_box(pr, front, wall_top, roof_top, roof_back);
+    pr->edges[0].kind = RG_EM_PROJ;
+    pr->edges[0].proj = rg_proj_rows(41, 47);
+    memset(&s, 0, sizeof(s));
+    s.fixed[0] = 1; s.fixed[1] = 41;
+    pr->edges[1].kind = RG_EM_STRIP;
+    pr->edges[1].strip = rg_strip_fin(s);
+    pr->edges[2].kind = RG_EM_TILE;
+    pr->edges[2].tile = lip;
+    pr->skip = 1u << 3;
+    pr->hasCaps = true;
+    pr->caps[pr->nCaps++] = rg_band(wall_top, roof_top + 1, lip, front);
+
+    pr = &pf->u.prism;
+    pr->x0 = px0; pr->x1 = px1;
+    pr->west = pr->east = true;
+    lm_box(pr, porch, -1, roof_top, front);
+    pr->edges[0].kind = RG_EM_PROJ;
+    pr->edges[0].proj = rg_proj_rows(49, 80);
+    pr->skip = (1u << 1) | (1u << 2) | (1u << 3);
+    pr->hasCaps = true;
+    pr->caps[pr->nCaps++] = rg_band(-1, roof_top + 1, panel, porch);
+    return !out->failed;
+}
+
+static const RgExact kGymExact[3] = {
+    {3, 1, 93, 4, false},       /* roof, its rounded top corners */
+    {0, 4, 96, 72, false},      /* roof, front edge and facade */
+    {40, 72, 72, 80, false},    /* the porch below the facade line */
+};
+
+static const RgExact kGym7Exact[3] = {
+    {3, 1, 109, 4, false},
+    {0, 4, 112, 72, false},
+    {40, 72, 72, 80, false},
+};
+
+static const RgExact kGym8Exact[3] = {
+    {3, 1, 125, 4, false},
+    {0, 4, 128, 72, false},
+    {40, 72, 72, 80, false},
+};
+
 static const RgExact kMartExact[3] = {
     {9, 2, 55, 8, false},       /* roof top, its first rows */
     {8, 8, 56, 36, false},      /* roof top */
@@ -120,5 +218,11 @@ const RgSpec rg_kspecs_landmarks[] = {
      k_center, 0, 0, NULL},
     {"k_mart", RG_SPEC_DIRECT, L_VIRIDIAN, {34, 16, 4, 4}, {1, 4}, {LM_GRASS, 0x008, 0x16E}, 3, kMartExact, 3,
      k_mart, 0, 0, NULL},
+    {"k_gym", RG_SPEC_DIRECT, L_VIRIDIAN, {33, 6, 6, 5}, {1, 5}, {LM_GRASS, 0x008, 0x009, 0x16E}, 4, kGymExact, 3,
+     k_gym, 96, 0, NULL},
+    {"k_gym_7", RG_SPEC_DIRECT, 80, 0xAAB0C96Cu, {12, 12, 7, 5}, {1, 5}, {LM_GRASS, 0x008, 0x009, 0x16E}, 4, kGym7Exact, 3,
+     k_gym, 112, 0, NULL},
+    {"k_gym_8", RG_SPEC_DIRECT, 84, 0x6B8BA7E4u, {8, 26, 8, 5}, {1, 5}, {LM_GRASS, 0x008, 0x009, 0x16E}, 4, kGym8Exact, 3,
+     k_gym, 128, 0, NULL},
 };
 const unsigned rg_kspecs_landmarks_count = sizeof(rg_kspecs_landmarks) / sizeof(rg_kspecs_landmarks[0]);
