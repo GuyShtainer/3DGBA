@@ -257,3 +257,25 @@ the game stays 2D (screenshot: Pallet Town, no voxel).
 - A pre-existing `sdmc:/3DGBA/gameA.gba` (an Emerald copy) and `gameA.sav` blocked `--stage-roms`; I moved them to
   the session scratchpad (`sd-backup/`) and put back after the runs.
 - Not live-verified: the raw weather/palette values (only through the checks), the fldeff and gfx tables (ROM-only).
+
+## K1 Pallet Town recipes (2026-10-06), in progress
+- k_pallet_house banked: 80x64, hip-roof house (rg_hiproof + one Prism, kit_house shape), check PASS ortho 0/0/0 on both exact rects, density empty, round trip ok; placements (5,4) and (14,4) on layout 78.
+- k_pallet_lab banked: 112x64, flat roof + vent unit over a yellow-brick front (rg_flat_block shape written out locally for plain-brick end walls), check PASS ortho 0/0/0, density empty, round trip ok; placement (13,10).
+
+### K1 final (2026-10-06)
+Worktree branch on main `35d6a32`. Files: `source/romgen/rg_kspecs_pallet.c` (new), `rg_kspecs.c` (extern + one `sTowns` line), `test/host/test_romgen_frlg_buildings.c` (empty-table test replaced by TestPallet; census now expects `covered 3 / 152`). Layout 78 FNV pin `843369BB` (FR = LG).
+Census: `covered 3 / 152` (Pallet 0x58 all three placements).
+
+Per-model checklist (5.5):
+- k_pallet_house, rect (5,4,5,4) 80x64, Hip roof + one Prism (kit_house shape; arg-free builder). 1 covered (2 placements: (5,4), (14,4)). 2 exact rects written as numbers: facade (2,32,78,64), roof+eave (14,0,66,32). 3 check: ortho 0/0/0 both rects, density 0 bad, round trip ok. 4 placements = exactly (5,4) and (14,4), map 3/0, none elsewhere. 5 viewed: gabled/hipped roof with overhanging eave over a plain two-window facade reads right from fl, fr and top. 6 gate identical. 7 pending R2/M1.
+- k_pallet_lab, rect (13,10,7,4) 112x64, flat-block shape written out locally (3 roof slabs around a vent Prism + front Prism, plain-brick end walls). Exact rects: facade (0,32,112,64), roof+vent+cornice (0,0,112,32). check ortho 0/0/0, density 0, round trip ok. placement (13,10) only. 5 viewed: flat front with cornice, grid roof and the red vent unit read right from all three views. 6 identical. 7 pending R2/M1.
+
+Tests: frlg_buildings 2467 checks, 0 failures (was 2390). FR buildings.bin 76032 bytes, 2 models, 3 placements, SHA-1 `66b63ede1e7eb54828654bf4a86f7a899b6c1aa7`; LG file byte-identical.
+
+### Gate (SPEC 0.3), Emerald, identical to the B0 entry
+    2929c7642be7ef83aad7cbb1619e062900ca4c74  buildings.bin
+    007a370f440fa3c36cf0056440f05c025a386c4f  regions.bin
+    21a837f091c6b4764ad284e02438f7113c829cbf  relief.bin (FULL)
+    eb25a3835edf7ebbcc9d634dd199be955fb4d27e  relief.bin (--relief ledges)
+    385156050629ee50724bf3f6504991b10e48c7c1  signposts.bin
+`make -C tools/romgen test` + `vtest`: 31 suites, every count equal to the B0 entry (art 33149, bimg 10481, buildings 4400, expand 1512, export 580568, gameprof 5681, geom 585, interior 851, regions 474, relief_canvas 1579, relief_drawn 1388, relief_faults 221, relief_ledge 55159, relief_solve 379, relief_world 691, roles 656013, rtables 9981, signs 1751, world 612, frlg_world 14685, pyset 28; relief_full 1538098; vtest entities 35, mesh 20, world 133, adapter 122, gate 37, lz77 173, overlay 23, shims 69); only frlg_buildings grew. 0 skipped, 0 failures. Device `make -j8` and `make -j8 ROMGEN_DEV_HOOK=1` link.

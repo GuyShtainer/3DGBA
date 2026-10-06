@@ -13,8 +13,11 @@ typedef struct KTown { const RgSpec *rows; const unsigned *count; } KTown;
 
 /* Story order (SPEC section 6): K1 pallet, K2 landmarks, K3 viridian, ... Each entry is added with its slice:
  *   extern const RgSpec rg_kspecs_pallet[]; extern const unsigned rg_kspecs_pallet_count;   and   {rg_kspecs_pallet, &rg_kspecs_pallet_count}, */
+extern const RgSpec rg_kspecs_pallet[];
+extern const unsigned rg_kspecs_pallet_count;
+
 static const KTown sTowns[] = {
-    {NULL, NULL},               /* sentinel while the table is empty (C forbids a zero-length array) */
+    {rg_kspecs_pallet, &rg_kspecs_pallet_count},   /* K1 */
 };
 
 static RgSpec sTable[RG_KSPECS_MAX];

@@ -2,7 +2,8 @@
 //  1. rg_png.c: the PNG writer's output is decoded by this file's own stored-deflate reader and compared pixel for pixel.
 //  2. `romgen author ... census` on FireRed and LeafGreen rev 1: the M1 numbers, pinned (real ROMs, ROMGEN_ROM_FR / _LG
 //     or firered.gba / leafgreen.gba beside ROMGEN_ROM; without them the real-ROM part prints SKIP).
-//  3. an empty Kanto spec table gives a 0-model buildings.bin that the vendored consumer loads.
+//  3. the K1 Kanto table (Pallet Town: k_pallet_house x2, k_pallet_lab): gate, placements, a two-model buildings.bin
+//     that the vendored consumer loads, and its SHA-1 pin (FR and LG give the identical file).
 //  4. the art / preview / check / placements commands run end to end (on Emerald's own table, which has real models).
 //
 // rg_author.c and rg_png.c live in tools/romgen/ and are #included here so the suite needs no Makefile change.
@@ -178,7 +179,12 @@ static void TestCensus(const char *name, const char *env, int idx)
         return;
     }
     CHECK(rg_world_open(&w, rom, n) == RG_OK);
-    CHECK(rg_author_census(&w, NULL, 0, c));
+    {
+        unsigned nk = 0;
+        const RgSpec *k = rg_kspecs_table(w.prof, &nk);          /* K1: the Pallet recipes mark their placements covered */
+
+        CHECK(k != NULL && rg_author_census(&w, k, nk, c));
+    }
     /* the SPEC's section 5.1 numbers; "277 door warps" is every warp on an outdoor map (the SPEC's own rule, destination
      * type 8, gives 191 doors: 277 = 191 + 55 map-to-map + 31 cave). The 152 placements and 108 + 44 agree. */
     CHECK(c->outdoorMaps == 76);
@@ -186,7 +192,7 @@ static void TestCensus(const char *name, const char *env, int idx)
     CHECK(c->doorWarps == 191 && c->mapWarps == 55 && c->caveWarps == 31);
     CHECK(c->n == 152);
     CHECK(c->mainland == 108 && c->sevii == 44);
-    CHECK(c->covered == 0);
+    CHECK(c->covered == 3);                                              /* K1: the two Pallet recipes cover the three Pallet placements */
     memset(cnt, 0, sizeof(cnt));
     for (i = 0; i < c->n; i++) {
         const RgCensusRow *r = &c->row[i];
@@ -194,7 +200,7 @@ static void TestCensus(const char *name, const char *env, int idx)
 
         cnt[r->mapsec]++;
         CHECK(dm != NULL && dm->mapType == 8);                          /* every destination is an indoor map */
-        CHECK(r->nDoors >= 1 && r->model == -1);
+        CHECK(r->nDoors >= 1 && (r->mapsec == 0x58 ? r->model >= 0 : r->model == -1));   /* only Pallet Town is authored so far */
         CHECK(r->rect[2] >= 1 && r->rect[3] >= 1 && r->rect[0] >= 0 && r->rect[1] >= 0);
         CHECK(r->rect[0] + r->rect[2] <= (int)w.layouts[r->layout - 1].w && r->rect[1] + r->rect[3] <= (int)w.layouts[r->layout - 1].h);
         CHECK(r->sevii == rg_author_mapsec_is_sevii(r->mapsec));
@@ -228,11 +234,12 @@ static void TestCensus(const char *name, const char *env, int idx)
     {
         char *buf = NULL;
         size_t sz = 0;
+        unsigned nkt = 0;
         FILE *fp = open_memstream(&buf, &sz);
 
-        census_print(&w, c, NULL, -1, -1, fp);
+        census_print(&w, c, rg_kspecs_table(w.prof, &nkt), -1, -1, fp);
         fclose(fp);
-        CHECK(buf != NULL && strstr(buf, "covered 0 / 152\n") != NULL && strstr(buf, "152 placements (108 mainland, 44 sevii)") != NULL);
+        CHECK(buf != NULL && strstr(buf, "covered 3 / 152\n") != NULL && strstr(buf, "152 placements (108 mainland, 44 sevii)") != NULL);
         free(buf);
     }
     rg_world_close(&w);
@@ -241,7 +248,7 @@ static void TestCensus(const char *name, const char *env, int idx)
            c->sevii, c->outdoorWarps, c->doorWarps, c->mapWarps, c->caveWarps);
 }
 
-/* ---- 3. the empty Kanto table: a 0-model buildings.bin that the consumer loads ---- */
+/* ---- 3. the K1 Kanto table: Pallet Town's two recipes, their gate, and a two-model buildings.bin the consumer loads ---- */
 static char sDir[64], sCwd[1024];
 
 static int EnterTemp(void)
@@ -264,14 +271,69 @@ static void LeaveTemp(void)
     (void)rmdir(sDir);
 }
 
-static void TestEmptyTable(const char *name, const char *env, GpGame game)
+/* SHA-1 of the file, for the pin (the same helper as test_romgen_relief_ledge.c) */
+static uint32_t Rol(uint32_t v, unsigned n) { return (v << n) | (v >> (32 - n)); }
+static void Sha1(const uint8_t *d, size_t n, char hex[41])
+{
+    uint32_t h[5] = {0x67452301u, 0xEFCDAB89u, 0x98BADCFEu, 0x10325476u, 0xC3D2E1F0u};
+    size_t total = ((n + 8) / 64 + 1) * 64, i;
+    uint8_t *m = (uint8_t *)calloc(total, 1);
+    unsigned k;
+
+    memcpy(m, d, n);
+    m[n] = 0x80;
+    for (k = 0; k < 8; k++) m[total - 1 - k] = (uint8_t)(((uint64_t)n * 8u) >> (8 * k));
+    for (i = 0; i < total; i += 64) {
+        uint32_t w[80], a = h[0], b = h[1], c = h[2], dd = h[3], e = h[4];
+        for (k = 0; k < 16; k++) w[k] = ((uint32_t)m[i + 4 * k] << 24) | ((uint32_t)m[i + 4 * k + 1] << 16) | ((uint32_t)m[i + 4 * k + 2] << 8) | m[i + 4 * k + 3];
+        for (k = 16; k < 80; k++) w[k] = Rol(w[k - 3] ^ w[k - 8] ^ w[k - 14] ^ w[k - 16], 1);
+        for (k = 0; k < 80; k++) {
+            uint32_t f, kk, t;
+            if (k < 20) { f = (b & c) | (~b & dd); kk = 0x5A827999u; }
+            else if (k < 40) { f = b ^ c ^ dd; kk = 0x6ED9EBA1u; }
+            else if (k < 60) { f = (b & c) | (b & dd) | (c & dd); kk = 0x8F1BBCDCu; }
+            else { f = b ^ c ^ dd; kk = 0xCA62C1D6u; }
+            t = Rol(a, 5) + f + e + kk + w[k];
+            e = dd; dd = c; c = Rol(b, 30); b = a; a = t;
+        }
+        h[0] += a; h[1] += b; h[2] += c; h[3] += dd; h[4] += e;
+    }
+    for (k = 0; k < 5; k++) snprintf(hex + 8 * k, 9, "%08x", h[k]);
+    free(m);
+}
+
+/* The FR buildings.bin of the two Pallet models (K1). Re-pinned by the lead after the visual check, if the look changes. */
+#define PALLET_BUILDINGS_SHA1 "66b63ede1e7eb54828654bf4a86f7a899b6c1aa7"
+
+static uint8_t *sPalletBin[2];
+static size_t sPalletBinSize[2];
+
+/* one check output must say "wrong 0 missing 0 extra 0" once per exact rect, an empty density list and a good round trip */
+static void CheckSpecText(const RgWorld *w, const RgSpec *sp, int expect)
+{
+    char *buf = NULL;
+    size_t sz = 0, found = 0;
+    const char *p;
+    FILE *mem = open_memstream(&buf, &sz);
+
+    CHECK(rg_author_check(w, sp, expect, mem) == 0);
+    fclose(mem);
+    for (p = buf; (p = strstr(p, "wrong 0 missing 0 extra 0")) != NULL; p++)
+        found++;
+    CHECK(found == sp->nExact);                                           /* ortho 0/0/0 on every exact rect */
+    CHECK(strstr(buf, "density: 0 bad triangle(s)") != NULL);             /* density empty */
+    CHECK(strstr(buf, "round trip: ok") != NULL && strstr(buf, "RESULT PASS") != NULL);
+    free(buf);
+}
+
+static void TestPallet(const char *name, const char *env, GpGame game, int idx)
 {
     size_t n = 0;
     uint8_t *rom = fxr_load_rom(env, &n);
     RgRunOpts opts;
     RgOutput out;
     RgWorld w;
-    unsigned nk = 99;
+    unsigned nk = 99, i;
     const RgSpec *k;
 
     if (rom == NULL) {
@@ -280,16 +342,56 @@ static void TestEmptyTable(const char *name, const char *env, GpGame game)
     }
     CHECK(rg_world_open(&w, rom, n) == RG_OK && w.prof->game == game);
     k = rg_kspecs_table(w.prof, &nk);
-    CHECK(k != NULL && nk == 0);                                          /* B0: the Kanto table is empty (K1 fills it) */
+    CHECK(k != NULL && nk == 2);                                          /* K1: the two Pallet Town recipes */
+    if (k != NULL && nk == 2) {
+        char *buf = NULL;
+        size_t sz = 0;
+        FILE *mem;
+
+        CHECK(strcmp(k[0].name, "k_pallet_house") == 0 && strcmp(k[1].name, "k_pallet_lab") == 0);
+        CHECK(k[0].layoutId == 78 && k[1].layoutId == 78 && k[0].layoutFnv == k[1].layoutFnv);
+        CHECK(k[0].rect[0] == 5 && k[0].rect[1] == 4 && k[0].rect[2] == 5 && k[0].rect[3] == 4);        /* 80x64 art */
+        CHECK(k[1].rect[0] == 13 && k[1].rect[1] == 10 && k[1].rect[2] == 7 && k[1].rect[3] == 4);      /* 112x64 art */
+        CheckSpecText(&w, &k[0], 2);                                      /* both houses */
+        CheckSpecText(&w, &k[1], 1);                                      /* Oak's Lab */
+        {
+            FILE *sink = fopen("/dev/null", "w");
+
+            CHECK(sink != NULL && rg_author_check(&w, &k[0], 1, sink) == 1);    /* a wrong expectation fails */
+            if (sink) fclose(sink);
+        }
+        /* the placements are exactly these three */
+        mem = open_memstream(&buf, &sz);
+        CHECK(rg_author_placements(&w, &k[0], mem) == 0);
+        fclose(mem);
+        CHECK(strstr(buf, "L78 5 4  (map 3/0)\n") != NULL && strstr(buf, "L78 14 4  (map 3/0)\n") != NULL);
+        CHECK(strstr(buf, "k_pallet_house: 2 placement(s) across 384 layouts") != NULL);
+        free(buf);
+        buf = NULL; sz = 0;
+        mem = open_memstream(&buf, &sz);
+        CHECK(rg_author_placements(&w, &k[1], mem) == 0);
+        fclose(mem);
+        CHECK(strstr(buf, "L78 13 10  (map 3/0)\n") != NULL && strstr(buf, "k_pallet_lab: 1 placement(s) across 384 layouts") != NULL);
+        free(buf);
+    }
     rg_world_close(&w);
     memset(&opts, 0, sizeof(opts));
     opts.wantBuildings = true;
     CHECK(rg_run(rom, n, &opts, &out) == RG_OK);
-    CHECK(out.buildings != NULL && out.buildingsSize >= 8 && memcmp(out.buildings, "VXB7", 4) == 0);
-    CHECK(out.bModels == 0 && out.bPlacements == 0 && out.bPages == 0 && out.buildingsFailed == 0);
+    CHECK(out.buildings != NULL && out.buildingsSize > 24 && memcmp(out.buildings, "VXB7", 4) == 0);
+    CHECK(out.bModels == 2 && out.bPlacements == 3 && out.buildingsFailed == 0);
     CHECK(out.regions == NULL && out.signs == NULL && out.relief == NULL);   /* regions, signposts, relief stay off for FRLG */
     CHECK(out.layouts == 384 && out.maps == 425 && out.outdoorMaps == 76);
+    if (out.buildings != NULL) {
+        sPalletBin[idx] = (uint8_t *)malloc(out.buildingsSize);
+        if (sPalletBin[idx] != NULL) {
+            memcpy(sPalletBin[idx], out.buildings, out.buildingsSize);
+            sPalletBinSize[idx] = out.buildingsSize;
+        }
+    }
     if (out.buildings != NULL && EnterTemp()) {
+        static const int in[6][2] = {{5, 4}, {9, 7}, {14, 4}, {18, 7}, {13, 10}, {19, 13}};     /* corners of the 3 rects */
+        static const int outside[6][2] = {{4, 4}, {10, 4}, {12, 10}, {20, 13}, {13, 9}, {5, 8}};
         VoxelMapInstance inst;
         FILE *fp = fopen("voxel/buildings.bin", "wb");
         int g = -1;
@@ -297,18 +399,24 @@ static void TestEmptyTable(const char *name, const char *env, GpGame game)
 
         CHECK(fp != NULL && fwrite(out.buildings, 1, out.buildingsSize, fp) == out.buildingsSize);
         if (fp) fclose(fp);
-        CHECK(VoxelBuildings_Init());                                      /* the vendored consumer loads the 0-model file */
+        CHECK(VoxelBuildings_Init());                                      /* the vendored consumer loads the two-model file */
         memset(&inst, 0, sizeof(inst));
         inst.layoutId = 78;                                                /* Pallet Town */
-        CHECK(VoxelBuildings_PageOf(&inst) < 0);                           /* no model: the device draws its fallback boxes */
-        CHECK(!VoxelBuildings_CellAt(&inst, 6, 7, &g, &top));
+        CHECK(VoxelBuildings_PageOf(&inst) >= 0);
+        CHECK(VoxelBuildings_MaxTop() > 0.0f);
+        for (i = 0; i < 6; i++) {
+            CHECK(VoxelBuildings_CellAt(&inst, in[i][0], in[i][1], &g, &top));
+            CHECK(i % 2 == 0 || top > 1.0f);                               /* the bottom corners stand under the model */
+            CHECK(!VoxelBuildings_CellAt(&inst, outside[i][0], outside[i][1], &g, &top));
+        }
+        inst.layoutId = 79;                                                /* any other layout places nothing */
+        CHECK(VoxelBuildings_PageOf(&inst) < 0);
         VoxelBuildings_Shutdown();
         LeaveTemp();
     }
-    /* the same bytes through the author's `check all` and an unknown spec name */
     rg_output_free(&out);
     free(rom);
-    printf("%s: empty Kanto table -> 0-model buildings.bin\n", name);
+    printf("%s: Pallet Town -> 2 models, 3 placements, buildings.bin %zu bytes\n", name, sPalletBinSize[idx]);
 }
 
 /* ---- 4. the commands end to end, on Emerald (its table has real models) ---- */
@@ -435,8 +543,20 @@ int main(void)
     }
     rg_census_free(&sCen[0]);
     rg_census_free(&sCen[1]);
-    TestEmptyTable("FireRed", FXR_ENV_FR, GP_FIRERED);
-    TestEmptyTable("LeafGreen", FXR_ENV_LG, GP_LEAFGREEN);
+    TestPallet("FireRed", FXR_ENV_FR, GP_FIRERED, 0);
+    TestPallet("LeafGreen", FXR_ENV_LG, GP_LEAFGREEN, 1);
+    if (sPalletBin[0] != NULL && sPalletBin[1] != NULL) {   /* the pin, and FR and LG produce the identical file */
+        char hex[2][41];
+
+        CHECK(sPalletBinSize[0] == sPalletBinSize[1] && memcmp(sPalletBin[0], sPalletBin[1], sPalletBinSize[0]) == 0);
+        Sha1(sPalletBin[0], sPalletBinSize[0], hex[0]);
+        Sha1(sPalletBin[1], sPalletBinSize[1], hex[1]);
+        CHECK(strcmp(hex[0], hex[1]) == 0);
+        printf("Pallet buildings.bin sha1 %s\n", hex[0]);
+        CHECK(strcmp(hex[0], PALLET_BUILDINGS_SHA1) == 0);
+    }
+    free(sPalletBin[0]);
+    free(sPalletBin[1]);
     {   /* Emerald has no Kanto table */
         unsigned nk = 5;
 
