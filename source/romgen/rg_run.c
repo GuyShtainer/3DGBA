@@ -6,6 +6,7 @@
 
 #include "rg_regions.h"
 #include "rg_signs.h"
+#include "rg_bspecs.h"
 
 static double now(const RgRunOpts *o)
 {
@@ -81,6 +82,66 @@ static RgErr write_outputs(const RgWorld *w, const RgRoles *r, RgSignList *signs
     return RG_OK;
 }
 
+/* S2: models -> gates -> buildings.bin. The pair-grouped passes live inside the builders; no RgPair is open here. */
+static RgErr run_buildings(const RgWorld *w, const RgRunOpts *o, RgOutput *out)
+{
+    RgBuildModels ms;
+    RgBuildStats st;
+    RgErr e;
+    unsigned i;
+    double t0 = now(o);
+    size_t n;
+
+    if (cancelled(o))
+        return RG_ERR_CANCELLED;
+    e = rg_build_models(w, rg_specs, rg_spec_count, &ms);
+    out->msBuildModels = now(o) - t0;
+    if (e != RG_OK) {
+        rg_models_free(&ms);
+        return e;
+    }
+    t0 = now(o);
+    for (i = 0; i < ms.n; i++) {
+        RgOrthoResult ortho;
+        unsigned dens = 0;
+
+        if (!rg_model_gate(&ms.m[i], &ortho, &dens)) {
+            rg_models_free(&ms);
+            return RG_ERR_NOMEM;
+        }
+        if (ortho.wrong || ortho.missing || ortho.extra || dens) {
+            if (out->buildingsFailed < RG_MAX_SKIPPED) {
+                strncpy(out->failedNames[out->buildingsFailed], ms.m[i].spec->name, 63);
+                out->failedNames[out->buildingsFailed][63] = '\0';
+            }
+            out->buildingsFailed++;
+        }
+    }
+    out->msChecks = now(o) - t0;
+    t0 = now(o);
+    memset(&st, 0, sizeof(st));
+    n = rg_buildings_write(w, &ms, NULL, 0, &st);
+    if (n > 0) {
+        out->buildings = (uint8_t *)malloc(n);
+        if (out->buildings == NULL || rg_buildings_write(w, &ms, out->buildings, n, &st) != n)
+            e = RG_ERR_NOMEM;
+        else
+            out->buildingsSize = n;
+    } else {
+        e = st.err != RG_OK ? st.err : RG_ERR_BUILDINGS;
+    }
+    out->msWriteBuildings = now(o) - t0;
+    out->bModels = st.models;
+    out->bPages = st.pages;
+    out->bPageModels = st.pageModels;
+    out->bPlacements = st.placements;
+    out->bVertices = st.vertices;
+    out->bMasks = st.masks;
+    out->bVariants = st.variants;
+    rg_models_free(&ms);
+    return e;
+}
+
 RgErr rg_run(const uint8_t *rom, size_t romSize, const RgRunOpts *opts, RgOutput *out)
 {
     RgWorld w;
@@ -108,6 +169,8 @@ RgErr rg_run(const uint8_t *rom, size_t romSize, const RgRunOpts *opts, RgOutput
         total += w.layouts[li].present;
     for (pi = 0; pi < w.pairCount && e == RG_OK; pi++)
         e = run_pair(&w, &r, &signs, pi, opts, out, &done, total);
+    if (e == RG_OK && opts != NULL && opts->wantBuildings)
+        e = run_buildings(&w, opts, out);
     t0 = now(opts);
     if (e == RG_OK)
         e = write_outputs(&w, &r, &signs, out);
@@ -136,6 +199,7 @@ void rg_output_free(RgOutput *out)
         return;
     free(out->regions);
     free(out->signs);
-    out->regions = out->signs = NULL;
-    out->regionsSize = out->signsSize = 0;
+    free(out->buildings);
+    out->regions = out->signs = out->buildings = NULL;
+    out->regionsSize = out->signsSize = out->buildingsSize = 0;
 }

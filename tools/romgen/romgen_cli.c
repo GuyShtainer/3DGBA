@@ -1,7 +1,7 @@
 /* romgen_cli.c -- host tool: reads a Pokemon Emerald (BPEE) .gba and writes the voxel data files
  * (3DGBA, GPLv3). Pure host code around the romgen cores in source/romgen/.
  *
- *   romgen ROM.gba OUTDIR [--time] [--only regions,signposts] [--dump-roles LAYOUT_ID]
+ *   romgen ROM.gba OUTDIR [--time] [--only regions,signposts,buildings] [--dump-roles LAYOUT_ID]
  *
  * Writes OUTDIR/regions.bin and OUTDIR/signposts.bin. The output is derived from the user's ROM: write it
  * outside the repo or under an ignored path. --dump-roles prints a layout with upstream's letters
@@ -85,7 +85,7 @@ static void DumpRoles(const RgOutput *o, unsigned id)
 int main(int argc, char **argv)
 {
     const char *romPath = NULL, *outDir = NULL;
-    bool timing = false, wantRegions = true, wantSigns = true;
+    bool timing = false, wantRegions = true, wantSigns = true, wantBuildings = true;
     int dumpId = 0, i;
     size_t n = 0;
     uint8_t *rom;
@@ -101,6 +101,7 @@ int main(int argc, char **argv)
             const char *v = argv[++i];
             wantRegions = strstr(v, "regions") != NULL;
             wantSigns = strstr(v, "signposts") != NULL;
+            wantBuildings = strstr(v, "buildings") != NULL;
         } else if (strcmp(argv[i], "--dump-roles") == 0 && i + 1 < argc) {
             dumpId = atoi(argv[++i]);
         } else if (romPath == NULL) {
@@ -110,7 +111,7 @@ int main(int argc, char **argv)
         }
     }
     if (romPath == NULL || outDir == NULL) {
-        fprintf(stderr, "usage: romgen ROM.gba OUTDIR [--time] [--only regions,signposts] [--dump-roles LAYOUT_ID]\n");
+        fprintf(stderr, "usage: romgen ROM.gba OUTDIR [--time] [--only regions,signposts,buildings] [--dump-roles LAYOUT_ID]\n");
         return 2;
     }
     rom = ReadFile(romPath, &n);
@@ -121,6 +122,7 @@ int main(int argc, char **argv)
     memset(&opts, 0, sizeof(opts));
     opts.nowMs = NowMs;
     opts.wantSigns = wantSigns;
+    opts.wantBuildings = wantBuildings;
     t0 = NowMs();
     e = rg_run(rom, n, &opts, &out);
     if (e != RG_OK) {
@@ -138,9 +140,18 @@ int main(int argc, char **argv)
     if (wantSigns && out.signs != NULL && WriteFile(outDir, "signposts.bin", out.signs, out.signsSize))
         printf("signposts.bin: %zu bytes, %u records (%u with a head, %u with an empty mask)\n", out.signsSize, out.signCount,
                out.headCount, out.emptyMasks);
+    if (wantBuildings && out.buildings != NULL && WriteFile(outDir, "buildings.bin", out.buildings, out.buildingsSize)) {
+        printf("buildings.bin: %zu bytes, %u models, %u pages, %u page-models, %u placements, %u vertices, %u masks, %u variants\n",
+               out.buildingsSize, out.bModels, out.bPages, out.bPageModels, out.bPlacements, out.bVertices, out.bMasks,
+               out.bVariants);
+        printf("buildings gate: %u failing model(s)\n", out.buildingsFailed);
+    }
     if (timing)
         printf("time: total %.1f ms (world %.1f, roles %.1f, signs %.1f, serialise %.1f)\n", NowMs() - t0, out.msWorld,
                out.msRoles, out.msSigns, out.msWrite);
+    if (timing && wantBuildings)
+        printf("time: buildings models %.1f ms, gates %.1f ms, placements+write %.1f ms\n", out.msBuildModels, out.msChecks,
+               out.msWriteBuildings);
     if (dumpId > 0)
         DumpRoles(&out, (unsigned)dumpId);
     rg_output_free(&out);

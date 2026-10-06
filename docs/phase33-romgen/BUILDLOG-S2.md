@@ -191,3 +191,41 @@ cannot cross-check each other).
 - `evidence/s26-player-house.png`: the Littleroot player house 1F as a 3D room — walls, fridge, sink counter,
   shelf, TV, table + chairs as modelled pieces. Lead-verified: interior 851/0, expand 1512/0 with the ROM.
 - Still open: device memory/load time for the 7.9 MB / 118-page file (hardware run).
+
+## 2026-10-06 S2.7 full export
+
+Audit: `rg_buildings_write` was already complete from S2.3-S2.6 (pages per layout incl. 442, patches, masks, quarters, variants,
+the size guards with the field named in `RgBuildStats.errField`, two-pass sizing via `out == NULL`). Nothing to rewrite there.
+Missing, now added: (1) `rg_run` `wantBuildings`: after the pair loop it runs `rg_build_models` -> `rg_model_gate` on every model ->
+`rg_buildings_write` (size, malloc, fill); `RgOutput` gains `buildings/buildingsSize`, `bModels bPages bPageModels bPlacements
+bVertices bMasks bVariants`, `buildingsFailed` + the first 8 failing names, `msBuildModels/msChecks/msWriteBuildings` (placements
+run inside the write). A gate failure is counted, not fatal (the file is still written). (2) CLI: `--only` now also accepts
+`buildings` (default on) and prints the counts, the gate result and the three timings: needed to exercise `wantBuildings`;
+`--dump-model` is NOT added (S2.8). (3) `test/host/test_romgen_export.c`: the section 4.2 checks as asserts over an independent
+parse of the bytes + the consumer round trip.
+
+Section 4.2 checks (580,568 checks, 0 failures, ASan/UBSan, both pysum modes): magic, size % 4, header trailing u16 == 0, pads zero;
+page table (POT, area <= 512x512, offsets contiguous from the texel start, every page inside the file, texels end exactly at EOF);
+model rows (`firstVertex+vertexCount <= vertices`, `heights+w*h <= heightBytes`, vertexCount % 3, cells sum == heightBytes); page-model
+indices; placements sorted by layout (1..442), `pageModel < pageModels`, `extraFirst+extraCount <= vertices`, extraCount % 6, every
+patch vertex y == 0.01 and shade 1; footprints 0xFFFF or `< masks`; quarters <= 0x0F; variants sorted unique by (layout, metatile,
+quarters), <= 128; every vertex float finite, shade > 0. Consumer: `VoxelBuildings_Init`, variants enumerate == 66, every layout that
+has a page answers `PageOf`/`PageSize`/`ReadPage` (first and last texels in, one past the end refused): 118 layouts. Also: second
+full `rg_run` is byte-identical; `wantBuildings` off leaves regions identical and buildings NULL; `out == NULL` size == written size;
+a cap one byte short returns 0 / `RG_ERR_TOO_BIG` ("output buffer").
+
+Pinned counts (real ROM, test + CLI agree): buildings.bin 7,898,476 B; 286 models; 118 pages; 630 page-models; 2894 placements
+(9 in layout 442); 80,520 vertices (3,978 patch vertices); 2169 height bytes; 56 masks; 66 variants; 0 gate failures.
+regions.bin 330,791 B and signposts.bin 26,144 B unchanged.
+
+Pysum diff: CLI built with `RG_PYSUM_COMPENSATED=1` and `=0`, run on the same ROM: buildings.bin 0 differing bytes (`cmp -l | wc -l`),
+regions.bin 0, signposts.bin 0. (Identical, not hidden.)
+
+`rg_run` timing, PC (host clang -O2, one run, all three outputs): total about 190-220 ms; buildings: models 83 ms, gates 9 ms,
+placements + write 70 ms. (Under ASan the test sees ~370 / 30 / 325 ms.)
+
+Deviations / decisions: (1) SPEC 4.2 says "POT page sizes within 512x512"; upstream's atlas allows {64..1024}^2 and the writer's real
+guard is area <= 512x512 (gen:1216-1218, rg_buildings.c). Page 3 is 1024x256, so the test asserts POT + dims <= 1024 + area <=
+512*512. (2) The CLI default now includes buildings (`--only` restricts). (3) A model gate failure does not fail `rg_run`.
+Open: device memory and load time for the 7.9 MB file and the on-device `rg_run` time (S2.8, hardware); `--dump-model`/`--time`
+polish is S2.8.
