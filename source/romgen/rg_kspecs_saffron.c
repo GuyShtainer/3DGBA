@@ -108,7 +108,7 @@ static const RgExact kSilphExact[4] = {
 };
 static const RgSideCfg kSilphSide[2] = {
     {"tube", {67, 39, 77, 52}, {67, 39, 77, 52}, 999, false},
-    {NULL, {4, 120, 8, 124}, {4, 20, 10, 70}, 154, true},
+    {NULL, {51, 14, 53, 72}, {4, 15, 11, 76}, 154, true},   /* the largest flat white / purple rects: a cap is one quad per patch repeat (look L7) */
 };
 
 /* ---- the green-roofed houses: 64x80 / 48x80 / 80x80 art (rects (21,10) 4x5, (46,17) 4x5, (26,17) 3x5, (41,34) 5x5) ------- */
