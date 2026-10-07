@@ -9,6 +9,10 @@
 // per ROM check, "LG differs from FR" for every address the SURVEY lists as differing, and a synthetic RAM image
 // per RAM check, each corrupting exactly one field.
 //
+// Phase 35 S1 adds the Ruby / Sapphire rev 2 anchors: their pinned values, the ROM checks on both real carts
+// (ROMGEN_ROM_RUBY / ROMGEN_ROM_SAPP), and the synthetic RAM checks through the RS layout (SaveBlock1 read directly,
+// the object events in IWRAM, inBattle at gMain + 0x43D).
+//
 //   make -C tools/romgen test T=gameprof     (links every rg_*.c plus the voxel consumer; see tools/romgen/Makefile)
 #include <stdio.h>
 #include <stdlib.h>
@@ -244,6 +248,43 @@ static void TestAnchorRowsDiffer(void)
     for (c = VXA_ROM_FIRST; c <= VXA_RAM_LAST; c++) CHECK(strcmp(vx_anchor_name(c), "?") != 0);
 }
 
+/* Phase 35 S1: the Ruby / Sapphire rev 2 rows (provenance per value in docs/PROVENANCE.md, Phase 35 S1). */
+static void TestRsRows(void)
+{
+    uint8_t h[0x100];
+    const GameProfile *ru, *sa;
+
+    memset(h, 0, sizeof h);
+    memcpy(h + 0xAC, "AXVE", 4); h[0xBC] = 2;
+    ru = gameprof_detect_romgen(h, sizeof h);
+    memcpy(h + 0xAC, "AXPE", 4);
+    sa = gameprof_detect_romgen(h, sizeof h);
+    CHECK(ru != NULL && sa != NULL && ru->game == GP_RUBY && sa->game == GP_SAPPHIRE);
+    if (ru == NULL || sa == NULL) return;
+    /* The RAM block is one value in both (each measured on both carts). */
+    CHECK(ru->gMain == 0x03001770u && ru->sb1Ptr == 0x02025734u && ru->backupLayout == 0x03004870u && ru->backupMap == 0);
+    CHECK(ru->mapHeader == 0x0202E828u && ru->objEvents == 0x030048A0u && ru->playerAvatar == 0x0202E858u);
+    CHECK(ru->sprites == 0x02020004u && ru->plttUnfaded == 0x0202EAC8u && ru->paletteFade == 0x0202F388u);
+    CHECK(ru->sb1Direct && sa->sb1Direct && ru->mainFlagsOff == 0x43D && sa->mainFlagsOff == 0x43D);
+    CHECK(ru->playerAvatarBytes == 0x24 && ru->weather == 0 && ru->gfxInfoCount == 218 && ru->fldeffCount == 36);
+    CHECK(sa->gMain == ru->gMain && sa->sb1Ptr == ru->sb1Ptr && sa->backupLayout == ru->backupLayout);
+    CHECK(sa->mapHeader == ru->mapHeader && sa->objEvents == ru->objEvents && sa->playerAvatar == ru->playerAvatar);
+    CHECK(sa->sprites == ru->sprites && sa->plttUnfaded == ru->plttUnfaded && sa->paletteFade == ru->paletteFade);
+    CHECK(memcmp(ru->weatherOff, gameprof_emerald()->weatherOff, sizeof ru->weatherOff) == 0);
+    CHECK(memcmp(sa->weatherOff, ru->weatherOff, sizeof ru->weatherOff) == 0);
+    /* The ROM anchors differ per cart. */
+    CHECK(ru->weatherPtr == 0x08396FDCu && sa->weatherPtr == 0x08396E24u);
+    CHECK(ru->gfxInfoPtrs == 0x0836DC70u && sa->gfxInfoPtrs == 0x0836DC00u);
+    CHECK(ru->fldeffTemplates == 0x0836DFD8u && sa->fldeffTemplates == 0x0836DF68u);
+    CHECK(ru->cb2Overworld == 0x080543C5u && ru->cb2OverworldBasic == 0x080543B9u);
+    CHECK(sa->cb2Overworld == 0x080543C9u && sa->cb2OverworldBasic == 0x080543BDu);
+    /* The other rows keep their inBattle byte and their SaveBlock1 pointer. */
+    CHECK(gameprof_emerald()->mainFlagsOff == GBA_OFF_MAIN_FLAGS && !gameprof_emerald()->sb1Direct);
+    memcpy(h + 0xAC, "BPRE", 4); h[0xBC] = 1;
+    CHECK(gameprof_detect_romgen(h, sizeof h)->mainFlagsOff == 0x439 && !gameprof_detect_romgen(h, sizeof h)->sb1Direct);
+    CHECK(!ru->interiors3d && !ru->emeraldIdTables);
+}
+
 static void Put32(uint8_t *rom, uint32_t addr, uint32_t v)
 {
     uint8_t *p = rom + (addr - 0x08000000u);
@@ -262,6 +303,7 @@ static void RomChecks(const char *tag, uint8_t *rom, size_t n, GpGame game, cons
     GameProfile q;
     uint8_t *c;
     uint32_t hdr30, lay30, hdr40, lay40, id30;
+    unsigned g0;   /* the maps checks 5 / 6 read: (3, 0) / (4, 0) on FRLG, (0, 0) / (1, 0) on Ruby / Sapphire */
     int r;
 
     CHECK(p != NULL && p->game == game && memcmp(p->code, code, 4) == 0);
@@ -269,15 +311,20 @@ static void RomChecks(const char *tag, uint8_t *rom, size_t n, GpGame game, cons
     r = vx_anchor_check_rom(p, rom, n);
     if (r != 0) printf("FAIL %s ROM check %d (%s) value 0x%08X\n", tag, r, vx_anchor_name(r), vx_anchor_last_value());
     CHECK(r == 0);
+    g0 = gp_is_rs(p) ? 0u : 3u;
     {   /* the other game's row must refuse this ROM at check 1 (header), never pass */
+        static const struct { GpGame g; const char *other; uint8_t rev; } kOther[] = {
+            {GP_FIRERED, "BPGE", 1}, {GP_LEAFGREEN, "BPRE", 1}, {GP_RUBY, "AXPE", 2}, {GP_SAPPHIRE, "AXVE", 2}};
         uint8_t h[0x100];
         const GameProfile *other;
+        unsigned k = 0;
+        while (kOther[k].g != game && k < 3u) k++;
         memset(h, 0, sizeof h);
-        memcpy(h + 0xAC, game == GP_FIRERED ? "BPGE" : "BPRE", 4); h[0xBC] = 1;
+        memcpy(h + 0xAC, kOther[k].other, 4); h[0xBC] = kOther[k].rev;
         other = FrlgRow(h, sizeof h);
         CHECK(other != NULL && other != p && vx_anchor_check_rom(other, rom, n) == 1);
     }
-    CHECK(vx_anchor_check_rom(gameprof_emerald(), rom, n) == 1);   /* only the FRLG rows are checked */
+    CHECK(vx_anchor_check_rom(gameprof_emerald(), rom, n) == 1);   /* only the FRLG / RS rows are checked */
     CHECK(vx_anchor_check_rom(NULL, rom, n) == 1 && vx_anchor_check_rom(p, NULL, 0) == 1 && vx_anchor_check_rom(p, rom, 0x80) == 1);
     /* 2: an anchor outside the image */
     q = *p; q.weatherPtr = 0x09FFFFF0u;
@@ -289,16 +336,16 @@ static void RomChecks(const char *tag, uint8_t *rom, size_t n, GpGame game, cons
     if (c == NULL) return;
     memcpy(c, rom, n); c[0xBC] = 0;                       /* 1: wrong revision byte */
     CHECK(vx_anchor_check_rom(p, c, n) == 1);
-    hdr30 = Get32(rom, Get32(rom, p->mapGroups + 4u * 3u));
+    hdr30 = Get32(rom, Get32(rom, p->mapGroups + 4u * g0));
     lay30 = Get32(rom, hdr30);
     id30 = (uint32_t)(rom[hdr30 - 0x08000000u + 0x12] | (rom[hdr30 - 0x08000000u + 0x13] << 8));
-    hdr40 = Get32(rom, Get32(rom, p->mapGroups + 4u * 4u));
+    hdr40 = Get32(rom, Get32(rom, p->mapGroups + 4u * (g0 + 1u)));
     lay40 = Get32(rom, hdr40);
     CHECK(Get32(rom, lay30 + 0x10) == p->tsGeneral && Get32(rom, lay40 + 0x10) == p->tsBuilding);
     /* 3: group pointers out of order / not in ROM */
     memcpy(c, rom, n); Put32(c, p->mapGroups + 4u * 5u, Get32(c, p->mapGroups + 4u * 4u));
     CHECK(vx_anchor_check_rom(p, c, n) == 3);
-    memcpy(c, rom, n); Put32(c, p->mapGroups + 4u * 40u, 0x02000000u);
+    memcpy(c, rom, n); Put32(c, p->mapGroups + 4u * (gp_is_rs(p) ? 30u : 40u), 0x02000000u);
     CHECK(vx_anchor_check_rom(p, c, n) == 3);
     /* 4: the layout table entry of (3,0)'s layout no longer matches its header */
     memcpy(c, rom, n); Put32(c, p->mapLayouts + 4u * (id30 - 1u), lay30 + 0x20u);
@@ -359,6 +406,41 @@ static void TestRomAnchors(void)
     free(fr); free(lg);
 }
 
+/* Phase 35 S1: the same ROM checks on the real Ruby / Sapphire rev 2 carts. */
+static void TestRsRomAnchors(void)
+{
+    size_t nr = 0, ns = 0;
+    uint8_t *ru = fxr_load_rom(FXR_ENV_RUBY, &nr), *sa = fxr_load_rom(FXR_ENV_SAPP, &ns);
+
+    if (ru == NULL || sa == NULL) {
+        printf("SKIP real-ROM RS anchor checks (set ROMGEN_ROM_RUBY and ROMGEN_ROM_SAPP to absolute paths)\n");
+        free(ru); free(sa);
+        return;
+    }
+    RomChecks("Ruby", ru, nr, GP_RUBY, "AXVE");
+    RomChecks("Sapphire", sa, ns, GP_SAPPHIRE, "AXPE");
+    {   /* Sapphire's row must not pass Ruby's data with the code forged, nor the reverse */
+        uint8_t *f = (uint8_t *)malloc(nr > ns ? nr : ns);
+        const GameProfile *sarow = FrlgRow(sa, ns), *rurow = FrlgRow(ru, nr);
+        CHECK(f != NULL && sarow != NULL && rurow != NULL);
+        if (f != NULL && sarow != NULL && rurow != NULL) {
+            memcpy(f, ru, nr);
+            memcpy(f + 0xAC, "AXPE", 4);
+            CHECK(vx_anchor_check_rom(sarow, f, nr) != 0);
+            memcpy(f, sa, ns);
+            memcpy(f + 0xAC, "AXVE", 4);
+            CHECK(vx_anchor_check_rom(rurow, f, ns) != 0);
+            memcpy(f, ru, nr);
+            f[0xBC] = 1;                                            /* rev 1 / rev 0 carts are not supported */
+            CHECK(gameprof_detect_romgen(f, nr) == NULL && vx_anchor_check_rom(rurow, f, nr) == 1);
+            f[0xBC] = 0;
+            CHECK(gameprof_detect_romgen(f, nr) == NULL && gameprof_detect(f, nr) == NULL);
+        }
+        free(f);
+    }
+    free(ru); free(sa);
+}
+
 /* ---- synthetic RAM images: one corrupted field per RAM check ---- */
 
 typedef struct {
@@ -370,17 +452,30 @@ typedef struct {
 static void SPut32(uint8_t *b, uint32_t off, uint32_t v) { b[off] = (uint8_t)v; b[off + 1] = (uint8_t)(v >> 8); b[off + 2] = (uint8_t)(v >> 16); b[off + 3] = (uint8_t)(v >> 24); }
 static void SPut16(uint8_t *b, uint32_t off, uint32_t v) { b[off] = (uint8_t)v; b[off + 1] = (uint8_t)(v >> 8); }
 
+/* The byte at a GBA work-RAM address of the synthetic image, either bank. */
+static uint8_t *SAt(Syn *s, uint32_t addr)
+{
+    return addr >= 0x03000000u ? s->iw + (addr - 0x03000000u) : s->ew + (addr - 0x02000000u);
+}
+
+/* The SaveBlock1 address of the synthetic image: behind the IWRAM pointer (FRLG) or the struct itself (RS). */
+static uint32_t SynSb1(const Syn *s)
+{
+    return s->p.sb1Direct ? s->p.sb1Ptr : 0x02025000u;
+}
+
 /* A small ROM with one map group of one map (header, an 8x6 layout) and the constants the RAM checks read, plus a
- * RAM image in which every RAM check passes. */
-static void SynBuild(Syn *s)
+ * RAM image in which every RAM check passes. `code` / `rev` pick the row whose RAM layout is built. */
+static void SynBuild(Syn *s, const char *code, uint8_t rev)
 {
     static const uint8_t one[1] = {1};
     const GameProfile *fr;
     uint8_t h[0x100];
     uint8_t *e, *i;
-    uint32_t pa, ob;
+    uint32_t pa, sb;
+    uint8_t *ob;
 
-    memset(h, 0, sizeof h); memcpy(h + 0xAC, "BPRE", 4); h[0xBC] = 1;
+    memset(h, 0, sizeof h); memcpy(h + 0xAC, code, 4); h[0xBC] = rev;
     fr = FrlgRow(h, sizeof h);
     s->p = *fr;
     s->n = 0x40000; s->rom = (uint8_t *)calloc(1, s->n);
@@ -395,16 +490,18 @@ static void SynBuild(Syn *s)
     s->p.cb2Overworld = 0x08000301u; s->p.cb2OverworldBasic = 0x08000281u;
     i = s->iw; e = s->ew;
     SPut32(i, s->p.gMain - 0x03000000u + 4, s->p.cb2Overworld);
-    SPut32(i, s->p.sb1Ptr - 0x03000000u, 0x02025000u);
-    SPut16(e, 0x25000 + 0, 10); SPut16(e, 0x25000 + 2, 20); e[0x25000 + 4] = 0; e[0x25000 + 5] = 0;   /* pos (10,20), map (0,0) */
+    sb = SynSb1(s) - 0x02000000u;
+    if (!s->p.sb1Direct)
+        SPut32(i, s->p.sb1Ptr - 0x03000000u, 0x02025000u);
+    SPut16(e, sb + 0, 10); SPut16(e, sb + 2, 20); e[sb + 4] = 0; e[sb + 5] = 0;   /* pos (10,20), map (0,0) */
     SPut32(i, s->p.backupLayout - 0x03000000u + 0, 8 + 15); SPut32(i, s->p.backupLayout - 0x03000000u + 4, 6 + 14);
     SPut32(i, s->p.backupLayout - 0x03000000u + 8, 0x02030000u);
     SPut16(e, s->p.mapHeader - 0x02000000u + 0x12, 7);
     pa = s->p.playerAvatar - 0x02000000u;
     e[pa + 4] = 2; e[pa + 5] = 3;                       /* spriteId 2, objectId 3 */
-    ob = s->p.objEvents - 0x02000000u + 3u * 0x24u;
-    e[ob + 2] = 1;                                      /* isPlayer */
-    SPut16(e, ob + 0x10, 17); SPut16(e, ob + 0x12, 27); /* 10 + 7, 20 + 7 */
+    ob = SAt(s, s->p.objEvents + 3u * 0x24u);           /* EWRAM (FRLG) or IWRAM (RS) */
+    ob[2] = 1;                                          /* isPlayer */
+    SPut16(ob, 0x10, 17); SPut16(ob, 0x12, 27);         /* 10 + 7, 20 + 7 */
     SPut32(e, s->p.sprites - 0x02000000u + 2u * 0x44u + 0x08u, 0x08000400u);
     SPut16(e, s->p.paletteFade - 0x02000000u + 4, 5u << 6);
     e[0x38F00 + s->p.weatherOff[0]] = 3; e[0x38F00 + s->p.weatherOff[1]] = 3;
@@ -414,36 +511,42 @@ static void SynBuild(Syn *s)
         if (rc != (want)) printf("FAIL RAM check expected %d got %d (%s)\n", (want), rc, vx_anchor_name(rc)); \
         CHECK(rc == (want)); UNDO; } while (0)
 
-static void TestRamChecks(void)
+static void TestRamChecks(const char *code, uint8_t rev)
 {
     Syn s;
     VxaRam r;
     int rc;
-    uint32_t gm, sb, bk, mh, pa, ob, sp, pf;
+    uint32_t gm, sb, bk, mh, pa, sp, pf, sbe, mf;
+    uint8_t *ob;
 
-    SynBuild(&s);
+    SynBuild(&s, code, rev);
     r.ewram = s.ew; r.iwram = s.iw;
     rc = vx_anchor_check_ram(&s.p, s.rom, s.n, &r);
     if (rc != 0) printf("FAIL baseline RAM check %d (%s) 0x%08X\n", rc, vx_anchor_name(rc), vx_anchor_last_value());
     CHECK(rc == 0);
     gm = s.p.gMain - 0x03000000u; sb = s.p.sb1Ptr - 0x03000000u; bk = s.p.backupLayout - 0x03000000u;
     mh = s.p.mapHeader - 0x02000000u; pa = s.p.playerAvatar - 0x02000000u;
-    ob = s.p.objEvents - 0x02000000u + 3u * 0x24u; sp = s.p.sprites - 0x02000000u + 2u * 0x44u;
+    ob = SAt(&s, s.p.objEvents + 3u * 0x24u); sp = s.p.sprites - 0x02000000u + 2u * 0x44u;
     pf = s.p.paletteFade - 0x02000000u;
+    sbe = SynSb1(&s) - 0x02000000u; mf = s.p.mainFlagsOff;
     BREAK_AND_CHECK(11, SPut32(s.iw, gm + 4, 0x02000000u), SPut32(s.iw, gm + 4, s.p.cb2Overworld));
     BREAK_AND_CHECK(11, SPut32(s.iw, gm + 4, s.p.cb2Overworld & ~1u), SPut32(s.iw, gm + 4, s.p.cb2Overworld));
-    BREAK_AND_CHECK(12, SPut32(s.iw, sb, 0x03000100u), SPut32(s.iw, sb, 0x02025000u));
-    BREAK_AND_CHECK(12, SPut32(s.iw, sb, 0x02025002u), SPut32(s.iw, sb, 0x02025000u));
+    if (s.p.sb1Direct) {   /* RS: the struct address itself must be an aligned EWRAM address */
+        BREAK_AND_CHECK(12, s.p.sb1Ptr = 0x03000100u, s.p.sb1Ptr = sbe + 0x02000000u);
+        BREAK_AND_CHECK(12, s.p.sb1Ptr = sbe + 0x02000002u, s.p.sb1Ptr = sbe + 0x02000000u);    } else {
+        BREAK_AND_CHECK(12, SPut32(s.iw, sb, 0x03000100u), SPut32(s.iw, sb, 0x02025000u));
+        BREAK_AND_CHECK(12, SPut32(s.iw, sb, 0x02025002u), SPut32(s.iw, sb, 0x02025000u));
+    }
     BREAK_AND_CHECK(13, SPut32(s.iw, bk + 8, 0x08000000u), SPut32(s.iw, bk + 8, 0x02030000u));
     BREAK_AND_CHECK(13, SPut32(s.iw, bk + 8, 0x0203FFF0u), SPut32(s.iw, bk + 8, 0x02030000u));   /* buffer runs past EWRAM */
     BREAK_AND_CHECK(14, SPut32(s.iw, bk + 0, 8 + 14), SPut32(s.iw, bk + 0, 8 + 15));
     BREAK_AND_CHECK(14, SPut32(s.iw, bk + 4, 6 + 15), SPut32(s.iw, bk + 4, 6 + 14));
-    BREAK_AND_CHECK(14, s.ew[0x25000 + 4] = 9, s.ew[0x25000 + 4] = 0);                          /* sb1 names a map the ROM lacks */
+    BREAK_AND_CHECK(14, s.ew[sbe + 4] = 9, s.ew[sbe + 4] = 0);                                  /* sb1 names a map the ROM lacks */
     BREAK_AND_CHECK(15, SPut16(s.ew, mh + 0x12, 8), SPut16(s.ew, mh + 0x12, 7));
     BREAK_AND_CHECK(16, s.ew[pa + 5] = 16, s.ew[pa + 5] = 3);
-    BREAK_AND_CHECK(16, s.ew[ob + 2] = 0, s.ew[ob + 2] = 1);
-    BREAK_AND_CHECK(16, SPut16(s.ew, ob + 0x10, 16), SPut16(s.ew, ob + 0x10, 17));
-    BREAK_AND_CHECK(16, SPut16(s.ew, ob + 0x12, 28), SPut16(s.ew, ob + 0x12, 27));
+    BREAK_AND_CHECK(16, ob[2] = 0, ob[2] = 1);
+    BREAK_AND_CHECK(16, SPut16(ob, 0x10, 16), SPut16(ob, 0x10, 17));
+    BREAK_AND_CHECK(16, SPut16(ob, 0x12, 28), SPut16(ob, 0x12, 27));
     BREAK_AND_CHECK(17, s.ew[pa + 4] = 65, s.ew[pa + 4] = 2);
     BREAK_AND_CHECK(17, SPut32(s.ew, sp + 0x08, 0x03000000u), SPut32(s.ew, sp + 0x08, 0x08000400u));
     BREAK_AND_CHECK(18, SPut16(s.ew, pf + 4, 17u << 6), SPut16(s.ew, pf + 4, 5u << 6));
@@ -451,11 +554,14 @@ static void TestRamChecks(void)
     BREAK_AND_CHECK(19, s.ew[0x38F00 + s.p.weatherOff[0]] = 15, s.ew[0x38F00 + s.p.weatherOff[0]] = 3);
     BREAK_AND_CHECK(19, s.ew[0x38F00 + s.p.weatherOff[1]] = 4, s.ew[0x38F00 + s.p.weatherOff[1]] = 3);
     BREAK_AND_CHECK(20, SPut32(s.iw, gm + 4, 0x08000401u), SPut32(s.iw, gm + 4, s.p.cb2Overworld));   /* thumb ROM pointer, not an overworld callback */
-    BREAK_AND_CHECK(20, s.iw[gm + 0x439] = 0x02, s.iw[gm + 0x439] = 0);                        /* in battle */
+    BREAK_AND_CHECK(20, s.iw[gm + mf] = 0x02, s.iw[gm + mf] = 0);                              /* in battle */
+    if (mf != 0x439)   /* RS: the FRLG / Emerald byte is not the flag here */
+        BREAK_AND_CHECK(0, s.iw[gm + 0x439] = 0x02, s.iw[gm + 0x439] = 0);
     rc = vx_anchor_check_ram(&s.p, s.rom, s.n, &r);
     CHECK(rc == 0);
     CHECK(vx_anchor_check_ram(NULL, s.rom, s.n, &r) == 11 && vx_anchor_check_ram(&s.p, s.rom, s.n, NULL) == 11);
     CHECK(vx_anchor_check_ram(gameprof_emerald(), s.rom, s.n, &r) == 11);
+    (void)sb;
     free(s.rom); free(s.ew); free(s.iw);
 }
 
@@ -467,8 +573,12 @@ int main(void)
     TestAccessor();
     TestRealRom();
     TestAnchorRowsDiffer();
+    TestRsRows();
     TestRomAnchors();
-    TestRamChecks();
+    TestRsRomAnchors();
+    TestRamChecks("BPRE", 1);
+    TestRamChecks("AXVE", 2);
+    TestRamChecks("AXPE", 2);
     printf("test_romgen_gameprof: %d checks, %d failures\n", sChecks, sFails);
     return sFails != 0;
 }

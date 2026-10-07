@@ -79,3 +79,17 @@ Numbers only; no decomp text. Reference clone is study-only, nothing in it was r
 | RS behaviour sets = Emerald's | `build_emerald_sets(&sRuby/&sSapphire)` (rg_gameprof.c) | pokeruby@5784633 and pokeemerald@731ad5b `include/constants/metatile_behaviors.h`, compared value by value (42 names differ, no value the sets use) | reuse, no new numbers | `test_romgen_rs_world.c` TestRows (every b in 0..511 equal to Emerald's, all twelve sets) |
 | rev 2 cartridge identity | (PHASE.md recon only) | pokeruby@5784633 `ruby_rev2.sha1`, `sapphire_rev2.sha1` | the user's dumps hash to these values | the profile gate (game code + rev byte 2) |
 
+## Phase 35 S1 (Ruby / Sapphire rev 2 renderer anchors), 2026-10-07
+
+Numbers only; no decomp text. Every address was measured on the user's own rev 2 dumps (ROM literal-pool reference counts
+and instruction patterns; scratch scripts, not committed) and cross-checked against the PokeDNA pokeruby rev-2 symbol list
+(addresses only). pokeruby@5784633 was read for struct offsets and table lengths only; nothing in it was run. Per-value
+method: docs/phase35-rs/PHASE.md "S1 + S2".
+
+| table | symbol (file) | source consulted | derivation | ROM assertion |
+|---|---|---|---|---|
+| RS RAM anchors: gMain 0x03001770, gSaveBlock1 0x02025734 (direct, `sb1Direct`), backupLayout 0x03004870, mapHeader 0x0202E828, objEvents 0x030048A0 (IWRAM), playerAvatar 0x0202E858 (0x24 B), sprites 0x02020004, plttUnfaded 0x0202EAC8, paletteFade 0x0202F388, backupMap 0 (derived) | `GP_RS_COMMON` (rg_gameprof.c) | ROM-measured (literal counts 694 / 339 / 24 / 99 / 276 / 202 / 1298 / 72 / 371, the same on both carts); PokeDNA rev-2 symbol list (numbers only) agrees | measured addresses; one value on Ruby and Sapphire | `test_romgen_gameprof.c` TestRsRows + synthetic RAM checks; Azahar Ruby + Sapphire: `vx: anchors ok` (checks 11-20) |
+| RS gMain inBattle byte 0x43D (`mainFlagsOff`) | `GP_RS_COMMON` | ROM-measured: 48 gMain literal pools carry 0x43D, none 0x439; pokeruby@5784633 struct Main arithmetic (offset only) agrees | number | check 20; TestRamChecks (RS: 0x439 set does not count as in battle) |
+| RS weather: weatherPtr Ruby 0x08396FDC / Sapphire 0x08396E24 (-> 0x0202F7E8), offsets {0x6D0, 0x6C6, 0x730, 0x6FB, 0x724} | `sRuby`, `sSapphire`, `GP_RS_COMMON` | ROM-measured (the word is referenced 108 times; the offsets as Thumb immediates and pool words); pokeruby@5784633 struct Weather arithmetic (offsets only) | addresses and offsets | checks 9, 19 |
+| RS gfxInfoPtrs Ruby 0x0836DC70 / Sapphire 0x0836DC00 (218), fldeffTemplates 0x0836DFD8 / 0x0836DF68 (36) | `sRuby`, `sSapphire`, `GP_RS_COMMON` | ROM-measured: a pointer run whose records carry a ROM pointer at +0x1C, ended where the 34-times-referenced field-effect table starts; pokeruby@5784633 table lengths (numbers only) | addresses and counts | checks 7, 8 (real ROMs) |
+| RS cb2Overworld Ruby 0x080543C5 / Sapphire 0x080543C9, cb2OverworldBasic 0x080543B9 / 0x080543BD | `sRuby`, `sSapphire` | ROM-measured (`push {lr}` + the &gPaletteFade literal at +0x28, 8 thumb references; the Basic thunk is 0xB500 with 1 reference); live: check 20 passes on the overworld in Azahar | addresses with the thumb bit | checks 10, 20 |

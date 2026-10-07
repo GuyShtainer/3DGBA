@@ -6,7 +6,7 @@
  *
  *   ROM checks (1..10)                          RAM checks (11..20)
  *    1 header code / revision                    11 gMain.callback2 is a thumb ROM pointer
- *    2 every anchor lies inside the image        12 sb1Ptr holds an EWRAM pointer
+ *    2 every anchor lies inside the image        12 sb1Ptr holds an EWRAM pointer (RS: is the EWRAM struct)
  *    3 mapGroups probe + group-size pin          13 backupLayout.map in EWRAM, w*h <= 10240
  *    4 mapLayouts: the all-headers rule          14 backupLayout w/h = layout w + 15 / h + 14
  *    5 General primary tileset                   15 gMapHeader.layoutId = ROM header's, for sb1's (group, num)
@@ -16,7 +16,8 @@
  *    9 weatherPtr const -> EWRAM struct          19 weather: current id 0..14, palette state 0..3
  *   10 CB2_Overworld / CB2_OverworldBasic        20 callback2 is an overworld callback and not in battle
  *
- * Only the FireRed / LeafGreen rows are checked (the Emerald row is validated by its macros and is untouched).
+ * Only the FireRed / LeafGreen rev 1 and (Phase 35 S1) Ruby / Sapphire rev 2 rows are checked (the Emerald row is
+ * validated by its macros and is untouched).
  */
 #ifndef RG_ANCHOR_H
 #define RG_ANCHOR_H
@@ -36,7 +37,7 @@ typedef struct VxaRam {
     const uint8_t *iwram;   /* 0x8000 bytes at 0x03000000 */
 } VxaRam;
 
-/* The ROM checks. `prof` must be a FireRed / LeafGreen row (anything else returns 1). */
+/* The ROM checks. `prof` must be a FireRed / LeafGreen or Ruby / Sapphire row (anything else returns 1). */
 int vx_anchor_check_rom(const GameProfile *prof, const uint8_t *rom, size_t size);
 
 /* The RAM checks, valid on an overworld frame. The ROM is needed to resolve sb1's map and its layout. */

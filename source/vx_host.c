@@ -77,7 +77,7 @@ static void LogAnchorFail(const GameProfile *p, int check)
              (unsigned)vx_anchor_last_value(), p->code, (unsigned)p->rev);
 }
 
-/* ROM half of the self-check, once per bind, for a FireRed / LeafGreen row. False = not detected (2D). */
+/* ROM half of the self-check, once per bind, for a FireRed / LeafGreen or Ruby / Sapphire row. False = not detected (2D). */
 static bool ProbeRom(const GameProfile *p, const uint8_t *rom, size_t sz)
 {
     int r;
@@ -120,7 +120,7 @@ static void ProbeRam(GbaCore *top)
     cb2 = Rd32At(iw, sProbe->gMain - 0x03000000u + 4u);
     if (cb2 != sProbe->cb2Overworld && cb2 != sProbe->cb2OverworldBasic)
         return;   /* not an overworld frame (title, battle, a warp in progress) */
-    sb1 = Rd32At(iw, sProbe->sb1Ptr - 0x03000000u);
+    sb1 = sProbe->sb1Direct ? sProbe->sb1Ptr : Rd32At(iw, sProbe->sb1Ptr - 0x03000000u);   /* RS: the struct itself */
     if (sb1 < 0x02000000u || sb1 - 0x02000000u > 0x3FFF0u)
         loc = 0xFFFFFFFEu;
     else
@@ -169,7 +169,7 @@ static void Rebind(GbaCore *top)
     if (prof == NULL && sz > 0xBC)
     {
         vx_log_set_sink(LogSink);
-        PORT_LOG("vx: not detected: game %.4s rev %u (supported: Emerald, FireRed rev 1, LeafGreen rev 1)",
+        PORT_LOG("vx: not detected: game %.4s rev %u (supported: Emerald, FireRed / LeafGreen rev 1, Ruby / Sapphire rev 2)",
                  (const char *)(rom + 0xAC), (unsigned)rom[0xBC]);
     }
 #if VX_DEV_FORCE_OVERLAY
@@ -541,7 +541,7 @@ const char *vx_host_status(bool userOn, bool isN3DS, bool linkAny, GbaCore *top)
     if (top != sBound && userOn)
         Rebind(top);
     if (!isN3DS && !VX_DEV_ALLOW_O3DS) return "Voxel 3D: needs a New 3DS";
-    if (top == NULL || sGame == GP_NONE || sRam == RAM_FAIL) return "Voxel 3D: Emerald, FireRed, LeafGreen (rev 1)";
+    if (top == NULL || sGame == GP_NONE || sRam == RAM_FAIL) return "Voxel 3D: Emerald, FRLG rev 1, RS rev 2";
     if (linkAny) return "Voxel 3D: paused during link";
     switch (vx_data_status())
     {
