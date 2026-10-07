@@ -13,10 +13,23 @@
 #endif
 
 #if CTR_VOXEL_LIGHTING
-/* Sun in the northwest; shadows travel southeast. Y is height. The sun is
- * along (-DX, 1, -DZ): 45 degrees up. */
-#define VOXEL_SUN_DX 0.85f
-#define VOXEL_SUN_DZ 0.55f
+/* THE sun. Every consumer (the ray march, the face term, the contact blob, an
+ * object's cast shadow, the dapple) reads these two numbers and nothing else.
+ *
+ * The sun is in FRONT of the scene (south, the camera's side), high, and a
+ * little to the west: it lies along (-DX, 1, -DZ) from a point, with +Z south.
+ * DZ is therefore NEGATIVE and shadows travel (+DX, +DZ) = north and a touch
+ * east: away from the camera, up the screen. The GBA sprites are drawn lit
+ * from the front and above; this makes the baked terrain/building shadows
+ * agree with them. Elevation: horizontal length 0.79 over height 1 = 52 deg.
+ * A south wall gets 0.65 of the sun's face term, a west wall 0.45, a roof 1;
+ * north and east walls take ambient. (L4: a day cycle only has to drive these
+ * two numbers, then VoxelLighting_Reset() and re-bake.)
+ *
+ * Nothing assumes a sign: the march, the reach boxes and the hash derive
+ * their extents from the signs of DX and DZ. */
+#define VOXEL_SUN_DX 0.45f
+#define VOXEL_SUN_DZ (-0.65f)
 #define VOXEL_LIGHT_REACH 8
 /* The light of what the sun does not reach: a cast shadow, and a face turned
  * away from the sun. The same number, so a wall and the shadow it casts on

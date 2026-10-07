@@ -20,6 +20,7 @@
 #include "voxel_world.h"
 #include "voxel_tree.h"
 #include "voxel_atlas.h"
+#include "voxel_lighting.h"
 #include "rg_gameprof.h"
 
 static int sChecks, sFails;
@@ -338,6 +339,58 @@ static void TestShrubTables(void)
     gVxProf = NULL;
 }
 
+/* ---- L3: the sun is in front of the scene; nothing in the march assumes a sign ---- */
+
+#if CTR_VOXEL_LIGHTING && defined(VOXEL_LIGHTING_TESTS)
+extern bool gVoxelLightingStepEveryPoint;
+
+static void TestSun(void)
+{
+    unsigned shadowed = 0, compared = 0;
+
+    /* The vector: south of the scene (+Z is south, the camera's side), so DZ < 0 and the shadows
+     * (+DX, +DZ) run north, away from the camera; high enough for a roof to read. */
+    CHECK(VOXEL_SUN_DZ < 0.0f);
+    CHECK(sqrtf(VOXEL_SUN_DX * VOXEL_SUN_DX + VOXEL_SUN_DZ * VOXEL_SUN_DZ) < 1.0f);   /* above 45 degrees */
+    /* The face term: ground full, the camera-facing south wall lit, west a little, north/east ambient. */
+    CHECK(VoxelLighting_Face(0, 1, 0) == 1.0f);
+    CHECK(VoxelLighting_Face(0, 0, 1) > VOXEL_AMBIENT + 0.15f);       /* a south wall: lit, not washed out */
+    CHECK(VoxelLighting_Face(0, 0, 1) < 1.0f);
+    CHECK(VoxelLighting_Face(-1, 0, 0) > VOXEL_AMBIENT);              /* west: lit a little */
+    CHECK(VoxelLighting_Face(0, 0, 1) > VoxelLighting_Face(-1, 0, 0));
+    CHECK(VoxelLighting_Face(0, 0, -1) == VOXEL_AMBIENT);             /* north wall: turned away */
+    CHECK(VoxelLighting_Face(1, 0, 0) == VOXEL_AMBIENT);              /* east wall: turned away */
+    /* A flat south-facing roof pitch is lit more than its north-facing twin: the roofs still read. */
+    CHECK(VoxelLighting_Face(0, 1, 0.5f) > VoxelLighting_Face(0, 1, -0.5f));
+
+    /* The skipping march agrees with the point-by-point one, over the whole fixture. */
+    Take();
+    VoxelLighting_Reset();
+    for (int z = -4; z < 24; ++z)
+        for (int x = -2; x < 24; ++x)
+            for (int k = 0; k < 3; ++k)
+            {
+                float px = (float)x + 0.17f + 0.31f * (float)k, pz = (float)z + 0.62f - 0.23f * (float)k;
+                float py = 0.4f + 0.8f * (float)k;
+                float fast, ref;
+
+                gVoxelLightingStepEveryPoint = false;
+                VoxelLighting_Reset();
+                fast = VoxelLighting_Sample(px, py, pz);
+                gVoxelLightingStepEveryPoint = true;
+                VoxelLighting_Reset();
+                ref = VoxelLighting_Sample(px, py, pz);
+                gVoxelLightingStepEveryPoint = false;
+                CHECK(fast == ref);
+                ++compared;
+                if (ref < 1.0f)
+                    ++shadowed;
+            }
+    CHECK(compared > 1000);
+    printf("  sun march: %u points compared, %u in shadow\n", compared, shadowed);
+}
+#endif
+
 int main(void)
 {
     CHECK(fxInit() == 0);
@@ -348,6 +401,9 @@ int main(void)
     TestHashes();
     TestTreeTables();
     TestShrubTables();
+#if CTR_VOXEL_LIGHTING && defined(VOXEL_LIGHTING_TESTS)
+    TestSun();
+#endif
     printf("test_voxel_world: %d checks, %d failures\n", sChecks, sFails);
     return sFails != 0;
 }
