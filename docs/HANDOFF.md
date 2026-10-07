@@ -9,6 +9,10 @@
 
 ## Current status
 
+- **2026-10-08 — MERGE IN PROGRESS H2** (`worktree-agent-af1235a0a6e26f511` @ `255b580` into main, `--no-ff`, then
+  the 41-suite gate on main). If this line is still here on resume: check `git log main` for the merge commit; if
+  present, rerun the gate (`<scratchpad>/gate-run.sh`) and clear this line; if absent, merge again.
+
 - **2026-10-07 — RESUME POINT (Guy restarted the Mac mid-H2).** `main` = `11d90c9`, all local, NOTHING PUSHED,
   nothing hardware-run. Gate on 11d90c9 green: 30 romgen + 11 vtest suites (41) 0 failures, device build links;
   `3DGBA.cia` last built 2026-10-07 23:07 from 11d90c9 (includes H1).
