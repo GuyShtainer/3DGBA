@@ -1,6 +1,6 @@
 # PHASE 36 — Hoenn census follow-up (romgen building recipes)
 
-Status: **H1 built** (2026-10-07, `BUILDLOG-H1.md`); H2-H6 planned. Nothing hardware-run.
+Status: **H1 built** (2026-10-07, `BUILDLOG-H1.md`); **H2 recipes built, pins pending** (`BUILDLOG-H2.md`); H3-H6 planned. Nothing hardware-run.
 
 ## Goal
 
