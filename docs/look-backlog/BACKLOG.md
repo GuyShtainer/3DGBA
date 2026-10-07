@@ -117,3 +117,18 @@ Evidence (Azahar N3DS, same saves, before = old sun build, after = new): `eviden
 building and tree, NPCs get a long shadow toward the viewer. After: shadows fall behind and beside, building fronts and
 NPCs read evenly lit, roofs keep their shading. Hardware frame time (the ray count is about the same: a 3.6 x 5.2 tile
 run instead of 6.8 x 4.4) still to be read on the device.
+
+## Guy's notes on the Kanto/Sevii shots (2026-10-07)
+
+Guy, after the FRLG census reached 151/152: "Great job. Im very pleased. And yea the side walls are not perfect, some
+roofs are not there. The fences and rocks are also flat, not only flowers and grass". His circled shots are in
+`evidence/guy-1007/` (Trainer Tower, Four Island, Five Island, Resort Gorgeous).
+
+| # | What Guy circled | Cause (lead's reading) | Fix direction | Size |
+|---|---|---|---|---|
+| L6 | Roofs that stop at the ridge: Five Island lilac houses, Four Island Center + orange/lilac houses, Resort Gorgeous house | The GBA art shows only the FRONT roof slope; the recipes extrude what is visible, so the back half (ridge + rear slope, behind the map's top row of the building) is missing or ends in a flat slab. | Per recipe family (`sv_gable`, `k_center`, the K-house builders): mirror the front slope to a rear slope about the ridge, colour/texture from the front slope rows; add a `check` rule + preview angle that looks from behind/above so a missing rear slope fails. Audit all 85 Kanto models + the Emerald set. | medium |
+| L5+ | Side walls "not perfect" (Five Island right house: plain purple end) | Ends are closed (side-closure check) but plain colour. | Already L5: dress ends from facade art (gable triangle, wall + window texture). | medium |
+| L7 | Trainer Tower base / top | Tower foot does not seat on the ground plinth; top cut off at this camera. | Revisit `k_trainer_tower` foot + plinth; check against the census rect. | small |
+| L8 | Flat fences (Resort Gorgeous, Pallet), rocks (sea rocks, boulders), flowers | No prop geometry for these metatiles: they render as ground art. | A prop part like the L1 shrub card: fence = thin upright card along the fence line (posts/rails from the upper layer), rocks = low rounded card/box, flowers = small upright card (check layer split; L2 reports it). Per-game tables like GpShrub. | medium |
+
+Order (lead): L2 (running) → L6 roofs → L5 side-wall dressing → L8 fences/rocks/flowers → L7 → L4 day cycle.
