@@ -253,7 +253,7 @@ static const RgExact kPortExact[8] = {
 /* Four Island's Center (17,18) and Mart (21,24), Five Island's Center are the K2 landmark models (k_center / k_mart). */
 
 #define L_FOUR 233, 0xF927FC39u
-#define L_FIVE 234, 0u
+#define L_FIVE 234, 0x2AA31FFFu
 #define L_RESORT 246, 0u
 #define L_MEADOW 248, 0u
 
@@ -324,6 +324,20 @@ static const RgSideCfg kFourPurpleSide[1] = {
     {NULL, {50, 58, 54, 60}, {77, 24, 79, 28}, 21, true},
 };
 
+/* ---- k_five_house_edge: 48x64 art (rect (21,6), 3x4 on layout 234; door (22,9)) ------------------------------------- */
+/* Five Island's lilac house at the map's east edge: the same house as k_four_house, but its right two cells lie outside
+ * the 24-wide map, so the rect is only three cells (48 px) wide and the top row holds bushes. Same rows as k_four_house
+ * (roof lip 9-19, roof 20-42, eave 43-45, facade 46-64) at width 48; the bushes (rows 0-8) are above the exact rect. */
+static bool k_five_house_edge(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    (void)spec; (void)a0; (void)a1;
+    return sv_gable(out, "house", 48, 64, 46, 43, 9, 0);
+}
+static const RgExact kFiveEdgeExact[1] = {{0, 9, 48, 64, false}};
+static const RgSideCfg kFiveEdgeSide[1] = {
+    {NULL, {41, 58, 45, 60}, {45, 24, 47, 28}, 21, true},
+};
+
 const RgSpec rg_kspecs_sevii[] = {
     {"k_sevii_house", RG_SPEC_DIRECT, L_ONE, {18, 6, 5, 4}, {1, 4}, SV_GROUND, 1, kHouseExact, 1,
      k_sevii_house, 0, 0, kHouseSide},
@@ -343,5 +357,7 @@ const RgSpec rg_kspecs_sevii[] = {
      k_four_house_orange, 0, 0, kFourOrangeSide},
     {"k_four_house", RG_SPEC_DIRECT, L_FOUR, {24, 23, 5, 4}, {1, 4}, SV_GROUND, 1, kFourPurpleExact, 1,
      k_four_house, 0, 0, kFourPurpleSide},
+    {"k_five_house_edge", RG_SPEC_DIRECT, L_FIVE, {21, 6, 3, 4}, {0, 0}, SV_GROUND, 1, kFiveEdgeExact, 1,
+     k_five_house_edge, 0, 0, kFiveEdgeSide},
 };
 const unsigned rg_kspecs_sevii_count = sizeof(rg_kspecs_sevii) / sizeof(rg_kspecs_sevii[0]);
