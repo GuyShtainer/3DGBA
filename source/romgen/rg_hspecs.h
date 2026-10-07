@@ -37,4 +37,30 @@ extern const RgSideCfg rg_h_dewford_house_side[1];
      RG_H_DEWFORD_HOUSE_NEXACT, rg_h_dewford_house, 64, 0, rg_h_dewford_house_side},                             \
     {"gym_dewford", RG_SPEC_DIRECT, L_H_DEWFORD, {5, 13, 6, 5}, {0, 0}, H_SAND, kGymExact, 4, rg_gym, 0, 0, NULL},
 
+/* ---- Mauville City (layout 3) ---- */
+#define L_H_MAUVILLE 3, 0x6FFC5818u
+#define H_GRASS1 {0x001}, 1
+bool rg_h_mauville_gable(const RgSpec *s, int width, int a1, RgPartList *out);
+bool rg_h_mauville_block(const RgSpec *s, int a0, int a1, RgPartList *out);
+bool rg_h_game_corner(const RgSpec *s, int a0, int a1, RgPartList *out);
+extern const RgExact rg_h_mauville_house_exact[2];
+extern const RgExact rg_h_mauville_wide_exact[2];
+extern const RgExact rg_h_mauville_block_exact[2];
+extern const RgExact rg_h_game_corner_exact[5];
+extern const RgSideCfg rg_h_mauville_house_side[1];
+extern const RgSideCfg rg_h_mauville_block_side[1];
+extern const RgSideCfg rg_h_game_corner_side[1];
+
+#define RG_HSPECS_MAUVILLE_ROWS                                                                                      \
+    {"mauville_house", RG_SPEC_DIRECT, L_H_MAUVILLE, {18, 11, 4, 4}, {0, 0}, H_GRASS1, rg_h_mauville_house_exact,    \
+     2, rg_h_mauville_gable, 64, 0, rg_h_mauville_house_side},                                                       \
+    {"mauville_bike", RG_SPEC_DIRECT, L_H_MAUVILLE, {34, 2, 5, 4}, {0, 0}, H_GRASS1, rg_h_mauville_wide_exact,       \
+     2, rg_h_mauville_gable, 80, 0, rg_h_mauville_house_side},                                                       \
+    {"mauville_house_e", RG_SPEC_DIRECT, L_H_MAUVILLE, {31, 11, 5, 4}, {0, 0}, H_GRASS1, rg_h_mauville_wide_exact,   \
+     2, rg_h_mauville_gable, 80, 0, rg_h_mauville_house_side},                                                       \
+    {"mauville_block", RG_SPEC_DIRECT, L_H_MAUVILLE, {36, 11, 4, 5}, {0, 0}, H_GRASS1, rg_h_mauville_block_exact,    \
+     2, rg_h_mauville_block, 0, 0, rg_h_mauville_block_side},                                                        \
+    {"game_corner", RG_SPEC_DIRECT, L_H_MAUVILLE, {5, 10, 7, 4}, {0, 0}, H_GRASS1, rg_h_game_corner_exact,           \
+     5, rg_h_game_corner, 0, 0, rg_h_game_corner_side},
+
 #endif
