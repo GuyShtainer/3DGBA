@@ -172,8 +172,9 @@ static void WriteAndRead(const RgWorld *w, const RgBuildModels *ms)
     CHECK(st.err == RG_OK && st.variants <= RG_MAX_VARIANTS && st.pages <= RG_MAX_PAGES);
     /* pins (this ROM, S2.6): 67 S2.5 models + 200 interior pieces + 19 bare twins */
     CHECK(st.models == 286 && st.variants == 66 && st.pages == 118 && st.pageModels == 630 && st.placements == 2894u);
-    /* 7898476 B / 80520 vertices -> 7870828 / 79368: the look-L7 flat-cap merge (outdoor models; interiors unchanged) */
-    CHECK(sz == 7870828u && st.vertices == 79368u && st.masks == 56u);
+    /* 7898476 B / 80520 vertices -> 7870828 / 79368: the look-L7 flat-cap merge (outdoor models; interiors unchanged);
+     * -> 7873564 / 79482: look L6, the hip-roof ridge's back face (outdoor models; interiors unchanged) */
+    CHECK(sz == 7873564u && st.vertices == 79482u && st.masks == 56u);
     CHECK(memcmp(buf, "VXB7", 4) == 0 && sz % 4 == 0);
     {
         VoxelMapInstance inst;
