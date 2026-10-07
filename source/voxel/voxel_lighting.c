@@ -74,6 +74,11 @@ static float sCeiling;
 static float sMapCeiling[MAX_VOXEL_MAP_INSTANCES];
 static unsigned sMapCeilings;
 
+/* The ray's horizontal run, in tiles, along each axis. */
+#define SUN_ABS(v) ((v) < 0.0f ? -(v) : (v))
+#define RUN_X (SUN_ABS(VOXEL_SUN_DX) * (float)VOXEL_LIGHT_REACH)
+#define RUN_Z (SUN_ABS(VOXEL_SUN_DZ) * (float)VOXEL_LIGHT_REACH)
+
 static int Tile(float n)
 {
     int i = (int)n;
@@ -141,13 +146,17 @@ void VoxelLighting_Reset(void)
 
 /*
  * The height past which nothing a ray from (x, z) can meet stands: over the
- * maps its reach overlaps (it runs northwest, towards the sun, and a cell's
- * point may lie a little off the ray's own), never above the global bound.
+ * maps its reach overlaps (it runs towards the sun, whichever way that is,
+ * and a cell's point may lie a little off the ray's own), never above the
+ * global bound.
  */
 static float RayCeiling(float x, float z)
 {
-    float x0 = x - VOXEL_SUN_DX * VOXEL_LIGHT_REACH - 1.0f, x1 = x + 1.0f;
-    float z0 = z - VOXEL_SUN_DZ * VOXEL_LIGHT_REACH - 1.0f, z1 = z + 1.0f;
+    /* The ray moves by -SUN per unit of rise: towards the sun. */
+    float endX = x - VOXEL_SUN_DX * (float)VOXEL_LIGHT_REACH;
+    float endZ = z - VOXEL_SUN_DZ * (float)VOXEL_LIGHT_REACH;
+    float x0 = (endX < x ? endX : x) - 1.0f, x1 = (endX > x ? endX : x) + 1.0f;
+    float z0 = (endZ < z ? endZ : z) - 1.0f, z1 = (endZ > z ? endZ : z) + 1.0f;
     float ceiling = -1000.0f;
     unsigned count = VoxelWorld_InstanceCount();
 
@@ -314,6 +323,29 @@ bool gVoxelLightingStepEveryPoint; /* the reference march, for the tests */
  * that used to take twenty-six points, with the same answer - only crowns,
  * which are round, are still tested point by point.
  */
+/* `move` is the ray's travel along an axis per unit of rise (-SUN). Steps (a
+ * quarter rise each) before a coordinate p in tile t reaches the edge it is
+ * heading for; huge when it does not move. */
+static float StepsToLeave(float p, int t, float move)
+{
+    if (move < 0.0f)
+        return (p - (float)t) * (1.0f / (-move * 0.25f));
+    if (move > 0.0f)
+        return ((float)(t + 1) - p) * (1.0f / (move * 0.25f));
+    return 1.0e9f;
+}
+
+/* Has coordinate r, moving by `move`, left tile t? (Only ever the edge it
+ * heads for: the first point was inside.) */
+static bool LeftTile(float r, int t, float move)
+{
+    if (move < 0.0f)
+        return r < (float)t;
+    if (move > 0.0f)
+        return r >= (float)(t + 1);
+    return false;
+}
+
 static bool Lit(float x, float y, float z)
 {
     float ceiling;
@@ -343,26 +375,25 @@ static bool Lit(float x, float y, float z)
         if ((cell->crownPart >= 0 || cell->surface || cell->sign || cell->mask != NULL)
          && cell->top + cell->base > ry)
             continue;  /* not a box: point by point while it is above the ray */
-        /* Leave the cell. rx and rz only fall, so it is left when either
-         * drops below the cell's corner. The estimate starts a step short
-         * of the crossing and the exact points settle it. */
+        /* Leave the cell. rx and rz each move by a fixed signed amount a
+         * step, so the cell is left when either crosses the edge it heads
+         * for (which edge the sun's sign says). The estimate starts a step
+         * short of the crossing and the exact points settle it. */
         {
-            /* Reciprocals, not divisions: the guess is a step short of the
-             * crossing anyway, far more than their rounding. */
-            float ex = (x - (float)tx) * (1.0f / (VOXEL_SUN_DX * 0.25f));
-            float ez = (z - (float)tz) * (1.0f / (VOXEL_SUN_DZ * 0.25f));
+            float ex = StepsToLeave(x, tx, -VOXEL_SUN_DX);
+            float ez = StepsToLeave(z, tz, -VOXEL_SUN_DZ);
             int guess = (int)(ex < ez ? ex : ez) - 1;
-            const float left = (float)tx, top = (float)tz;
 
             if (guess > step)
                 step = guess;
-            /* rx and rz only fall and the first point was inside the cell,
-             * so it is left exactly when either drops under its corner:
-             * Tile(r) != t, without computing Tile. */
+            /* The first point was inside the cell, so it is left exactly
+             * when a coordinate passes the edge it moves towards: Tile(r)
+             * != t, without computing Tile. */
             for (; step <= VOXEL_LIGHT_REACH * 4; ++step)
             {
                 RayPoint(x, y, z, step, &rx, &ry, &rz);
-                if (rx < left || rz < top || ry >= ceiling)
+                if (ry >= ceiling
+                 || LeftTile(rx, tx, -VOXEL_SUN_DX) || LeftTile(rz, tz, -VOXEL_SUN_DZ))
                     break;
             }
         }
@@ -447,12 +478,16 @@ float VoxelLighting_Sample(float x, float y, float z)
 
 uint32_t VoxelLighting_Hash(int x0, int z0, int x1, int z1)
 {
-    /* Rays now reach northwest. Also include the chunk's own north margin
-     * and neighbours on the opposite boundary for AO and face visibility. */
-    int northReach = VOXEL_LIGHT_REACH > VOXEL_CHUNK_MARGIN_NORTH
-                   ? VOXEL_LIGHT_REACH : VOXEL_CHUNK_MARGIN_NORTH;
-    int hx0 = x0 - VOXEL_LIGHT_REACH - 1, hz0 = z0 - northReach - 1;
-    int hx1 = x1 + 1, hz1 = z1 + 2;
+    /* Rays run towards the sun: out past whichever sides its signs say (its
+     * x sign, its z sign), so those are the margins the shadows come from.
+     * Also keep the chunk's own north margin and a tile of neighbours on
+     * every side for AO and face visibility. */
+    int runX = (int)(RUN_X) + 1, runZ = (int)(RUN_Z) + 1;
+    int west = VOXEL_SUN_DX > 0.0f ? runX : 0, east = VOXEL_SUN_DX < 0.0f ? runX : 0;
+    int north = VOXEL_SUN_DZ > 0.0f ? runZ : 0, south = VOXEL_SUN_DZ < 0.0f ? runZ : 0;
+    int hx0 = x0 - west - 1, hz0 = z0 - (north > VOXEL_CHUNK_MARGIN_NORTH
+                                          ? north : VOXEL_CHUNK_MARGIN_NORTH) - 1;
+    int hx1 = x1 + east + 1, hz1 = z1 + south + 2;
     uint32_t hash = VoxelWorld_BlockHash(hx0, hz0, hx1, hz1);
 
     /* Equal tile IDs in a different tileset/layout do not mean equal casters.
@@ -496,8 +531,9 @@ static void RawQuad(VoxelBuilder *builder, const VoxelVertex *a,
 
 float VoxelLighting_Face(float nx, float ny, float nz)
 {
-    /* n . sun over up . sun, the sun unnormalised at (-DX, 1, -DZ): level
-     * ground is 1, a west wall 0.85, a north one 0.55, south and east 0. */
+    /* n . sun over up . sun, the sun unnormalised at (-DX, 1, -DZ), +Z south:
+     * level ground is 1, a south wall -DZ (0.70), a west wall DX (0.30),
+     * north and east walls <= 0 (ambient). */
     float length = sqrtf(nx * nx + ny * ny + nz * nz);
     float facing;
 
@@ -817,8 +853,9 @@ void VoxelLighting_Contact(VoxelBuilder *builder, float x, float z)
         {1,0}, {0.707107f,0.707107f}, {0,1}, {-0.707107f,0.707107f}
     };
     VoxelVertex polygon[8], a[16], b[16];
-    /* Slight southeast displacement, away from the northwest sun. */
-    float cx = x + 0.10f, cz = z + 0.06f;
+    /* Slight displacement along the shadows, away from the sun: the sun's
+     * horizontal direction at the old 0.116 tile. */
+    float cx = x + VOXEL_SUN_DX * 0.12f, cz = z + VOXEL_SUN_DZ * 0.12f;
     for (unsigned i = 0; i < 8; ++i)
         polygon[i] = (VoxelVertex){cx + ring[i][0] * 0.36f, 0,
                                    cz + ring[i][1] * 0.23f, 0, 0, 0};
