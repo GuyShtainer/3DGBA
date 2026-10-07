@@ -404,6 +404,23 @@ static const RgSideCfg kWarehouseSide[1] = {
     {NULL, {88, 60, 92, 70}, {88, 14, 91, 40}, 27, true},
 };
 
+/* ==== KS3: Six Island (layout 236, map 3/18), Seven Island (235, 3/17), Water Path (252, 3/60), Trainer Tower (254, 3/62),
+ *      Sevault Canyon (256, 3/64), Navel Rock (343, 2/0), Birth Island (342, 2/56) ====================================== */
+
+#define L_SEVEN 235, 0x64A249C1u
+#define L_SIX 236, 0u
+#define L_WATER 252, 0u
+#define L_TOWER 254, 0u
+#define L_CANYON 256, 0u
+#define L_NAVEL 343, 0x45EADA9Bu
+#define L_BIRTH 342, 0xA2E502C5u
+
+/* ---- k_seven_house: 80x64 art (rect (10,6), 5x4 on layout 235; door (11,9)) --------------------------------------- */
+/* The lilac-roofed house of Seven Island, Six Island and Water Path (rows 1-3 of the rect are the cells 649-669 on every
+ * one: the 5x3 census signature A0A45131; the top row is grass or cliff and varies, so matchRows is (1, 4)). Same art as
+ * k_four_house pixel for pixel, but these layouts use another secondary tileset, so Four Island's model does not land
+ * here (placements checks the tileset): this row, with its own pin, reuses the builder. */
+
 const RgSpec rg_kspecs_sevii[] = {
     {"k_sevii_house", RG_SPEC_DIRECT, L_ONE, {18, 6, 5, 4}, {1, 4}, SV_GROUND, 1, kHouseExact, 1,
      k_sevii_house, 0, 0, kHouseSide},
@@ -433,5 +450,13 @@ const RgSpec rg_kspecs_sevii[] = {
      k_lorelei_house, 0, 0, kLoreleiSide},
     {"k_rocket_warehouse", RG_SPEC_DIRECT, L_MEADOW, {9, 17, 6, 5}, {0, 0}, SV_GROUND, 1, kWarehouseExact, 1,
      k_rocket_warehouse, 0, 0, kWarehouseSide},
+    {"k_seven_house", RG_SPEC_DIRECT, L_SEVEN, {10, 6, 5, 4}, {1, 4}, SV_GROUND, 1, kFourPurpleExact, 1,
+     k_four_house, 0, 0, kFourPurpleSide},
+    {"k_seven_harbor", RG_SPEC_DIRECT, L_SEVEN, {13, 13, 7, 6}, {0, 0}, {619}, 1, kFourHarborExact, 6,
+     k_four_harbor, 0, 0, kFourHarborSide},
+    {"k_navel_harbor", RG_SPEC_DIRECT, L_NAVEL, {6, 16, 7, 6}, {0, 0}, {630}, 1, kFourHarborExact, 6,
+     k_four_harbor, 0, 0, kFourHarborSide},
+    {"k_birth_harbor", RG_SPEC_DIRECT, L_BIRTH, {12, 24, 7, 6}, {0, 0}, {630}, 1, kFourHarborExact, 6,
+     k_four_harbor, 0, 0, kFourHarborSide},
 };
 const unsigned rg_kspecs_sevii_count = sizeof(rg_kspecs_sevii) / sizeof(rg_kspecs_sevii[0]);
