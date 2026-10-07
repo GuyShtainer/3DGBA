@@ -32,8 +32,9 @@ static int sChecks, sFails, sSkipped;
 #define REGIONS_SHA1 "1a09cd5fa1eab91dd0fa11f88b42b038856144d8"
 #define SIGNPOSTS_SHA1 "9b4d379cb2a40e522d3e681ed03110785f3243d4"
 #define RELIEF_SHA1 "215a12d9c4ee8f4747e66d895f37d6ed1f8c4b5c"
-/* S4: a03a3b74 -> 40135582 (oldale_house and the Rustboro set repinned to the RS layouts, rs_littleroot_lab in the lab) */
-#define BUILDINGS_SHA1 "40135582461dc05eee3828faf332c244e17acfad"
+/* S4: a03a3b74 -> 40135582 (oldale_house and the Rustboro set repinned to the RS layouts, rs_littleroot_lab in the lab);
+ * Phase 36 H1: 40135582 -> 91257d8b (21 Hoenn models: Dewford, Mauville, Verdanturf, Fallarbor, Slateport) */
+#define BUILDINGS_SHA1 "91257d8b2ff5a894db3d7c2b2e85e890ea08275e"
 #define LITTLEROOT_LAYOUT 10u      /* the town whose two houses match Emerald's pins */
 
 static const uint8_t kGroupSizes[34] = {54, 5, 5, 6, 7, 7, 8, 7, 7, 13, 8, 17, 10, 24, 13, 13, 14, 2, 2, 2, 3, 1, 1,
@@ -168,8 +169,11 @@ static void TestSpecs(const Cart *C)
 {
     static const char *kRepinned[6] = {"oldale_house", "rustboro_stone", "rustboro_olive", "gym_rustboro", "devon_corporation",
                                        "rustboro_fountain"};
+    static const char *kTents[3][2] = {{"battle_tent_verdanturf", "rs_contest_verdanturf"},
+                                       {"battle_tent_fallarbor", "rs_contest_fallarbor"},
+                                       {"battle_tent_slateport", "rs_contest_slateport"}};
     const RgSpec *t;
-    unsigned n = 0, i, interiors = 0, comp = 0, j, k, repinned = 0, pinned = 0, matching = 0;
+    unsigned n = 0, i, interiors = 0, comp = 0, j, k, repinned = 0, pinned = 0, matching = 0, replaced = 0;
 
     t = rg_game_specs(C->w.prof, &n);
     for (i = 0; i < rg_spec_count; i++) interiors += rg_specs[i].kind == RG_SPEC_INTERIOR;
@@ -180,6 +184,15 @@ static void TestSpecs(const Cart *C)
             CHECK(j < n && strcmp(t[j].name, "rs_littleroot_lab") == 0 && t[j].kind == RG_SPEC_DIRECT);
             CHECK(t[j].layoutId == rg_specs[i].layoutId && t[j].layoutFnv == rg_specs[i].layoutFnv);
             CHECK(t[j].ext != NULL);                  /* look L5 side dressing on the RS-own recipe */
+            j++;
+            continue;
+        }
+        for (k = 0; k < 3; k++)
+            if (strcmp(rg_specs[i].name, kTents[k][0]) == 0) break;
+        if (k < 3) {                                  /* Phase 36 H1: a Contest Hall where Emerald has a Battle Tent */
+            CHECK(j < n && strcmp(t[j].name, kTents[k][1]) == 0 && t[j].kind == RG_SPEC_DIRECT && t[j].ext != NULL);
+            CHECK(t[j].layoutId == rg_specs[i].layoutId);
+            replaced++;
             j++;
             continue;
         }
@@ -197,14 +210,15 @@ static void TestSpecs(const Cart *C)
         }
         j++;
     }
-    CHECK(comp > 0 && repinned == 6);
-    /* every pinned row now names this cart's layout (S0: 7 of 16 did not) */
+    CHECK(comp > 0 && repinned == 6 && replaced == 3);
+    /* every pinned row now names this cart's layout (S0: 7 of 16 did not); 16 -> 37: Phase 36 H1's 21 Hoenn rows (the
+     * Verdanturf, Fallarbor and Slateport ones retargeted to the RS layouts, rg_rsspecs.c) */
     for (j = 0; t != NULL && j < n; j++) {
         if (t[j].layoutId == 0) continue;
         pinned++;
         matching += t[j].layoutId <= C->w.layoutCount && rg_layout_fnv(&C->w.layouts[t[j].layoutId - 1u]) == t[j].layoutFnv;
     }
-    CHECK(pinned == 16 && matching == 16);
+    CHECK(pinned == 37 && matching == 37);
     printf("  %s: %u recipe rows (%u Emerald rows, %u interiors left out, %u components retargeted, %u repinned, %u/%u pins "
            "match)\n", C->name, n, rg_spec_count, interiors, comp, repinned, matching, pinned);
     n = 7;
@@ -329,8 +343,10 @@ static void Run(Cart *C)
     CHECK(o->regionsSize == 256216u && memcmp(o->regions, "VXR5", 4) == 0);
     CHECK(o->signsSize == 16136u && o->signCount == 224 && o->headCount == 22 && o->emptyMasks == 3);
     CHECK(o->reliefSize == 22872u && o->rst.ledgeLayouts == 20 && o->rst.ledgeCells == 851 && o->rst.drawnRows == 0);
-    CHECK(o->buildingsSize == 3016324u && o->bModels == 64 && o->bPages == 58 && o->bPlacements == 2081);
-    CHECK(o->bVertices == 35508 && o->bMasks == 57 && o->bVariants == 66);
+    /* 3016324 B, 64 models, 2081 placements, 35508 vertices, 57 masks -> 3518812 / 85 / 2105 / 39252 / 60: Phase 36 H1
+     * (Dewford, Mauville, Verdanturf, Fallarbor, Slateport; three Contest Halls in the Battle Tents' place) */
+    CHECK(o->buildingsSize == 3518812u && o->bModels == 85 && o->bPages == 58 && o->bPlacements == 2105);
+    CHECK(o->bVertices == 39252 && o->bMasks == 60 && o->bVariants == 66);
     /* S4: every model passes its art gate (S0 left the Emerald lab out here; rs_littleroot_lab replaces it) */
     CHECK(o->buildingsFailed == 0 && o->buildingsDropped == 0);
     CHECK(o->roleCount[VOXEL_ROLE_SIGNPOST] == 224);

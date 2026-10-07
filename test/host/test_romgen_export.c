@@ -199,9 +199,10 @@ static void TestRealRom(void)
            a.buildingsFailed, a.regionsSize, a.signsSize, a.msBuildModels, a.msChecks, a.msWriteBuildings);
     /* pinned counts (S2.6 values: nothing was added in S2.7; 7898476 B / 80520 vertices -> 7870828 / 79368 by the
      * look-L7 flat-cap merge: six flat-capped models emit 64 triangles fewer each, same pixels; -> 7873564 / 79482 by
-     * look L6: the hip-roof ridge gets its back face, 38 triangles) */
-    CHECK(a.buildingsSize == 7873564u && a.bModels == 286 && a.bPages == 118 && a.bPageModels == 630 && a.bPlacements == 2894 &&
-          a.bVertices == 79482 && a.bMasks == 56 && a.bVariants == 66 && a.buildingsFailed == 0);
+     * look L6: the hip-roof ridge gets its back face, 38 triangles; -> 8475268 / 87360, 307 models, 651 pageModels,
+     * 2918 placements, 59 masks by Phase 36 H1 (Dewford, Mauville, Verdanturf, Fallarbor, Slateport): 21 direct models, 24 placements) */
+    CHECK(a.buildingsSize == 8475268u && a.bModels == 307 && a.bPages == 118 && a.bPageModels == 651 && a.bPlacements == 2918 &&
+          a.bVertices == 87360 && a.bMasks == 59 && a.bVariants == 66 && a.buildingsFailed == 0);
     CHECK(a.regionsSize == 330791u && a.signsSize == 26144u);   /* S0/S1 outputs unchanged by wantBuildings */
     Parse(a.buildings, a.buildingsSize);
     Consume(a.buildings, a.buildingsSize, a.bVariants);

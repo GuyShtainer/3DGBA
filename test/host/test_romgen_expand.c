@@ -318,11 +318,13 @@ static void TestRealRom(void)
     }
     CHECK(nPl > 0);
     printf("gate failures %u of %u models, %u triangles\n", gateBad, ms.n, nTris);
-    /* S2.6: the 13 interior rows add 200 pieces + 19 bare twins to the S2.5 total of 67 models */
-    CHECK(ms.n == 286 && ms.nInterior == 200 && ms.nTwin == 19 && ms.nHedge == 6 && ms.nRailing == 35 && ms.nKit == 7 && ms.nProps == 5 && ms.skipped == 0);
+    /* S2.6: the 13 interior rows add 200 pieces + 19 bare twins to the S2.5 total of 67 models;
+     * 286 -> 307: Phase 36 H1 (Dewford, Mauville, Verdanturf, Fallarbor, Slateport): 21 direct models, 24 placements */
+    CHECK(ms.n == 307 && ms.nInterior == 200 && ms.nTwin == 19 && ms.nHedge == 6 && ms.nRailing == 35 && ms.nKit == 7 && ms.nProps == 5 && ms.skipped == 0);
     /* 25514 -> 25130: flat-cap merge (look L7 follow-up): six Emerald models with flat-colour cap patches emit 64 triangles fewer each (littleroot_house_e/w, littleroot_lab, kit_house_4/5, oldale_house); previews pixel-identical.
-     * 25130 -> 25168: look L6: the hip-roof ridge gets its back face, 38 triangles over the hip-roofed models (closed from behind; the ortho gate stays 0) */
-    CHECK(gateBad == 0 && nTris == 25168);
+     * 25130 -> 25168: look L6: the hip-roof ridge gets its back face, 38 triangles over the hip-roofed models (closed from behind; the ortho gate stays 0)
+     * 25168 -> 27794: Phase 36 H1 (Dewford, Mauville, Verdanturf, Fallarbor, Slateport): 21 direct models, 24 placements */
+    CHECK(gateBad == 0 && nTris == 27794);
     CHECK(ms.seamClash == 0 && ms.connAmbiguous == 0);   /* seam_art column assert, connections assert */
     printf("props tie-break divergence A2: %u tied adjacent groups (informational, model order / _n suffix only)\n", ms.propTies);
     t0 = Now();
@@ -334,10 +336,11 @@ static void TestRealRom(void)
         CHECK(buf && rg_buildings_write(&w, &ms, buf, sz, &st) == sz);
         printf("buildings.bin: %zu bytes, %u pages, %u models, %u pageModels, %u vertices, %u placements, %u masks, %u variants\n",
                sz, st.pages, st.models, st.pageModels, st.vertices, st.placements, st.masks, st.variants);
-        CHECK(st.err == RG_OK && st.models == 286 && st.variants == 66 && st.variants <= 128);
+        CHECK(st.err == RG_OK && st.models == 307 && st.variants == 66 && st.variants <= 128);
         /* 7898476 B / 80520 vertices -> 7870828 / 79368 (1152 vertices = 6 x 64 triangles): the flat-cap merge;
-         * -> 7873564 / 79482 (114 vertices = 38 triangles): look L6: the hip-roof ridge gets its back face, 38 triangles over the hip-roofed models */
-        CHECK(sz == 7873564u && st.pages == 118 && st.placements == 2894u && st.vertices == 79482u && st.masks == 56u);
+         * -> 7873564 / 79482 (114 vertices = 38 triangles): look L6: the hip-roof ridge gets its back face, 38 triangles over the hip-roofed models;
+         * -> 8475268 / 87360, 2918 placements, 59 masks: Phase 36 H1 (Dewford, Mauville, Verdanturf, Fallarbor, Slateport): 21 direct models, 24 placements */
+        CHECK(sz == 8475268u && st.pages == 118 && st.placements == 2918u && st.vertices == 87360u && st.masks == 59u);
         CHECK(memcmp(buf, "VXB7", 4) == 0 && sz % 4 == 0);
         {   /* the vendored consumer reads it back: every variant, every owned model's layout page */
             VoxelMapInstance inst;
