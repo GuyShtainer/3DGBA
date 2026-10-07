@@ -542,3 +542,67 @@ the NPC on the path above reads upright. Not yet investigated. Suspects, to be m
 field-effect sprite covering the lower half of the billboard, the L2 blade cards drawn over the billboard, the
 billboard's foot/depth placement on grass cells, and the night grade lowering sprite contrast. Check Emerald and FRLG
 grass too (not RS-specific until shown). Size: unknown until measured. Order: after Phase 35 S4.
+
+### L9 DONE (2026-10-07, branch worktree-agent-aa61fbea184d97905)
+
+**Root cause (measured, not guessed).** Nothing cuts the actor's sprite. The GBA's own "in the grass" picture was
+lying flat under the L2 blades. On the GBA, an object standing in tall grass gets the FLDEFFOBJ_TALL_GRASS field effect,
+a 16x16 sprite on its tile drawn over its feet. Its resting frame (frame 0, the one that stays while the object stands)
+is opaque only in rows 9-15, a tuft over the legs. The port drew that tile effect as a flat decal (`EmitDecal`). After
+L2 the decal sat under the blade cards and was not visible. So no grass came in front of the legs except the own cell's
+front blade card, whose top meets the actor's plane about three sprite rows up. The actor stood whole on top of the
+grass carpet, which reads as "pasted on". Reproduced on Ruby Route 102 at night (Guy's view) with a debug build that had
+four flags read from `sdmc:/3DGBA/l9dbg.txt` (since removed):
+- slot log: Brendan's decoded slot has full opaque rows 10..30 of 32, foot pad 1. The sprite is complete.
+- flag 8 (billboards drawn with depth test ALWAYS): practically identical to the baseline. Nothing hides any part of
+  the actor, so it is not a depth or foot-placement problem.
+- flag 1 (blade cards off): the whole Brendan is visible, standing on flat ground art.
+- flag 2 (tile effects off): differs from the baseline only in a few pixels at the feet. The flat tuft decal was all
+  but invisible.
+The night grade was not the cause: the day shots show the same thing. It is not RS-specific either: Emerald Route 101
+and FireRed Route 1 show the same thing.
+
+Also found: the player x-ray (pale silhouette where something hides the player) drew pale "ghost feet" under the
+blade card, a mark that floats under the grass.
+
+**Fix (`voxel_entities.c`, general: all five games use the same field effect table).**
+- Tall grass (`VoxelEntities_StandsTileEffect`) now stands up on its own tile as a billboard, `VOXEL_EFFECT_DEPTH`
+  (0.04) in front of an object there, as the GBA draws it over the object's feet. It is still placed from its tile
+  (`data[1]/data[2]`), never from its owner, so a step's rustle stays on the tile left behind. It is lit like an object
+  on its tile. Long grass (FLDEFFOBJ_LONG_GRASS) is unchanged: still a decal, because no blade cards stand on long grass.
+- The player standing on a tall-grass tile is drawn as two quads of the same picture in the same place: the lowest
+  `VOXEL_GRASS_XRAY_ROWS` (8, half the grass tile) and the rest. The x-ray draws only the upper quad, so the ghost feet
+  are gone. The x-ray behind anything taller (roofs, tree crowns) still shows everything above those 8 rows. NPCs are not
+  split, because the x-ray is the player's alone.
+- Cost: one more quad (6 vertices) per actor in tall grass for the grass card, which was already one quad as a decal.
+  The card moved from flat to upright, so the grass costs nothing extra. One more quad when the player is in grass. No
+  new texture, no new draw call.
+
+**Tests.** `test_voxel_entities` gains TestTallGrass (+26 checks, 29 -> 55): `StandsTileEffect` true for tall grass
+and false for long grass and 0; with tall grass on the player's tile, the player is two quads, the lower one 8 rows tall,
+the upper one continues it in y and v on the same plane, and `PlayerVertexFirst` points at the upper one. The grass
+card is upright, its feet on the player's ground, 0.04 in front along the camera's toward vector and not sideways. Tall
+grass under the NPC does not split anyone. Long grass on the player's tile stays flat and leaves the player one quad. With
+the fix reverted (StandsTileEffect always false) the suite fails. Gate: `make -C tools/romgen test` 30 suites, 0 failures; `vtest` 11 suites, 0 failures, every
+other vtest count unchanged (mesh 27, world 8605, frlg 994, daylight 42609, rs 96, adapter 562, gate 37, lz77 173,
+overlay 23, shims 79); device `make -j8` links. romgen output byte-identical
+(Emerald buildings 6d321c3a, regions 007a370f, signposts 38515605, relief 21a837f0, ledges eb25a383; FR = LG 5ba2cc16 /
+3716874d / ba2fde45 / 32c24146; R = S 40135582 / 1a09cd5f / 9b4d379c / 215a12d9).
+
+**Evidence** (Azahar N3DS, private instance, MK.ctm, warped save copies, `daylight.txt` held at 12:00 or 02:00, each
+before/after pair from the same save): `evidence/l9-em-r101-{before,after}-{day,night}.png` (May in the grass of
+Route 101, a wild-encounter patch) and `evidence/l9-fr-r1-{before,after}-{day,night}.png` (Red in Route 1's grass);
+`evidence/l9-em-fr-night-zoom.png` = the actor zoomed at night, Emerald top / FireRed bottom, columns: before, the
+standing tuft alone (pale x-ray feet still under it), final. The Ruby Route 102 shots that reproduce Guy's view are
+kept out of git (RS screenshots).
+
+**Verdict (by eye on those shots).** Before: the whole actor stood on top of the grass, legs fully visible, with pale x-ray
+feet below. After: the tuft covers the legs and the lower body, so the actor stands IN the grass as on the GBA screen,
+in all three games, by day and by night; the ghost feet are gone (night zoom). The look is the GBA's own: how much of
+the actor the grass hides is the game's tuft, at the sprites' scale. Honest limits:
+- The tuft is a flat card 0.04 in front, so from the side (camera yaw) it stays a card, like every billboard.
+- A walk through grass was not captured: the walk run met a wild encounter at once. The rustle frames 1-4 use the
+  same card, so they stand up around the legs instead of lying flat, unchecked in motion.
+- No hardware frame time measured. The cost is a quad or two per frame, so no change is expected.
+- Not changed: surf, water and reflections, ledge jumps, shadows (the effect paths for those are untouched; only the
+  tile-effect branch and the player's quad changed).

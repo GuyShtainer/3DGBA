@@ -58,6 +58,11 @@ int VoxelEntities_PlayerVertexFirst(void);
  * (the day cycle's tint, voxel_daylight.h): 1 by day and by default. */
 void VoxelEntities_SetShadowStrength(float strength);
 
+/* look L9: true for the field effect (a sprite template's ROM address) that a
+ * tile keeps under a standing object and that stands up in front of that
+ * object's feet instead of lying on the ground: tall grass. */
+bool VoxelEntities_StandsTileEffect(uint32_t spriteTemplate);
+
 unsigned VoxelEntities_Emit(VoxelBuilder *builder, uint16_t *atlas,
                             const VoxelCamera *camera, VoxelBuilder *shadows,
                             VoxelBuilder *reflections);
