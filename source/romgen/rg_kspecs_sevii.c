@@ -367,6 +367,11 @@ static const RgSideCfg kFourHarborSide[1] = {
     {NULL, {20, 70, 24, 74}, {18, 24, 22, 30}, 999, true},
 };
 
+/* ---- k_five_harbor: 112x96 art (rect (9,14), 7x6 on layout 234; door (12,14)) -------------------------------------- */
+/* Five Island's harbor: the same pier, ferry and cranes as k_four_harbor (the cells match except the crane-side sea
+ * reflections 710 / 726 / 718 / 734 / 711 / 727 / 719 / 735 against Four's 646 / 662 / 654 / 670 / 647 / 663 / 655), over
+ * the sea metatile 299. So it shares Four's builder, exact rects and side tiles under its own pin and rect. */
+
 const RgSpec rg_kspecs_sevii[] = {
     {"k_sevii_house", RG_SPEC_DIRECT, L_ONE, {18, 6, 5, 4}, {1, 4}, SV_GROUND, 1, kHouseExact, 1,
      k_sevii_house, 0, 0, kHouseSide},
@@ -389,6 +394,8 @@ const RgSpec rg_kspecs_sevii[] = {
     {"k_five_house_edge", RG_SPEC_DIRECT, L_FIVE, {21, 6, 3, 4}, {0, 0}, SV_GROUND, 1, kFiveEdgeExact, 1,
      k_five_house_edge, 0, 0, kFiveEdgeSide},
     {"k_four_harbor", RG_SPEC_DIRECT, L_FOUR, {7, 28, 7, 6}, {0, 0}, {627}, 1, kFourHarborExact, 6,
+     k_four_harbor, 0, 0, kFourHarborSide},
+    {"k_five_harbor", RG_SPEC_DIRECT, L_FIVE, {9, 14, 7, 6}, {0, 0}, {299}, 1, kFourHarborExact, 6,
      k_four_harbor, 0, 0, kFourHarborSide},
 };
 const unsigned rg_kspecs_sevii_count = sizeof(rg_kspecs_sevii) / sizeof(rg_kspecs_sevii[0]);
