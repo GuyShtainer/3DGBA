@@ -758,3 +758,10 @@ Branch `worktree-agent-afdaa7710c8fed1d1`, based on main `b4c584d` (KS2 merged, 
 
 ### M4 closing note
 M4 (Sevii Islands) is complete: every One to Seven Island outdoor map, Navel Rock and Birth Island has its building placements covered (44 Sevii rows: KS1 14 + KS2 10 + KS3 10 own rows plus the 10 rows of the K2 Center / Mart landmarks). Final census 151 / 152; the one uncovered row is the excluded S.S. Anne gangway. Remaining for M4: hardware sign-off (SPEC 8.2) and a LeafGreen Azahar pass.
+
+## Look L7 Trainer Tower entrance (2026-10-07)
+
+- Bug: the Trainer Tower's platform and porch (door) were not drawn in-game. Root cause: the chunk vertex scratch (9344) overflowed; the model was 4148 triangles (12444 vertices), 4036 of them end caps (one quad per 4x4 patch repeat), and the refused tail was the platform + porch. voxel.log: `chunk scratch full, 1222 triangles refused at 6,0 of 3:62`. Same on `k_saffron_silph` (824 refused at 3,2 of 3:10).
+- Fix: `kTowerSide` patches enlarged to the largest flat rects (tower 6x89, pillars 2x34, edge 28x2): 744 triangles. `kSilphSide` likewise (wall (51,14,53,72), roof (4,15,11,76)): 968. check k_trainer_tower and k_saffron_silph PASS (ortho 0/0/0, density empty, side 0 open, round trip ok).
+- FR = LG buildings.bin SHA-1 459645ee... -> b0f63cdcfe902d1bc8a229631cd5872303608478. Not fixed: `k_pokemon_tower` (20464 triangles) and `k_power_plant` (9292) have the same cause; their flat patches are too small to get under the scratch (best 5488 / 5050 triangles).
+- Evidence: look-backlog/evidence/l7-{before,after}-{a,b}.png, l7-silph-{before,after}.png.

@@ -128,7 +128,7 @@ roofs are not there. The fences and rocks are also flat, not only flowers and gr
 |---|---|---|---|---|
 | L6 | Roofs that stop at the ridge: Five Island lilac houses, Four Island Center + orange/lilac houses, Resort Gorgeous house | The GBA art shows only the FRONT roof slope; the recipes extrude what is visible, so the back half (ridge + rear slope, behind the map's top row of the building) is missing or ends in a flat slab. | Per recipe family (`sv_gable`, `k_center`, the K-house builders): mirror the front slope to a rear slope about the ridge, colour/texture from the front slope rows; add a `check` rule + preview angle that looks from behind/above so a missing rear slope fails. Audit all 85 Kanto models + the Emerald set. | medium |
 | L5+ | Side walls "not perfect" (Five Island right house: plain purple end) | Ends are closed (side-closure check) but plain colour. | Already L5: dress ends from facade art (gable triangle, wall + window texture). | medium |
-| L7 (BUG) | Trainer Tower: no entrance, foot not seated (Guy: "there is no enterence to the battle tower") | The model HAS a plinth + porch with a door (`ks3-preview-k_trainer_tower-flfr.png`), but in-game (`guy-1007/88c9ed28-image.jpg`, KS3's `ks3-fr-trainertower.png`) the tower face runs straight into flat grass: the plinth/porch rows are not drawn or sit below ground. Suspect: placement clip / ground offset of the lower exact rects, or rect rows below the placement. | Reproduce at 3/62 (59,9), compare the placement rect vs the model's lower parts, fix so the porch + door stand on the plinth in front of the tower; add a test that the porch prism is emitted at placement. | small |
+| L7 (DONE, see below) | Trainer Tower: no entrance, foot not seated (Guy: "there is no enterence to the battle tower") | The model HAS a plinth + porch with a door (`ks3-preview-k_trainer_tower-flfr.png`), but in-game (`guy-1007/88c9ed28-image.jpg`, KS3's `ks3-fr-trainertower.png`) the tower face runs straight into flat grass: the plinth/porch rows are not drawn or sit below ground. Suspect: placement clip / ground offset of the lower exact rects, or rect rows below the placement. | Reproduce at 3/62 (59,9), compare the placement rect vs the model's lower parts, fix so the porch + door stand on the plinth in front of the tower; add a test that the porch prism is emitted at placement. | small |
 | L8 | Flat fences (Resort Gorgeous, Pallet), rocks (sea rocks, boulders), flowers | No prop geometry for these metatiles: they render as ground art. | A prop part like the L1 shrub card: fence = thin upright card along the fence line (posts/rails from the upper layer), rocks = low rounded card/box, flowers = small upright card (check layer split; L2 reports it). Per-game tables like GpShrub. | medium |
 
 Order (lead): L2 (DONE) → L7 Trainer Tower entrance (bug) → L6 roofs → L5 side-wall dressing → L8 fences/rocks/flowers → L4 day cycle.
@@ -170,3 +170,19 @@ layer switched to the upper/composite. Cost per flower cell would be the same 6-
 **Tests.** `test_voxel_frlg.c` GrassAround (classification only 0x02, GrassSource round trip and bound, blade slot present and distinct,
 a grass cell emits 6 + 6*VOXEL_GRASS_CARDS = 18 vertices); `test_voxel_world.c` TestGrassProfile (bladeGrass == {0x02}, ground, skip list,
 id layout).
+
+## L7 DONE (2026-10-07, branch of agent-a67c5a8d1fa0113ab)
+
+Root cause: not placement, not ground level. The model was too big for a map chunk. `k_trainer_tower` was 4148 triangles
+(12444 vertices), and a chunk's vertex scratch (`VOXEL_CHUNK_SCRATCH`, 9344 vertices in `ctr_voxel.c`) refuses the rest
+(`VOXEL: chunk scratch full, 1222 triangles refused at 6,0 of 3:62 (9342 of 9344 vertices)` in voxel.log). The model's
+parts are emitted in recipe order, so what was refused was the tail: the platform and the porch with the door. 4036 of the
+4148 triangles were end caps: a cap is one quad per repeat of its flat patch, and the tower's patches were 4x4 px. Rows
+vs art were fine (the porch is rows 6-7 of the 9x8 rect, door (58,7), inside the census rect; `buildings.bin` held the
+porch at z 6.9-8.0, y 0-1.1 cells). Fix: the five side patches are the largest pixel-flat rects of the art (wall x 55-61
+rows 0-89, pillars 2x34, grey edge 28x2), 4148 -> 744 triangles, chunk 6,0 now 2796 vertices (and 18.7 ms -> 8.5 ms).
+The same cause hit `k_saffron_silph` (9342 of 9344, 824 triangles refused: the entrance canopy and glass door were never
+drawn); fixed the same way, 3488 -> 968 triangles. Still affected, not fixed (no flat patch large enough: the cap needs a
+stretched patch or a coarser tessellation, a generator change): `k_pokemon_tower` (20464 triangles), `k_power_plant`
+(9292); with the best flat rects they only drop to 5488 and 5050 triangles, still over the scratch. Evidence:
+`evidence/l7-before-a|b.png`, `l7-after-a|b.png` (3/62 at (59,9) and (59,14)), `l7-silph-before|after.png` (3/10 at (33,33)).
