@@ -11,11 +11,14 @@
 
 #include "gba_game.h"
 
-/* Real-ROM loading for the FireRed / LeafGreen suites (Phase 34). ROMGEN_ROM_FR / ROMGEN_ROM_LG name the files;
- * when unset, firered.gba / leafgreen.gba beside the file named by ROMGEN_ROM are used. Paths should be ABSOLUTE
+/* Real-ROM loading for the FireRed / LeafGreen suites (Phase 34) and the Ruby / Sapphire suites (Phase 35).
+ * ROMGEN_ROM_FR / ROMGEN_ROM_LG / ROMGEN_ROM_RUBY / ROMGEN_ROM_SAPP name the files; when unset, firered.gba /
+ * leafgreen.gba / ruby.gba / sapphire.gba beside the file named by ROMGEN_ROM are used. Paths should be ABSOLUTE
  * (make runs from tools/romgen). Returns a malloc'd image, or NULL (the suite prints SKIP). */
 #define FXR_ENV_FR "ROMGEN_ROM_FR"
 #define FXR_ENV_LG "ROMGEN_ROM_LG"
+#define FXR_ENV_RUBY "ROMGEN_ROM_RUBY"
+#define FXR_ENV_SAPP "ROMGEN_ROM_SAPP"
 static inline uint8_t *fxr_load_rom(const char *env, size_t *n)
 {
     char path[1024];
@@ -30,7 +33,10 @@ static inline uint8_t *fxr_load_rom(const char *env, size_t *n)
         dl = (size_t)(slash - base) + 1u;
         if (dl + 16u >= sizeof path) return NULL;
         memcpy(path, base, dl);
-        strcpy(path + dl, strcmp(env, FXR_ENV_FR) == 0 ? "firered.gba" : "leafgreen.gba");
+        strcpy(path + dl, strcmp(env, FXR_ENV_FR) == 0     ? "firered.gba"
+                          : strcmp(env, FXR_ENV_RUBY) == 0 ? "ruby.gba"
+                          : strcmp(env, FXR_ENV_SAPP) == 0 ? "sapphire.gba"
+                                                           : "leafgreen.gba");
         p = path;
     }
     fp = fopen(p, "rb");
