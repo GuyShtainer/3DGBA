@@ -53,6 +53,25 @@ void rg_pc_close(RgPairCache *c)
 
 /* ---- models -------------------------------------------------------------------------------- */
 
+/* RgMesh.flatPatch for a model's own art: every pixel of the rect (u0, v0, u1, v1) the same RGBA. A rect that leaves the
+ * art is not flat. Look L7 budget: a cap on a flat patch becomes one polygon instead of one quad per repeat. */
+static bool art_rect_flat(const void *ctx, const double rect[4])
+{
+    const RgImage *a = (const RgImage *)ctx;
+    int x0 = (int)floor(rect[0] + 1e-6), y0 = (int)floor(rect[1] + 1e-6);
+    int x1 = (int)ceil(rect[2] - 1e-6), y1 = (int)ceil(rect[3] - 1e-6), x, y;
+    const uint8_t *ref;
+
+    if (a == NULL || a->px == NULL || x0 < 0 || y0 < 0 || x1 > a->w || y1 > a->h || x1 <= x0 || y1 <= y0)
+        return false;
+    ref = a->px + ((size_t)y0 * (size_t)a->w + (size_t)x0) * 4u;
+    for (y = y0; y < y1; y++)
+        for (x = x0; x < x1; x++)
+            if (memcmp(ref, a->px + ((size_t)y * (size_t)a->w + (size_t)x) * 4u, 4) != 0)
+                return false;
+    return true;
+}
+
 void rg_model_release(RgBuildModel *m)
 {
     rg_img_free(&m->art);
@@ -185,7 +204,11 @@ RgErr rg_build_models(const RgWorld *w, const RgSpec *specs, unsigned nSpecs, Rg
                 break;
             }
             rg_parts_init(&parts);
+            m->mesh.flatPatch = art_rect_flat;
+            m->mesh.flatCtx = &m->art;
             ok = s->parts(s, s->arg0, s->arg1, &parts) && rg_close_sides(s, &parts) && rg_parts_emit(&parts, &m->mesh);
+            m->mesh.flatPatch = NULL;   /* the art may move with the model array; nothing emits after this */
+            m->mesh.flatCtx = NULL;
             rg_parts_free(&parts);
             if (!ok || m->mesh.failed)
                 err = RG_ERR_BUILDINGS;

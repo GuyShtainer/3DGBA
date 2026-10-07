@@ -54,6 +54,12 @@ typedef struct RgMesh {
     char (*names)[RG_TAG_LEN];
     unsigned nNames, capNames;
     bool failed;                 /* sticky: an allocation or table limit was hit */
+    /* Optional, set by the model builder (look L7 budget): true when the art rect (u0, v0, u1, v1) is one flat colour.
+     * A cap whose patch is flat is then written as one polygon per piece of its profile, its uv pinned to the patch
+     * centre (tagged ~clamp), instead of one quad per repeat of the patch: the same pixels for a fraction of the
+     * triangles. NULL = always tile (the hand-built test meshes). */
+    bool (*flatPatch)(const void *ctx, const double rect[4]);
+    const void *flatCtx;
 } RgMesh;
 
 void rg_mesh_init(RgMesh *m);
