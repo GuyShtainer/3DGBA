@@ -474,6 +474,28 @@ int rg_author_grass(const RgWorld *w, FILE *fp, const char *outDir, const unsign
         while (j > 0 && c[j - 1].uses < t.uses) { c[j] = c[j - 1]; j--; }
         c[j] = t;
     }
+    if (!nIds) {
+        /* the densest screenful: the most cells of the listed behaviours in a 26 x 16 window (the view is about 25 x 15
+         * tiles) of any General-primary layout, with a card budget (12 vertices a cell) */
+        unsigned best = 0, bl = 0, bx = 0, by = 0, wy, wx;
+        for (l = 0; l < w->layoutCount; l++) {
+            const RgLayout *L = &w->layouts[l];
+            if (!L->present || L->ts[0]->addr != gp->tsGeneral)
+                continue;
+            for (wy = 0; wy < L->h; wy++)
+                for (wx = 0; wx < L->w; wx++) {
+                    unsigned cnt = 0, yy, xx;
+                    for (yy = wy; yy < wy + 16u && yy < L->h; yy++)
+                        for (xx = wx; xx < wx + 26u && xx < L->w; xx++) {
+                            unsigned b = rg_behaviour(L, (int)xx, (int)yy);
+                            for (k = 0; k < nBehs; k++)
+                                cnt += (behs[k] == b);
+                        }
+                    if (cnt > best) { best = cnt; bl = L->id; bx = wx; by = wy; }
+                }
+        }
+        fprintf(fp, "# densest 26x16 window: %u cells at L%u %u,%u = %u grass-card vertices\n", best, bl, bx, by, best * 12u);
+    }
     fprintf(fp, "# grass: %s, %u metatiles (idx ts id beh uses upperPx/256)\n", gp->dataSubdir, n);
     for (i = 0; i < n; i++)
         fprintf(fp, "grass %3u ts 0x%08X 0x%03X beh 0x%02X uses %u upper %u at L%u %u,%u\n", i, c[i].ts, c[i].m, c[i].beh,

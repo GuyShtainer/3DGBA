@@ -244,24 +244,34 @@ bool VoxelTree_GrassSource(const void *primaryTileset, const void *secondaryTile
 }
 
 /*
- * One card per cell, standing at the cell's south edge and leaning back, low: the blades' own 16x16 squeezed onto a
- * slant of about 0.62 tile, rising 0.5. Lit as the rounded volume it stands for, like a crown card, and sunk a little so
- * its foot meets the ground without a seam. Two triangles.
+ * Two low cards per cell, each leaning back from its foot: the blades' own 16x16 squeezed onto a slant of about 0.6 tile.
+ * The front card stands on the cell's south edge and rises 0.55; the back one on its middle and rises 0.40, drawn
+ * mirrored so a row of cells does not repeat to the pixel. Seen from the camera the rows interleave and the field reads
+ * as standing grass; one card per cell left a bare stripe of flat ground between the rows (tried: bands like a hedge),
+ * two equal cards a solid dark carpet that lost the game's tufted look (tried). Lit as the rounded volume they stand
+ * for, like a crown card, and sunk a little so each foot meets the ground without a seam. Two quads, 12 vertices.
  */
-#define GRASS_RISE 0.50f
-#define GRASS_RUN  0.36f
+#define GRASS_SINK (-0.04f)
 void VoxelTree_EmitGrassCard(VoxelBuilder *builder, int x, int y,
                              float u0, float v0, float u1, float v1)
 {
-    const float sink = -0.04f;
-    float wx = (float)x, foot = (float)y + 1.0f;
+    static const float foot[VOXEL_GRASS_CARDS] = {0.5f, 1.0f};   /* back card first: the nearer one draws over it */
+    static const float rise[VOXEL_GRASS_CARDS] = {0.40f, 0.55f};
+    static const float run[VOXEL_GRASS_CARDS] = {0.12f, 0.14f};
+    float wx = (float)x;
 
     builder->rounded = true;
-    VoxelBuilder_Quad(builder,
-        &(VoxelVertex){wx,        sink + GRASS_RISE, foot - GRASS_RUN, u0, v0, 1.0f},
-        &(VoxelVertex){wx + 1.0f, sink + GRASS_RISE, foot - GRASS_RUN, u1, v0, 1.0f},
-        &(VoxelVertex){wx + 1.0f, sink,              foot,             u1, v1, 1.0f},
-        &(VoxelVertex){wx,        sink,              foot,             u0, v1, 1.0f});
+    for (unsigned c = 0; c < VOXEL_GRASS_CARDS; ++c)
+    {
+        float z = (float)y + foot[c];
+        float ua = c ? u0 : u1, ub = c ? u1 : u0;   /* the back card mirrored */
+
+        VoxelBuilder_Quad(builder,
+            &(VoxelVertex){wx,        GRASS_SINK + rise[c], z - run[c], ua, v0, 1.0f},
+            &(VoxelVertex){wx + 1.0f, GRASS_SINK + rise[c], z - run[c], ub, v0, 1.0f},
+            &(VoxelVertex){wx + 1.0f, GRASS_SINK,           z,          ub, v1, 1.0f},
+            &(VoxelVertex){wx,        GRASS_SINK,           z,          ua, v1, 1.0f});
+    }
     builder->rounded = false;
 }
 

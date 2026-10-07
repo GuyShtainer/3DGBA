@@ -43,6 +43,7 @@ void VoxelTree_EmitShrubCard(VoxelBuilder *builder, int x, int y,
 /* 3DGBA (look backlog L2): tall grass. The index k (< VOXEL_GRASSES) of a cell's metatile among its tileset pair's
  * blade-grass metatiles (profile bladeGrass behaviour, id order), or -1. Only where tree sprites are drawn. */
 int VoxelTree_Grass(const VoxelMapInstance *inst, int metatileId);
+#define VOXEL_GRASS_CARDS 2u   /* cards per grass cell (2 quads, 12 vertices) */
 /* For the atlas: blade-grass entry k of this tileset pair, and its metatile id. */
 bool VoxelTree_GrassSource(const void *primaryTileset, const void *secondaryTileset,
                            unsigned k, unsigned *metatileId);
