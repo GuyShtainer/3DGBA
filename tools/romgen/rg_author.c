@@ -13,11 +13,11 @@
 #include <unistd.h>
 
 #include "rg_bcheck.h"
+#include "rg_budget.h"
 #include "rg_kspecs.h"
 #include "rg_png.h"
 
 #ifdef RG_AUTHOR_CONSUMER
-#include "rg_budget.h"
 #include "voxel_building.h"
 #include "voxel_world.h"
 #endif
@@ -874,6 +874,11 @@ int rg_author_check(const RgWorld *w, const RgSpec *spec, int expect, FILE *fp)
         if (r.wrong || r.missing || r.extra)
             pass = false;
     }
+    /* look L7: the device refuses a chunk's tail past its vertex scratch, and a model is emitted after the terrain */
+    fprintf(fp, "  budget: %u triangles, %u vertices (limit %u)%s\n", m->mesh.n, m->mesh.n * 3u, RG_BUDGET_MODEL_VERTS,
+            m->mesh.n * 3u > RG_BUDGET_MODEL_VERTS ? "  FAIL: too many vertices for a chunk" : "");
+    if (m->mesh.n * 3u > RG_BUDGET_MODEL_VERTS)
+        pass = false;
     nBad = rg_density_check(&m->mesh, &m->art, bad, 8);
     fprintf(fp, "  density: %u bad triangle(s)\n", nBad);
     for (k = 0; k < nBad && k < 8u; k++)

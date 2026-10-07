@@ -20,13 +20,14 @@
 /* ctr_voxel.c with CTR_VOXEL_LIGHTING (the device build): 8192 + 64 * 18. Kept in step by hand; the test pins it. */
 #define RG_BUDGET_SCRATCH (8192u + 64u * 18u)
 /*
- * The per-model limit `author check` enforces: what one model may emit and still leave a chunk room for its terrain.
- * Measured (budget, 2026-10-07, all three games): the heaviest terrain any chunk carries under a model is ~2.2k
- * vertices (ground + lit refinement + relief + trees/grass), the design reserve of the scratch for refinement alone is
- * 1152. 9344 - 3344 = 6000 vertices = 2000 triangles leaves 1.5x the worst terrain seen. Several models in one chunk
- * are the chunk check's business, not this one's.
+ * The per-model limit `author check` enforces: what one model may emit and still leave its chunk room for the terrain
+ * under it. Measured (`author budget`, 2026-10-07, relief FULL): the heaviest terrain any chunk that holds a model
+ * carries is 5892 vertices (Emerald 0/8 chunk 1,8: lit relief + refinement); FRLG's is 2430. 9344 - 5892 = 3452, so
+ * 3300 vertices (1100 triangles) fits a model on that chunk with 152 to spare. The largest model after the flat-cap
+ * change is 2808 (Emerald rustboro_stone_3_43); before it Pokemon Tower was 61392. Several models in one chunk, or a
+ * model on still heavier terrain, are the chunk check's business (test_romgen_budget), not this one's.
  */
-#define RG_BUDGET_MODEL_VERTS 6000u
+#define RG_BUDGET_MODEL_VERTS 3300u
 
 typedef struct RgBudgetModel {
     char name[64];
