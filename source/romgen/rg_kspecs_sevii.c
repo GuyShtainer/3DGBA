@@ -338,6 +338,35 @@ static const RgSideCfg kFiveEdgeSide[1] = {
     {NULL, {41, 58, 45, 60}, {45, 24, 47, 28}, 21, true},
 };
 
+/* ---- k_four_harbor: 112x96 art (rect (7,28), 7x6 on layout 233; door (10,28)) -------------------------------------- */
+/* Four Island's harbor: the Two Island ferry (sv_ferry's blocks) with the map's pier cut 17 rows lower, so the rect is
+ * 6 cells tall and starts at the pier's deck. Rows (Two Island's minus 17): the plank pier x 32-80 rows 0-11 with its
+ * ramp 11-16, the red roof 16-63 over the grey hull 63-87 (x 16-96), and a crane at each side (x 0-16 and 96-112, rows
+ * 25-49 and 57-81). The sea quarters (metatile 627) are the ground; the reflections under the cranes are not modelled. */
+static bool sv_ferry_cut(RgPartList *out, double dy)
+{
+    return sv_block(out, "pier", 32, 80, 33 - dy, 28 - dy, 0) && sv_block(out, "ferry", 16, 96, 104 - dy, 80 - dy, 33 - dy) &&
+           sv_block(out, "crane_nw", 0, 16, 66 - dy, 56 - dy, 42 - dy) && sv_block(out, "crane_sw", 0, 16, 98 - dy, 88 - dy, 74 - dy) &&
+           sv_block(out, "crane_ne", 96, 112, 66 - dy, 56 - dy, 42 - dy) && sv_block(out, "crane_se", 96, 112, 98 - dy, 88 - dy, 74 - dy) &&
+           !out->failed;
+}
+static bool k_four_harbor(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    (void)spec; (void)a0; (void)a1;
+    return sv_ferry_cut(out, 17);
+}
+static const RgExact kFourHarborExact[6] = {
+    {32, 0, 80, 16, false},         /* the pier deck and its ramp */
+    {16, 16, 96, 87, false},        /* the ferry: roof, hull, sign */
+    {0, 25, 16, 49, false},         /* the west cranes (the water reflections below each are not modelled) */
+    {0, 57, 16, 81, false},
+    {96, 25, 112, 49, false},       /* the east cranes */
+    {96, 57, 112, 81, false},
+};
+static const RgSideCfg kFourHarborSide[1] = {
+    {NULL, {20, 70, 24, 74}, {18, 24, 22, 30}, 999, true},
+};
+
 const RgSpec rg_kspecs_sevii[] = {
     {"k_sevii_house", RG_SPEC_DIRECT, L_ONE, {18, 6, 5, 4}, {1, 4}, SV_GROUND, 1, kHouseExact, 1,
      k_sevii_house, 0, 0, kHouseSide},
@@ -359,5 +388,7 @@ const RgSpec rg_kspecs_sevii[] = {
      k_four_house, 0, 0, kFourPurpleSide},
     {"k_five_house_edge", RG_SPEC_DIRECT, L_FIVE, {21, 6, 3, 4}, {0, 0}, SV_GROUND, 1, kFiveEdgeExact, 1,
      k_five_house_edge, 0, 0, kFiveEdgeSide},
+    {"k_four_harbor", RG_SPEC_DIRECT, L_FOUR, {7, 28, 7, 6}, {0, 0}, {627}, 1, kFourHarborExact, 6,
+     k_four_harbor, 0, 0, kFourHarborSide},
 };
 const unsigned rg_kspecs_sevii_count = sizeof(rg_kspecs_sevii) / sizeof(rg_kspecs_sevii[0]);
