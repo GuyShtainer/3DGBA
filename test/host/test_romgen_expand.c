@@ -320,7 +320,8 @@ static void TestRealRom(void)
     printf("gate failures %u of %u models, %u triangles\n", gateBad, ms.n, nTris);
     /* S2.6: the 13 interior rows add 200 pieces + 19 bare twins to the S2.5 total of 67 models */
     CHECK(ms.n == 286 && ms.nInterior == 200 && ms.nTwin == 19 && ms.nHedge == 6 && ms.nRailing == 35 && ms.nKit == 7 && ms.nProps == 5 && ms.skipped == 0);
-    CHECK(gateBad == 0 && nTris == 25514);
+    /* 25514 -> 25130: flat-cap merge (look L7 follow-up): six Emerald models with flat-colour cap patches emit 64 triangles fewer each (littleroot_house_e/w, littleroot_lab, kit_house_4/5, oldale_house); previews pixel-identical */
+    CHECK(gateBad == 0 && nTris == 25130);
     CHECK(ms.seamClash == 0 && ms.connAmbiguous == 0);   /* seam_art column assert, connections assert */
     printf("props tie-break divergence A2: %u tied adjacent groups (informational, model order / _n suffix only)\n", ms.propTies);
     t0 = Now();
@@ -333,7 +334,8 @@ static void TestRealRom(void)
         printf("buildings.bin: %zu bytes, %u pages, %u models, %u pageModels, %u vertices, %u placements, %u masks, %u variants\n",
                sz, st.pages, st.models, st.pageModels, st.vertices, st.placements, st.masks, st.variants);
         CHECK(st.err == RG_OK && st.models == 286 && st.variants == 66 && st.variants <= 128);
-        CHECK(sz == 7898476u && st.pages == 118 && st.placements == 2894u && st.vertices == 80520u && st.masks == 56u);
+        /* 7898476 B / 80520 vertices -> 7870828 / 79368 (1152 vertices = 6 x 64 triangles): the flat-cap merge */
+        CHECK(sz == 7870828u && st.pages == 118 && st.placements == 2894u && st.vertices == 79368u && st.masks == 56u);
         CHECK(memcmp(buf, "VXB7", 4) == 0 && sz % 4 == 0);
         {   /* the vendored consumer reads it back: every variant, every owned model's layout page */
             VoxelMapInstance inst;

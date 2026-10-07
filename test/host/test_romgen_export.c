@@ -197,9 +197,10 @@ static void TestRealRom(void)
            "        regions %zu B, signposts %zu B; ms: models %.0f gates %.0f placements+write %.0f\n",
            a.buildingsSize, a.bModels, a.bPages, a.bPageModels, a.bPlacements, a.bVertices, a.bMasks, a.bVariants,
            a.buildingsFailed, a.regionsSize, a.signsSize, a.msBuildModels, a.msChecks, a.msWriteBuildings);
-    /* pinned counts (S2.6 values: nothing was added in S2.7) */
-    CHECK(a.buildingsSize == 7898476u && a.bModels == 286 && a.bPages == 118 && a.bPageModels == 630 && a.bPlacements == 2894 &&
-          a.bVertices == 80520 && a.bMasks == 56 && a.bVariants == 66 && a.buildingsFailed == 0);
+    /* pinned counts (S2.6 values: nothing was added in S2.7; 7898476 B / 80520 vertices -> 7870828 / 79368 by the
+     * look-L7 flat-cap merge: six flat-capped models emit 64 triangles fewer each, same pixels) */
+    CHECK(a.buildingsSize == 7870828u && a.bModels == 286 && a.bPages == 118 && a.bPageModels == 630 && a.bPlacements == 2894 &&
+          a.bVertices == 79368 && a.bMasks == 56 && a.bVariants == 66 && a.buildingsFailed == 0);
     CHECK(a.regionsSize == 330791u && a.signsSize == 26144u);   /* S0/S1 outputs unchanged by wantBuildings */
     Parse(a.buildings, a.buildingsSize);
     Consume(a.buildings, a.buildingsSize, a.bVariants);
