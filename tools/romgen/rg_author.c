@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #include "rg_bcheck.h"
+#include "rg_budget.h"
 #include "rg_kspecs.h"
 #include "rg_png.h"
 
@@ -873,6 +874,11 @@ int rg_author_check(const RgWorld *w, const RgSpec *spec, int expect, FILE *fp)
         if (r.wrong || r.missing || r.extra)
             pass = false;
     }
+    /* look L7: the device refuses a chunk's tail past its vertex scratch, and a model is emitted after the terrain */
+    fprintf(fp, "  budget: %u triangles, %u vertices (limit %u)%s\n", m->mesh.n, m->mesh.n * 3u, RG_BUDGET_MODEL_VERTS,
+            m->mesh.n * 3u > RG_BUDGET_MODEL_VERTS ? "  FAIL: too many vertices for a chunk" : "");
+    if (m->mesh.n * 3u > RG_BUDGET_MODEL_VERTS)
+        pass = false;
     nBad = rg_density_check(&m->mesh, &m->art, bad, 8);
     fprintf(fp, "  density: %u bad triangle(s)\n", nBad);
     for (k = 0; k < nBad && k < 8u; k++)
@@ -1003,6 +1009,7 @@ static void usage(void)
             "  preview SPEC\n"
             "  check [SPEC|TOWN|all] [--expect N]\n"
             "  placements SPEC\n"
+            "  budget [PCT]    (vertices of every model and every map chunk vs the device scratch; lists >= PCT%%, default 80)\n"
             "  trees [LO HI [LAYOUT]]   (list the tree metatiles; or a contact sheet PNG of metatiles LO..HI-1, LAYOUT's tilesets)\n"
             "  shrubs [TS]     (one-cell foliage candidates, primary and secondary, + contact sheet shrubs.png; TS: every id of that tileset)\n"
             "images land in tools/romgen/out/author/<BPRE|BPGE|BPEE>/ (next to the build directory unless --out is given)\n");
@@ -1118,6 +1125,23 @@ int rg_author_main(int argc, char **argv)
             vals[nv++] = (unsigned)strtoul(args[a], NULL, 0);
         if (!byId && nv == 0) { vals[0] = 2; vals[1] = 3; vals[2] = 7; vals[3] = 9; nv = 4; }
         rc = rg_author_grass(&w, stdout, outDir, vals, byId ? 0u : nv, gts, vals, byId ? nv : 0u);
+    } else if (strcmp(cmd, "budget") == 0 && nargs <= 1) {
+#ifdef RG_AUTHOR_CONSUMER
+        RgBudget b;
+        char why[160];
+
+        if (!rg_budget_run(rom, n, &b, why, sizeof(why))) {
+            fprintf(stderr, "romgen author: budget: %s\n", why);
+            rc = 1;
+        } else {
+            rg_budget_print(&b, stdout, nargs == 1 ? (unsigned)atoi(args[0]) : 80u);
+            rc = b.overChunks != 0 || b.overModels != 0;
+            rg_budget_free(&b);
+        }
+#else
+        fprintf(stderr, "romgen author: budget needs the voxel consumer (-DRG_AUTHOR_CONSUMER)\n");
+        rc = 2;
+#endif
     } else if (strcmp(cmd, "check") == 0 && nargs <= 1) {
         const char *key = nargs == 1 ? args[0] : "all";
         unsigned matched = 0, failed = 0;

@@ -664,7 +664,7 @@ static void cap_cb(void *vc, const RgPt *p, unsigned n)
 }
 
 static void emit_cap_piece(RgMesh *m, const double (*piece)[2], unsigned np, const RgBand *band, double x, bool west,
-                           double shade, uint16_t tag)
+                           double shade, uint16_t tag, uint16_t flatTag)
 {
     RgTile tiles[3];
     double sa[3], sb[3];
@@ -701,6 +701,17 @@ static void emit_cap_piece(RgMesh *m, const double (*piece)[2], unsigned np, con
         if (cnt >= 3) cnt = rg_clip(c1, cnt, 2, 0, sb[t], false, c2); else memcpy(c2, c1, cnt * sizeof(RgPt));
         if (cnt < 3)
             continue;
+        if (m->flatPatch != NULL && m->flatPatch(m->flatCtx, tiles[t].rect)) {
+            /* One flat colour: every repeat of the patch draws the same pixels, so the piece is one polygon sampling the
+             * patch centre. The geometry is the union of the pieces the tiling would have cut. */
+            RgVtx out[MAXV];
+            double cu = (tiles[t].rect[0] + tiles[t].rect[2]) / 2, cv = (tiles[t].rect[1] + tiles[t].rect[3]) / 2;
+
+            for (k = 0; k < cnt; k++)
+                out[k] = V(x, top - c2[k].c[1], band->z0 - c2[k].c[0], cu, cv);
+            rg_mesh_poly(m, out, cnt, shade, flatTag);
+            continue;
+        }
         shifted = rg_tile(tiles[t].rect[0], tiles[t].rect[1], tiles[t].rect[2], tiles[t].rect[3]);
         shifted.s0 = sa[t];
         shifted.flip = tiles[t].flip != west;
@@ -912,18 +923,22 @@ static bool emit_prism(const RgPrism *pr, const char *name, RgMesh *m)
         return !m->failed;
     {
         unsigned tris[16][3], nt = rg_triangulate(poly, n, tris), side, b, t;
-        char tg[2][RG_TAG_LEN];
+        char tg[2][RG_TAG_LEN], ftg[2][RG_TAG_LEN];
 
         tag_cat(tg[0], name, ".capw");
         tag_cat(tg[1], name, ".cape");
+        tag_cat(ftg[0], tg[0], "~clamp");
+        tag_cat(ftg[1], tg[1], "~clamp");
         for (side = 0; side < 2; side++) {
             bool west = side == 0;
             double x = west ? x0 : x1, shade = west ? RG_SHADE_WEST : RG_SHADE_EAST;
-            uint16_t tag;
+            uint16_t tag, flatTag = RG_NO_TAG;
 
             if ((west && !pr->west) || (!west && !pr->east))
                 continue;
             tag = rg_mesh_tag(m, tg[side]);
+            if (m->flatPatch != NULL)
+                flatTag = rg_mesh_tag(m, ftg[side]);
             for (b = 0; b < pr->nCaps; b++) {
                 const RgBand *band = &pr->caps[b];
 
@@ -945,7 +960,7 @@ static bool emit_prism(const RgPrism *pr, const char *name, RgMesh *m)
                         piece[k][0] = p3[k].c[0];
                         piece[k][1] = p3[k].c[1];
                     }
-                    emit_cap_piece(m, piece, cnt, band, x, west, shade, tag);
+                    emit_cap_piece(m, piece, cnt, band, x, west, shade, tag, flatTag);
                 }
             }
         }

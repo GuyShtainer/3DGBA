@@ -11,6 +11,7 @@
 //   ROMGEN_ROM=$PWD/roms/emerald.gba make -C tools/romgen test T=frlg_buildings
 #define RG_AUTHOR_CONSUMER 1
 #include "../../tools/romgen/rg_author.c"
+#include "../../tools/romgen/rg_budget.c"
 #include "../../tools/romgen/rg_author_trees.c"
 #include "../../tools/romgen/rg_png.c"
 
@@ -305,8 +306,8 @@ static void Sha1(const uint8_t *d, size_t n, char hex[41])
     free(m);
 }
 
-/* The FR buildings.bin of the Kanto models so far (K1 Pallet, K2 landmarks, K3 Viridian, K4 Pewter, K5 Cerulean, K6 Vermilion and Routes 5-8, K7 Lavender and Route 10, K8 Celadon, K9 Fuchsia and Safari Zone, K10 Saffron, K11 Cinnabar, Indigo Plateau and Routes 22/23, KS1 Sevii One/Two/Three + Cape Brink + Three Isle Port, KS2 Four/Five Island + Resort Gorgeous + Five Isle Meadow, KS3 Six/Seven Island + Water Path + Sevault Canyon + Trainer Tower + Navel Rock + Birth Island); FR = LG. Re-pinned for Phase 34 side walls (end faces closed); re-pinned 459645ee -> b0f63cdc by look L7 (the Trainer Tower and Silph Co. end-cap patches enlarged: 4148 -> 744 and 3488 -> 968 triangles so their platform, porch and entrance fit a chunk). */
-#define PALLET_BUILDINGS_SHA1 "b0f63cdcfe902d1bc8a229631cd5872303608478"
+/* The FR buildings.bin of the Kanto models so far (K1 Pallet, K2 landmarks, K3 Viridian, K4 Pewter, K5 Cerulean, K6 Vermilion and Routes 5-8, K7 Lavender and Route 10, K8 Celadon, K9 Fuchsia and Safari Zone, K10 Saffron, K11 Cinnabar, Indigo Plateau and Routes 22/23, KS1 Sevii One/Two/Three + Cape Brink + Three Isle Port, KS2 Four/Five Island + Resort Gorgeous + Five Isle Meadow, KS3 Six/Seven Island + Water Path + Sevault Canyon + Trainer Tower + Navel Rock + Birth Island); FR = LG. Re-pinned for Phase 34 side walls (end faces closed); re-pinned 459645ee -> b0f63cdc by look L7 (the Trainer Tower and Silph Co. end-cap patches enlarged: 4148 -> 744 and 3488 -> 968 triangles so their platform, porch and entrance fit a chunk); re-pinned b0f63cdc -> e9f54cdd by the L7 follow-up flat-cap merge (a cap piece on a one-colour patch is one polygon, not one per tile repeat: 56151 -> 5186 triangles, Pokemon Tower 20464 -> 176, Power Plant 9292 -> 282; previews pixel-identical). */
+#define PALLET_BUILDINGS_SHA1 "e9f54cdded903d5caff027d2d9fefdb4114b59b7"
 
 static uint8_t *sPalletBin[2];
 static size_t sPalletBinSize[2];

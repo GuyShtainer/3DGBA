@@ -9,6 +9,7 @@
 //   ROMGEN_ROM=$PWD/roms/emerald.gba make -C tools/romgen test T=frlg_trees
 #define RG_AUTHOR_CONSUMER 1
 #include "../../tools/romgen/rg_author.c"
+#include "../../tools/romgen/rg_budget.c"
 #include "../../tools/romgen/rg_author_trees.c"
 #include "../../tools/romgen/rg_png.c"
 

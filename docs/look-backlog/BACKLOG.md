@@ -186,3 +186,51 @@ drawn); fixed the same way, 3488 -> 968 triangles. Still affected, not fixed (no
 stretched patch or a coarser tessellation, a generator change): `k_pokemon_tower` (20464 triangles), `k_power_plant`
 (9292); with the best flat rects they only drop to 5488 and 5050 triangles, still over the scratch. Evidence:
 `evidence/l7-before-a|b.png`, `l7-after-a|b.png` (3/62 at (59,9) and (59,14)), `l7-silph-before|after.png` (3/10 at (33,33)).
+
+## L7 follow-up: the chunk vertex budget, measured and gated (2026-10-07)
+
+The class of bug behind L7: a chunk whose geometry overflows the device's per-chunk vertex scratch
+(`VOXEL_CHUNK_SCRATCH`, 9344 vertices with lighting) silently refuses the TAIL of what it emits, and models are
+emitted last. New tool: `romgen author ROM budget [PCT]` measures every model and every chunk of every map (outdoor,
+plus Emerald's 3D interiors) with the device's own emitters in the device's order (ground rows, trees/shrubs/grass,
+then the models whose placement origin is in the chunk). Calibration: FR 3/62 chunk 6,0 measures 2796, exactly what
+the device logged after L7.
+
+Before (relief FULL):
+- FR = LG: 2116 chunks in 76 layouts, **3 over the scratch**: 3/4 L82 chunk 1,0 = 62874 vertices (Pokemon Tower,
+  20464 triangles, 672 %); 3/28 L98 chunk 0,4 = 28512 (Power Plant, 9292 triangles); and a new one, 3/4 L82 chunk 1,1 =
+  10044 (two `k_lavender_house`, 1382 triangles each, 107 %). Azahar confirms all three in voxel.log (17844, 6390 and 234
+  triangles refused).
+- Emerald: 5563 chunks in 406 layouts, 0 over, 5 at >= 80 % (worst 0/47 L48 chunk 1,0 = 8982, 96 %: sea_rock /
+  sea_stack props). Worst model rustboro_stone_3_43, 936 triangles.
+
+Cause: 53399 of FRLG's 56151 model triangles were end caps, one fan per repeat of a small patch rect, and 52424 of
+those sampled a single-colour patch. Fix (generator, not per recipe; `rg_geom.c emit_cap_piece`, enabled for outdoor
+models in `rg_buildings.c`): a cap piece whose patch is one solid colour (`art_rect_flat`: every pixel of the patch
+identical) is ONE polygon per profile piece, its uv pinned to the patch centre, tagged `~clamp`. Same pixels by
+construction; all 455 author preview images (all 85 FR models + the 6 changed Emerald ones, 5 views each) are
+pixel-identical before and after. Side closure kept (`check all` on FR and LG: 85 PASS each, all 170 side lines 0 open or n/a).
+
+After:
+- FR = LG: 0 over, 0 at >= 80 %, worst chunk 2712 (29 %); all model triangles 56151 -> 5186. Pokemon Tower 20464 ->
+  176, Power Plant 9292 -> 282, Lavender house 1382 -> 14 (chunk 1,1 now 1836), Trainer Tower 744 -> 156, Silph 968 ->
+  32. Largest model k_pallet_lab 332 triangles.
+- Emerald: six models 64 triangles fewer each (littleroot_house_e/w 614 -> 550, littleroot_lab, kit_house_4/5,
+  oldale_house); chunks unchanged. **Still 96 % on 0/47 chunk 1,0** (sea_stack 330 triangles x 562 placements, its
+  mound parts are `~proj`, not caps): not over, but the next prop or relief change there will tip it. Gated now.
+
+The gate: `romgen author ROM check` FAILs a model over 3300 vertices (the heaviest terrain measured under a model is
+5892, Emerald 0/8 chunk 1,8; 9344 - 5892 = 3452); `test_romgen_budget` (new, 28th romgen suite) runs the budget over
+all three games and fails on any chunk over the scratch, any model over the limit, or RG_BUDGET_SCRATCH drifting from
+ctr_voxel.c. It fails on the pre-fix generator (verified). Pins: FR = LG buildings.bin b0f63cdc -> e9f54cdd, Emerald
+2929c764 -> ec2f3292 (7898476 -> 7870828 B); regions, signposts, relief (both modes) unchanged.
+
+Evidence (Azahar, private instance, New 3DS): `evidence/budget-tower-{before,after}.png` (Lavender at 18,9: the tower
+body above the base and the Lavender house's gable now drawn), `budget-plant-{before,after}.png` (Route 10 at 7,43:
+before only the two end caps stood, after the whole Power Plant), `budget-littleroot-{before,after}.png` (Emerald
+Littleroot: identical buildings, only NPCs moved). After: no "chunk scratch full" line in voxel.log in any run.
+
+Device fallback (recommended, not implemented): JobFinish logs an overflow only when it beats the session's worst, so
+a second, smaller overflow is silent. Log every refusing chunk once (map + chunk + refused count). And reserve the tail
+of the scratch for models (stop terrain decoration, trees/grass, at scratch minus the chunk's model vertices, which
+`VoxelBuildings` knows before JOB_TREES) so an overflow costs grass, not a building.
