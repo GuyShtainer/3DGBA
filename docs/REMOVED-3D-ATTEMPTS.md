@@ -87,11 +87,12 @@ The settings file layout did not change. It is still 29 × s32 = 116 bytes, with
 
 ## Known follow-ups (left as they are)
 
-- **Orphaned baked labels.** The baked `pause-bot-enhance` plate art still shows the labels
-  "Tilt-shift DoF", "LDR Bloom", "Time-of-day light" and "Vivid mode", and the ENHANCE tab
-  now has an empty band at y141-226. This needs re-baked plate art.
-- **Broken smoke-test pieces.** The TILT channel in `tools/emutest/smoke.sh` (press-ctm asserts
-  `tiltLevel == 3`) and `tools/emutest/tests/fixtures/movie_menu_tilt_quit.json` target the deleted row. They need retargeting.
+- **Orphaned baked labels. DONE (1569f7e, 9ae55db).** "Time-of-day light" and "Vivid mode" were erased from the
+  `pause-bot-enhance` plate of all 6 themes (`tools/plate_erase_rows.py`, flat fill of x88-311 y140-195, which is each
+  plate's own panel colour). The voxel rows moved up under LDR Bloom (VOXEL 3D y141, 3D ANGLE y181, 3D ZOOM y227);
+  contentH 362 -> 253, maxScroll 136 -> 27. Evidence: `docs/look-backlog/evidence/pm-enhance-*.png`.
+- **Broken smoke-test pieces. DONE (9ae55db).** `press-ctm` now taps the VOXEL 3D toggle and then the 3D ANGLE seg
+  (index 4) and asserts `g_prefs.voxPitch` (+0x28) goes 2 -> 4; the fixture is `movie_menu_voxangle_quit.json`.
 - **Historical comments.** Comments in `presence.{c,h}`, `presence_art.c`, `fieldgate.h`,
   `touchgeom.h`, `touch.c`, `gamestate.h` and `main.c` still mention `tilt_project` or the
   depth-pop. They describe how that code was designed and were left as they are.

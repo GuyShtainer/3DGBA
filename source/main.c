@@ -1752,12 +1752,15 @@ static const PCtl PT_AUDIO[] = {
   {PK_STEP,ACT_VOLB,0, 93,132,216,24,0},{PK_TOG,ACT_MUTE,0, 276,171,34,18,0} };
 static const PCtl PT_ENHANCE[] = {
   {PK_TOG,ACT_3D,0, 276,51,34,18,0},{PK_TOG,ACT_DOF,0, 276,83,34,18,0},{PK_TOG,ACT_BLOOM,0, 276,112,34,18,0},
-  // PHASE 32 / SPEC-port 8.3: ENHANCE is full, so the voxel rows went BELOW the (since deleted) tilt row and the tab
-  // scrolls (the content panel is a viewport since phase 17; uihit_content_h derives the extent from
-  // this table). contentH 362 -> maxScroll 136. ANGLE/ZOOM are dimmed + not hit-testable while VOXEL 3D is off.
-  {PK_TOG,ACT_VOXEL,0, 276,250,34,18,"VOXEL 3D",OV_ROW},
-  {PK_SEG,ACT_VOXPITCH,5, 140,290,170,26,"3D ANGLE · DEG",OV_SECTION_TIGHT},
-  {PK_SEG,ACT_VOXZOOM,4, 140,336,170,26,"3D ZOOM · %",OV_SECTION_TIGHT} };
+  // PHASE 32 / SPEC-port 8.3 + 2026-10-07 tidy: the voxel rows sit directly under LDR Bloom, in the band the
+  // deleted Time-of-day/Vivid rows left (their baked labels were erased from the plates by
+  // tools/plate_erase_rows.py). Pitch: Bloom y112 -> VOXEL toggle +29 (the toggles' own pitch) -> ANGLE seg +40 -> ZOOM
+  // seg +46 (the spacing the rows had before). The last seg ends at 253, so the panel scrolls 27 px
+  // (uihit_content_h derives the extent from this table: contentH 362 -> 253, maxScroll 136 -> 27).
+  // ANGLE/ZOOM are dimmed + not hit-testable while VOXEL 3D is off.
+  {PK_TOG,ACT_VOXEL,0, 276,141,34,18,"VOXEL 3D",OV_ROW},
+  {PK_SEG,ACT_VOXPITCH,5, 140,181,170,26,"3D ANGLE · DEG",OV_SECTION_TIGHT},
+  {PK_SEG,ACT_VOXZOOM,4, 140,227,170,26,"3D ZOOM · %",OV_SECTION_TIGHT} };
 // Phase 15 adds the CO-OP row (SPEC-avatar A6.1). It goes on LINK, not ENHANCE, because ENHANCE is
 // measurably full: its five baked toggles end at y=188, the (since deleted) tilt seg took y198..224 and the status
 // hint sits at y=231 — SEVEN pixels left, and phase 14's open question O6 (new plate art for a 6th

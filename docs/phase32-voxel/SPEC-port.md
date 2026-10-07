@@ -950,6 +950,8 @@ moves:
 | 3D ANGLE | `{PK_SEG, ACT_VOXPITCH, 5, 140, 290, 170, 26, "3D ANGLE", OV_SECTION_TIGHT}` | 5 rungs, labels `34° 37° 40° 43° 46°` | "3D ANGLE" |
 | 3D ZOOM | `{PK_SEG, ACT_VOXZOOM, 4, 140, 336, 170, 26, "3D ZOOM", OV_SECTION_TIGHT}` | 4 rungs, labels `90 100 110 120` | "3D ZOOM" |
 
+
+> 2026-10-07: the tilt row is gone and the three rows moved up under LDR Bloom: VOXEL 3D y141, 3D ANGLE y181, 3D ZOOM y227, contentH 253, maxScroll 27 (see `PT_ENHANCE` in main.c). The y values and the 362/136 figures above are the original design.
 `contentH` becomes 362 ⇒ `maxScroll` = 362 − 226 = 136 px. Each new `ACT_*` gets its case in the three
 `switch`es that read/write PK_SEG/PK_TOG values (`main.c:4169/4176`, `5295` label table, `5544/5550`) and in
 `PUSH(...)` bookkeeping (`main.c:3058`). Captions follow phase 19's L3.2.6 rule (caption ink 17 px above its

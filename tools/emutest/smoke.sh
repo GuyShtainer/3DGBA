@@ -17,7 +17,7 @@
 #              avutil.60). Frames are the deliverable, video is the bonus: no ffmpeg ->
 #              the row SKIPs with the reason, never a silent pass.
 #   press-ctm  E3: Tier A zero-permission closed loop — synthesized movie drives the
-#              ROM-less session's pause menu: tiltLevel 0->3 (gdb-read), menu QUIT ->
+#              ROM-less session's pause menu: voxPitch 2->4 (gdb-read), menu QUIT ->
 #              app exit closes the RSP session (H3.5 as corrected in BUILDLOG E3).
 #   press-d4   E4 (--rom only): Tier B — fixtures staged, movie drives the REAL ROM picker
 #              into a dual-core session; pre-dropped move_p1.txt is consumed (remove-on-
@@ -40,6 +40,7 @@ AZ_SD="$AZ_DATA/sdmc"
 AZ_BIN="${EMUTEST_AZ_BIN:-$HOME/Applications/Azahar.app/Contents/MacOS/azahar}"
 APP="${EMUTEST_APP:-$REPO/3DGBA.3dsx}"
 RUN="$HERE/run"
+STATE_DIR="${EMUTEST_STATE_DIR:-$HERE/state}"   # honours a private instance (EMUTEST_STATE_DIR) like azctl does
 PY="$HERE/.venv/bin/python"
 
 NO_LIVE=0
@@ -73,8 +74,8 @@ declare -a TMPFILES=()
 tmpreg() { TMPFILES+=("$@"); }
 
 # settings.bin is DELETED (after snapshotting) before each movie phase, not merely saved:
-# the app loads tiltLevel from it at startup (settings_load, main.c:2102 <- main.c:2562) and
-# the press-ctm assertion is `tiltLevel == 3`. A previous run that died after the tilt taps
+# the app loads voxPitch from it at startup (settings_load) and
+# the press-ctm assertion is `voxPitch == 4`. A previous run that died after the ANGLE tap
 # leaves 3 on disk, and `gdbio poll --expect 3` then PASSES on its first sample without the
 # movie ever driving anything (reproduced: patched settings.bin tilt to 3, booted with NO
 # movie -> "poll: PASS — expected value 3 on first sample"). Booting from defaults makes the
@@ -138,7 +139,7 @@ fi
 
 # Tier-A movies REQUIRE the ROM-less state (E3 follow-up 2): a previous aborted Tier-B
 # run may have left fixtures staged — clean them (originals are hash-verified first).
-if [ -f "$HERE/state/fixtures.json" ]; then
+if [ -f "$STATE_DIR/fixtures.json" ]; then
   echo "smoke: stale ROM fixtures staged — cleaning before the Tier-A phases"
   "$RUN" azctl clean-fixtures || fail_run "stale fixture cleanup failed (see above)"
 fi
@@ -156,7 +157,7 @@ fi
 STATUS="$("$RUN" azctl status)"
 echo "$STATUS" | sed 's/^/smoke: status: /'
 DETAIL="$(echo "$STATUS" | grep -o 'pid=[0-9]*' | head -1)"
-LRD1="$(cat "$HERE/state/last_run" 2>/dev/null)"
+LRD1="$(cat "$STATE_DIR/last_run" 2>/dev/null)"
 BOOTJ="$(cat "$LRD1/boot.json" 2>/dev/null || echo '{}')"
 T_GDB="$(echo "$BOOTJ" | "$PY" -c 'import json,sys; print(json.load(sys.stdin).get("t_gdb_port_s","?"))')"
 
@@ -165,7 +166,7 @@ echo "$STATUS" | grep -q '^process=ours' || { echo "smoke: FAIL status: not ours
 echo "$STATUS" | grep -q '^profile=APPLIED' || { echo "smoke: FAIL status: profile not APPLIED"; OK=0; }
 echo "$STATUS" | grep -q '^gdb_port=open' || { echo "smoke: FAIL status: gdb stub not listening"; OK=0; }
 # The backup must equal the pre-run user config byte-for-byte (invariant 2).
-cmp -s "$SNAP" "$HERE/state/qt-config.ini.bak" || { echo "smoke: FAIL backup != pre-run config"; OK=0; }
+cmp -s "$SNAP" "$STATE_DIR/qt-config.ini.bak" || { echo "smoke: FAIL backup != pre-run config"; OK=0; }
 
 # --- read-state (E2: resume is MANDATORY — the release stub parks every boot) ------------
 RS_OK=1
@@ -324,13 +325,13 @@ fi
 if [ "$RS_OK" = 1 ]; then
   row read-state PASS "resume; verify-base 3/3 anchors; renderSeq $SEQ; g_appActive=1 g_quit=0; detach"
 else
-  row read-state FAIL "see smoke output above (gdbio broker log: $HERE/state/gdbio-broker.log)"
+  row read-state FAIL "see smoke output above (gdbio broker log: $STATE_DIR/gdbio-broker.log)"
 fi
 
 # =========================================================================================
 # Phase 2 — press-ctm (E3, Tier A): the zero-permission closed loop
 # =========================================================================================
-# Movie = tests/fixtures/movie_menu_tilt_quit.json, synthesized fresh by ctm.py per run.
+# Movie = tests/fixtures/movie_menu_voxangle_quit.json, synthesized fresh by ctm.py per run.
 # What it does inside the ROM-less app session (all source facts probed in slice E3):
 #   no ROMs in sdmc:/3DGBA -> rompicker_run returns false IMMEDIATELY (scan_roms n==0,
 #   rompicker.c:194) -> main.c:4448 falls through to run_session with the default paths ->
@@ -338,46 +339,49 @@ fi
 #   [wait 1200f]           past splash (170f auto-end, main.c run_splash) + app boot margin
 #   [START+SELECT 40f]     the pause-menu combo (main.c:2700-2704; kHeld both)
 #   [touch 40,110]         tab rail -> ENHANCE (t2=(py-8)/30=3; main.c:3195)
-#   [touch 250,210]        TILT seg index 2 (PT_ENHANCE row 5: x140 y198 w170 h26 nseg 4,
-#   [touch 290,210]        then index 3) -> g_prefs.tiltLevel = 2 then 3 (main.c:3220-3226)
+#   [touch 293,150]        VOXEL 3D toggle (PT_ENHANCE: x276 y141 w34 h18) -> g_prefs.voxel 0->1;
+#                          the ANGLE/ZOOM rows are DIMMED = not hit-testable while it is off (main.c:3145)
+#   [touch 293,194]        3D ANGLE seg index 4 (PT_ENHANCE: x140 y181 w170 h26 nseg 5; idx4 = x276..310)
+#                          -> g_prefs.voxPitch 2 -> 4 (default 2: theme.c g_prefs init)
 #   [touch 40,20]          tab rail -> SESSION (t2=0)
 #   [touch 200,125]        the QUIT button (PT_SESSION row 2: x93 y108 w216 h43, ACT_QUIT=18)
 #                          -> SESSION_QUIT -> main returns -> the emulated app exits
-# Observables (zero permission): g_prefs.tiltLevel 0x1c into g_prefs (theme.h:38-53) flips
-# to 3 = THE state-global change; then the app quits = azahar's stub socket dies;
+# Observables (zero permission): g_prefs.voxPitch at g_prefs+0x28 (theme.h UiPrefs: theme 0, base/accent hue
+# 4/8, contrast 0xc, gameMode 0x10, padColor 0x14, padEdge 0x18, rsvTilt 0x1c, smartTraverse 0x20, voxel 0x24,
+# voxPitch 0x28, voxZoom 0x2c) flips 2 -> 4 = THE state-global change; then the app quits = azahar's stub socket dies;
 # azahar_log carries "Loaded Movie, ID:" (release movie.cpp:551).
 # settings.bin note: the menu taps settings_save into sdmc:/3DGBA/settings.bin (harness-
 # writable fixture dir, H4.2) — snapshotted AND CLEARED before boot (settings_take), then
 # restored after (settings_restore, also on the EXIT trap). Clearing is what makes the
-# tiltLevel assertion non-vacuous: see the settings_take comment at the top.
+# voxPitch assertion non-vacuous: see the settings_take comment at the top.
 PC_OK=1
 settings_take
 MOVIE_BASE="$(mktemp -t emutest-movie)"; MOVIE="$MOVIE_BASE.ctm"
 tmpreg "$MOVIE_BASE" "$MOVIE"           # mktemp -t X creates $TMPDIR/X.XXXXXXXX: BOTH go
 SNAP2="$(mktemp -t emutest-cfg-snap2)"; tmpreg "$SNAP2"
 cp "$AZ_CFG" "$SNAP2"
-BLOG="$HERE/state/gdbio-broker.log"
+BLOG="$STATE_DIR/gdbio-broker.log"
 B0="$(wc -l < "$BLOG" 2>/dev/null | tr -d ' ' || echo 0)"; B0="${B0:-0}"
 
-"$RUN" ctm make "$HERE/tests/fixtures/movie_menu_tilt_quit.json" "$MOVIE" || PC_OK=0
+"$RUN" ctm make "$HERE/tests/fixtures/movie_menu_voxangle_quit.json" "$MOVIE" || PC_OK=0
 # azctl --movie auto-pins is_new_3ds=false: on the N3DS model libctru's hidInit starts the
 # ir:rst movie consumer whose interleave is unsynthesizable ("Expected to read type 4"
 # desync — E3 live finding; azctl cmd_boot comment has the full cite chain).
 if [ "$PC_OK" = 1 ] && "$RUN" azctl boot --gdb --movie "$MOVIE"; then
   "$RUN" gdbio resume || PC_OK=0
-  TILT_BEFORE="$("$RUN" gdbio read-u32 g_prefs+0x1c | grep -o '= [0-9]*' | head -1 | cut -d' ' -f2)"
-  echo "smoke: tiltLevel before movie taps: ${TILT_BEFORE:-?}"
-  # THE PRECONDITION (review fix): the assertion below is `--expect 3`, and cmd_poll passes
-  # on sample 1 if the value already IS 3. With settings.bin cleared this must read 0
-  # (theme.h: tiltLevel ships 0); anything already at 3 means the channel would prove
-  # nothing about the movie, so fail loudly instead of printing "tiltLevel 3->3  PASS".
-  if [ "${TILT_BEFORE:-x}" = 3 ]; then
-    echo "smoke: FAIL — tiltLevel is ALREADY 3 before the movie taps; the press-ctm"
+  PITCH_BEFORE="$("$RUN" gdbio read-u32 g_prefs+0x28 | grep -o '= [0-9]*' | head -1 | cut -d' ' -f2)"
+  echo "smoke: voxPitch before movie taps: ${PITCH_BEFORE:-?}"
+  # THE PRECONDITION (review fix): the assertion below is `--expect 4`, and cmd_poll passes
+  # on sample 1 if the value already IS 4. With settings.bin cleared this must read 2
+  # (theme.c: voxPitch ships 2); anything already at 4 means the channel would prove
+  # nothing about the movie, so fail loudly instead of printing "voxPitch 4->4  PASS".
+  if [ "${PITCH_BEFORE:-x}" = 4 ]; then
+    echo "smoke: FAIL — voxPitch is ALREADY 4 before the movie taps; the press-ctm"
     echo "smoke:        assertion would pass without the movie driving anything."
     PC_OK=0
   fi
-  # The tilt taps land ~24 s into EMULATED time; poll wide (halt->read->cont blinks).
-  PT="$("$RUN" gdbio poll g_prefs+0x1c --expect 3 --timeout 120 --interval 1000)" \
+  # The ENHANCE taps land ~24 s into EMULATED time; poll wide (halt->read->cont blinks).
+  PT="$("$RUN" gdbio poll g_prefs+0x28 --expect 4 --timeout 120 --interval 1000)" \
     && echo "$PT" | sed 's/^/smoke: /' || { echo "$PT" | sed 's/^/smoke: /'; PC_OK=0; }
   # Quit phase (~3 s emulated after the tilt change). PROVEN observable (E3 live run):
   # the emulated app's exit closes the gdb stub's TCP session -> the broker exits with
@@ -399,7 +403,7 @@ if [ "$PC_OK" = 1 ] && "$RUN" azctl boot --gdb --movie "$MOVIE"; then
     echo "smoke: FAIL — no quit observable within 90s"; PC_OK=0
   fi
   "$RUN" azctl stop || PC_OK=0
-  LRD="$(cat "$HERE/state/last_run" 2>/dev/null)"
+  LRD="$(cat "$STATE_DIR/last_run" 2>/dev/null)"
   if grep -q 'Loaded Movie, ID:' "$LRD/azahar_log.txt" 2>/dev/null; then
     echo "smoke: azahar_log: movie playback confirmed (Loaded Movie, ID:)"
   else
@@ -420,7 +424,7 @@ fi
 settings_restore
 rm -f "$MOVIE" "$SNAP2"
 if [ "$PC_OK" = 1 ]; then
-  row press-ctm PASS "movie menu-drive: tiltLevel ${TILT_BEFORE:-?}->3; quit: ${QUIT_SEEN}; Loaded Movie in log, 0 desyncs"
+  row press-ctm PASS "movie menu-drive: voxPitch ${PITCH_BEFORE:-?}->4; quit: ${QUIT_SEEN}; Loaded Movie in log, 0 desyncs"
 else
   row press-ctm FAIL "see smoke output above"
 fi
@@ -456,7 +460,7 @@ if [ "$ROM" = 1 ]; then
     "$RUN" sdmc drop move 1 "W60" || D4_OK=0           # pre-drop: pickup is consume-on-read
     "$RUN" ctm make "$HERE/tests/fixtures/movie_pick_play_quit.json" "$MOVIE3" || D4_OK=0
     if [ "$D4_OK" = 1 ] && "$RUN" azctl boot --gdb --movie "$MOVIE3" --fresh-sd-fixtures; then
-      LRD3="$(cat "$HERE/state/last_run" 2>/dev/null)"
+      LRD3="$(cat "$STATE_DIR/last_run" 2>/dev/null)"
       SPAWN3="$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("spawn_ts",0))' "$LRD3/boot.json" 2>/dev/null || echo 0)"
       "$RUN" gdbio resume || D4_OK=0
       # Seat-0 pickup counter (g_ctlStat+6, u16 — control.h:170-176; E3 live: 0 -> 1).
