@@ -302,3 +302,14 @@ before | after | changed pixels, with a 3x zoom):
 - Resort Gorgeous (3/54), Pallet, Emerald Littleroot: identical apart from NPCs/sparkles (20 / 100 / 760 px): the
   rear halves are out of the in-game camera's view, and the front did not change.
 - voxel.log: no "chunk scratch full" in any of the 10 runs; FR Four Island loaded 15804 -> 18948 building vertices.
+
+## L6b: roof backs hidden by steep pitch (Guy, 2026-10-07)
+
+After L6 merged (closed backs), Guy was asked what looked wrong on his circled roofs; his answer: **"The back is
+missing"**. L6 built the rear slopes, but in-game they barely show (`evidence/l6-fr-five-diff.png`,
+`l6-fr-resort-*`): the recipes' roof slopes are near-vertical (the striped front slope reads as a wall), and the camera
+looks down at 34-46° (`voxPitch` presets). A back-facing slope steeper than the camera elevation is hidden behind its
+own ridge, so the mirrored rear slope is invisible from every in-game angle. Fix direction: gable/hip roof pitch below
+the lowest camera elevation (~30°) so both slopes are seen from above, keeping the front's in-game look (the front
+slope's projected screen height must still match the art; that may mean a deeper roof, extending the back north of the
+art's top row). Needs a design pass (opus) with in-game before/after at Guy's spots. Queued after L8.
