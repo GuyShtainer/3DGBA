@@ -195,6 +195,9 @@ static bool CutSourceOf(const struct Tileset *primary, const struct Tileset *sec
 #define SHRUB_LEAVES_ONLY 0x10u
 /* ... and (look L2) the lower layer alone with the pair's ground colour clear: tall grass's blades. */
 #define GRASS_BLADES_ONLY 0x20u
+/* ... and (look L8) with the leaves: key out every colour the cell's own LOWER layer draws, so what is left is the object
+ * alone (a rock without its foam ring, a flower bed without its grass). */
+#define LEAVES_KEY_LOWER 0x40u
 
 static bool AtlasSourceOf(const struct Tileset *primary, const struct Tileset *secondary,
                           unsigned id, unsigned *metatile, unsigned *hidden, const uint8_t **cut)
@@ -220,6 +223,13 @@ static bool AtlasSourceOf(const struct Tileset *primary, const struct Tileset *s
         unsigned k = (id - VOXEL_SHRUB_FIRST) / 2u;
 
         *hidden = ((id - VOXEL_SHRUB_FIRST) & 1u) ? SHRUB_LEAVES_ONLY : 0xFu;
+        if (((id - VOXEL_SHRUB_FIRST) & 1u) != 0u)
+        {
+            unsigned kind = VoxelTree_PropKind(k);
+
+            if (kind == GP_PROP_ROCK || kind == GP_PROP_FLOWER)
+                *hidden |= LEAVES_KEY_LOWER;
+        }
         return VoxelTree_ShrubSource(primary, secondary, k, metatile);
     }
     if (id >= VOXEL_CUT_FIRST)
@@ -261,6 +271,7 @@ static bool AtlasSourceOf(const struct Tileset *primary, const struct Tileset *s
  * count as black.
  */
 #define GRASS_KEY_MAX 8u
+#define LOWER_KEY_MAX 24u
 static unsigned GrassGroundKey(const struct AtlasSource *src, uint16_t key[GRASS_KEY_MAX]);
 
 static bool ComposeAt(const struct AtlasSource *src, const uint16_t *entries,
@@ -342,6 +353,38 @@ static bool ComposeAt(const struct AtlasSource *src, const uint16_t *entries,
         for (unsigned x = 0; x < 16; ++x)
             if ((row >> x) & 1u)
                 dest[CtrVideo_Texel(baseX + x, baseY + y, width)] &= (uint16_t)~1u;
+    }
+    if (leavesOnly && (hidden & LEAVES_KEY_LOWER) != 0u)
+    {
+        /* look L8: the cell's own lower layer's colours (the ground, the water under a sea rock) are clear in its
+         * leaves: the lower layer alone is composed to a scratch tile, its distinct colours are the key */
+        uint16_t tile[VOXEL_ATLAS_SLOT * VOXEL_ATLAS_SLOT];
+        uint16_t key[LOWER_KEY_MAX];
+        unsigned nKey = 0;
+
+        memset(tile, 0, sizeof tile);
+        ComposeAt(src, entries, tile, 0, 0, VOXEL_ATLAS_SLOT, 0xFu, NULL);
+        for (unsigned i = 0; i < VOXEL_ATLAS_SLOT * VOXEL_ATLAS_SLOT; ++i)
+        {
+            unsigned k = 0;
+
+            while (k < nKey && key[k] != tile[i])
+                ++k;
+            if (k == nKey && nKey < LOWER_KEY_MAX)
+                key[nKey++] = tile[i];
+        }
+        for (unsigned y = 0; y < VOXEL_ATLAS_SLOT; ++y)
+            for (unsigned x = 0; x < VOXEL_ATLAS_SLOT; ++x)
+            {
+                uint16_t *texel = &dest[CtrVideo_Texel(baseX + x, baseY + y, width)];
+
+                for (unsigned k = 0; k < nKey; ++k)
+                    if (*texel == key[k])
+                    {
+                        *texel = 0;
+                        break;
+                    }
+            }
     }
     if ((hidden & GRASS_BLADES_ONLY) != 0u)
     {

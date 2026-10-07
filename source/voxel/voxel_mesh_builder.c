@@ -20,6 +20,7 @@
 #include "voxel_mesh_builder.h"
 #include "voxel_atlas.h"
 #include "voxel_tree.h"
+#include "gba_game.h" /* 3DGBA look L8: GP_PROP_* */
 #include "voxel_lighting.h"
 #include "voxel_sign.h"
 #include "voxel_building.h"
@@ -1012,6 +1013,27 @@ static bool ShrubSlotsReady(const VoxelBuilder *builder, int shrub)
         && l != 0 && l != VOXEL_SLOT_PENDING && l != VOXEL_SLOT_ABSENT;
 }
 
+/* look L8: the shrub table's entry k stands up as its kind's card (bush, fence, rock, flower bed) */
+static void EmitPropCard(VoxelBuilder *builder, int shrub, int x, int y, float u0, float v0, float u1, float v1)
+{
+    switch (VoxelTree_PropKind((unsigned)shrub))
+    {
+    case GP_PROP_FENCE_EW:
+    case GP_PROP_FENCE_NS:
+        VoxelTree_EmitFenceCard(builder, x, y, u0, v0, u1, v1);
+        break;
+    case GP_PROP_ROCK:
+        VoxelTree_EmitRockCard(builder, x, y, u0, v0, u1, v1);
+        break;
+    case GP_PROP_FLOWER:
+        VoxelTree_EmitGrassCard(builder, x, y, u0, v0, u1, v1);
+        break;
+    default:
+        VoxelTree_EmitShrubCard(builder, x, y, u0, v0, u1, v1);
+        break;
+    }
+}
+
 static void EmitShrubCard(VoxelBuilder *builder, const VoxelMapInstance *inst, int x, int y)
 {
     int shrub = VoxelTree_Shrub(inst, VoxelWorld_GetMetatileId(x, y));
@@ -1022,7 +1044,7 @@ static void EmitShrubCard(VoxelBuilder *builder, const VoxelMapInstance *inst, i
         return;
     builder->lift = VoxelRelief_CellLift(inst, x, y);
     builder->shift = VoxelRelief_CellShift(inst, x, y);
-    VoxelTree_EmitShrubCard(builder, x, y, u0, v0, u1, v1);
+    EmitPropCard(builder, shrub, x, y, u0, v0, u1, v1);
     builder->lift = 0.0f;
     builder->shift = 0.0f;
 }
@@ -1367,7 +1389,7 @@ static bool EmitBorderShrub(VoxelBuilder *builder, int x, int y)
      || !MetatileUV(builder, (int)VOXEL_SHRUB_LEAVES(shrub), &u0, &v0, &u1, &v1))
         return false;
     VoxelMesh_Top(builder, (float)x, (float)y, 0.0f, 0.0f, g0, h0, g1, h1, SHADE_TOP);
-    VoxelTree_EmitShrubCard(builder, x, y, u0, v0, u1, v1);
+    EmitPropCard(builder, shrub, x, y, u0, v0, u1, v1);
     return true;
 }
 

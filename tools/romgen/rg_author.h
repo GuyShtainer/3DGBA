@@ -56,6 +56,9 @@ int rg_author_shrubs(const RgWorld *w, FILE *fp, const char *outDir, uint32_t on
 int rg_author_grass(const RgWorld *w, FILE *fp, const char *outDir, const unsigned *behs, unsigned nBehs,
                     uint32_t ts, const unsigned *ids, unsigned nIds);
 
+/* L8: every metatile with >= minUses uses (fences, rocks, flowers are picked from it); sheets <outDir>/props-N.png. */
+int rg_author_props(const RgWorld *w, FILE *fp, const char *outDir, unsigned minUses);
+
 /* Pixel helpers shared with the tests. */
 int rg_author_mkdir_p(const char *path);
 

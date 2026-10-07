@@ -30,7 +30,12 @@ struct RgSpec;
 /* Look backlog L1: a one-cell shrub (a bush drawn on a metatile's upper layer over its ground). `tileset` is the GBA
  * address of the secondary tileset the id belongs to (a secondary id means nothing without it), 0 for a primary id;
  * `metatile` < 1024. */
-typedef struct GpShrub { uint32_t tileset; uint16_t metatile; } GpShrub;
+typedef struct GpShrub { uint32_t tileset; uint16_t metatile; uint8_t kind; } GpShrub;
+/* Look backlog L8: what a table entry stands up as. 0 (the default of every L1 initialiser) is the one-cell bush; the others
+ * are props drawn on the same slot machinery (upper layer = the art, lower layer = the ground under it): a fence picket
+ * row (GP_PROP_FENCE_EW), fence posts seen along their run (GP_PROP_FENCE_NS), a rock whose ground colours are keyed out
+ * of its art (GP_PROP_ROCK), a flower bed keyed the same way (GP_PROP_FLOWER). */
+enum { GP_PROP_BUSH = 0, GP_PROP_FENCE_EW, GP_PROP_FENCE_NS, GP_PROP_ROCK, GP_PROP_FLOWER };
 
 typedef struct GameProfile {
     GpGame game;

@@ -283,9 +283,12 @@ static void TestShrubTables(void)
     if (i0 == NULL)
         return;
     gVxProf = NULL;
-    CHECK(em->shrubs != NULL && em->shrubCount == 11 && em->shrubCount <= VOXEL_SHRUBS);
-    for (unsigned k = 0; k < em->shrubCount; ++k)      /* every Emerald shrub is a secondary id with its tileset */
-        CHECK(em->shrubs[k].tileset != 0 && em->shrubs[k].metatile >= em->nPrimMetatiles && em->shrubs[k].metatile < 1024);
+    CHECK(em->shrubs != NULL && em->shrubCount == 18 && em->shrubCount <= VOXEL_SHRUBS);
+    for (unsigned k = 0; k < 11; ++k)      /* the 11 Emerald bushes are secondary ids with their tileset; L8 props follow */
+        CHECK(em->shrubs[k].kind == GP_PROP_BUSH && em->shrubs[k].tileset != 0 && em->shrubs[k].metatile >= em->nPrimMetatiles
+              && em->shrubs[k].metatile < 1024);
+    for (unsigned k = 11; k < em->shrubCount; ++k)     /* L8: General-tileset props, never bushes */
+        CHECK(em->shrubs[k].kind != GP_PROP_BUSH && em->shrubs[k].tileset == 0 && em->shrubs[k].metatile < em->nPrimMetatiles);
     memset(&dewford, 0, sizeof dewford);
     dewford.gbaAddr = 0x083DF74Cu;
     slateport = dewford;
@@ -319,7 +322,7 @@ static void TestShrubTables(void)
         memcpy(hdr + 0xAC, game == 0 ? "BPRE" : "BPGE", 4);
         hdr[0xBC] = 1;
         p = gameprof_detect(hdr, sizeof hdr);
-        CHECK(p != NULL && p->shrubs != NULL && p->shrubCount == 3);
+        CHECK(p != NULL && p->shrubs != NULL && p->shrubCount == 33);   /* 3 bushes + the L8 props */
         if (p == NULL || p->shrubs == NULL)
             continue;
         CHECK(p->shrubs[0].tileset == 0 && p->shrubs[0].metatile == 0x005);
