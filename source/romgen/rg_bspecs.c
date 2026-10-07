@@ -856,7 +856,181 @@ const unsigned rg_spec_count = sizeof(rg_specs) / sizeof(rg_specs[0]);
 
 /* ---- Phase 34 side walls --------------------------------------------------------------------------------------------- */
 
-bool rg_close_sides(const RgSpec *s, RgPartList *parts)
+/* ---- look L5: dress the end faces from the building's own front art ---------------------------------------------- */
+/* The ROM draws a building's front only, so an end face is derived from the front's rows. The wall below the eave is a
+ * one-texel-wide COLUMN of the facade, stretched along the depth: the column that matches the facade's most common
+ * colour in the most rows, so it carries the wall band and the base stripe (and the eave shadow) at the heights the front
+ * has them. Where the depth allows, a window of the same facade (a run of columns that differ from the wall in the middle
+ * but not at the foot, so a door or a pilaster is not mistaken for one) is laid at its true 1:1 size in the middle of the
+ * depth. A mirrored gable's end triangle above the eave takes the facade's wall colour instead of the roof's.
+ * Every piece is one projected polygon (RgBand.proj): no tiling, so it costs no more than the flat patch it replaces. */
+#define SD_MAXW 256
+
+static uint32_t sd_px(const RgImage *a, int x, int y)
+{
+    const uint8_t *p;
+
+    if (x < 0 || y < 0 || x >= a->w || y >= a->h)
+        return 0u;
+    p = a->px + ((size_t)y * (size_t)a->w + (size_t)x) * 4u;
+    if (p[3] < 128)
+        return 0u;                                  /* transparent: never a wall colour */
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | 0xFFu;
+}
+
+typedef struct SdDress {
+    double uCol, uWin0, uWin1, gableU, gableV;
+    bool window;
+} SdDress;
+
+/* Reads the wall rows of the prism (front at z = zfront, y in [ylo, yhi)) off the art; false = nothing trustworthy. */
+static bool sd_analyse(const RgImage *art, double x0, double x1, double zfront, double ylo, double yhi, SdDress *d)
+{
+    int c0 = (int)floor(x0 + 1e-6), c1 = (int)ceil(x1 - 1e-6), nc, nr, r, c, k, best = -1, bestScore = -1;
+    int r0 = (int)floor(zfront - yhi + 1e-6), r1 = (int)ceil(zfront - ylo - 1e-6);
+    uint32_t mode[SD_MAXW];
+    int diff[SD_MAXW];
+    bool win[SD_MAXW];
+    double mid;
+
+    if (art == NULL || art->px == NULL || c0 < 0 || c1 > art->w || r0 < 0 || r1 > art->h || c1 <= c0 || r1 - r0 < 4 ||
+        r1 - r0 > SD_MAXW || c1 - c0 > SD_MAXW)
+        return false;
+    nc = c1 - c0;
+    nr = r1 - r0;
+    for (r = 0; r < nr; r++) {                      /* the facade's most common colour in each row */
+        uint32_t cand[SD_MAXW];
+        int n[SD_MAXW], nd = 0, top = 0;
+
+        for (c = 0; c < nc; c++) {
+            uint32_t px = sd_px(art, c0 + c, r0 + r);
+
+            if (px == 0u)
+                continue;
+            for (k = 0; k < nd && cand[k] != px; k++)
+                ;
+            if (k == nd) {
+                cand[nd] = px;
+                n[nd++] = 0;
+            }
+            n[k]++;
+        }
+        mode[r] = 0u;
+        for (k = 0; k < nd; k++)
+            if (n[k] > top) {
+                top = n[k];
+                mode[r] = cand[k];
+            }
+    }
+    mid = (nc - 1) / 2.0;
+    for (c = 0; c < nc; c++) {
+        int score = 0;
+
+        for (r = 0; r < nr; r++)
+            if (mode[r] != 0u && sd_px(art, c0 + c, r0 + r) == mode[r])
+                score++;
+        diff[c] = nr - score;
+        if (score > bestScore || (score == bestScore && fabs(c - mid) < fabs(best - mid))) {
+            bestScore = score;
+            best = c;
+        }
+    }
+    if (best < 0 || bestScore * 10 < nr * 6)
+        return false;
+    d->uCol = c0 + best + 0.5;
+    {   /* the wall colour: the column's most common texel (its row is the gable's) */
+        int bestN = 0;
+
+        d->gableU = d->uCol;
+        d->gableV = r0 + nr / 2 + 0.5;
+        for (r = 0; r < nr; r++) {
+            uint32_t px = sd_px(art, c0 + best, r0 + r);
+            int n = 0;
+
+            for (k = 0; k < nr; k++)
+                n += sd_px(art, c0 + best, r0 + k) == px;
+            if (px != 0u && n > bestN) {
+                bestN = n;
+                d->gableV = r0 + r + 0.5;
+            }
+        }
+    }
+    /* windows: a column that differs from the wall in the middle rows but not in the lowest three (a door or a pilaster
+     * stands on the ground; a window has the wall's own foot below it) */
+    for (c = 0; c < nc; c++) {
+        int foot = 0;
+
+        for (r = nr - 3; r < nr; r++)
+            foot += sd_px(art, c0 + c, r0 + r) == mode[r];
+        win[c] = diff[c] >= 3 && foot == 3 && c > 0 && c < nc - 1;
+    }
+    d->window = false;
+    for (c = 0; c < nc;) {
+        int a = c, b;
+
+        if (!win[c]) {
+            c++;
+            continue;
+        }
+        for (b = c; b < nc && (win[b] || (b + 1 < nc && win[b + 1])); b++)
+            ;                                       /* a one-column gap stays inside the window */
+        if (b - a >= 10 && b - a <= 40 && (!d->window || b - a > (int)(d->uWin1 - d->uWin0))) {
+            d->window = true;
+            d->uWin0 = c0 + a;
+            d->uWin1 = c0 + b;
+        }
+        c = b;
+    }
+    return true;
+}
+
+static RgBand sd_band(double y0, double y1, double z0, double sLo, double sHi, double pu0, double pdu, double pv0, double pdv)
+{
+    RgBand b = rg_band(y0, y1, rg_tile(0, 0, 1, 1), z0);
+
+    b.proj = true;
+    b.sLo = sLo; b.sHi = sHi;
+    b.pu0 = pu0; b.pdu = pdu; b.pv0 = pv0; b.pdv = pdv;
+    return b;
+}
+
+/* Fills pr->caps from the art; false = leave the flat patches. */
+static bool sd_dress(RgPrism *pr, const RgSideCfg *cfg, const RgImage *art, double ytop, double zfront)
+{
+    SdDress d;
+    double ybot = 1e30, zback = 1e30, yw1 = cfg->eave < ytop ? cfg->eave : ytop, depth;
+    unsigned k;
+
+    for (k = 0; k < pr->nPoly; k++) {
+        if (pr->poly[k][1] < ybot) ybot = pr->poly[k][1];
+        if (pr->poly[k][0] < zback && pr->poly[k][1] < yw1 - RG_EPS) zback = pr->poly[k][0];
+    }
+    if (ybot < 0.0)
+        ybot = 0.0;
+    if (yw1 - ybot < 4.0 || !sd_analyse(art, pr->x0, pr->x1, zfront, ybot, yw1, &d))
+        return false;
+    depth = zfront - zback;
+    pr->nCaps = 0;
+    if (d.window && depth >= (d.uWin1 - d.uWin0) + 12.0) {
+        double w = d.uWin1 - d.uWin0, sw0 = floor((depth - w) / 2.0);
+
+        pr->caps[pr->nCaps++] = sd_band(-1, yw1, zfront, 0.0, sw0, d.uCol, 0, zfront, 1);
+        pr->caps[pr->nCaps++] = sd_band(-1, yw1, zfront, sw0, sw0 + w, d.uWin0, 1, zfront, 1);
+        pr->caps[pr->nCaps++] = sd_band(-1, yw1, zfront, sw0 + w, 1e9, d.uCol, 0, zfront, 1);
+    } else {
+        pr->caps[pr->nCaps++] = sd_band(-1, yw1, zfront, 0.0, 1e9, d.uCol, 0, zfront, 1);
+    }
+    if (ytop > cfg->eave) {
+        if (pr->mirrored)                           /* a gable end: wall colour */
+            pr->caps[pr->nCaps++] = sd_band(cfg->eave, ytop + 1, zfront, 0.0, 1e9, d.gableU, 0, d.gableV, 0);
+        else
+            pr->caps[pr->nCaps++] = rg_band(cfg->eave, ytop + 1,
+                                            rg_tile_top(cfg->roof[0], cfg->roof[1], cfg->roof[2], cfg->roof[3], ytop), zfront);
+    }
+    return true;
+}
+
+bool rg_close_sides(const RgSpec *s, RgPartList *parts, const RgImage *art)
 {
     const RgSideCfg *table;
     unsigned i;
@@ -890,6 +1064,9 @@ bool rg_close_sides(const RgSpec *s, RgPartList *parts)
         pr->west = west;
         pr->east = east;
         pr->hasCaps = true;
+        pr->nCaps = 0;
+        if (art != NULL && sd_dress(pr, cfg, art, ytop, zfront))
+            continue;
         pr->nCaps = 0;
         pr->caps[pr->nCaps++] = rg_band(-1, cfg->eave < ytop ? cfg->eave : ytop + 1,
                                         rg_tile_top(cfg->wall[0], cfg->wall[1], cfg->wall[2], cfg->wall[3], ytop), zfront);
@@ -1545,9 +1722,9 @@ static int cb_guard(const RgSpec *s, const RgPartList *parts, const RgImage *art
     return added;
 }
 
-static bool cb_build(const RgSpec *s, RgPartList *parts, const RgBackDeny *deny)
+static bool cb_build(const RgSpec *s, RgPartList *parts, const RgBackDeny *deny, const RgImage *art)
 {
-    return s->parts(s, s->arg0, s->arg1, parts) && rg_close_backs(s, parts, deny) && rg_close_sides(s, parts) &&
+    return s->parts(s, s->arg0, s->arg1, parts) && rg_close_backs(s, parts, deny) && rg_close_sides(s, parts, art) &&
            !parts->failed;
 }
 
@@ -1559,7 +1736,7 @@ bool rg_spec_parts(const RgSpec *s, const RgImage *art, RgPartList *parts)
 
     if (s->parts == NULL)
         return false;
-    ok = cb_build(s, parts, NULL);
+    ok = cb_build(s, parts, NULL, art);
     for (round = 0; ok && art != NULL && round < 16u; round++) {
         int added;
 
@@ -1574,7 +1751,7 @@ bool rg_spec_parts(const RgSpec *s, const RgImage *art, RgPartList *parts)
             break;
         rg_parts_free(parts);
         rg_parts_init(parts);
-        ok = cb_build(s, parts, deny);
+        ok = cb_build(s, parts, deny, art);
     }
     if (ok && rg_close_backs_log != NULL)
         for (i = 0; i < parts->n; i++) {
