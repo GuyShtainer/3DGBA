@@ -414,3 +414,191 @@ bool rg_side_check(const RgPartList *parts, const RgMesh *m, bool east, RgSideRe
     free(cov);
     return true;
 }
+
+/* ---- back closure (look L6) ---------------------------------------------------------------------------------------- */
+
+#define BACK_MARGIN 0.75    /* px: a ray must reach this far inside a solid to count (grazing an edge is not entering) */
+#define BACK_SLACK 1.0      /* px along the ray: a face this close behind the solid's surface still closes it */
+#define BACK_SEC RG_SEC_PTS
+
+/* Where the 2D ray o + t*d first gets BACK_MARGIN inside the polygon: the polygon edge it crossed there. 1e30 = never. */
+static double back_entry(const double (*poly)[2], unsigned n, const double o[2], const double d[2])
+{
+    double ts[BACK_SEC + 2];
+    unsigned nt = 0, i, j;
+
+    for (i = 0; i < n && nt < BACK_SEC + 2u; i++) {
+        const double *a = poly[i], *b = poly[(i + 1) % n];
+        double ez = b[0] - a[0], ey = b[1] - a[1], den = d[0] * ey - d[1] * ez, t, s;
+
+        if (fabs(den) < 1e-12)
+            continue;
+        t = ((a[0] - o[0]) * ey - (a[1] - o[1]) * ez) / den;
+        s = ((a[0] - o[0]) * d[1] - (a[1] - o[1]) * d[0]) / den;
+        if (s < -1e-9 || s > 1 + 1e-9)
+            continue;
+        ts[nt++] = t;
+    }
+    for (i = 1; i < nt; i++) {
+        double key = ts[i];
+
+        for (j = i; j > 0 && ts[j - 1] > key; j--)
+            ts[j] = ts[j - 1];
+        ts[j] = key;
+    }
+    for (i = 0; i + 1 < nt; i++) {
+        double mid = (ts[i] + ts[i + 1]) / 2;
+
+        if (ts[i + 1] - ts[i] > 2 * BACK_MARGIN &&
+            rg_poly_inside(poly, n, o[0] + mid * d[0], o[1] + mid * d[1], BACK_MARGIN))
+            return ts[i];
+    }
+    return 1e30;
+}
+
+/* Moller-Trumbore for a ray in the plane x = const: origin (x, oy, oz), direction (0, dy, dz). */
+static double back_hit(const RgTri *t, double x, double oz, double oy, double dz, double dy)
+{
+    double e1[3], e2[3], pv[3], tv[3], qv[3], det, inv, u, v, dir[3];
+    const RgVtx *a = &t->p[0], *b = &t->p[1], *c = &t->p[2];
+
+    dir[0] = 0.0; dir[1] = dy; dir[2] = dz;
+    e1[0] = b->x - a->x; e1[1] = b->y - a->y; e1[2] = b->z - a->z;
+    e2[0] = c->x - a->x; e2[1] = c->y - a->y; e2[2] = c->z - a->z;
+    pv[0] = dir[1] * e2[2] - dir[2] * e2[1];
+    pv[1] = dir[2] * e2[0] - dir[0] * e2[2];
+    pv[2] = dir[0] * e2[1] - dir[1] * e2[0];
+    det = e1[0] * pv[0] + e1[1] * pv[1] + e1[2] * pv[2];
+    if (fabs(det) < 1e-12)
+        return 1e30;
+    inv = 1.0 / det;
+    tv[0] = x - a->x; tv[1] = oy - a->y; tv[2] = oz - a->z;
+    u = (tv[0] * pv[0] + tv[1] * pv[1] + tv[2] * pv[2]) * inv;
+    if (u < -1e-7 || u > 1 + 1e-7)
+        return 1e30;
+    qv[0] = tv[1] * e1[2] - tv[2] * e1[1];
+    qv[1] = tv[2] * e1[0] - tv[0] * e1[2];
+    qv[2] = tv[0] * e1[1] - tv[1] * e1[0];
+    v = (dir[0] * qv[0] + dir[1] * qv[1] + dir[2] * qv[2]) * inv;
+    if (v < -1e-7 || u + v > 1 + 1e-7)
+        return 1e30;
+    return (e2[0] * qv[0] + e2[1] * qv[1] + e2[2] * qv[2]) * inv;
+}
+
+const double rg_back_pitch[RG_BACK_VIEWS] = {30.0, 60.0, 90.0};
+
+bool rg_back_check(const RgPartList *parts, const RgMesh *m, RgBackResult *out, RgBackRayFn cb, void *ctx)
+{
+    double xlo = 1e30, xhi = -1e30, zlo = 1e30, zhi = -1e30, ylo = 1e30, yhi = -1e30, cz, cy, R, L;
+    unsigned i, k, view;
+    int ix, nx;
+    unsigned *col;
+
+    memset(out, 0, sizeof(*out));
+    if (m->n == 0)
+        return true;
+    for (i = 0; i < m->n; i++)
+        for (k = 0; k < 3; k++) {
+            const RgVtx *v = &m->t[i].p[k];
+
+            if (v->x < xlo) xlo = v->x;
+            if (v->x > xhi) xhi = v->x;
+            if (v->z < zlo) zlo = v->z;
+            if (v->z > zhi) zhi = v->z;
+            if (v->y < ylo) ylo = v->y;
+            if (v->y > yhi) yhi = v->y;
+        }
+    for (i = 0; i < parts->n; i++) {     /* an open solid may reach past every face: grow the box to the parts */
+        const RgPart *p = rg_parts_at(parts, i);
+
+        if (p != NULL && p->kind == RG_P_PRISM && !rg_prism_is_sheet(&p->u.prism)) {
+            if (p->u.prism.x0 < xlo) xlo = p->u.prism.x0;
+            if (p->u.prism.x1 > xhi) xhi = p->u.prism.x1;
+            for (k = 0; k < p->u.prism.nPoly; k++) {
+                double z = p->u.prism.poly[k][0], y = p->u.prism.poly[k][1];
+
+                if (z < zlo) zlo = z;
+                if (z > zhi) zhi = z;
+                if (y < ylo) ylo = y;
+                if (y > yhi) yhi = y;
+            }
+        }
+    }
+    if (!(xhi - xlo < 4096.0 && zhi - zlo < 4096.0 && yhi - ylo < 4096.0))
+        return false;
+    cz = (zlo + zhi) / 2;
+    cy = (ylo + yhi) / 2;
+    R = hypot(zhi - zlo, yhi - ylo) / 2 + 2.0;
+    L = 2 * R + 10.0;
+    nx = (int)ceil(xhi - floor(xlo));
+    col = (unsigned *)malloc((size_t)m->n * sizeof(unsigned));
+    if (col == NULL)
+        return false;
+    for (ix = 0; ix < nx; ix++) {
+        double x = floor(xlo) + ix + 0.5;
+        unsigned nc = 0;
+
+        for (i = 0; i < m->n; i++) {      /* the triangles this ray column can meet */
+            const RgTri *t = &m->t[i];
+            double a = t->p[0].x, b = t->p[1].x, c = t->p[2].x;
+            double lo = a < b ? (a < c ? a : c) : (b < c ? b : c), hi = a > b ? (a > c ? a : c) : (b > c ? b : c);
+
+            if (!(t->flags & (RG_TAG_DEPTH | RG_TAG_BEHIND)) && lo <= x + 1e-9 && hi >= x - 1e-9)
+                col[nc++] = i;
+        }
+        for (view = 0; view < RG_BACK_VIEWS; view++) {
+            double ph = rg_back_pitch[view] * 3.14159265358979323846 / 180.0;
+            double d[2], u[2];             /* (z, y): from behind (north), looking south and down */
+            int iw, nw = (int)ceil(2 * R);
+
+            d[0] = cos(ph); d[1] = -sin(ph);
+            u[0] = sin(ph); u[1] = cos(ph);
+            if (fabs(d[0]) < 1e-12) d[0] = 0.0;
+            if (fabs(u[1]) < 1e-12) u[1] = 0.0;
+            for (iw = 0; iw < nw; iw++) {
+                double w = -R + iw + 0.5, o[2], best = 1e30, hit = 1e30;
+                int state;
+
+                o[0] = cz + w * u[0] - L * d[0];
+                o[1] = cy + w * u[1] - L * d[1];
+                for (i = 0; i < parts->n; i++) {
+                    const RgPart *p = rg_parts_at(parts, i);
+                    double sec[2][BACK_SEC][2];
+                    unsigned ns, s, n[2];
+
+                    if (p == NULL)
+                        continue;
+                    ns = rg_part_section(p, x, BACK_MARGIN, sec, n);
+                    for (s = 0; s < ns; s++) {
+                        double t = back_entry((const double (*)[2])sec[s], n[s], o, d);
+
+                        if (t < best)
+                            best = t;
+                    }
+                }
+                if (best >= 1e29) {
+                    state = 0;
+                } else {
+                    for (i = 0; i < nc; i++) {
+                        double t = back_hit(&m->t[col[i]], x, o[0], o[1], d[0], d[1]);
+
+                        if (t > 0.0 && t < hit)
+                            hit = t;
+                    }
+                    out->expected++;
+                    if (hit > best + BACK_SLACK) {
+                        out->open++;
+                        state = 2;
+                    } else {
+                        state = 1;
+                    }
+                }
+                if (cb != NULL)
+                    cb(ctx, view, ix, iw, state);
+            }
+        }
+    }
+    free(col);
+    out->applicable = out->expected > 0;
+    return true;
+}

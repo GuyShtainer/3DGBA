@@ -5,6 +5,8 @@
 #include "rg_bspecs.h"
 #include "rg_brooms.h"
 
+#include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define GRASS 0x001
@@ -896,4 +898,680 @@ bool rg_close_sides(const RgSpec *s, RgPartList *parts)
                                             rg_tile_top(cfg->roof[0], cfg->roof[1], cfg->roof[2], cfg->roof[3], ytop), zfront);
     }
     return !parts->failed;
+}
+
+/* ---- look L6: rg_close_backs -------------------------------------------------------------------------------------- */
+/* The GBA art draws a building's front only, so many builders stop a roof at its ridge or end a block in a skipped back
+ * wall, which leaves the model open from behind. An edge of a solid prism is OPEN when it is not drawn (skipped, or a
+ * back-facing NONE edge), does not face the ground or the camera, and some point half a pixel behind it lies in no
+ * other solid part. A prism with an open edge is closed in one of three ways:
+ *  - pitched: when the front chain (the edges from the front-bottom corner, counter-clockwise, up to the first open one)
+ *    ends in a slope that rises toward the back and nothing drawn lies behind it, the roof part of that chain (above the
+ *    eave) is mirrored about the ridge, clipped at the footprint's back row, and a back wall drops to the ground. The
+ *    rear slope keeps the front's pitch and its rows (a mirrored projection); a parapet over the ridge gets a 45-degree
+ *    back in the roof colour;
+ *  - otherwise every open edge is drawn flat: the side-closure wall patch below the eave, the roof patch above it (a spec
+ *    without a RgSideCfg takes a texel of the front wall's and the roof's own rows);
+ *  - when rg_spec_parts' front guard finds a flat face showing through the art (a transparent texel of the top in front
+ *    of it), the prism instead runs a 45-degree back down from the top of its front chain: a face the front camera sees
+ *    edge-on. A face that shows only at its ends is trimmed there instead (at most CB_TRIM px, a quarter of its width). */
+void (*rg_close_backs_log)(const char *spec, const char *part, const char *what);
+
+#define CB_COVER_STEP 4.0
+#define CB_NO_MIRROR 0x80000000u
+#define CB_CHAMFER 0x40000000u
+#define CB_NO_CHAMFER 0x20000000u
+#define CB_EDGES 0x0FFFFFFFu
+
+static bool cb_point_solid(const RgPartList *parts, unsigned self, double x, double z, double y)
+{
+    unsigned j, k;
+
+    for (j = 0; j < parts->n; j++) {
+        const RgPart *q = rg_parts_at(parts, j);
+        double sec[2][RG_SEC_PTS][2];
+        unsigned n[2], ns;
+
+        if (j == self || q == NULL)
+            continue;
+        ns = rg_part_section(q, x, 0.0, sec, n);
+        for (k = 0; k < ns; k++)
+            if (rg_poly_inside((const double (*)[2])sec[k], n[k], z, y, 0.0))
+                return true;
+    }
+    return false;
+}
+
+/* 1 when every sample half a pixel behind edge i (over the prism's width) falls in another solid */
+static bool cb_covered(const RgPartList *parts, unsigned self, const RgPrism *pr, unsigned i, double nz, double ny)
+{
+    const double *a = pr->poly[i], *b = pr->poly[(i + 1) % pr->nPoly];
+    double len = hypot(b[0] - a[0], b[1] - a[1]), x, t;
+    unsigned hit = 0, all = 0;
+
+    for (x = pr->x0 + 1.0; x <= pr->x1 - 1.0 + RG_EPS; x += CB_COVER_STEP)
+        for (t = 0.5 / len; t < 1.0; t += (len > 8.0 ? 4.0 : 1.0) / len) {
+            double z = a[0] + (b[0] - a[0]) * t + nz * 0.5, y = a[1] + (b[1] - a[1]) * t + ny * 0.5;
+
+            all++;
+            if (cb_point_solid(parts, self, x, z, y))
+                hit++;
+        }
+    return all > 0 && hit == all;
+}
+
+static void cb_normal(const RgPrism *pr, unsigned i, double *nz, double *ny)
+{
+    const double *a = pr->poly[i], *b = pr->poly[(i + 1) % pr->nPoly];
+    double dz = b[0] - a[0], dy = b[1] - a[1], len = hypot(dz, dy);
+
+    *nz = len > RG_EPS ? dy / len : 0.0;
+    *ny = len > RG_EPS ? -dz / len : 0.0;
+}
+
+static bool cb_edge_open(const RgPartList *parts, unsigned self, const RgPrism *pr, unsigned i)
+{
+    double nz, ny;
+    bool drawn;
+
+    cb_normal(pr, i, &nz, &ny);
+    if (ny < -0.5 || nz > 0.3)          /* the ground, or a face toward the camera (the art may sit on a sheet in front) */
+        return false;
+    drawn = !(pr->skip & (1u << i)) && (pr->edges[i].kind != RG_EM_NONE || nz + ny > RG_EPS);
+    return !drawn && !cb_covered(parts, self, pr, i, nz, ny);
+}
+
+/* a texel of edge i's own projected rows, near the prism's west end (false when the edge is not projected) */
+static bool cb_texel(const RgPrism *pr, unsigned i, double out[2])
+{
+    const RgEdgeMat *e = &pr->edges[i];
+    const double *a = pr->poly[i], *b = pr->poly[(i + 1) % pr->nPoly];
+    double v;
+
+    if (pr->skip & (1u << i))
+        return false;
+    if (e->kind == RG_EM_FLAT) {
+        out[0] = e->flat[0];
+        out[1] = e->flat[1];
+        return true;
+    }
+    if (e->kind != RG_EM_PROJ && e->kind != RG_EM_NONE)
+        return false;
+    v = (a[0] - a[1] + b[0] - b[1]) / 2;
+    if (e->kind == RG_EM_PROJ && e->proj.hasLo && v < e->proj.lo + 0.5)
+        v = e->proj.lo + 0.5;
+    if (e->kind == RG_EM_PROJ && e->proj.hasHi && v > e->proj.hi - 0.5)
+        v = e->proj.hi - 0.5;
+    out[0] = pr->x0 + 2.5;
+    out[1] = v;
+    return true;
+}
+
+static void cb_flat(RgEdgeMat *e, const double uv[2])
+{
+    memset(e, 0, sizeof(*e));
+    e->kind = RG_EM_FLAT;
+    e->flat[0] = uv[0];
+    e->flat[1] = uv[1];
+}
+
+static RgEdgeMat cb_mirror(const RgEdgeMat *src, double axis)
+{
+    RgEdgeMat e = *src;
+
+    if (e.kind == RG_EM_NONE) {
+        memset(&e, 0, sizeof(e));
+        e.kind = RG_EM_PROJ;
+        e.proj = rg_proj();
+    }
+    if (e.kind == RG_EM_PROJ) {
+        e.proj.mirror = true;
+        e.proj.axis = axis;
+    } else if (e.kind == RG_EM_STRIP) {
+        e.strip.fromEnd = !e.strip.fromEnd;
+    }
+    return e;
+}
+
+typedef struct CbPoly {
+    double p[RG_PRISM_PTS][2];
+    RgEdgeMat e[RG_PRISM_PTS];
+    uint32_t skip;
+    unsigned n;
+    bool over;
+} CbPoly;
+
+static void cb_add(CbPoly *q, double z, double y, const RgEdgeMat *e, bool skip)
+{
+    if (q->n >= RG_PRISM_PTS) {
+        q->over = true;
+        return;
+    }
+    q->p[q->n][0] = z;
+    q->p[q->n][1] = y;
+    q->e[q->n] = *e;
+    if (skip)
+        q->skip |= 1u << q->n;
+    q->n++;
+}
+
+/* builds the mirrored outline; false (prism untouched) when the shape does not fit */
+static bool cb_mirror_prism(RgPrism *pr, unsigned v0, unsigned nChain, double eave, const double wallUv[2],
+                            const double roofUv[2], bool *steep)
+{
+    unsigned n = pr->nPoly, k, S = nChain, e;
+    double c[RG_PRISM_PTS + 1][2], zmin = 0.0, axis, ybot, rise = 0.0;
+    RgEdgeMat ce[RG_PRISM_PTS], wall, roof;
+    uint32_t cskip = 0;
+    CbPoly q;
+
+    memset(&q, 0, sizeof(q));
+    cb_flat(&wall, wallUv);
+    cb_flat(&roof, roofUv);
+    for (k = 0; k <= nChain; k++) {
+        unsigned i = (v0 + k) % n;
+
+        c[k][0] = pr->poly[i][0];
+        c[k][1] = pr->poly[i][1];
+        if (k < nChain) {
+            ce[k] = pr->edges[i];
+            if (pr->skip & (1u << i))
+                cskip |= 1u << k;
+        }
+    }
+    for (k = 0; k < n; k++)
+        if (pr->poly[k][0] < zmin)
+            zmin = pr->poly[k][0];
+    /* a vertical parapet run over the slope top S */
+    while (S > 1 && fabs(c[S][0] - c[S - 1][0]) < RG_EPS && c[S][1] > c[S - 1][1])
+        S--;
+    if (S == 0 || !(c[S][0] < c[S - 1][0] - RG_EPS && c[S][1] > c[S - 1][1] + RG_EPS))
+        return false;
+    rise = c[nChain][1] - c[S][1];
+    axis = c[S][0] - rise / 2;
+    ybot = c[0][1];
+    for (e = 0; e < S && c[e][1] < eave - RG_EPS; e++)
+        ;
+    if (e >= S)
+        e = S - 1;
+    for (k = 0; k < nChain; k++)
+        cb_add(&q, c[k][0], c[k][1], &ce[k], (cskip >> k) & 1u);
+    {
+        /* mirrored points c[S]' (parapet only) .. c[e]'; the edge into each is the mirror of the chain edge it copies */
+        double m[RG_PRISM_PTS + 1][2];
+        RgEdgeMat me[RG_PRISM_PTS + 1];
+        unsigned nm = 0;
+        double prev[2];
+
+        prev[0] = c[nChain][0];
+        prev[1] = c[nChain][1];
+        if (rise > RG_EPS) {
+            m[nm][0] = 2 * axis - c[S][0]; m[nm][1] = c[S][1];
+            me[nm] = roof;               /* R -> S' */
+            nm++;
+        }
+        for (k = S; k-- > e;) {
+            m[nm][0] = 2 * axis - c[k][0]; m[nm][1] = c[k][1];
+            me[nm] = cb_mirror(&ce[k], axis);
+            nm++;
+        }
+        cb_add(&q, prev[0], prev[1], &me[0], false);   /* R starts the edge into m[0] */
+        for (k = 0; k < nm; k++) {
+            double z = m[k][0], y = m[k][1];
+            bool last = k + 1 == nm;
+            double nzv, nyv, dz = z - prev[0], dy = y - prev[1], len = hypot(dz, dy);
+
+            nzv = len > RG_EPS ? dy / len : 0;
+            nyv = len > RG_EPS ? -dz / len : 0;
+            if (nzv + nyv > RG_EPS && me[k].kind != RG_EM_FLAT)
+                *steep = false;          /* a rear face shallower than 45 degrees would show over the ridge */
+            if (z < zmin - RG_EPS) {
+                double t = (zmin - prev[0]) / (z - prev[0]);
+
+                z = zmin;
+                y = prev[1] + (y - prev[1]) * t;
+                last = true;
+            }
+            if (last) {
+                /* the back wall: roof colour above the eave, wall colour below */
+                if (y > eave + RG_EPS && eave > ybot + RG_EPS) {
+                    cb_add(&q, z, y, &roof, false);
+                    cb_add(&q, z, eave, &wall, false);
+                } else if (y > ybot + RG_EPS) {
+                    cb_add(&q, z, y, y > eave + RG_EPS ? &roof : &wall, false);
+                }
+                cb_add(&q, z, ybot, &wall, true);   /* the bottom back to c[0] */
+                break;
+            }
+            cb_add(&q, z, y, &me[k + 1], false);
+            prev[0] = z;
+            prev[1] = y;
+        }
+    }
+    if (q.over || q.n < 3 || !rg_polygon_ccw((const double (*)[2])q.p, q.n))
+        return false;
+    for (k = 0; k < q.n; k++) {
+        pr->poly[k][0] = q.p[k][0];
+        pr->poly[k][1] = q.p[k][1];
+        pr->edges[k] = q.e[k];
+    }
+    pr->nPoly = q.n;
+    pr->skip = q.skip;
+    pr->closed = 0;
+    for (k = nChain; k < q.n; k++)
+        if (!(q.skip & (1u << k)))
+            pr->closed |= 1u << k;
+    pr->mirrored = true;
+    return true;
+}
+
+static bool cb_cross(const double *a, const double *b, const double *c, const double *d)
+{
+    double d1 = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+    double d2 = (b[0] - a[0]) * (d[1] - a[1]) - (b[1] - a[1]) * (d[0] - a[0]);
+    double d3 = (d[0] - c[0]) * (a[1] - c[1]) - (d[1] - c[1]) * (a[0] - c[0]);
+    double d4 = (d[0] - c[0]) * (b[1] - c[1]) - (d[1] - c[1]) * (b[0] - c[0]);
+
+    return ((d1 > RG_EPS && d2 < -RG_EPS) || (d1 < -RG_EPS && d2 > RG_EPS)) &&
+           ((d3 > RG_EPS && d4 < -RG_EPS) || (d3 < -RG_EPS && d4 > RG_EPS));
+}
+
+/* The fallback when a flat face would show through the art: from the top of the front chain R the outline runs down
+ * and back at 45 degrees (a face the front camera sees edge-on, so it never adds a pixel) to the ground or the
+ * footprint's back row, where a back wall drops the rest of the way. */
+static bool cb_chamfer_prism(RgPrism *pr, unsigned v0, unsigned nChain, double eave, const double wallUv[2],
+                             const double roofUv[2])
+{
+    unsigned n = pr->nPoly, k, j;
+    double zmin = 0.0, ybot, R[2], drop;
+    RgEdgeMat wall, roof;
+    CbPoly q;
+
+    memset(&q, 0, sizeof(q));
+    cb_flat(&wall, wallUv);
+    cb_flat(&roof, roofUv);
+    for (k = 0; k < n; k++)
+        if (pr->poly[k][0] < zmin)
+            zmin = pr->poly[k][0];
+    ybot = pr->poly[v0][1];
+    R[0] = pr->poly[(v0 + nChain) % n][0];
+    R[1] = pr->poly[(v0 + nChain) % n][1];
+    if (nChain == 0 || R[1] <= ybot + RG_EPS)
+        return false;
+    for (k = 0; k < nChain; k++) {
+        unsigned i = (v0 + k) % n;
+
+        cb_add(&q, pr->poly[i][0], pr->poly[i][1], &pr->edges[i], (pr->skip >> i) & 1u);
+    }
+    drop = R[1] - ybot;
+    if (R[0] - drop >= zmin - RG_EPS) {
+        cb_add(&q, R[0], R[1], R[1] > eave + RG_EPS ? &roof : &wall, false);
+        cb_add(&q, R[0] - drop, ybot, &wall, true);
+    } else {
+        double yc = R[1] - (R[0] - zmin);
+
+        cb_add(&q, R[0], R[1], R[1] > eave + RG_EPS ? &roof : &wall, false);
+        cb_add(&q, zmin, yc, yc > eave + RG_EPS ? &roof : &wall, false);
+        cb_add(&q, zmin, ybot, &wall, true);
+    }
+    if (q.over || q.n < 3 || !rg_polygon_ccw((const double (*)[2])q.p, q.n))
+        return false;
+    for (k = 0; k < q.n; k++)
+        for (j = k + 2; j < q.n; j++)
+            if (!(k == 0 && j == q.n - 1) && cb_cross(q.p[k], q.p[(k + 1) % q.n], q.p[j], q.p[(j + 1) % q.n]))
+                return false;
+    for (k = 0; k < q.n; k++) {
+        pr->poly[k][0] = q.p[k][0];
+        pr->poly[k][1] = q.p[k][1];
+        pr->edges[k] = q.e[k];
+    }
+    pr->nPoly = q.n;
+    pr->skip = q.skip;
+    pr->closed = 0;
+    for (k = nChain; k < q.n; k++)
+        if (!(q.skip & (1u << k)))
+            pr->closed |= 1u << k;
+    pr->chamfered = true;
+    return true;
+}
+
+static void cb_trim(RgPrism *pr, const RgBackDeny *d)
+{
+    unsigned k;
+
+    for (k = 0; d != NULL && k < pr->nPoly; k++)
+        if (pr->closed & (1u << k)) {
+            pr->edges[k].trim[0] = d->trim[k][0];
+            pr->edges[k].trim[1] = d->trim[k][1];
+        }
+}
+
+bool rg_close_backs(const RgSpec *s, RgPartList *parts, const RgBackDeny *deny)
+{
+    const RgSideCfg *table = s->kind == RG_SPEC_DIRECT ? (const RgSideCfg *)s->ext : NULL;
+    unsigned i;
+
+    for (i = 0; i < parts->n; i++) {
+        RgPart *p = rg_parts_at(parts, i);
+        RgPrism *pr;
+        const RgSideCfg *cfg = NULL;
+        bool open[RG_PRISM_PTS], raw[RG_PRISM_PTS], any = false, rest = true, steep = true;
+        uint32_t no = deny != NULL ? deny[i].mask : 0u;
+        unsigned n, k, v0 = 0, nChain;
+        double wallUv[2], roofUv[2], eave;
+
+        if (p == NULL || p->kind != RG_P_PRISM || rg_prism_is_sheet(&p->u.prism))
+            continue;
+        pr = &p->u.prism;
+        n = pr->nPoly;
+        for (k = 0; k < n; k++) {
+            raw[k] = cb_edge_open(parts, i, pr, k);
+            open[k] = raw[k] && !(no & (1u << k));
+            any = any || raw[k];
+        }
+        if (!any)
+            continue;
+        if (table != NULL) {
+            const RgSideCfg *t = table;
+
+            while (t->part != NULL && strncmp(p->name, t->part, strlen(t->part)) != 0 && !t->last)
+                t++;
+            if (t->part == NULL || strncmp(p->name, t->part, strlen(t->part)) == 0)
+                cfg = t;
+        }
+        for (k = 1; k < n; k++)
+            if (pr->poly[k][1] < pr->poly[v0][1] - RG_EPS ||
+                (fabs(pr->poly[k][1] - pr->poly[v0][1]) <= RG_EPS && pr->poly[k][0] > pr->poly[v0][0]))
+                v0 = k;
+        for (nChain = 0; nChain < n && !raw[(v0 + nChain) % n]; nChain++)
+            ;
+        for (k = nChain; k < n; k++) {
+            unsigned j = (v0 + k) % n;
+            double nz, ny;
+
+            cb_normal(pr, j, &nz, &ny);
+            if (!raw[j] && ny >= -0.5 && !(pr->skip & (1u << j)) &&
+                (pr->edges[j].kind != RG_EM_NONE || nz + ny > RG_EPS))     /* a drawn face behind the chain stays */
+                rest = false;
+        }
+        /* the eave: the side closure's, else where the front chain first leaves the vertical */
+        eave = pr->poly[v0][1];
+        for (k = 0; k < nChain; k++) {
+            const double *a = pr->poly[(v0 + k) % n], *b = pr->poly[(v0 + k + 1) % n];
+
+            if (fabs(b[0] - a[0]) > RG_EPS) {
+                eave = a[1];
+                break;
+            }
+        }
+        if (cfg != NULL) {
+            eave = cfg->eave;
+            wallUv[0] = (cfg->wall[0] + cfg->wall[2]) / 2; wallUv[1] = (cfg->wall[1] + cfg->wall[3]) / 2;
+            roofUv[0] = (cfg->roof[0] + cfg->roof[2]) / 2; roofUv[1] = (cfg->roof[1] + cfg->roof[3]) / 2;
+        } else {
+            bool w = false, r = false;
+
+            for (k = 0; k < nChain && !w; k++)
+                w = cb_texel(pr, (v0 + k) % n, wallUv);
+            for (k = nChain; k-- > 0 && !r;)
+                r = cb_texel(pr, (v0 + k) % n, roofUv);
+            if (!w && !r) {
+                for (k = 0; k < n && !w; k++)
+                    w = cb_texel(pr, k, wallUv);
+                if (!w) {
+                    wallUv[0] = pr->x0 + 0.5;
+                    wallUv[1] = 0.5;
+                }
+            }
+            if (!w)
+                memcpy(wallUv, roofUv, sizeof(wallUv));
+            if (!r)
+                memcpy(roofUv, wallUv, sizeof(roofUv));
+        }
+        if (!(no & CB_NO_MIRROR) && nChain > 0 && nChain < n && rest &&
+            cb_mirror_prism(pr, v0, nChain, eave, wallUv, roofUv, &steep)) {
+            cb_trim(pr, deny != NULL ? &deny[i] : NULL);
+            continue;
+        }
+        if ((no & CB_CHAMFER) && !(no & CB_NO_CHAMFER) && nChain < n && rest &&
+            cb_chamfer_prism(pr, v0, nChain, eave, wallUv, roofUv)) {
+            cb_trim(pr, deny != NULL ? &deny[i] : NULL);
+            continue;
+        }
+        for (k = 0; k < n; k++) {
+            const double *a = pr->poly[k], *b = pr->poly[(k + 1) % n];
+
+            if (!open[k])
+                continue;
+            cb_flat(&pr->edges[k], (a[1] + b[1]) / 2 > eave + RG_EPS ? roofUv : wallUv);
+            pr->skip &= ~(1u << k);
+            pr->closed |= 1u << k;
+        }
+        cb_trim(pr, deny != NULL ? &deny[i] : NULL);
+    }
+    return !parts->failed;
+}
+
+/* The front guard: a closure face the front camera can see (through a transparent texel of the art, or a rear slope
+ * shallower than 45 degrees) would change the front, so it is denied and the parts rebuilt: a mirrored prism falls back
+ * to flat faces, a flat face stays open. The raster is the ortho check's (same projection, same alpha rule). */
+static bool cb_name_edge(const char *tag, char *part, unsigned *edge)
+{
+    const char *e = strrchr(tag, '.');
+    size_t len;
+    unsigned v = 0;
+
+    if (e == NULL || e[1] != 'e' || e[2] < '0' || e[2] > '9')
+        return false;
+    len = (size_t)(e - tag);
+    if (len >= RG_NAME_LEN)
+        return false;
+    memcpy(part, tag, len);
+    part[len] = 0;
+    for (e += 2; *e >= '0' && *e <= '9'; e++)
+        v = v * 10u + (unsigned)(*e - '0');
+    *edge = v;
+    return true;
+}
+
+/* A closure face's pixels that the ortho check would judge (inside an exact rect, or anywhere when the spec has none; a
+ * transparent art pixel under a `behind` rect is allowed) break the front. When they all sit within CB_TRIM px of the
+ * face's ends (a transparent corner texel of the art) the face is trimmed there; otherwise it is denied. */
+#define CB_TRIM 8
+static bool cb_judged(const RgSpec *s, const RgImage *art, int x, int y)
+{
+    unsigned r;
+    bool clear;
+
+    if (x < 0 || y < 0 || x >= art->w || y >= art->h)
+        return false;
+    clear = art->px[((size_t)y * (size_t)art->w + (size_t)x) * 4u + 3u] < 128;
+    if (s->nExact == 0)
+        return true;
+    for (r = 0; r < s->nExact; r++) {
+        const RgExact *e = &s->exact[r];
+
+        if (x >= e->x0 && x < e->x1 && y >= e->y0 && y < e->y1 && !(clear && e->behind))
+            return true;
+    }
+    return false;
+}
+
+static int cb_guard(const RgSpec *s, const RgPartList *parts, const RgImage *art, RgBackDeny *deny)
+{
+    enum { M = 32 };
+    RgMesh mesh;
+    RgRaster ras;
+    int16_t *lo = NULL, *hi = NULL;
+    unsigned i, nNames, k;
+    int added = 0, x, y;
+
+    rg_mesh_init(&mesh);
+    if (!rg_parts_emit(parts, &mesh) || mesh.failed || !rg_raster_init(&ras, art->w + 2 * M, art->h + M)) {
+        rg_mesh_free(&mesh);
+        return -1;
+    }
+    for (i = 0; i < mesh.n; i++) {
+        const RgTri *t = &mesh.t[i];
+        double vs[3][6];
+
+        if (t->flags & (RG_TAG_DEPTH | RG_TAG_BEHIND))
+            continue;
+        for (k = 0; k < 3; k++) {
+            vs[k][0] = t->p[k].x + M;
+            vs[k][1] = t->p[k].z - t->p[k].y + M;
+            vs[k][2] = t->p[k].y + t->p[k].z;
+            vs[k][3] = 1.0;
+            vs[k][4] = t->p[k].u;
+            vs[k][5] = t->p[k].v;
+        }
+        rg_raster_draw(&ras, vs, art, t->shade, (int16_t)t->tag);
+    }
+    nNames = mesh.nNames;
+    lo = (int16_t *)malloc((nNames > 0 ? nNames : 1u) * sizeof(int16_t));
+    hi = (int16_t *)malloc((nNames > 0 ? nNames : 1u) * sizeof(int16_t));
+    if (lo == NULL || hi == NULL) {
+        free(lo);
+        free(hi);
+        rg_raster_free(&ras);
+        rg_mesh_free(&mesh);
+        return -1;
+    }
+    for (k = 0; k < nNames; k++) {
+        lo[k] = INT16_MAX;
+        hi[k] = INT16_MIN;
+    }
+    for (y = 0; y < art->h; y++)
+        for (x = 0; x < art->w; x++) {
+            int16_t o = ras.owner[(size_t)(y + M) * (size_t)ras.w + (size_t)(x + M)];
+
+            if (o < 0 || (unsigned)o >= nNames || !cb_judged(s, art, x, y))
+                continue;
+            if (x < lo[o]) lo[o] = (int16_t)x;
+            if (x > hi[o]) hi[o] = (int16_t)x;
+        }
+    for (k = 0; k < nNames; k++) {
+        char part[RG_NAME_LEN];
+        unsigned edge, j;
+
+        if (lo[k] > hi[k] || !cb_name_edge(mesh.names[k], part, &edge) || edge >= RG_PRISM_PTS)
+            continue;
+        for (j = 0; j < parts->n; j++) {
+            const RgPart *p = rg_parts_at(parts, j);
+            const RgPrism *pr;
+            RgBackDeny *d = &deny[j];
+            double t0, t1;
+
+            if (p == NULL || p->kind != RG_P_PRISM || strcmp(p->name, part) != 0)
+                continue;
+            pr = &p->u.prism;
+            if (!(pr->closed & (1u << edge)) || hi[k] < pr->x0 - 0.5 || lo[k] > pr->x1 - 0.5)
+                continue;
+            /* the columns to leave out: from each end of the face to its farthest judged pixel there; -1 when one sits
+             * in the middle */
+            t0 = t1 = 0;
+            for (y = 0; y < art->h && t0 >= 0; y++)
+                for (x = lo[k]; x <= hi[k]; x++) {
+                    if (ras.owner[(size_t)(y + M) * (size_t)ras.w + (size_t)(x + M)] != (int16_t)k ||
+                        x < pr->x0 - 0.5 || x > pr->x1 - 0.5 || !cb_judged(s, art, x, y))
+                        continue;
+                    if (x < pr->x0 + CB_TRIM) {
+                        if (x + 1 - pr->x0 > t0) t0 = x + 1 - pr->x0;
+                    } else if (x >= pr->x1 - CB_TRIM) {
+                        if (pr->x1 - x > t1) t1 = pr->x1 - x;
+                    } else {
+                        t0 = -1;
+                        break;
+                    }
+                }
+            if ((pr->edges[edge].kind == RG_EM_FLAT || pr->edges[edge].kind == RG_EM_PROJ) && t0 >= 0 && t1 >= 0 &&
+                t0 <= (pr->x1 - pr->x0) / 4 && t1 <= (pr->x1 - pr->x0) / 4 &&
+                (t0 > d->trim[edge][0] || t1 > d->trim[edge][1])) {
+                if (t0 > d->trim[edge][0]) d->trim[edge][0] = (uint8_t)t0;
+                if (t1 > d->trim[edge][1]) d->trim[edge][1] = (uint8_t)t1;
+            } else if (pr->mirrored) {
+                if (d->mask & CB_NO_MIRROR)
+                    continue;
+                d->mask |= CB_NO_MIRROR;
+                memset(d->trim, 0, sizeof(d->trim));
+            } else if (pr->chamfered) {
+                if (d->mask & CB_NO_CHAMFER)
+                    continue;
+                d->mask |= CB_NO_CHAMFER;
+                memset(d->trim, 0, sizeof(d->trim));
+            } else {
+                if (d->mask & (1u << edge))
+                    continue;
+                d->mask |= 1u << edge;
+                if (!(d->mask & CB_NO_CHAMFER) && !(d->mask & CB_CHAMFER)) {
+                    d->mask |= CB_CHAMFER;
+                    memset(d->trim, 0, sizeof(d->trim));
+                }
+            }
+            added++;
+        }
+    }
+    free(lo);
+    free(hi);
+    rg_raster_free(&ras);
+    rg_mesh_free(&mesh);
+    return added;
+}
+
+static bool cb_build(const RgSpec *s, RgPartList *parts, const RgBackDeny *deny)
+{
+    return s->parts(s, s->arg0, s->arg1, parts) && rg_close_backs(s, parts, deny) && rg_close_sides(s, parts) &&
+           !parts->failed;
+}
+
+bool rg_spec_parts(const RgSpec *s, const RgImage *art, RgPartList *parts)
+{
+    RgBackDeny *deny = NULL;
+    unsigned round, i;
+    bool ok;
+
+    if (s->parts == NULL)
+        return false;
+    ok = cb_build(s, parts, NULL);
+    for (round = 0; ok && art != NULL && round < 16u; round++) {
+        int added;
+
+        if (deny == NULL && (deny = (RgBackDeny *)calloc(parts->n > 0 ? parts->n : 1u, sizeof(RgBackDeny))) == NULL)
+            return false;
+        added = cb_guard(s, parts, art, deny);
+        if (added < 0) {
+            ok = false;
+            break;
+        }
+        if (added == 0)
+            break;
+        rg_parts_free(parts);
+        rg_parts_init(parts);
+        ok = cb_build(s, parts, deny);
+    }
+    if (ok && rg_close_backs_log != NULL)
+        for (i = 0; i < parts->n; i++) {
+            const RgPart *p = rg_parts_at(parts, i);
+            const char *what = NULL;
+            bool trimmed = false;
+            unsigned k;
+
+            if (p == NULL || p->kind != RG_P_PRISM)
+                continue;
+            for (k = 0; deny != NULL && k < RG_PRISM_PTS; k++)
+                trimmed = trimmed || deny[i].trim[k][0] || deny[i].trim[k][1];
+            if (p->u.prism.mirrored)
+                what = trimmed ? "rear slope mirrored (ends trimmed for the front)" : "rear slope mirrored";
+            else if (p->u.prism.chamfered)
+                what = trimmed ? "45-degree back (ends trimmed for the front)" : "45-degree back (a flat face would show)";
+            else if (p->u.prism.closed != 0)
+                what = deny != NULL && (deny[i].mask & CB_EDGES) != 0 ? "flat faces (some denied: the front would change)"
+                       : trimmed ? "flat faces (ends trimmed for the front)" : "flat faces";
+            else if (deny != NULL && (deny[i].mask & CB_EDGES) != 0)
+                what = "left open (closing it would change the front)";
+            if (what != NULL)
+                rg_close_backs_log(s->name, p->name, what);
+        }
+    free(deny);
+    return ok;
 }

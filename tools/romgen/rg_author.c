@@ -670,6 +670,64 @@ static bool build_one(const RgWorld *w, const RgSpec *spec, RgBuildModels *ms)
     return true;
 }
 
+/* look L6: the back gate's rays as a picture, one panel per pitch (30, 60, 90 degrees from behind), x across, the ray's
+ * height up: grey = closed, magenta = open (the ray looked into the building), dark = no solid. */
+#define OPEN_GRID 1024
+typedef struct { uint8_t *g; int nx, nw; } OpenGrid;
+
+static void open_cb(void *ctx, unsigned view, int ix, int iw, int state)
+{
+    OpenGrid *og = (OpenGrid *)ctx;
+
+    if (view >= RG_BACK_VIEWS || ix < 0 || iw < 0 || ix >= OPEN_GRID || iw >= OPEN_GRID)
+        return;
+    og->g[((size_t)view * OPEN_GRID + (size_t)iw) * OPEN_GRID + (size_t)ix] = (uint8_t)(state + 1);
+    if (ix + 1 > og->nx) og->nx = ix + 1;
+    if (iw + 1 > og->nw) og->nw = iw + 1;
+}
+
+static int preview_open(const char *outDir, const char *specName, const RgBuildModel *m)
+{
+    RgPartList parts;
+    RgBackResult br;
+    OpenGrid og;
+    RgImage img;
+    char name[128];
+    int rc = 1;
+    unsigned v;
+
+    og.g = (uint8_t *)calloc((size_t)RG_BACK_VIEWS * OPEN_GRID * OPEN_GRID, 1);
+    og.nx = og.nw = 0;
+    rg_parts_init(&parts);
+    if (og.g != NULL && rg_spec_parts(m->spec, &m->art, &parts) && rg_back_check(&parts, &m->mesh, &br, open_cb, &og) &&
+        og.nx > 0 && rg_img_new(&img, (og.nx + 4) * (int)RG_BACK_VIEWS * 2, og.nw * 2)) {
+        int x, y;
+
+        for (v = 0; v < RG_BACK_VIEWS; v++)
+            for (y = 0; y < og.nw * 2; y++)
+                for (x = 0; x < (og.nx + 4) * 2; x++) {
+                    int gx = x / 2, gw = og.nw - 1 - y / 2;
+                    uint8_t s = gx < og.nx ? og.g[((size_t)v * OPEN_GRID + (size_t)gw) * OPEN_GRID + (size_t)gx] : 0;
+                    int px = (int)v * (og.nx + 4) * 2 + x;
+
+                    if (s == 3)
+                        px_set(&img, px, y, 255, 0, 200, 255);
+                    else if (s == 2)
+                        px_set(&img, px, y, 170, 170, 170, 255);
+                    else if (s == 1)
+                        px_set(&img, px, y, 40, 40, 40, 255);
+                    else
+                        px_set(&img, px, y, 90, 0, 90, 255);
+                }
+        snprintf(name, sizeof(name), "%s_open.png", specName);
+        rc = write_png(outDir, name, &img);
+        rg_img_free(&img);
+    }
+    rg_parts_free(&parts);
+    free(og.g);
+    return rc;
+}
+
 int rg_author_preview(const RgWorld *w, const char *outDir, const RgSpec *spec)
 {
     RgBuildModels ms;
@@ -748,10 +806,13 @@ int rg_author_preview(const RgWorld *w, const char *outDir, const RgSpec *spec)
     rc |= write_png(outDir, name, &diff);
     rg_img_free(&ortho); rg_img_free(&diff); rg_raster_free(&ras);
     {
-        static const struct { const char *suffix; double az, pitch; } views[3] = {{"fl", -35.0, 40.0}, {"fr", 35.0, 40.0}, {"top", 0.0, 40.0}};
+        /* look L6: "back" stands north of the model (azimuth 180) and "high" looks down steeply from the south, so a roof
+         * that stops at its ridge or a missing back wall shows */
+        static const struct { const char *suffix; double az, pitch; } views[5] = {
+            {"fl", -35.0, 40.0}, {"fr", 35.0, 40.0}, {"top", 0.0, 40.0}, {"back", 180.0, 35.0}, {"high", 0.0, 70.0}};
         unsigned v;
 
-        for (v = 0; v < 3; v++) {
+        for (v = 0; v < 5; v++) {
             RgImage ob;
 
             if (!oblique(&m->mesh, &m->art, views[v].az, views[v].pitch, &ob)) {
@@ -764,6 +825,8 @@ int rg_author_preview(const RgWorld *w, const char *outDir, const RgSpec *spec)
             rg_img_free(&ob);
         }
     }
+    if (m->spec->parts != NULL && m->comp == NULL && m->prop == NULL && m->spec->kind != RG_SPEC_INTERIOR)
+        rc |= preview_open(outDir, spec->name, m);
     rg_models_free(&ms);
     return rc;
 }
@@ -844,6 +907,14 @@ static bool consumer_roundtrip(const RgWorld *w, const RgBuildModels *one, const
 }
 #endif
 
+/* look L6: what the back closure did to each prism, in the check's log */
+static FILE *g_closeFp;
+static void close_log(const char *spec, const char *part, const char *what)
+{
+    (void)spec;
+    fprintf(g_closeFp, "  close-back %s: %s\n", part, what);
+}
+
 int rg_author_check(const RgWorld *w, const RgSpec *spec, int expect, FILE *fp)
 {
     RgBuildModels ms;
@@ -885,15 +956,33 @@ int rg_author_check(const RgWorld *w, const RgSpec *spec, int expect, FILE *fp)
         fprintf(fp, "    %s along %.4f down %.4f shear %.4f\n", bad[k].tag, bad[k].along, bad[k].down, bad[k].shear);
     if (nBad)
         pass = false;
-    if ((w->prof->game == GP_FIRERED || w->prof->game == GP_LEAFGREEN) && spec->parts != NULL) {
-        /* Phase 34: the Kanto table only. Emerald's builders are pinned bytes and never face this gate. */
+    if (m->spec->parts != NULL && m->comp == NULL && m->prop == NULL && m->spec->kind != RG_SPEC_INTERIOR) {
+        /* The parts as shipped (rg_spec_parts: builder, back closure, side closure). The side gate is the Kanto table's
+         * (Phase 34); the back gate (look L6) judges every outdoor building of every game. */
         RgPartList parts;
+        RgBackResult br;
         unsigned side;
-        bool ran;
+        bool ran, kanto = w->prof->game == GP_FIRERED || w->prof->game == GP_LEAFGREEN;
 
         rg_parts_init(&parts);
-        ran = spec->parts(spec, spec->arg0, spec->arg1, &parts);
-        for (side = 0; side < 2u; side++) {
+        g_closeFp = fp;
+        rg_close_backs_log = close_log;
+        ran = rg_spec_parts(m->spec, &m->art, &parts);
+        rg_close_backs_log = NULL;
+        if (!ran || !rg_back_check(&parts, &m->mesh, &br, NULL, NULL)) {
+            fprintf(fp, "  FAIL back: check could not run\n");
+            pass = false;
+        } else if (!br.applicable) {
+            fprintf(fp, "  back: no solid part (n/a)\n");
+        } else {
+            bool bad = br.open > RG_BACK_TOL(br.expected);
+
+            fprintf(fp, "  back: %u of %u rays open (tolerance %u)%s\n", br.open, br.expected, RG_BACK_TOL(br.expected),
+                    bad ? "  FAIL: open back or top" : "");
+            if (bad)
+                pass = false;
+        }
+        for (side = 0; side < 2u && kanto; side++) {
             RgSideResult sr;
             const char *nm = side ? "east" : "west";
 

@@ -126,7 +126,7 @@ roofs are not there. The fences and rocks are also flat, not only flowers and gr
 
 | # | What Guy circled | Cause (lead's reading) | Fix direction | Size |
 |---|---|---|---|---|
-| L6 | Roofs that stop at the ridge: Five Island lilac houses, Four Island Center + orange/lilac houses, Resort Gorgeous house | The GBA art shows only the FRONT roof slope; the recipes extrude what is visible, so the back half (ridge + rear slope, behind the map's top row of the building) is missing or ends in a flat slab. | Per recipe family (`sv_gable`, `k_center`, the K-house builders): mirror the front slope to a rear slope about the ridge, colour/texture from the front slope rows; add a `check` rule + preview angle that looks from behind/above so a missing rear slope fails. Audit all 85 Kanto models + the Emerald set. | medium |
+| L6 (DONE, see below) | Roofs that stop at the ridge: Five Island lilac houses, Four Island Center + orange/lilac houses, Resort Gorgeous house | The GBA art shows only the FRONT roof slope; the recipes extrude what is visible, so the back half (ridge + rear slope, behind the map's top row of the building) is missing or ends in a flat slab. | Per recipe family (`sv_gable`, `k_center`, the K-house builders): mirror the front slope to a rear slope about the ridge, colour/texture from the front slope rows; add a `check` rule + preview angle that looks from behind/above so a missing rear slope fails. Audit all 85 Kanto models + the Emerald set. | medium |
 | L5+ | Side walls "not perfect" (Five Island right house: plain purple end) | Ends are closed (side-closure check) but plain colour. | Already L5: dress ends from facade art (gable triangle, wall + window texture). | medium |
 | L7 (DONE, see below) | Trainer Tower: no entrance, foot not seated (Guy: "there is no enterence to the battle tower") | The model HAS a plinth + porch with a door (`ks3-preview-k_trainer_tower-flfr.png`), but in-game (`guy-1007/88c9ed28-image.jpg`, KS3's `ks3-fr-trainertower.png`) the tower face runs straight into flat grass: the plinth/porch rows are not drawn or sit below ground. Suspect: placement clip / ground offset of the lower exact rects, or rect rows below the placement. | Reproduce at 3/62 (59,9), compare the placement rect vs the model's lower parts, fix so the porch + door stand on the plinth in front of the tower; add a test that the porch prism is emitted at placement. | small |
 | L8 | Flat fences (Resort Gorgeous, Pallet), rocks (sea rocks, boulders), flowers | No prop geometry for these metatiles: they render as ground art. | A prop part like the L1 shrub card: fence = thin upright card along the fence line (posts/rails from the upper layer), rocks = low rounded card/box, flowers = small upright card (check layer split; L2 reports it). Per-game tables like GpShrub. | medium |
@@ -234,3 +234,71 @@ Device fallback (recommended, not implemented): JobFinish logs an overflow only 
 a second, smaller overflow is silent. Log every refusing chunk once (map + chunk + refused count). And reserve the tail
 of the scratch for models (stop terrain decoration, trees/grass, at scratch minus the chunk's model vertices, which
 `VoxelBuildings` knows before JOB_TREES) so an overflow costs grass, not a building.
+
+## L6 DONE (2026-10-07, branch worktree-agent-abd284018bc80a3bd)
+
+Roofs that stop at the ridge. The art shows only a building's front; the recipes extruded what they saw, so from behind
+or above the camera looked into the building. Diagnosis per family (what the back was before):
+- **Profile gables** (`sv_gable`, the Sevii lilac/orange houses, most Kanto houses, Lorelei, Rocket warehouse): the
+  prism stopped at the ridge, rear slope and back wall missing; from behind the facade showed through.
+- **Flat blocks** (`sv_block`, Silph, Celadon Dept, Trainer Tower, the harbors): top drawn, back wall skipped.
+- **Hip roofs** (Emerald houses, Pallet houses): closed except the ridge's back face (the window/light showed through).
+- **Viridian gable**: rear slope present, the fascia and body back open.
+- **k_gym family**: porch top and a 2 px body ledge open.
+- **Frustums** (Center, Mart, One Network): already closed, unchanged.
+
+Fix, one pass for every family (`rg_bspecs.c rg_close_backs`, run by `rg_spec_parts` after the builder, before
+`rg_close_sides`; the device generator and `author check` go through the same function):
+- A roof chain is **mirrored about its ridge**: the rear slope takes the front slope's own rows (`RgProj.mirror`), a
+  back wall down from the eave. 65 FR prisms.
+- Other open edges (not drawn, not ground-facing, not front-facing, not covered by another part's solid) get a **flat
+  face** (`RG_EM_FLAT`, colour from the wall/roof patch or the neighbouring edge's texel). 159 FR prisms.
+- **Front guard**: the model is rasterised front-on; any closure pixel the ortho gate would judge (art has transparent
+  texels there) escalates: trim the face ends (<= 8 px, <= 1/4 of the width; 8 prisms) -> flat instead of mirror -> a
+  **45-degree back** from the front top (edge-on to the front camera; 32 prisms: cranes, Cinnabar lab, gym porch) ->
+  leave that edge open (0 needed). Ortho exact rects stay 0/0/0 on every model (258 lines, identical before/after).
+- Hip roofs: the ridge gets its back face (`rg_geom.c`).
+
+Check (`rg_bcheck.c rg_back_check`): parallel rays from the north at 30, 60 and 90 degrees down into each part's solid
+(`rg_part_section`); a ray is open when no face lies within 1 px of where it entered the solid. FAIL when open >
+`RG_BACK_TOL` (= the side check's: max(expected / 50, 8)). Preview adds `back` and `high` views and an `_open.png`
+overlay. On the pre-L6 builder it fails FR 79 / 85 models and Emerald 7. After: FR 85 / 85 and LG 85 / 85 PASS (back
+open 0 on all but `k_celadon_dept`, 552 of 79256 rays, tolerance 1585: the slot between its wings), Emerald back open 0
+on all 15 models with a solid; Emerald `check all` 30 PASS / 4 FAIL, the same pre-existing four (hedge, mart, lab,
+rustboro_gym: "the placement's cell does not resolve").
+
+Budget: heaviest FR model 996 -> 1200 vertices, Emerald 2610 (limit 3300); `test_romgen_budget` 0 failures, worst FR
+chunk 2748 of 9344.
+
+Back views reviewed (`evidence/l6-preview-*.png`: before back / high, after back / high / front):
+- `k_center`, `k_mart`: unchanged, already closed.
+- `k_four_house` (lilac), `k_four_house_orange`, `k_five_house_edge`, `k_sevii_house`: a mirrored rear slope and back
+  wall where the facade showed through.
+- `k_lorelei_house`: the parapet gets a 45-degree back, the roof a rear slope.
+- `k_pallet_house` (hip): unchanged, already closed.
+- `k_celadon_dept`: wings and main block get back walls.
+- `k_saffron_silph`: a tall grey back wall.
+- `k_pokemon_tower`: a stepped closed back.
+- `k_trainer_tower`: a closed blue back.
+- `k_gym`: porch and ledge closed.
+- `k_cinnabar_lab`: closed; the 70-degree high view shows a dark olive chamfer wedge behind the barrel (edge-on at the
+  in-game pitches).
+- `k_two_harbor`: grey back walls behind the cranes. `k_rocket_warehouse`, `k_viridian_house`, `k_cerulean_house_a`:
+  rear slope + back wall.
+- Emerald `littleroot_house_w`, `littleroot_lab`, `oldale_house`, `briney_house`, `kit_house_4`: the ridge back is
+  solid (the light showed through it). `devon_corporation`: unchanged.
+
+Pins: FR = LG buildings.bin e9f54cdd -> 55cbd83ca1bdda43d09391cb6d1e602bd52cf94e (4660816 -> 4736560 B); Emerald
+ec2f3292 -> 6d321c3af1c1c72b91173e6b2c277db5cad708e7 (7870828 -> 7873564 B, 79368 -> 79482 vertices, nTris 25130 ->
+25168). Unchanged: Emerald regions 007a370f, signposts 38515605, relief 21a837f0, `--relief ledges` eb25a383; FRLG
+regions 3716874d, signposts ba2fde45, relief 32c24146.
+
+Azahar (private instance k, New 3DS, main vs L6 buildings.bin, everything else identical; `evidence/l6-*-diff.png` =
+before | after | changed pixels, with a 3x zoom):
+- Four Island (3/15): the orange house's east gable end was cut off vertically at the ridge; now a full gable sloping
+  back (487 px changed).
+- Five Island (3/16): the lilac house's west end was a sliver with a spike at the ridge; now a full gable (699 px,
+  incl. a moved NPC).
+- Resort Gorgeous (3/54), Pallet, Emerald Littleroot: identical apart from NPCs/sparkles (20 / 100 / 760 px): the
+  rear halves are out of the in-game camera's view, and the front did not change.
+- voxel.log: no "chunk scratch full" in any of the 10 runs; FR Four Island loaded 15804 -> 18948 building vertices.

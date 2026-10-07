@@ -43,4 +43,19 @@ typedef struct RgSideResult { bool applicable; unsigned expected, open; } RgSide
 bool rg_side_check(const RgPartList *parts, const RgMesh *m, bool east, RgSideResult *out);
 #define RG_SIDE_TOL(expected) ((expected) / 50u > 8u ? (expected) / 50u : 8u)
 
+/* Back closure (look L6). The GBA art shows a building's front only, so a recipe that extruded what it saw can stop at
+ * the ridge: the roof's top or the back wall missing, the room inside open to a camera behind or above. The solids are
+ * the parts' own volumes: a non-sheet prism's (z, y) section over x0..x1, a hip roof (box, hip, ridge), a frustum's
+ * walls. Parallel rays come from behind the model (north, the side the art never shows) at RG_BACK_VIEWS pitches
+ * (rg_back_pitch: 30 and 60 degrees below the horizon, and straight down), one per px of x and of the view's height. A
+ * ray that gets 0.75 px inside some solid is `expected`; it is `open` when no face of the model lies within 1 px (along
+ * the ray) of the point where it entered that solid: the camera would look into the building. Passes when
+ * open <= RG_BACK_TOL(expected). `cb` (optional) gets every ray: state 0 = no solid, 1 = closed, 2 = open. */
+#define RG_BACK_VIEWS 3u
+extern const double rg_back_pitch[RG_BACK_VIEWS];
+typedef struct RgBackResult { bool applicable; unsigned expected, open; } RgBackResult;
+typedef void (*RgBackRayFn)(void *ctx, unsigned view, int ix, int iw, int state);
+bool rg_back_check(const RgPartList *parts, const RgMesh *m, RgBackResult *out, RgBackRayFn cb, void *ctx);
+#define RG_BACK_TOL(expected) RG_SIDE_TOL(expected)
+
 #endif

@@ -100,4 +100,18 @@ typedef struct RgSideCfg {
 /* True (a no-op) for a spec without a RgSideCfg. False when a band could not be built. */
 bool rg_close_sides(const RgSpec *s, RgPartList *parts);
 
+/* look L6: closes every solid prism the art left open at the back (a rear slope mirrored about the ridge, else flat
+ * faces over the open edges). See rg_bspecs.c. rg_close_backs_log, when set, hears what each prism got. */
+/* deny (NULL = none), one per part: mask bit i = leave edge i open, bit 31 = do not mirror; trim = px of a closure
+ * face left out at x0, x1 (rg_spec_parts' front guard fills it). */
+typedef struct RgBackDeny { uint32_t mask; uint8_t trim[RG_PRISM_PTS][2]; } RgBackDeny;
+bool rg_close_backs(const RgSpec *s, RgPartList *parts, const RgBackDeny *deny);
+extern void (*rg_close_backs_log)(const char *spec, const char *part, const char *what);
+
+/* A building spec's finished part list, as rg_build_models emits it: the builder, then rg_close_backs, then
+ * rg_close_sides. The author check rebuilds the parts through this so it judges what ships. */
+/* With `art` (the model's art), closure faces the front camera would see are denied and the parts rebuilt (look L6:
+ * the front never changes). */
+bool rg_spec_parts(const RgSpec *s, const RgImage *art, RgPartList *parts);
+
 #endif

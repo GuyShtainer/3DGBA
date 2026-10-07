@@ -788,3 +788,28 @@ M4 (Sevii Islands) is complete: every One to Seven Island outdoor map, Navel Roc
   trip, identical on the pre-change build: pre-existing). Device `make -j8` links 3DGBA.3dsx.
 - Azahar: Tower and Power Plant drawn whole, no "chunk scratch full" in voxel.log (before: 17844 + 234 refused on 3/4,
   6390 on 3/28). Evidence `look-backlog/evidence/budget-*.png`.
+
+## Look L6 closed backs (2026-10-07)
+
+- Problem: roofs stopping at the ridge (Guy's Four / Five Island, Resort Gorgeous shots). Families before: profile
+  gables open behind the ridge (no rear slope, no back wall); flat blocks with a skipped back wall; hip roofs open only
+  at the ridge's back; Viridian gable's fascia/body back open; k_gym porch top + 2 px ledge open; frustums closed.
+- Builder: `rg_close_backs` (rg_bspecs.c), inside `rg_spec_parts` (builder -> close backs -> close sides), shared by
+  `rg_build_models` and `author check`. Mirror the roof chain about its ridge (`RgProj.mirror/axis`, STRIP fromEnd
+  toggled, back wall split at the eave; `RG_PRISM_PTS` 8 -> 12); else `RG_EM_FLAT` faces on open edges; front guard
+  (ortho raster of the closure faces): trim ends (`RgEdgeMat.trim`, <= 8 px and <= 1/4 width) -> no mirror -> 45-degree
+  chamfer -> leave open, up to 16 rounds. Hip ridge back face in rg_geom.c. FR closures: 65 mirrored, 159 flat, 8
+  trimmed, 32 chamfered, 0 left open; Emerald only the hip ridge backs.
+- Check: `rg_back_check` (rg_bcheck.c), rays from the north at 30/60/90 degrees into `rg_part_section` solids, open
+  when no face within 1 px of the entry; tolerance `RG_BACK_TOL` = `RG_SIDE_TOL`. Pre-L6 builder fails FR 79/85,
+  Emerald 7. After: `check all` FR 85/85, LG 85/85 PASS; Emerald 30/34 (the same 4 pre-existing round-trip FAILs).
+  All 258 exact-rect lines 0/0/0 before and after. Budget: FR max model 996 -> 1200 vertices, Emerald 2610 (<= 3300).
+- Pins: FR = LG buildings.bin e9f54cdd -> 55cbd83ca1bdda43d09391cb6d1e602bd52cf94e; Emerald ec2f3292 ->
+  6d321c3af1c1c72b91173e6b2c277db5cad708e7 (7870828 -> 7873564 B, 79368 -> 79482 vertices, expand nTris 25130 ->
+  25168). Regions / signposts / relief (both games, both relief modes) unchanged.
+- `make -C tools/romgen test`: 28 suites, 0 failures (test_romgen_budget 9820 checks, frlg_buildings 4283, expand 1512,
+  export 573302, interior 851); `vtest` (with the ROM env): 9 suites, 0 failures (test_voxel_frlg 994 checks, 0
+  skipped). Device `make -j8` links 3DGBA.3dsx (no warnings from romgen files).
+- Azahar (instance k, EMUTEST_STATE_DIR=/tmp/l6, New 3DS, main vs L6 buildings.bin): Four Island orange house and Five
+  Island lilac house gable ends become full gables; Resort Gorgeous, Pallet, Littleroot unchanged (rear halves out of
+  view, front unchanged). No "chunk scratch full" in any run. Evidence `look-backlog/evidence/l6-*.png`.
