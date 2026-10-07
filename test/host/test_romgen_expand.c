@@ -338,12 +338,13 @@ static void TestRealRom(void)
         CHECK(buf && rg_buildings_write(&w, &ms, buf, sz, &st) == sz);
         printf("buildings.bin: %zu bytes, %u pages, %u models, %u pageModels, %u vertices, %u placements, %u masks, %u variants\n",
                sz, st.pages, st.models, st.pageModels, st.vertices, st.placements, st.masks, st.variants);
-        CHECK(st.err == RG_OK && st.models == 311 && st.variants == 66 && st.variants <= 128);
+        CHECK(st.err == RG_OK && st.models == 311 && st.variants == 75 && st.variants <= 128);
         /* 7898476 B / 80520 vertices -> 7870828 / 79368 (1152 vertices = 6 x 64 triangles): the flat-cap merge;
          * -> 7873564 / 79482 (114 vertices = 38 triangles): look L6: the hip-roof ridge gets its back face, 38 triangles over the hip-roofed models;
          * -> 8475268 / 87360, 2918 placements, 59 masks: Phase 36 H1 (Dewford, Mauville, Verdanturf, Fallarbor, Slateport): 21 direct models, 24 placements;
-         * -> 8606220 / 89364, 2931 placements, 68 masks, 655 pageModels: Phase 36 H2 (Fortree, Lavaridge, Pacifidlog): 4 models, 13 placements */
-        CHECK(sz == 8606220u && st.pages == 118 && st.placements == 2931u && st.vertices == 89364u && st.masks == 68u);
+         * -> 8606220 / 89364, 2931 placements, 68 masks, 655 pageModels: Phase 36 H2 (Fortree, Lavaridge, Pacifidlog): 4 models, 13 placements;
+         * -> 8606276, 66 -> 75 variants: Phase 36 H2, a building's water cells draw the sea under the roof (quarters 0xF variants), 9 variants */
+        CHECK(sz == 8606276u && st.pages == 118 && st.placements == 2931u && st.vertices == 89364u && st.masks == 68u);
         CHECK(memcmp(buf, "VXB7", 4) == 0 && sz % 4 == 0);
         {   /* the vendored consumer reads it back: every variant, every owned model's layout page */
             VoxelMapInstance inst;

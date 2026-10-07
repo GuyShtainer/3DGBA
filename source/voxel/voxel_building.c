@@ -31,6 +31,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "gba_game.h"
 /* Host tests define PORT_LOG away rather than link the console's logger. */
 #ifndef PORT_LOG
 #include "ctr_shims.h"
@@ -419,6 +420,18 @@ static long ModelCell(const VoxelMapInstance *inst, int x, int y, unsigned *plac
     return -1;
 }
 
+/* The tileset a layout draws `metatile` from. A variant is one tileset's
+ * metatile: two secondary tilesets give the same id different drawings
+ * (FireRed's Sevii harbours), so a cell takes only its own tileset's. */
+static const struct Tileset *TilesetOf(unsigned layoutId, unsigned metatile)
+{
+    const struct MapLayout *layout = Port_GetMapLayoutById((u16)layoutId);
+
+    if (layout == NULL)
+        return NULL;
+    return metatile < VXP(nPrimMetatiles) ? layout->primaryTileset : layout->secondaryTileset;
+}
+
 bool VoxelBuildings_CellAt(const VoxelMapInstance *inst, int x, int y,
                            int *groundMetatile, float *top)
 {
@@ -430,14 +443,19 @@ bool VoxelBuildings_CellAt(const VoxelMapInstance *inst, int x, int y,
     if (groundMetatile != NULL)
     {
         *groundMetatile = LayoutPlacements(inst, &count)[i].ground;
-        if (*groundMetatile == (int)OWN_GROUND)
+        /* the cell's own drawing, less what the model stands for: every
+         * cell of a props model, and a building's cells that are water (a
+         * Pacifidlog hut's roof over the sea: the sea, not the deck it
+         * stands on). Without a variant a building keeps its ground. */
+        if (*groundMetatile == (int)OWN_GROUND || sQuarters[k] != 0)
         {
-            /* the cell's own drawing, less what the model stands for */
             unsigned own = (unsigned)VoxelWorld_GetMetatileId(x, y);
 
-            *groundMetatile = (int)own;
+            if (*groundMetatile == (int)OWN_GROUND)
+                *groundMetatile = (int)own;
             for (unsigned v = 0; sQuarters[k] != 0 && v < sVariantCount && v < VOXEL_VARIANTS; ++v)
-                if (U16(sVariants + 6u * v + 2) == own && sVariants[6u * v + 4] == sQuarters[k])
+                if (U16(sVariants + 6u * v + 2) == own && sVariants[6u * v + 4] == sQuarters[k]
+                 && TilesetOf(U16(sVariants + 6u * v), own) == TilesetOf(inst->layoutId, own))
                 {
                     *groundMetatile = (int)(VOXEL_METATILE_REAL + v);
                     break;

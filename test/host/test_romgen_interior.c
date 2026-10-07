@@ -172,13 +172,15 @@ static void WriteAndRead(const RgWorld *w, const RgBuildModels *ms)
     CHECK(st.err == RG_OK && st.variants <= RG_MAX_VARIANTS && st.pages <= RG_MAX_PAGES);
     /* pins (this ROM, S2.6): 67 S2.5 models + 200 interior pieces + 19 bare twins; 286 -> 307 models, 630 -> 651
      * pageModels, 2894 -> 2918 placements: Phase 36 H1 (Dewford, Mauville, Verdanturf, Fallarbor, Slateport): 21 direct models, 24 placements (interiors unchanged);
-     * -> 311 models, 655 pageModels, 2931 placements: Phase 36 H2 (Fortree, Lavaridge, Pacifidlog): 4 models, 13 placements (interiors unchanged) */
-    CHECK(st.models == 311 && st.variants == 66 && st.pages == 118 && st.pageModels == 655 && st.placements == 2931u);
+     * -> 311 models, 655 pageModels, 2931 placements: Phase 36 H2 (Fortree, Lavaridge, Pacifidlog): 4 models, 13 placements (interiors unchanged);
+     * -> 75 variants: Phase 36 H2, a building's water cells draw the sea under the roof (quarters 0xF variants), 9 variants */
+    CHECK(st.models == 311 && st.variants == 75 && st.pages == 118 && st.pageModels == 655 && st.placements == 2931u);
     /* 7898476 B / 80520 vertices -> 7870828 / 79368: the look-L7 flat-cap merge (outdoor models; interiors unchanged);
      * -> 7873564 / 79482: look L6, the hip-roof ridge's back face (outdoor models; interiors unchanged);
      * -> 8475268 / 87360, 59 masks: Phase 36 H1's outdoor models (interiors unchanged);
-     * -> 8606220 / 89364, 68 masks: Phase 36 H2's outdoor models (interiors unchanged) */
-    CHECK(sz == 8606220u && st.vertices == 89364u && st.masks == 68u);
+     * -> 8606220 / 89364, 68 masks: Phase 36 H2's outdoor models (interiors unchanged);
+     * -> 8606276: Phase 36 H2's water-cell variants (interiors unchanged) */
+    CHECK(sz == 8606276u && st.vertices == 89364u && st.masks == 68u);
     CHECK(memcmp(buf, "VXB7", 4) == 0 && sz % 4 == 0);
     {
         VoxelMapInstance inst;

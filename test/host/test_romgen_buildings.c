@@ -379,6 +379,33 @@ static void TestRealRom(void)
     printf("buildings.bin (house 1 only): %zu bytes, %u placements\n", sz1, st1.placements);
     RoundTrip(buf1, sz1, 10, 2, 4, &cellOk, &page);
     CHECK(cellOk && page == 0);
+    {   /* Phase 36 H2: Pacifidlog's centre has its roof row over the sea (water metatiles 0x230-0x233, layout 16). Those
+         * cells get the whole upper layer cut (quarters 0xF, a variant per metatile): the sea under them, not the deck */
+        unsigned P = U16(buf + 4), M = U16(buf + 6), PM = U16(buf + 8), PL = U16(buf + 10), HB = U16(buf + 12);
+        unsigned MK = U16(buf + 14), VAR = U16(buf + 20), mt, v, pc = ms.n, k;
+        size_t modelT = 24u + 8u * P, hT = modelT + 16u * M + 8u * PM + 16u * PL;
+        size_t qT = hT + HB + (HB & 1u) + 2u * HB + 32u * MK, varT = qT + HB + (HB & 1u);
+
+        for (i = 0; i < ms.n; i++)
+            if (strcmp(ms.m[i].spec->name, "pokemon_center") == 0)
+                pc = i;
+        CHECK(pc < ms.n);
+        if (pc < ms.n) {
+            unsigned hs = U32(buf + modelT + 16u * pc + 12), w = ms.m[pc].w, h = ms.m[pc].h;
+
+            for (k = 0; k < w; k++) {
+                CHECK(buf[qT + hs + k] == 0x0F);                       /* the roof row: water at Pacifidlog */
+                CHECK(buf[qT + hs + (h - 1u) * w + k] == 0);           /* the door row: the placement's ground */
+            }
+        }
+        for (mt = 0x230; mt <= 0x233; mt++) {
+            int found = 0;
+
+            for (v = 0; v < VAR; v++)
+                found |= U16(buf + varT + 6u * v) == 16 && U16(buf + varT + 6u * v + 2) == mt && buf[varT + 6u * v + 4] == 0x0F;
+            CHECK(found);
+        }
+    }
     /* the structural parse of the file */
     CHECK(U16(buf + 4) >= 1 && U16(buf + 6) == ms.n);
     {   unsigned np = U16(buf + 4), pg;

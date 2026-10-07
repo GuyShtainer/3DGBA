@@ -37,8 +37,9 @@ static int sChecks, sFails, sSkipped;
  * Phase 36 H2: 91257d8b -> 3eafee01 (4 Hoenn models: Fortree, Lavaridge, Pacifidlog)
  * Phase 36 H2: 3eafee01 -> 7257e9b6 (Pacifidlog hut footprint filled with the deck, not the sea)
  * Phase 36 H2: 7257e9b6 -> aad730ec (a building in the sea takes its footprint ground from the planks: the five
- *   Pacifidlog huts and the Pokemon Center on 0x221, two route houses; sizes and counts unchanged) */
-#define BUILDINGS_SHA1 "aad730ec7d55d61a03ecec4218d3160f6f08d814"
+ *   Pacifidlog huts and the Pokemon Center on 0x221, two route houses; sizes and counts unchanged)
+ * Phase 36 H2: aad730ec -> a00bb5ae (a building's water cells draw the sea under the roof, not the planks: 66 -> 75 variants) */
+#define BUILDINGS_SHA1 "a00bb5ae01f41d7fb0499469529cd857feb12e52"
 #define LITTLEROOT_LAYOUT 10u      /* the town whose two houses match Emerald's pins */
 
 static const uint8_t kGroupSizes[34] = {54, 5, 5, 6, 7, 7, 8, 7, 7, 13, 8, 17, 10, 24, 13, 13, 14, 2, 2, 2, 3, 1, 1,
@@ -352,9 +353,10 @@ static void Run(Cart *C)
      * (Dewford, Mauville, Verdanturf, Fallarbor, Slateport; three Contest Halls in the Battle Tents' place) */
     /* 3016324 B, 64 models, 2081 placements, 35508 vertices, 57 masks -> 3518812 / 85 / 2105 / 39252 / 60: Phase 36 H1
      * (Dewford, Mauville, Verdanturf, Fallarbor, Slateport; three Contest Halls in the Battle Tents' place)
-     * -> 3650196 / 89 / 2118 / 41274 / 69: Phase 36 H2 (Fortree, Lavaridge, Pacifidlog: 4 models, 13 placements) */
-    CHECK(o->buildingsSize == 3650196u && o->bModels == 89 && o->bPages == 58 && o->bPlacements == 2118);
-    CHECK(o->bVertices == 41274 && o->bMasks == 69 && o->bVariants == 66);
+     * -> 3650196 / 89 / 2118 / 41274 / 69: Phase 36 H2 (Fortree, Lavaridge, Pacifidlog: 4 models, 13 placements)
+     * -> 3650252, 66 -> 75 variants: Phase 36 H2, a building's water cells draw the sea under the roof (quarters 0xF variants), 9 variants */
+    CHECK(o->buildingsSize == 3650252u && o->bModels == 89 && o->bPages == 58 && o->bPlacements == 2118);
+    CHECK(o->bVertices == 41274 && o->bMasks == 69 && o->bVariants == 75);
     /* S4: every model passes its art gate (S0 left the Emerald lab out here; rs_littleroot_lab replaces it) */
     CHECK(o->buildingsFailed == 0 && o->buildingsDropped == 0);
     CHECK(o->roleCount[VOXEL_ROLE_SIGNPOST] == 224);
