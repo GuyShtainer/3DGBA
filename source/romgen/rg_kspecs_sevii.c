@@ -309,6 +309,21 @@ static const RgSideCfg kFourOrangeSide[1] = {
     {NULL, {10, 50, 14, 60}, {10, 24, 14, 28}, 22, true},
 };
 
+/* ---- k_four_house: 80x64 art (rect (24,23), 5x4 on layout 233; door (25,26)) ---------------------------------------- */
+/* The lilac-roofed house that stands on Four Island (three times) and Five Island: rows 1-3 of the rect are the same cells
+ * everywhere (649-653 / 657-661 / 665-669), only the top row differs (a grass roof-top cell, a cliff-side one), so
+ * matchRows is (1, 4) and the art is taken from the grass-topped one at (24,23). Grass 0-8, the pale roof lip 9-19,
+ * the lilac roof 20-42, the dark eave 43-45, a barred door and a window in the facade 46-64. */
+static bool k_four_house(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    (void)spec; (void)a0; (void)a1;
+    return sv_gable(out, "house", 80, 64, 46, 43, 9, 0);
+}
+static const RgExact kFourPurpleExact[1] = {{0, 9, 80, 64, false}};
+static const RgSideCfg kFourPurpleSide[1] = {
+    {NULL, {50, 58, 54, 60}, {77, 24, 79, 28}, 21, true},
+};
+
 const RgSpec rg_kspecs_sevii[] = {
     {"k_sevii_house", RG_SPEC_DIRECT, L_ONE, {18, 6, 5, 4}, {1, 4}, SV_GROUND, 1, kHouseExact, 1,
      k_sevii_house, 0, 0, kHouseSide},
@@ -326,5 +341,7 @@ const RgSpec rg_kspecs_sevii[] = {
      k_three_port, 0, 0, kTwoHarborSide},
     {"k_four_house_orange", RG_SPEC_DIRECT, L_FOUR, {11, 10, 4, 4}, {0, 0}, SV_GROUND, 1, kFourOrangeExact, 1,
      k_four_house_orange, 0, 0, kFourOrangeSide},
+    {"k_four_house", RG_SPEC_DIRECT, L_FOUR, {24, 23, 5, 4}, {1, 4}, SV_GROUND, 1, kFourPurpleExact, 1,
+     k_four_house, 0, 0, kFourPurpleSide},
 };
 const unsigned rg_kspecs_sevii_count = sizeof(rg_kspecs_sevii) / sizeof(rg_kspecs_sevii[0]);
