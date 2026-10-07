@@ -45,7 +45,16 @@ static uint32_t rd32(const uint8_t *rom, size_t size, uint32_t addr)
     return (uint32_t)rom[o] | ((uint32_t)rom[o + 1] << 8) | ((uint32_t)rom[o + 2] << 16) | ((uint32_t)rom[o + 3] << 24);
 }
 
-static void e8(uint8_t *ew, uint32_t a, uint32_t v) { ew[a - 0x02000000u] = (uint8_t)v; }
+/* Phase 35 S3: one write helper for both banks, because Ruby / Sapphire keep the object events in IWRAM (0x03...); the
+ * IWRAM image is the one state_build is filling. */
+static uint8_t *sIwBank;
+static void e8(uint8_t *ew, uint32_t a, uint32_t v)
+{
+    if (a >= 0x03000000u)
+        sIwBank[a - 0x03000000u] = (uint8_t)v;
+    else
+        ew[a - 0x02000000u] = (uint8_t)v;
+}
 static void e16(uint8_t *ew, uint32_t a, uint32_t v) { e8(ew, a, v & 0xFFu); e8(ew, a + 1, (v >> 8) & 0xFFu); }
 static void i32w(uint8_t *iw, uint32_t a, uint32_t v)
 {
@@ -65,12 +74,16 @@ static bool state_build(uint8_t *ew, uint8_t *iw, const uint8_t *rom, size_t siz
 
     if ((unsigned)((w + 15) * (h + 14)) > VX_BACKUP_MAP_MAX_CELLS)
         return false;
+    uint32_t sb1 = p->sb1Direct ? p->sb1Ptr : BUDGET_SB1;   /* RS: SaveBlock1 is the struct at sb1Ptr, no pointer to it */
+
     memset(ew, 0, 0x40000);
     memset(iw, 0, 0x8000);
+    sIwBank = iw;
     i32w(iw, p->gMain + 4, p->cb2Overworld);
-    i32w(iw, p->sb1Ptr, BUDGET_SB1);
-    e16(ew, BUDGET_SB1, (uint32_t)px); e16(ew, BUDGET_SB1 + 2, (uint32_t)py);
-    e8(ew, BUDGET_SB1 + 4, group); e8(ew, BUDGET_SB1 + 5, num);
+    if (!p->sb1Direct)
+        i32w(iw, p->sb1Ptr, BUDGET_SB1);
+    e16(ew, sb1, (uint32_t)px); e16(ew, sb1 + 2, (uint32_t)py);
+    e8(ew, sb1 + 4, group); e8(ew, sb1 + 5, num);
     i32w(iw, p->backupLayout, (uint32_t)(w + 15));
     i32w(iw, p->backupLayout + 4, (uint32_t)(h + 14));
     i32w(iw, p->backupLayout + 8, backup);

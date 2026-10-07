@@ -75,7 +75,7 @@ gym_rustboro, devon_corporation, rustboro_fountain) and fall back to the extrude
 | **S0** (built) | romgen ROM layer: AXVE/AXPE rev 2 profile rows (romgen-only, `rendererOn` false), layoutSlots cap, Emerald exterior recipes retargeted (interiors dropped, components expanders pointed at the RS Petalburg/Rustboro tilesets), art-failing models left out on RS, Emerald signpost heuristic, ledges relief | host suite `test_romgen_rs_world` green with pins; all Emerald/FRLG pins unchanged; device builds link (with and without `ROMGEN_DEV_HOOK=1`) |
 | **S1** (built) | RS renderer anchors + self-check: gSaveBlock1 is a DIRECT struct (no pointer, needs a profile flag), gMain/gMapHeader/gPlayerAvatar/gSprites/palette buffers (the `RS_PROFILE_BODY_RAM` values in gamestate.c are a start, from .sym), weather, gfxInfo and field-effect tables harvested from rev 2 ROM literal pools, cb2Overworld measured live | anchor check passes in Azahar on both carts; wrong ROM disables cleanly |
 | **S2** (built) | renderer on (`rendererOn`), Azahar captures of Littleroot and Rustboro in 3D | test_voxel_* counts unchanged + an RS row; shots |
-| S3 | RS tree / shrub / grass / prop tables (ROM-measured with `romgen author ROM shrubs/props`) | host pins + Azahar |
+| **S3** (built) | RS tree / shrub / grass / prop tables (ROM-measured with `romgen author ROM shrubs/props`) | host pins + Azahar |
 | S4 | RS-specific recipes: Littleroot lab (RS roof), Oldale, Rustboro set (stone, olive, gym, Devon, fountain) | per-recipe gates 0/0/0, placements pinned |
 | S5 | interiors (if wanted), rev 0 / 1 profiles (measure first) | |
 
@@ -182,3 +182,27 @@ Looks honestly: trees, shrubs and props are flat until S3 (no RS tables yet); RS
 lab, Rustboro's stone set, Devon, the gym) are boxes or missing until S4. Shots are kept locally, not committed
 (ROM-derived art): `evidence/s2-ruby-littleroot.top.png`, `s2-ruby-rustboro.top.png`, `s2-sapphire-littleroot.top.png`,
 `s2-ruby-rev1-refused.top.png`; the voxel.log of each run is committed beside them (`*.voxel.log.txt`).
+
+## S3 (built, 2026-10-07)
+
+RS trees, shrubs, tall grass and props in the 3D renderer. Profile data only (`rg_gameprof.c`), no new code path.
+
+- **Trees:** Ruby/Sapphire General ids and roles match Emerald, so Emerald's tree tables serve RS (24 ids) plus four RS-only
+  forest-edge ids (0x1F2, 0x1F3, 0x1FC, 0x1FD). `treeGround` = Emerald's 13 pairs, checked on RS pixels. Crowns use the vendored
+  Emerald-style `voxel_trees.bin` (RS crowns look Emerald-like, not RS-exact).
+- **Shrubs and props:** measured with `romgen author ROM shrubs/props/grass`: 9 bushes (Dewford, Slateport and the E14 tileset
+  ids) + props: fence EW 0x149, fence NS 0x140/0x142, rocks 0x0E0..0x0E2, flower 0x004. Ruby and Sapphire tables differ only by
+  the secondary-tileset addresses (Sapphire is 0x70 lower). `grassGround` 0x001, `grassSkip` the 0x206 bush tile.
+  No Petalburg/Rustboro tileset fences or bushes were added (no measured match).
+- **`rg_budget.c`:** `romgen author ROM budget` crashed (SIGBUS) on RS, which keeps SaveBlock1 as a direct struct and the object
+  events in IWRAM. `state_build` is now bank-aware.
+- **Budget (Ruby, Sapphire identical):** 0 chunks over, worst chunk 8496 of 9344 vertices (a sea-rock chunk, 90%), 2 chunks at
+  80% or more. The worst chunk is the same with and without the tables.
+- **Tests:** new suite `test_romgen_rs_foliage` (473 checks); host `test` 30 suites and `vtest` 11 suites, 0 failures; every
+  Emerald/FR/LG count unchanged. Output pins unchanged (the tables change no romgen output): RS buildings a03a3b74,
+  regions 1a09cd5f, signposts 9b4d379c, relief 215a12d9.
+- **Azahar (Ruby, private instance, warp-save copies):** `voxel.log` per spot beside this file (`s3-ruby-*.voxel.log.txt`),
+  no "chunk scratch full" in any. Littleroot: flowers/corner trees now rendered (flat before). Route 101 and 102: forest edges,
+  tall grass and tree crowns read right. Rustboro: unchanged (no foliage in view; its fences were already buildings).
+  Petalburg: unchanged near the Center and pond. Not seen: bush/fence/rock props in an RS town view, and the four RS-only tree
+  ids were not singled out. Hardware: not run. Shots (`evidence/s3-after-*.png`) are local only, not committed.
