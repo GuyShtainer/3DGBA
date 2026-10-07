@@ -11,6 +11,7 @@
  *   k_sevii_house        5x4 cells (80x64): the purple-roofed house (every purple house of KS1) */
 #include "rg_bspecs.h"
 
+#include <math.h>
 #include <string.h>
 
 #define L_ONE 230, 0x60EA96AFu
@@ -410,7 +411,7 @@ static const RgSideCfg kWarehouseSide[1] = {
 #define L_SEVEN 235, 0x64A249C1u
 #define L_SIX 236, 0u
 #define L_WATER 252, 0u
-#define L_TOWER 254, 0u
+#define L_TOWER 254, 0xD2E7C700u
 #define L_CANYON 256, 0u
 #define L_NAVEL 343, 0x45EADA9Bu
 #define L_BIRTH 342, 0xA2E502C5u
@@ -420,6 +421,56 @@ static const RgSideCfg kWarehouseSide[1] = {
  * one: the 5x3 census signature A0A45131; the top row is grass or cliff and varies, so matchRows is (1, 4)). Same art as
  * k_four_house pixel for pixel, but these layouts use another secondary tileset, so Four Island's model does not land
  * here (placements checks the tileset): this row, with its own pin, reuses the builder. */
+
+/* ---- k_trainer_tower: 144x128 art (rect (54,0), 9x8 on layout 254; door (58,7); the map top cuts the tower) ------------- */
+/* Trainer Tower, a tall blue tower on a grey crenellated platform, seen against sandstone cliffs. Rows (art row = z - y):
+ * the front face of the tower (x 17-127, rows 0-90: louvred blue wall with a window every 24 rows between a pale-blue
+ * pillar at each side), standing on the platform's top (rows 90-104, the battlements) and its front edge (104-110, x
+ * 30-114). Below row 56 the pillars bulge into two wings (x 10-17 and 127-134, rows 56-90) and the platform's corners
+ * are 45-degree bevels (the bottom row of the left bevel is x + 81, the right one 224 - x), built from 2-px slices. The
+ * door is a porch with a gabled grey roof: a flat top over rows 99-110 and the face 110-128 (x 59-85). The art is cut at
+ * the map top, so the tower runs up to row 0 and goes on above it: a narrower upper tier and a top slab (their rows lie above
+ * the art, where PROJ clamps to the edge row) smear the plain louvre rows 9-11. Same technique as K7's Pokemon Tower. */
+static bool k_trainer_tower(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    static const double body[4][2] = {{96, 6}, {96, 96}, {40, 96}, {40, 6}};
+    static const double bodyr[4][2] = {{0, 90}, {9, 10}, {0, 0}, {0, 0}};
+    static const double wing[4][2] = {{96, 6}, {96, 40}, {40, 40}, {40, 6}};
+    static const double wingr[4][2] = {{56, 90}, {55, 56}, {0, 0}, {0, 0}};
+    static const double tier[4][2] = {{88, 96}, {88, 144}, {44, 144}, {44, 96}};
+    static const double tierr[4][2] = {{10, 11}, {9, 10}, {0, 0}, {0, 0}};
+    static const double slab[4][2] = {{84, 144}, {84, 152}, {48, 152}, {48, 144}};
+    static const double slabr[4][2] = {{10, 11}, {9, 10}, {0, 0}, {0, 0}};
+    unsigned i;
+
+    (void)spec; (void)a0; (void)a1;
+    if (!sv_profile(out, "tower", 17, 127, 4, body, bodyr) || !sv_profile(out, "wing_w", 10, 17, 4, wing, wingr) ||
+        !sv_profile(out, "wing_e", 127, 134, 4, wing, wingr) || !sv_profile(out, "tierup", 36, 108, 4, tier, tierr) ||
+        !sv_profile(out, "tierup_slab", 40, 104, 4, slab, slabr))
+        return false;
+    for (i = 0; i < 10; i++) {                      /* the bevels: left x 10-30, right x 114-134 */
+        double xl = 10 + 2 * i, bot = floor(xl + 1 + 81 + 0.5);
+        double ft = bot - 6, rt = ft > 90 ? 90 : ft - 1;
+
+        if (!sv_block(out, "chamf_w", xl, xl + 2, bot, ft, rt) || !sv_block(out, "chamf_e", 144 - xl - 2, 144 - xl, bot, ft, rt))
+            return false;
+    }
+    return sv_block(out, "plat", 30, 114, 110, 104, 90) && sv_block(out, "porch", 59, 85, 128, 110, 99) && !out->failed;
+}
+static const RgExact kTowerExact[5] = {
+    {17, 0, 127, 90, false},        /* the front face: pillars, louvres, windows */
+    {11, 62, 17, 90, false},        /* the left wing */
+    {127, 62, 133, 90, false},      /* the right wing */
+    {30, 90, 114, 110, false},      /* the platform: battlements and front edge */
+    {61, 112, 83, 128, false},      /* the porch door */
+};
+static const RgSideCfg kTowerSide[5] = {
+    {"tower", {55, 0, 59, 4}, {55, 0, 59, 4}, 999, false},
+    {"tierup", {55, 0, 59, 4}, {55, 0, 59, 4}, 999, false},
+    {"wing_w", {14, 70, 16, 74}, {14, 70, 16, 74}, 999, false},
+    {"wing_e", {128, 70, 130, 74}, {128, 70, 130, 74}, 999, false},
+    {NULL, {45, 104, 47, 106}, {45, 104, 47, 106}, 999, true},
+};
 
 const RgSpec rg_kspecs_sevii[] = {
     {"k_sevii_house", RG_SPEC_DIRECT, L_ONE, {18, 6, 5, 4}, {1, 4}, SV_GROUND, 1, kHouseExact, 1,
@@ -458,5 +509,7 @@ const RgSpec rg_kspecs_sevii[] = {
      k_four_harbor, 0, 0, kFourHarborSide},
     {"k_birth_harbor", RG_SPEC_DIRECT, L_BIRTH, {12, 24, 7, 6}, {0, 0}, {630}, 1, kFourHarborExact, 6,
      k_four_harbor, 0, 0, kFourHarborSide},
+    {"k_trainer_tower", RG_SPEC_DIRECT, L_TOWER, {54, 0, 9, 8}, {0, 0}, SV_GROUND, 1, kTowerExact, 5,
+     k_trainer_tower, 0, 0, kTowerSide},
 };
 const unsigned rg_kspecs_sevii_count = sizeof(rg_kspecs_sevii) / sizeof(rg_kspecs_sevii[0]);
