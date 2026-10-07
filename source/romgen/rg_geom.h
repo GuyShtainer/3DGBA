@@ -115,6 +115,11 @@ typedef struct RgBand {          /* vb:280-293 */
     bool hasFront; RgTile front;
     bool hasBack;  RgTile back;
     double length;               /* z0 - z1, or 1e9 when no z1 was given */
+    /* look L5: a projected band (proj) draws the end face from the art without tiling: over s = z0 - z in [sLo, sHi]
+     * (sHi 1e9 = to the back) a point (s, y) samples u = pu0 + pdu * (s - sLo), v = pv0 - pdv * y (pdu, pdv 0 or 1: a
+     * 1:1 column of the art, or one texel when both are 0). One polygon per triangle piece, tagged ~clamp. */
+    bool proj;
+    double sLo, sHi, pu0, pdu, pv0, pdv;
 } RgBand;
 
 RgTile rg_tile(double u0, double v0, double u1, double v1);

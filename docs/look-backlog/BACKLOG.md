@@ -73,6 +73,49 @@ patches cut from the model's own art (the ROM has no side-view drawing). Guy's D
 yet a plain one. Future: dress the end walls from the front art (repeat the facade's wall band, base stripe and a
 window from the same building) so a side reads like the front. Size: small-medium, Kanto table only.
 
+### L5 DONE (2026-10-07, branch worktree-agent-a689c5eb803c533d7)
+
+**Design: derive the end face from the building's own front rows, in one family-level change** (`rg_close_sides` now takes
+the model art; `sd_analyse` / `sd_dress` in `rg_bspecs.c`; a projected-band mode `RgBand.proj` in `rg_geom.c`). No recipe
+was edited; every Kanto DIRECT spec with a `RgSideCfg` gets it.
+- Wall below the eave: the facade column that matches the facade's most common colour in the most rows (per row, mode
+  across the prism's width), stretched along the depth. It carries the wall band, the base stripe and the eave shadow at
+  the heights the front has them. A wall the art cannot explain (best column < 60 % of rows) falls back to the old patch.
+- Window: a run of 10-40 columns that differ from the wall in the middle rows but equal it in the lowest three (a door or
+  pilaster stands on the ground, a window has the wall's foot below it), laid 1:1 in the middle of the depth when the depth
+  is at least window + 12 px. Else a plain wall.
+- Gable: above the eave the end triangle of a *mirrored* (gable) roof takes the wall colour; a flat or chamfered roof keeps
+  the old roof patch (a flat roof's side is a slab, not a gable).
+- Cost: each piece is one polygon per triangle piece (u/v sampled 1:1 from the art, tagged `~clamp`), no tiling. Fronts,
+  backs and roofs are untouched (check's exact rects 0/0/0).
+
+Numbers (`author ROM budget 0`, FR; LG identical): worst model 1956 (`k_rocket_warehouse`) -> 1170 (`k_power_plant`)
+vertices, limit 3300, because the warehouse's textured tiled caps (652 triangles) became 84; worst chunk 3432 (3/56 chunk
+1,2) -> 2730 (3/0 chunk 0,0) of 9344. The cottages and houses with a window grew (e.g. route 12 cottage 786 -> 870,
+Cinnabar lab 222 -> 276). `check all`: FR 85/85 and LG 85/85 PASS (side west/east, back, ortho, round trip as before);
+Emerald 30/34, the same four pre-existing round-trip FAILs (hedge, mart, lab, rustboro_gym). Pins: FR = LG buildings.bin
+51a921db -> 5ba2cc16e66713ab14f8f4751493f2e23544bda2; Emerald buildings.bin stays 6d321c3af1c1c72b91173e6b2c277db5cad708e7.
+`make -C tools/romgen test` 28 suites and `vtest` 9 suites, 0 failures; device `make -j8` links 3DGBA.3dsx.
+
+Azahar (private instance m, New 3DS, MK.ctm, only buildings.bin swapped; `evidence/l5-*` = before | after | changed pixels
+in red, then a 3x zoom of the change box): `l5-fr-five-island.png` (3/16, 17,8: 1253 px changed), `l5-fr-four-island.png`
+(3/15, 22,16: 1105 px), `l5-fr-vermilion.png` (3/5, 12,9: 133 px). voxel.log: no "chunk scratch full" in any of the 6 runs.
+
+Honest verdict: the end faces now read as part of the building in the author previews (siding, the green skirt and base
+stripe, a window, a wall-coloured gable; compare the previews of `k_sevii_house`, `evidence/l5-preview-sevii-house.png`, top before, bottom after). **In the game's default view
+the effect is small**: the camera looks straight north from the south, so an end wall is a sliver except for buildings far
+from the screen centre. Five Island's right house shows its west end as a thin tan wall with a dark edge strip instead of the
+flat dark patch (a real but modest gain; the circled purple side is mostly roof from this angle); the Four Island purple
+house and Vermilion show almost no end at this spot. Not proven: a window on an end seen in-game (none of the three
+spots has one in view; previews only).
+
+Open nits: (1) the column is a statistic, so a model whose commonest column is a pilaster or the siding (Five Island house:
+tan pilaster) gets that look on its end, correct to the art but not always what a viewer expects; (2) the window finder is a
+heuristic (foot rule, width 10-40) and was checked by eye on previews of the 85 models, not by test; (3) west/east windows
+are not mirrored (no tile flip); (4) flat-roofed buildings (Center, Mart, gyms, labs) keep a flat roof-colour patch above
+the eave; (5) no host test exercises `sd_analyse` directly (the pin and the FR/LG gate cover it end to end); (6) how many
+prisms fell back to the old patch was not counted.
+
 ## Pause menu ENHANCE tidy (2026-10-07)
 
 The orphaned "Time-of-day light" and "Vivid mode" labels are erased from all 6 `pause-bot-enhance` plates

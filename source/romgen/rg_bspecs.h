@@ -97,8 +97,11 @@ typedef struct RgSideCfg {
     double eave;
     bool last;                   /* the last entry of the spec's array */
 } RgSideCfg;
-/* True (a no-op) for a spec without a RgSideCfg. False when a band could not be built. */
-bool rg_close_sides(const RgSpec *s, RgPartList *parts);
+/* look L5: with `art` (the model's art) the ends are dressed from the front's rows instead (rg_bspecs.c): a facade column
+ * for the wall, a window of the same facade where the depth allows, wall colour in a mirrored gable's triangle. The patches
+ * above stay the fallback (art NULL, or a wall the art cannot explain).
+ * True (a no-op) for a spec without a RgSideCfg. False when a band could not be built. */
+bool rg_close_sides(const RgSpec *s, RgPartList *parts, const RgImage *art);
 
 /* look L6: closes every solid prism the art left open at the back (a rear slope mirrored about the ridge, else flat
  * faces over the open edges). See rg_bspecs.c. rg_close_backs_log, when set, hears what each prism got. */

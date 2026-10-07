@@ -673,6 +673,29 @@ static void emit_cap_piece(RgMesh *m, const double (*piece)[2], unsigned np, con
     double top = band->tile.hasTop ? band->tile.top : band->y1;
     double sFront = 0.0, sBack = 1e9, bw = 0.0;
 
+    if (band->proj) {
+        RgPt pts[MAXV], c1[MAXV], c2[MAXV];
+        RgVtx out[MAXV];
+        unsigned k, cnt = np;
+
+        for (k = 0; k < np; k++) {
+            memset(&pts[k], 0, sizeof(RgPt));
+            pts[k].c[0] = piece[k][0];
+            pts[k].c[1] = piece[k][1];
+        }
+        cnt = rg_clip(pts, cnt, 2, 0, band->z0 - band->sHi, true, c1);
+        if (cnt >= 3) cnt = rg_clip(c1, cnt, 2, 0, band->z0 - band->sLo, false, c2); else memcpy(c2, c1, cnt * sizeof(RgPt));
+        if (cnt < 3)
+            return;
+        for (k = 0; k < cnt; k++) {
+            double z = c2[k].c[0], y = c2[k].c[1];
+
+            out[k] = V(x, y, z, band->pu0 + band->pdu * ((band->z0 - z) - band->sLo), band->pv0 - band->pdv * y);
+        }
+        rg_mesh_poly(m, out, cnt, shade, flatTag);
+        return;
+    }
+
     if (band->hasFront) {
         double fw = band->front.rect[2] - band->front.rect[0];
 
@@ -1027,6 +1050,9 @@ static bool emit_prism(const RgPrism *pr, const char *name, RgMesh *m)
             tag = rg_mesh_tag(m, tg[side]);
             if (m->flatPatch != NULL)
                 flatTag = rg_mesh_tag(m, ftg[side]);
+            for (b = 0; b < pr->nCaps && flatTag == RG_NO_TAG; b++)
+                if (pr->caps[b].proj)
+                    flatTag = rg_mesh_tag(m, ftg[side]);
             for (b = 0; b < pr->nCaps; b++) {
                 const RgBand *band = &pr->caps[b];
 
