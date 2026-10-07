@@ -33,8 +33,9 @@ static int sChecks, sFails, sSkipped;
 #define SIGNPOSTS_SHA1 "9b4d379cb2a40e522d3e681ed03110785f3243d4"
 #define RELIEF_SHA1 "215a12d9c4ee8f4747e66d895f37d6ed1f8c4b5c"
 /* S4: a03a3b74 -> 40135582 (oldale_house and the Rustboro set repinned to the RS layouts, rs_littleroot_lab in the lab);
- * Phase 36 H1: 40135582 -> 91257d8b (21 Hoenn models: Dewford, Mauville, Verdanturf, Fallarbor, Slateport) */
-#define BUILDINGS_SHA1 "91257d8b2ff5a894db3d7c2b2e85e890ea08275e"
+ * Phase 36 H1: 40135582 -> 91257d8b (21 Hoenn models: Dewford, Mauville, Verdanturf, Fallarbor, Slateport);
+ * Phase 36 H2: 91257d8b -> 3eafee01 (4 Hoenn models: Fortree, Lavaridge, Pacifidlog) */
+#define BUILDINGS_SHA1 "3eafee01fb3c7b4654a195718bfab93343cd27e8"
 #define LITTLEROOT_LAYOUT 10u      /* the town whose two houses match Emerald's pins */
 
 static const uint8_t kGroupSizes[34] = {54, 5, 5, 6, 7, 7, 8, 7, 7, 13, 8, 17, 10, 24, 13, 13, 14, 2, 2, 2, 3, 1, 1,
@@ -348,9 +349,9 @@ static void Run(Cart *C)
      * (Dewford, Mauville, Verdanturf, Fallarbor, Slateport; three Contest Halls in the Battle Tents' place) */
     /* 3016324 B, 64 models, 2081 placements, 35508 vertices, 57 masks -> 3518812 / 85 / 2105 / 39252 / 60: Phase 36 H1
      * (Dewford, Mauville, Verdanturf, Fallarbor, Slateport; three Contest Halls in the Battle Tents' place)
-     * -> 3650372 / 89 / 2118 / 41256 / 69: Phase 36 H2 (Fortree, Lavaridge, Pacifidlog: 4 models, 13 placements) */
-    CHECK(o->buildingsSize == 3650372u && o->bModels == 89 && o->bPages == 58 && o->bPlacements == 2118);
-    CHECK(o->bVertices == 41256 && o->bMasks == 69 && o->bVariants == 66);
+     * -> 3650196 / 89 / 2118 / 41274 / 69: Phase 36 H2 (Fortree, Lavaridge, Pacifidlog: 4 models, 13 placements) */
+    CHECK(o->buildingsSize == 3650196u && o->bModels == 89 && o->bPages == 58 && o->bPlacements == 2118);
+    CHECK(o->bVertices == 41274 && o->bMasks == 69 && o->bVariants == 66);
     /* S4: every model passes its art gate (S0 left the Emerald lab out here; rs_littleroot_lab replaces it) */
     CHECK(o->buildingsFailed == 0 && o->buildingsDropped == 0);
     CHECK(o->roleCount[VOXEL_ROLE_SIGNPOST] == 224);
