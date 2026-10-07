@@ -76,7 +76,7 @@ gym_rustboro, devon_corporation, rustboro_fountain) and fall back to the extrude
 | **S1** (built) | RS renderer anchors + self-check: gSaveBlock1 is a DIRECT struct (no pointer, needs a profile flag), gMain/gMapHeader/gPlayerAvatar/gSprites/palette buffers (the `RS_PROFILE_BODY_RAM` values in gamestate.c are a start, from .sym), weather, gfxInfo and field-effect tables harvested from rev 2 ROM literal pools, cb2Overworld measured live | anchor check passes in Azahar on both carts; wrong ROM disables cleanly |
 | **S2** (built) | renderer on (`rendererOn`), Azahar captures of Littleroot and Rustboro in 3D | test_voxel_* counts unchanged + an RS row; shots |
 | **S3** (built) | RS tree / shrub / grass / prop tables (ROM-measured with `romgen author ROM shrubs/props`) | host pins + Azahar |
-| S4 | RS-specific recipes: Littleroot lab (RS roof), Oldale, Rustboro set (stone, olive, gym, Devon, fountain) | per-recipe gates 0/0/0, placements pinned |
+| **S4** (built) | RS-specific recipes: Littleroot lab (RS roof), Oldale, Rustboro set (stone, olive, gym, Devon, fountain) | per-recipe gates 0/0/0, placements pinned |
 | S5 | interiors (if wanted), rev 0 / 1 profiles (measure first) | |
 
 ## Risks
@@ -206,3 +206,63 @@ RS trees, shrubs, tall grass and props in the 3D renderer. Profile data only (`r
   tall grass and tree crowns read right. Rustboro: unchanged (no foliage in view; its fences were already buildings).
   Petalburg: unchanged near the Center and pond. Not seen: bush/fence/rock props in an RS town view, and the four RS-only tree
   ids were not singled out. Hardware: not run. Shots (`evidence/s3-after-*.png`) are local only, not committed.
+
+## S4 (built, 2026-10-07)
+
+RS building recipes for the listed set (`rg_rsspecs.c`, new `rg_rsspecs_littleroot.c`). romgen only, no renderer change.
+
+- **Repinned rows (`kRetarget`):** the RS layouts differ from Emerald's, but not inside the buildings (cell dumps of both
+  carts with `romgen author ROM art`): Oldale (layout 11) only at the tree cell (18,3), Rustboro (layout 4) in 24 cells,
+  none inside a recipe rect. The Emerald builder, rect and art gates are kept; only the pin moves.
+  `oldale_house` -> L11 `37D810BE` (2 placements); `rustboro_stone` (2), `rustboro_olive` (1), `gym_rustboro`,
+  `devon_corporation`, `rustboro_fountain` -> L4 `5FF68C82`.
+- **RS-own lab (`kReplace`):** Emerald's `littleroot_lab` builds on RS (same layout pin) but fails its art gate, because RS
+  draws the roof differently (corrugated slope under a light ridge band, a square vent). `rs_littleroot_lab` replaces it:
+  rect (3,12,7,5), 112x80, one placement. PROJ profile prisms (Kanto style): wall rows 53-80, fascia 50-53, a 15 degree
+  slope (`rg_close_backs`' L6b pitch, so it is not laid down again) split at the vent's foot (row 31), and the ridge band
+  as a 5 degree rise. The vent is a base (front rows 22-31) and a hood (19-22, top 1-19). The slope and band slice behind
+  the vent (x 19-44) take one FLAT texel of the slope and band colours, so the vent's art is not painted again behind it
+  or on the mirrored rear slope. L5 side dressing is on, for the body prisms only (not the vent).
+- **check (Ruby):** every S4 recipe PASS. Exact rects 0/0/0: `rs_littleroot_lab` (2 rects), `oldale_house` (2),
+  `gym_rustboro` (4), `devon_corporation` (2), `rustboro_fountain` (1); `rustboro_stone`/`rustboro_olive` are
+  components expanders (no exact rects), density 0, round trip ok. `check all`: 21 specs, 1 failed = `hedge`, the round
+  trip ("the placement's cell does not resolve"), which also fails on Emerald (unchanged, not S4).
+- **budget 0 (Ruby):** 0 models over, 0 chunks over the scratch; worst chunk 8496 of 9344 vertices (the same sea-rock
+  chunk as S3), worst model `rustboro_stone_3_43` 2808 of 3300. `devon_corporation` 2610, `rs_littleroot_lab` 384.
+- **Census (Ruby, `romgen author ROM census`):** covered 47 / 139 -> 58 / 139. The "before" count included the lab, whose
+  model was dropped by the art gate, so 46 shipped. Newly covered: all nine Rustboro rows, the lab (1/4) and both
+  Oldale houses (2/0, 2/1). Emerald covers 60 / 160.
+- **Remaining gap (81 rows):** every RS row still uncovered is uncovered on Emerald too, so this is new authoring, not
+  RS drift: Lilycove 0/5 13, Sootopolis 0/7 9, Slateport 0/1 7, Fortree 0/4 7, Mossdeep 0/6 7, Pacifidlog 0/15 5,
+  Mauville 0/2 4, Dewford 0/11 4, Verdanturf 0/14 4, Fallarbor 0/13 3, 0/25 3, and one each in 0/8, 0/12, 0/24, 0/26,
+  0/27, 0/28, 0/29, 0/34, 0/36, 0/37, 24/12, 24/21, 26/3, 26/4, 27/0.
+- **Outputs (Ruby = Sapphire, byte-identical):** buildings `a03a3b74` -> `40135582461dc05eee3828faf332c244e17acfad`
+  (2,389,332 -> 3,016,324 bytes, 52 -> 64 models, 58 pages, 2067 -> 2081 placements, 20,412 -> 35,508 vertices, 49 -> 57
+  masks, 66 variants, 0 failing). regions `1a09cd5f`, signposts `9b4d379c`, relief `215a12d9` unchanged. Emerald (buildings
+  `6d321c3a`, regions `007a370f`, signposts `38515605`, relief `21a837f0`, ledges `eb25a383`) and FR = LG (buildings
+  `5ba2cc16`, regions `3716874d`, signposts `ba2fde45`, relief `32c24146`) unchanged.
+- **Tests:** `test_romgen_rs_world` repinned (8379 checks): lab row, the six repins match the cart's layout FNV, model,
+  placement, vertex and mask counts. `make -C tools/romgen test` 30 suites, `vtest` 11 suites, every one 0 failures.
+  Device `make -j8` links.
+
+### Evidence (Azahar, 2026-10-07)
+
+Private emutest instance s (New 3DS, `--keep-n3ds`, voxel on with the default instance's settings.bin, state dir
+/tmp/s4s), warp-save copies of ruby.sav in the session scratchpad (the original is untouched). Same build for before and
+after; only `voxel/AXVE` changes (S3 output `a03a3b74` before, S4 output `40135582` after). The voxel.log of each after
+run is committed (`evidence/s4-ruby-*.voxel.log.txt`); no "chunk scratch full" in any run, before or after. The device
+log shows `64 models on 58 pages, 2081 placements, 35508 vertices`.
+
+| spot (player) | before | after |
+|---|---|---|
+| Littleroot lab, 0.9 (7,19) | flat ground art | a 3D lab: corrugated roof, ridge band, vent, facade with windows and door read right from the front camera |
+| Oldale, 0.10 (8,11) | the house is flat | a 3D house with the roof and eaves, facade and door; the second house is at the frame edge |
+| Rustboro Devon, 0.3 (11,19) | flat | Devon stands as a tall 3D block, facade, arched doors and windows read right; a stone house now stands at the bottom of the frame |
+| Rustboro gym, 0.3 (27,22) | gym and houses are flat or boxes | the stone houses to the right stand in 3D; the gym in this view barely changes (it was a box before and reads much the same) |
+| Rustboro west houses, 0.3 (12,33) | (an NPC dialog was open) | the stone houses stand in 3D with a roof vent, walls and windows |
+| Rustboro south, 0.3 (26,49) | flat | the stone and olive houses stand in 3D; the fountain is off the top of the frame |
+
+Not seen: the fountain model itself, and a spot at (28,37) (the movie opened the Pokedex there in both runs, so no shot).
+The lab's top and side views (`romgen author ... preview`) show a plain stripe behind the vent and thin vent-edge slivers
+at art columns 16-18 and 44-47 on the cap; the front camera does not see them. Hardware: not run. Shots
+(`evidence/s4-before-*.top.png`, `s4-after-*.top.png`) are local only, not committed (ROM-derived art).
