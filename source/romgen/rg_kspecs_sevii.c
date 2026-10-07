@@ -17,8 +17,9 @@
 #define L_TWO 231, 0x9AB6DD1Fu
 #define L_THREE 232, 0x76E27C1Eu
 #define L_BRINK 239, 0u
-#define L_PORT 241, 0u
+#define L_PORT 241, 0x9A123C3Eu
 #define SV_GROUND {0x001}
+#define SV_SEA_PORT {613, 627, 619, 628}   /* Three Isle Port's sea: 613 beside the pier, the rest as Two Island's */
 #define SV_SEA {627, 619, 628, 632}        /* the sea's open-water metatiles (the water is the ground; at most 4 entries) */
 
 static void sv_pt(double (*poly)[2], unsigned i, double z, double y)
@@ -136,6 +137,7 @@ static const RgExact kNetworkExact[5] = {
 };
 
 /* ==== KS1: Two Island (layout 231, map 3/13) ============================================================================ */
+/* (the one-block helper sv_block and the ferry's pieces are used by One Island's harbor below, so they sit here) */
 
 /* A flat-roofed block over x0..x1: the facade runs art rows ftop..zf (a vertical face, height zf - ftop), the level roof
  * top runs rows rtop..ftop behind it. */
@@ -173,14 +175,18 @@ static const RgSideCfg kGameCornerSide[1] = {
  * are ground quarters, so they are transparent). Rows: the pier deck 0-28 and its grey ramp 28-33 (x 32-80), the ferry's
  * red corrugated roof 33-80 over its grey hull with the red-triangle sign 80-112 (x 16-96), and two red cranes at each
  * side (x 0-16 and 96-112, rows 42-74 and 74-106). Four flat blocks and the pier slab. */
-static bool k_two_harbor(const RgSpec *spec, int a0, int a1, RgPartList *out)
+static bool sv_ferry(RgPartList *out)
 {
-    (void)spec; (void)a0; (void)a1;
-    return sv_block(out, "pier", 32, 80, 33, 26, 0) &&
+    return sv_block(out, "pier", 32, 80, 33, 28, 0) &&
            sv_block(out, "ferry", 16, 96, 104, 80, 33) &&
            sv_block(out, "crane_nw", 0, 16, 66, 56, 42) && sv_block(out, "crane_sw", 0, 16, 98, 88, 74) &&
            sv_block(out, "crane_ne", 96, 112, 66, 56, 42) && sv_block(out, "crane_se", 96, 112, 98, 88, 74) &&
            !out->failed;
+}
+static bool k_two_harbor(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    (void)spec; (void)a0; (void)a1;
+    return sv_ferry(out);
 }
 static const RgExact kTwoHarborExact[6] = {
     {32, 0, 80, 33, false},         /* the pier deck and its ramp */
@@ -203,6 +209,26 @@ static const RgSideCfg kHouseRedSide[1] = {
     {NULL, {40, 58, 44, 60}, {7, 24, 9, 30}, 22, true},
 };
 
+/* ---- k_three_port: 112x112 art (rect (9,12), 7x7 on layout 241; door (12,13)) -------------------------------------- */
+/* Three Isle Port: the same ferry, pier and cranes as Two Island's harbor (the boat cells are identical), moored at a
+ * sand quay instead of a plank deck. The quay is two low blocks beside the pier (x 0-32 and 80-112): sand and the
+ * grey bollards on top (rows 0-16), the dark edge as the face (rows 16-20). */
+static bool k_three_port(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    (void)spec; (void)a0; (void)a1;
+    return sv_block(out, "quay_w", 0, 32, 20, 16, 0) && sv_block(out, "quay_e", 80, 112, 20, 16, 0) && sv_ferry(out);
+}
+static const RgExact kPortExact[8] = {
+    {32, 0, 80, 33, false},         /* the pier: sand, planks, ramp */
+    {0, 0, 32, 20, false},          /* the west quay */
+    {80, 0, 112, 20, false},        /* the east quay */
+    {16, 33, 96, 104, false},       /* the ferry */
+    {0, 42, 16, 66, false},         /* the cranes */
+    {0, 74, 16, 98, false},
+    {96, 42, 112, 66, false},
+    {96, 74, 112, 98, false},
+};
+
 const RgSpec rg_kspecs_sevii[] = {
     {"k_sevii_house", RG_SPEC_DIRECT, L_ONE, {18, 6, 5, 4}, {1, 4}, SV_GROUND, 1, kHouseExact, 1,
      k_sevii_house, 0, 0, kHouseSide},
@@ -214,5 +240,7 @@ const RgSpec rg_kspecs_sevii[] = {
      k_two_harbor, 0, 0, kTwoHarborSide},
     {"k_three_house_red", RG_SPEC_DIRECT, L_THREE, {2, 28, 5, 4}, {1, 4}, SV_GROUND, 1, kHouseExact, 1,
      k_sevii_house, 0, 0, kHouseRedSide},
+    {"k_three_port", RG_SPEC_DIRECT, L_PORT, {9, 12, 7, 7}, {0, 0}, SV_SEA_PORT, 4, kPortExact, 8,
+     k_three_port, 0, 0, kTwoHarborSide},
 };
 const unsigned rg_kspecs_sevii_count = sizeof(rg_kspecs_sevii) / sizeof(rg_kspecs_sevii[0]);
