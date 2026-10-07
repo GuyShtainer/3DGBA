@@ -24,11 +24,15 @@ void rg_h_slope(double z0, double y0, double rows, double deg, double *z1, doubl
  * RG_H_PITCH slope rows ridge..eave, a 5-degree cap rows 0..ridge; the top ends one pixel short of the (skipped) back
  * drop, which rg_close_backs mirrors into the rear slope. */
 bool rg_h_gable(RgPartList *out, double width, double height, double eave, double ridge);
+/* The same with the cap starting at art row `top` (the rows above it are not the building's). */
+bool rg_h_gable_t(RgPartList *out, double width, double height, double eave, double ridge, double top);
 
 /* A flat-roofed block `width` px wide and `height` art rows tall: the wall carries rows wallTop..height, the level top
  * the rows above it. The top ends one pixel short of the (skipped) back drop, so the face rg_close_backs lays there sits
  * behind art row 0 instead of tying with the top's back edge. Part name "block". */
 bool rg_h_flat(RgPartList *out, double width, double height, double wallTop);
+/* The same with the top carrying rows top..wallTop only. */
+bool rg_h_flat_t(RgPartList *out, double width, double height, double wallTop, double top);
 
 /* ---- Dewford Town (layout 12) ---- */
 #define L_H_DEWFORD 12, 0xB67B1972u
@@ -105,6 +109,42 @@ extern const RgSideCfg rg_h_fallarbor_house_side[1];
     {"fallarbor_house_s", RG_SPEC_DIRECT, L_H_FALLARBOR, {5, 14, 4, 4}, {0, 0}, H_DIRT,                            \
      rg_h_fallarbor_house_exact, 3, rg_h_fallarbor_house, 0, 0, rg_h_fallarbor_house_side},                       \
     {"battle_tent_fallarbor", RG_SPEC_DIRECT, L_H_FALLARBOR, {6, 3, 5, 5}, {0, 0}, H_DIRT,                         \
+     rg_h_battle_tent_v_exact, 2, rg_h_battle_tent_v, 0, 0, rg_h_battle_tent_v_side},
+
+/* ---- Slateport City (layout 2; Ruby / Sapphire retarget it, rg_rsspecs.c) ---- */
+#define L_H_SLATEPORT 2, 0xD57B2886u
+#define H_SLATE_GROUND {0x001, 0x202, 0x211}, 3
+bool rg_h_slateport_house(const RgSpec *s, int width, int a1, RgPartList *out);
+bool rg_h_slateport_house_g(const RgSpec *s, int a0, int a1, RgPartList *out);
+bool rg_h_fan_club(const RgSpec *s, int a0, int a1, RgPartList *out);
+bool rg_h_oceanic_museum(const RgSpec *s, int a0, int a1, RgPartList *out);
+bool rg_h_shipyard(const RgSpec *s, int a0, int a1, RgPartList *out);
+extern const RgExact rg_h_slateport_house_exact[2];
+extern const RgExact rg_h_slateport_house_w_exact[2];
+extern const RgExact rg_h_slateport_house_g_exact[3];
+extern const RgExact rg_h_fan_club_exact[2];
+extern const RgExact rg_h_oceanic_museum_exact[6];
+extern const RgExact rg_h_shipyard_exact[2];
+extern const RgSideCfg rg_h_slateport_house_side[1];
+extern const RgSideCfg rg_h_slateport_house_g_side[1];
+extern const RgSideCfg rg_h_fan_club_side[1];
+extern const RgSideCfg rg_h_oceanic_museum_side[1];
+extern const RgSideCfg rg_h_shipyard_side[1];
+
+#define RG_HSPECS_SLATEPORT_ROWS                                                                                     \
+    {"slateport_house", RG_SPEC_DIRECT, L_H_SLATEPORT, {4, 16, 4, 4}, {0, 0}, H_SLATE_GROUND,                      \
+     rg_h_slateport_house_exact, 2, rg_h_slateport_house, 64, 0, rg_h_slateport_house_side},                       \
+    {"slateport_house_w", RG_SPEC_DIRECT, L_H_SLATEPORT, {24, 41, 6, 4}, {0, 0}, H_SLATE_GROUND,                   \
+     rg_h_slateport_house_w_exact, 2, rg_h_slateport_house, 96, 0, rg_h_slateport_house_side},                     \
+    {"slateport_house_g", RG_SPEC_DIRECT, L_H_SLATEPORT, {2, 22, 5, 5}, {0, 0}, H_SLATE_GROUND,                    \
+     rg_h_slateport_house_g_exact, 3, rg_h_slateport_house_g, 0, 0, rg_h_slateport_house_g_side},                  \
+    {"slateport_fan_club", RG_SPEC_DIRECT, L_H_SLATEPORT, {25, 7, 7, 6}, {0, 0}, H_SLATE_GROUND,                   \
+     rg_h_fan_club_exact, 2, rg_h_fan_club, 0, 0, rg_h_fan_club_side},                                             \
+    {"oceanic_museum", RG_SPEC_DIRECT, L_H_SLATEPORT, {28, 22, 6, 6}, {0, 0}, H_SLATE_GROUND,                      \
+     rg_h_oceanic_museum_exact, 6, rg_h_oceanic_museum, 0, 0, rg_h_oceanic_museum_side},                           \
+    {"slateport_shipyard", RG_SPEC_DIRECT, L_H_SLATEPORT, {24, 32, 8, 7}, {0, 0}, H_SLATE_GROUND,                  \
+     rg_h_shipyard_exact, 2, rg_h_shipyard, 0, 0, rg_h_shipyard_side},                                             \
+    {"battle_tent_slateport", RG_SPEC_DIRECT, L_H_SLATEPORT, {8, 8, 5, 5}, {0, 0}, H_SLATE_GROUND,                 \
      rg_h_battle_tent_v_exact, 2, rg_h_battle_tent_v, 0, 0, rg_h_battle_tent_v_side},
 
 #endif

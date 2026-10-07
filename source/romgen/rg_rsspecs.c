@@ -32,11 +32,17 @@ static const struct { const char *name; uint16_t layoutId; uint32_t fnv; } kReta
     {"gym_rustboro", 4, 0x5FF68C82u},
     {"devon_corporation", 4, 0x5FF68C82u},
     {"rustboro_fountain", 4, 0x5FF68C82u},
-    /* Phase 36 H1: Verdanturf's and Fallarbor's houses (the Contest Halls are RS-own, below) */
+    /* Phase 36 H1: Verdanturf's, Fallarbor's and Slateport's buildings (the Contest Halls are RS-own, below) */
     {"verdanturf_house", 15, 0x92F55851u},
     {"verdanturf_house_w", 15, 0x92F55851u},
     {"fallarbor_house_n", 14, 0x434DB33Eu},
     {"fallarbor_house_s", 14, 0x434DB33Eu},
+    {"slateport_house", 2, 0xA8D336A7u},
+    {"slateport_house_w", 2, 0xA8D336A7u},
+    {"slateport_house_g", 2, 0xA8D336A7u},
+    {"slateport_fan_club", 2, 0xA8D336A7u},
+    {"oceanic_museum", 2, 0xA8D336A7u},
+    {"slateport_shipyard", 2, 0xA8D336A7u},
 };
 
 /* Phase 35 S4: RS-own recipes (rg_rsspecs_<town>.c, the Kanto files' pattern) in the place of an Emerald row whose art gate
@@ -47,11 +53,14 @@ extern const RgSpec rg_rsspecs_verdanturf[];       /* rg_rsspecs_h1.c, Phase 36 
 extern const unsigned rg_rsspecs_verdanturf_count;
 extern const RgSpec rg_rsspecs_fallarbor[];
 extern const unsigned rg_rsspecs_fallarbor_count;
+extern const RgSpec rg_rsspecs_slateport[];
+extern const unsigned rg_rsspecs_slateport_count;
 
 static const struct { const char *name; const RgSpec *rows; const unsigned *count; } kReplace[] = {
     {"littleroot_lab", rg_rsspecs_littleroot, &rg_rsspecs_littleroot_count},   /* RS draws the lab roof differently */
     {"battle_tent_verdanturf", rg_rsspecs_verdanturf, &rg_rsspecs_verdanturf_count},  /* RS: the Contest Hall */
     {"battle_tent_fallarbor", rg_rsspecs_fallarbor, &rg_rsspecs_fallarbor_count},
+    {"battle_tent_slateport", rg_rsspecs_slateport, &rg_rsspecs_slateport_count},
 };
 
 static RgSpec sTable[2][RG_RSSPECS_MAX];
