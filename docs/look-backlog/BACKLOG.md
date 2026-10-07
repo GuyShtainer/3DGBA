@@ -8,7 +8,7 @@ points, with the cause found in the code:
 | L1 (DONE, see below) | "the trees near the entrance to the cave in Dewford are flat on top" | `voxel_tree.c` `VoxelTree_Part` knows only the General-tileset tree metatiles (0x1D4-0x1E7, 0x1EC/0x1ED, the small trees 0x016/0x017/0x0C6/0x0C7/0x1F4/0x1F5). The Route 106 / Dewford shrubs on sand are metatiles 0x124, 0x239, 0x242, 0x243 (`romgen author emerald.gba art 22 42 17 12 3`). They are not in the table, so they render as flat ground art. Seen in `docs/phase33-romgen/evidence/s37-full-r106.png` (foreground). | Scan all outdoor layouts for foliage metatiles missing from the table (the T1 foliage rule: at least 50 % foliage pixels), then add them as VOXEL_TREE_SMALL or as a new "shrub" part. Emerald table only; the FRLG table comes from T1. | small |
 | L2 (DONE, see below) | "the grass is still flat" | Upstream renders tall grass as ground texture. Only the rustle field effect is a sprite. There is no grass geometry. | Tall-grass cells (behaviour set) get low crossed or billboard blade cards from the cell's own art, swaying optionally. Budget: many cells per screen, so instance it cheaply and test the frame time on hardware. | medium |
 | L3 (DONE, see below) | "the lighting is somewhat off. The shadow has a single direction which doesn't add up: the NPCs are lit from the front" | `voxel_lighting.h`: a fixed sun in the northwest (`VOXEL_SUN_DX 0.85`, `DZ 0.55`), so shadows fall southeast, towards the camera side. The GBA sprite art is shaded as if lit from the front and above. The baked terrain shadows and the sprite shading disagree. | Move the sun in front of the scene (south, high), so cast shadows fall away from the camera. Check that `voxel_lighting.c`'s ray march does not assume a northwest sun (its reach box is built from DX/DZ signs). | small-medium |
-| L4 | "maybe for future: live lighting that changes with the day (use the 3DS clock or the RTC for RSE)" | The lighting is baked once into the chunk colours. | Sun angle and colour from the time of day. The source is the 3DS clock (osGetTime), which is also what mGBA's RTC reads for RSE, so all games agree. FRLG have no RTC, so they use the 3DS clock. Re-bake chunks incrementally when the sun has moved enough (minutes, not frames), plus a global tint (dawn, day, dusk, night). Future, after L3. | large |
+| L4 (DONE, see below) | "maybe for future: live lighting that changes with the day (use the 3DS clock or the RTC for RSE)" | The lighting is baked once into the chunk colours. | Sun angle and colour from the time of day. The source is the 3DS clock (osGetTime), which is also what mGBA's RTC reads for RSE, so all games agree. FRLG have no RTC, so they use the 3DS clock. Re-bake chunks incrementally when the sun has moved enough (minutes, not frames), plus a global tint (dawn, day, dusk, night). Future, after L3. | large |
 
 L1 finding (lead, 2026-10-06, `art 22 42 17 12 3`): the Route 106 / Dewford shrubs are ONE-CELL bushes (16x16) over
 sand or grass, not two-tile trees. The tree pass draws crowns from the fixed embedded 64x64 `voxel_trees.bin` (the
@@ -453,3 +453,83 @@ tileset fences (Sevii) beyond what the General table covers, fence side rails fo
 numbers beyond the first look.
 
 Tests: `make -C tools/romgen test` 28 suites, 0 failures; `vtest` 9 suites, 0 failures (mesh 27, world 8605, frlg 994).
+
+## L4 DONE (2026-10-07, branch worktree-agent-af97d93bc13fbf54b)
+
+**What it does.** The voxel world's sun and light colour follow the time of day. The clock is the 3DS's (`osGetTime`,
+local time), which is also what mGBA's RTC reads for Ruby/Sapphire/Emerald; FireRed/LeafGreen have no RTC and use the same
+clock. New pure-C module `voxel_daylight.{h,c}` (host-tested), wired in `ctr_voxel.c` ("The day (look backlog L4)").
+
+**Design: the colour is continuous, the shadows step.**
+- Colour (per frame, uniforms only, free): a keyframed tint multiplies the weather's grade (sun and shade tints), the
+  haze colour, and the glow (sun rays, dust motes, bloom, dapple contrast). Keys: night 20:00-04:45 (dim blue moonlight,
+  cool shade close to it so shadows are faint, glow 0), dawn 05:45 (pink-orange), morning 07:00, **day 09:00-16:30 = the
+  identity** (every factor exactly 1, so the middle of the day is L3's picture), golden hour 18:00, dusk 19:00 (red).
+  Linear between keys; the largest change of any factor is 0.0033 per quarter minute, so nothing pops. NPC/player cast
+  shadows fade with it (`VoxelEntities_SetShadowStrength`; 1 underground). Interiors and caves get no tint.
+- Sun direction: keyframed path that stays south of the scene (dz < 0) all day, because L3's point holds: the GBA sprites
+  are drawn lit from the front. It swings from east-low (05:00-06:00, 30 deg up, shadows west) through south at noon and
+  **exactly L3's vector at 14:00**, to west-low (18:00-20:00, shadows east). By night (20:30-04:00) it is L3's vector again
+  (a dim moon); the two sun-moon swings happen in full night where shadows are faint. The **baked** sun is quantised to
+  10-minute steps (144 a day); the largest daytime step-to-step move is 0.059 (tested < 0.12). Cast shadows use the
+  baked sun so they agree with the terrain; the dapple drift and mote wind use the continuous sun so they never jump.
+- Re-bake: a step sets the lighting sun (`VoxelLighting_SetSun`, resets the march caches) and bumps a sun stamp. Every lit
+  outdoor chunk built under another stamp is stale-but-drawn (the old mesh stays on screen) and goes through the existing
+  stale machinery: built after FrameEnd against the frame's spare time, **at most 1 sun re-bake job started per frame**
+  (`VOXEL_SUN_REBAKES_PER_FRAME`, `VoxelRebake_Take`), never built inside the frame (`RequestOverdue` refuses sun-only
+  requests), and a job that straddles a step is dropped (`JobValid`). Hashes are not recomputed (the chunk's hash still
+  holds; only the sun moved).
+- Hash margins: a chunk's hash must cover every tile a shadow ray can read. At start-up the margins are widened to the
+  union over all 144 step suns (`VoxelLighting_WidenReach`): W13 E13 N0 S7 instead of L3's W4 E0 N0 S6 (north stays
+  `VOXEL_CHUNK_MARGIN_NORTH`'s alone: the sun never goes north). Cost: each chunk hash reads ~2.4x the columns. With the
+  cycle off nothing is widened.
+
+**Rejected:** bumping the chunk epoch on a sun step (cancels every job, re-hashes everything); folding the sun into the
+hash (same effect, plus no way to keep the old mesh); a continuous baked sun (a re-bake every frame); a continuous sun for
+cast shadows (they would slide off the baked terrain shadows); a full 360-degree day through the north (breaks L3, the
+sprites would be back-lit); a very low sun (longer rays, wider hash, more march cost); a pause-menu row or a settings.bin
+field (the old "Time-of-day light" row was deliberately removed, and settings.bin has a strict length ladder).
+
+**Turning it off / testing it (no UI).** `sdmc:/3DGBA/daylight.txt`, read once at start-up:
+`off` = cycle off (L3's fixed sun, no tint: bit for bit the old picture); `HH:MM` = clock held there; `HH:MM xN` =
+from there at N x speed (1..3600). No file (the default) = live 3DS clock, cycle on. Anything not understood = live clock,
+logged as "daylight.txt not understood". voxel.log logs `VOXEL day: ...` at start, at every step, and a `VOXEL day wave:`
+cost line at the end of each re-bake wave.
+
+**Numbers (Azahar N3DS, Oldale, `13:58 x60` so a step every 10 s, 15 waves after the first):** every wave re-baked 64
+chunks over 146-198 frames (~7 s at Azahar's ~24 fps), 4.84 ms of build per chunk. Frame interval during waves mean
+42.08 ms vs steady 40.21 ms (+1.9 ms, ~5 %); max 66.85 ms (4 vsyncs) in 6 of 15 waves vs 50.19 ms (3 vsyncs) steady.
+Voxel module work (update + after-submit builds) mean 2.82 / max 10.16 ms in waves vs 0.60 / 0.69 ms steady. No
+"chunk scratch full" in any of the 9 runs. **Azahar is not the hardware gate**: it runs at ~24 fps here, emulator-bound,
+so these numbers show the shape (bounded, one build a frame, no in-frame rescue), not the New 3DS frame budget.
+
+**Bit-identity.** At 14:00 (and by night, and with the cycle off) the baked sun is L3's vector exactly, the tint is the
+identity by day, and the march / face terms are unchanged: `test_voxel_world` still reports 8605 checks, 2184 sun-march
+points, 12 in shadow; every other vtest count is unchanged (entities 29, mesh 27, frlg 994, adapter 562, gate 37, lz77
+173, overlay 23, shims 79). romgen output is byte-identical to main's (SHA-1 of all 8 Emerald + FR .bin from a HEAD
+build and from this branch: Emerald buildings 6d321c3a, regions 007a370f, signposts 38515605, relief 21a837f0; FR
+buildings 5ba2cc16, regions 3716874d, signposts ba2fde45, relief 32c24146); source/romgen untouched.
+
+**Tests.** New `test_voxel_daylight` (42609 checks): sun exact at 14:00 / its step / night, dz < 0 and length <= 1.75 at
+every quarter minute, small daytime steps (big ones only where glow is 0), tint identity 09:00-16:30, night < dusk/dawn <
+day, continuity, the override parser and wrap, the pacer (never above the cap per frame; 60 stale chunks over 60 frames),
+default reach = L3's 4/0/0/6, widened reach covers each step's actual ray run, march at L3's step = L3's march bit for bit
+(2184 points + 7 face terms), and at dawn/noon/dusk suns the skipping march equals the point-by-point reference.
+`make -C tools/romgen test` 28 suites, 0 failures, 0 skipped; `vtest` 10 suites, 0 failures; device `make -j8` links.
+
+**Evidence** (Azahar N3DS, private instance, MK.ctm, staged warp saves, `daylight.txt` held at 05:45 / 12:00 / 19:00 /
+23:00): `evidence/l4-fr-pallet-{dawn,noon,dusk,night}.png`, `evidence/l4-em-oldale-{dawn,noon,dusk,night}.png`.
+
+**Verdict, per time of day (by eye on those shots):**
+- Noon / day: unchanged picture (identity tint), sun due south so shadows fall straight up the screen. Good.
+- Dawn (05:45): warm-grey light, long shadows to the west (the Oldale Center casts a long one to the left). Reads as
+  morning; the tint is a little washed out (greyish rather than golden) - a candidate for tuning.
+- Dusk (19:00): red-orange light, long shadows to the east. Reads well; the strongest look of the four.
+- Night (23:00): blue moonlight, faint shadows, no rays/dust. Readable and clearly night; the people are tinted too
+  (they are drawn through the same grade), right for the scene, but they read dimmer than by day.
+
+**Only hardware can prove:** the real cost of a wave on a New 3DS at its own frame rate (does one 4.8 ms after-submit
+build per frame fit the spare time without a missed vsync, and does the 2.4x wider hash cost show in steady frames), the
+look of the tints on the real screens (Azahar's colours are not the LCD's), and the live-clock path (`osGetTime`) with
+no file, which Azahar's runs above never used (they all held the clock with the file). Not done: a per-step visual
+check of shadow movement in motion; caves still re-bake on sun steps though they are untinted (harmless, wasted work).
