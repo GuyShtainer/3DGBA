@@ -533,3 +533,12 @@ build per frame fit the spare time without a missed vsync, and does the 2.4x wid
 look of the tints on the real screens (Azahar's colours are not the LCD's), and the live-clock path (`osGetTime`) with
 no file, which Azahar's runs above never used (they all held the clock with the file). Not done: a per-step visual
 check of shadow movement in motion; caves still re-bake on sun steps though they are untinted (harmless, wasted work).
+
+## L9: characters look flat in tall grass (Guy, 2026-10-07)
+
+Guy, on Ruby Route 102 at night (circled shot kept out of git: RS screenshots are pending Guy's call on ROM-derived images): "Here it feels that
+the characters are kinda flat". The player and the trainer standing in tall grass read as pasted on the ground, while
+the NPC on the path above reads upright. Not yet investigated. Suspects, to be measured: the GBA's own tall-grass
+field-effect sprite covering the lower half of the billboard, the L2 blade cards drawn over the billboard, the
+billboard's foot/depth placement on grass cells, and the night grade lowering sprite contrast. Check Emerald and FRLG
+grass too (not RS-specific until shown). Size: unknown until measured. Order: after Phase 35 S4.
