@@ -1,5 +1,5 @@
 /* rg_rsspecs.h -- the Ruby / Sapphire building recipe table, and the per-game table selector (3DGBA, GPLv3). Pure C.
- * Phase 35 S0: docs/phase35-rs/PHASE.md. */
+ * Phase 35 S0, S4: docs/phase35-rs/PHASE.md. */
 #ifndef RG_RSSPECS_H
 #define RG_RSSPECS_H
 
@@ -10,8 +10,10 @@
  * FNV-1a pin of that layout's blockdata, so a recipe builds only where the Ruby / Sapphire layout is byte-identical to the
  * Emerald one it was authored on; everywhere else rg_build_models skips it and the device draws its extruded-box fallback.
  * Two rows change: the interior recipes are left out (Ruby / Sapphire interiors stay 2D, `interiors3d` false), and a
- * components expander's secondary tileset is the same tileset at this cartridge's address. NULL with *n = 0 for any other
- * game. Not thread-safe on its first call (like rg_kspecs_table). */
+ * components expander's secondary tileset is the same tileset at this cartridge's address. Phase 35 S4: the rows whose
+ * buildings RS draws exactly as Emerald does, on a layout that differs elsewhere (Oldale, Rustboro), are repinned to the RS
+ * layout, and the Littleroot lab (RS draws its roof differently) is replaced by an RS-own recipe (rg_rsspecs_littleroot.c).
+ * NULL with *n = 0 for any other game. Not thread-safe on its first call (like rg_kspecs_table). */
 const RgSpec *rg_rsspecs_table(const GameProfile *prof, unsigned *n);
 
 /* The recipe table romgen builds for a profile: rg_specs on Emerald, rg_rsspecs_table on Ruby / Sapphire, rg_kspecs_table on
