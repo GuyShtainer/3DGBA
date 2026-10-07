@@ -77,6 +77,37 @@ static const GpShrub kLeafGreenShrubs[] = {{0, 0x005, GP_PROP_BUSH}, {0x082D4BA4
  * the tileset at 0x083DF794 draws its blades over a sandy-brown ground (ROM-measured, `romgen author ROM grass`). */
 static const GpShrub kEmeraldGrassSkip[] = {{0x083DF794u, 0x206, GP_PROP_BUSH}};
 
+/* Phase 35 S3: Ruby / Sapphire rev 2 foliage, ROM-measured on the user's carts (`romgen author ROM trees|shrubs|props|grass`,
+ * PROVENANCE "ROM-measured, no decomp"; docs/phase35-rs/PHASE.md S3). The General tileset is Emerald's with redrawn art
+ * but the SAME metatile ids and roles, so the tree wall is Emerald's table (kEmeraldTreePart / kEmeraldTreeGround, every
+ * pair re-checked on the RS pixels: each canopy-fringe metatile's lower layer equals its replacement's, exactly as on
+ * Emerald), plus four ids Emerald leaves flat that RS shows plainly as the same wall's forest-edge variants (blocked on
+ * every use, foliage): the top row 0x1FC / 0x1FD (parts 0 / 1) and the lower row 0x1F3 / 0x1F2 (parts 2 / 3). */
+static const int16_t kRsTreePart[] = {
+    0x1D4, 0, 0x1D6, 0, 0x1D5, 1, 0x1D7, 1, 0x1FC, 0, 0x1FD, 1,
+    0x1DC, 2, 0x1DE, 2, 0x1E4, 2, 0x1E6, 2, 0x1EC, 2, 0x1F3, 2,
+    0x1DD, 3, 0x1DF, 3, 0x1E5, 3, 0x1E7, 3, 0x1ED, 3, 0x1F2, 3,
+    0x016, 4, 0x017, 4, 0x0C6, 4, 0x0C7, 4, 0x1F4, 4, 0x1F5, 4,
+};
+/* One-cell bushes and props of Ruby / Sapphire. The three secondary tilesets (Dewford 0x08286D54, Slateport 0x08286D6C,
+ * 0x08286E14 in Ruby; Sapphire's sit 0x70 lower) are the ones whose round bushes match Emerald's by pixel
+ * and role. The General props are Emerald's ids: the fence row 0x149, the fence posts 0x140 / 0x142 (upper layers
+ * pixel-identical to Emerald's), the boulders 0x0E0 / 0x0E1 / 0x0E2, the flower bed 0x004. Ground and leaves split on the
+ * layers as test_romgen_rs_foliage pins. */
+#define GP_RS_PROPS \
+    {0, 0x149, GP_PROP_FENCE_EW}, {0, 0x140, GP_PROP_FENCE_NS}, {0, 0x142, GP_PROP_FENCE_NS}, \
+    {0, 0x0E0, GP_PROP_ROCK}, {0, 0x0E1, GP_PROP_ROCK}, {0, 0x0E2, GP_PROP_ROCK}, {0, 0x004, GP_PROP_FLOWER}
+#define GP_RS_SHRUBS(dew, slate, fall) \
+    {dew, 0x243, GP_PROP_BUSH}, {dew, 0x242, GP_PROP_BUSH}, {dew, 0x247, GP_PROP_BUSH}, {dew, 0x202, GP_PROP_BUSH}, \
+    {dew, 0x207, GP_PROP_BUSH}, {slate, 0x243, GP_PROP_BUSH}, \
+    {fall, 0x220, GP_PROP_BUSH}, {fall, 0x23B, GP_PROP_BUSH}, {fall, 0x23F, GP_PROP_BUSH}, GP_RS_PROPS
+static const GpShrub kRubyShrubs[] = {GP_RS_SHRUBS(0x08286D54u, 0x08286D6Cu, 0x08286E14u)};
+static const GpShrub kSapphireShrubs[] = {GP_RS_SHRUBS(0x08286CE4u, 0x08286CFCu, 0x08286DA4u)};
+/* Look L2 on RS: tall grass (behaviour 0x02) of the Lavaridge-side tileset draws its blades over the same sandy ground as
+ * Emerald's 0x206 (ROM-measured: 114 of its lower layer's 256 pixels are plain-grass colours, the sand 13955 among them). */
+static const GpShrub kRubyGrassSkip[] = {{0x08286D9Cu, 0x206, GP_PROP_BUSH}};
+static const GpShrub kSapphireGrassSkip[] = {{0x08286D2Cu, 0x206, GP_PROP_BUSH}};
+
 #define GP_FRLG_TREES .treePart = kFrlgTreePart, .treePartCount = sizeof kFrlgTreePart / sizeof kFrlgTreePart[0] / 2u
 
 /* The Emerald row is built from the existing macros so it cannot drift (SPEC 1.2 rule 1). */
@@ -197,17 +228,22 @@ static const uint8_t kRsGroupSizes[34] = {54, 5, 5, 6, 7, 7, 8, 7, 7, 13, 8, 17,
     .gMain = 0x03001770u, .sb1Ptr = 0x02025734u, .sb1Direct = true, .backupLayout = 0x03004870u, .backupMap = 0,      \
     .mapHeader = 0x0202E828u, .objEvents = 0x030048A0u, .playerAvatar = 0x0202E858u, .sprites = 0x02020004u,          \
     .plttUnfaded = 0x0202EAC8u, .paletteFade = 0x0202F388u, .mainFlagsOff = 0x43D, .playerAvatarBytes = 0x24,        \
-    .weather = 0, .weatherOff = {0x6D0, 0x6C6, 0x730, 0x6FB, 0x724}, .gfxInfoCount = 218, .fldeffCount = 36
+    .weather = 0, .weatherOff = {0x6D0, 0x6C6, 0x730, 0x6FB, 0x724}, .gfxInfoCount = 218, .fldeffCount = 36,           \
+    .treePart = kRsTreePart, .treePartCount = sizeof kRsTreePart / sizeof kRsTreePart[0] / 2u,                        \
+    .treeGround = kEmeraldTreeGround, .treeGroundCount = sizeof kEmeraldTreeGround / sizeof kEmeraldTreeGround[0] / 2u, \
+    .grassGround = 0x001
 
 static GameProfile sRuby = {GP_RS_COMMON, .game = GP_RUBY, .code = {'A', 'X', 'V', 'E'}, .dataSubdir = "AXVE",
                             .mapGroups = 0x083085A0u, .mapLayouts = 0x08304F30u, .tsGeneral = 0x08286D0Cu,
                             .tsBuilding = 0x08286E5Cu, .weatherPtr = 0x08396FDCu, .gfxInfoPtrs = 0x0836DC70u,
-                            .fldeffTemplates = 0x0836DFD8u, .cb2Overworld = 0x080543C5u, .cb2OverworldBasic = 0x080543B9u};
+                            .fldeffTemplates = 0x0836DFD8u, .cb2Overworld = 0x080543C5u, .cb2OverworldBasic = 0x080543B9u,
+                            GP_SHRUBS(kRubyShrubs), .grassSkip = kRubyGrassSkip, .grassSkipCount = 1};
 static GameProfile sSapphire = {GP_RS_COMMON, .game = GP_SAPPHIRE, .code = {'A', 'X', 'P', 'E'}, .dataSubdir = "AXPE",
                                 .mapGroups = 0x08308530u, .mapLayouts = 0x08304EC0u, .tsGeneral = 0x08286C9Cu,
                                 .tsBuilding = 0x08286DECu, .weatherPtr = 0x08396E24u, .gfxInfoPtrs = 0x0836DC00u,
                                 .fldeffTemplates = 0x0836DF68u, .cb2Overworld = 0x080543C9u,
-                                .cb2OverworldBasic = 0x080543BDu};
+                                .cb2OverworldBasic = 0x080543BDu, GP_SHRUBS(kSapphireShrubs),
+                                .grassSkip = kSapphireGrassSkip, .grassSkipCount = 1};
 
 static void set_bit(GpBehSet *s, unsigned b)
 {
