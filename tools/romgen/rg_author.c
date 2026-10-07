@@ -15,6 +15,7 @@
 #include "rg_bcheck.h"
 #include "rg_budget.h"
 #include "rg_kspecs.h"
+#include "rg_rsspecs.h"
 #include "rg_png.h"
 
 #ifdef RG_AUTHOR_CONSUMER
@@ -67,7 +68,7 @@ static const RgSpec *game_specs(const RgWorld *w, unsigned *n)
         *n = rg_spec_count;
         return rg_specs;
     }
-    return rg_kspecs_table(w->prof, n);
+    return rg_game_specs(w->prof, n);   /* FRLG: the Kanto table; Ruby / Sapphire: Emerald's pinned rows */
 }
 
 /* ------------------------------------------------------------------------------------------------------------------ */

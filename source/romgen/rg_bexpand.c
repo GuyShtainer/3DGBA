@@ -721,7 +721,6 @@ skip:
 
 /* ---- props (voxel_props.py, gen:93-142) ---------------------------------------------------- */
 
-#define TS_GENERAL 0x083DF704u             /* gTileset_General */
 
 typedef struct PGrid { int tile; bool optional; int pal; } PGrid;      /* tile -1 = None */
 typedef struct PObj { int gw, gh, palette; PGrid g[16]; } PObj;
@@ -923,7 +922,7 @@ static RgErr find_obj(ExpCtx *c, unsigned lid, const PObj *obj, Found **res, uns
 
     *res = NULL;
     *nres = 0;
-    if (L->ts[0]->addr != TS_GENERAL)
+    if (L->ts[0]->addr != rg_lprof(L)->tsGeneral)   /* TS_GENERAL on Emerald; Phase 35: this cartridge's General */
         return RG_OK;
     for (j = 0; j < obj->gh && ai < 0; j++)
         for (i = 0; i < obj->gw; i++) {

@@ -8,6 +8,7 @@
 #include "rg_signs.h"
 #include "rg_bspecs.h"
 #include "rg_kspecs.h"
+#include "rg_rsspecs.h"
 
 static double now(const RgRunOpts *o)
 {
@@ -109,11 +110,12 @@ static RgErr run_buildings(const RgWorld *w, const RgRunOpts *o, RgOutput *out)
     if (w->prof->specs != NULL) {
         e = rg_build_models(w, w->prof->specs, w->prof->nSpecs, &ms);
     } else if (w->prof->game != GP_EMERALD) {
-        /* Phase 34 B0: FireRed / LeafGreen use the Kanto table (rg_kspecs.c); empty until the K slices, which is a valid
-         * 0-model buildings.bin the consumer loads (the device then draws the fallback boxes). It is not read through
-         * the profile's `specs` pointer because rg_gameprof.c is also linked by the renderer-only builds. */
+        /* Phase 34 B0: FireRed / LeafGreen use the Kanto table (rg_kspecs.c); Phase 35: Ruby / Sapphire the Emerald rows
+         * that their pins admit (rg_rsspecs.c). An empty table is a valid 0-model buildings.bin the consumer loads (the
+         * device then draws the fallback boxes). It is not read through the profile's `specs` pointer because
+         * rg_gameprof.c is also linked by the renderer-only builds. */
         unsigned nk = 0;
-        const RgSpec *k = rg_kspecs_table(w->prof, &nk);
+        const RgSpec *k = rg_game_specs(w->prof, &nk);
 
         e = rg_build_models(w, k, nk, &ms);
     } else {
@@ -139,6 +141,16 @@ static RgErr run_buildings(const RgWorld *w, const RgRunOpts *o, RgOutput *out)
                 out->failedNames[out->buildingsFailed][63] = '\0';
             }
             out->buildingsFailed++;
+            /* Phase 35: a Ruby / Sapphire model is an Emerald recipe over this cartridge's art, which can differ where its
+             * layout pin still matches (the Littleroot lab's roof); a recipe that does not reproduce the art is left out, so
+             * the device draws that building's extruded-box fallback. Emerald and FRLG keep shipping a failing model. */
+            if (gp_is_rs(w->prof)) {
+                rg_model_release(&ms.m[i]);
+                memmove(&ms.m[i], &ms.m[i + 1], (size_t)(ms.n - i - 1u) * sizeof(ms.m[0]));
+                ms.n--;
+                i--;
+                out->buildingsDropped++;
+            }
         }
     }
     out->msChecks = now(o) - t0;

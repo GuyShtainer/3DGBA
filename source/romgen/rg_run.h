@@ -29,6 +29,7 @@ typedef struct RgOutput {
     RgReliefStats rst;
     unsigned bModels, bPages, bPageModels, bPlacements, bVertices, bMasks, bVariants;
     unsigned buildingsFailed;    /* models whose gate (ortho + density) failed; the file is still written */
+    unsigned buildingsDropped;   /* Phase 35: of those, the ones left out of the file (Ruby / Sapphire: fallback box instead) */
     char failedNames[RG_MAX_SKIPPED][64];   /* the first few failing model names */
     unsigned layouts, maps, tilesets, pairs, outdoorMaps;
     unsigned signCount, headCount, emptyMasks;

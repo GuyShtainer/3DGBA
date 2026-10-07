@@ -67,3 +67,15 @@ Numbers only (ids, addresses, value sets); no decomp text. Reference clone is st
 | table | symbol (file) | source consulted | derivation | ROM assertion |
 |---|---|---|---|---|
 | FR/LG General ids: fences 0x0B4 0x0B5 0x0D6 0x0D7 0x0E6 0x0E7 0x0EC 0x0ED (E-W), 0x0EF 0x0F0 0x0F1 0x0F4 0x0F5 (N-S); rocks 0x110 0x111 0x118 0x119 0x1CB 0x1CC 0x1D3 0x1D4 0x212 0x213 0x21A 0x21B 0x244 0x245 0x24C 0x24D; flower 0x004. Emerald General: fences 0x149 (E-W) 0x140 0x142 (N-S); rocks 0x0E0-0x0E2; flower 0x004 | `GP_FRLG_PROPS`, `kEmeraldShrubs` (rg_gameprof.c) | none: ROM-measured, no decomp. `romgen author ROM props` on the user's own Emerald and FR/LG rev 1 dumps: every General metatile used outdoors with an object-shaped upper layer, kept by eye from the contact sheets (props-N.png); layer split, behaviour, uses and blocked share are printed per id | metatile ids, measured from art and layout cells | `test_romgen_shrubs.c` RunProps (used outdoors, blocked on >= half the uses for fences and rocks, lower layer opaque, upper layer kept/keyed pixel counts, counts 7 Emerald / 30 FR-LG), `test_voxel_mesh.c` TestPropCards |
+
+## Phase 35 S0 (Ruby / Sapphire rev 2), pokeruby@5784633, 2026-10-07
+
+Numbers only; no decomp text. Reference clone is study-only, nothing in it was run.
+
+| table | symbol (file) | source consulted | derivation | ROM assertion |
+|---|---|---|---|---|
+| RS table addresses: gMapGroups Ruby 0x083085A0 / Sapphire 0x08308530, gMapLayouts 0x08304F30 / 0x08304EC0, General 0x08286D0C / 0x08286C9C, Building 0x08286E5C / 0x08286DEC; components secondaries Petalburg 0x08286D24 / 0x08286CB4, Rustboro 0x08286D3C / 0x08286CCC | `sRuby`, `sSapphire` (rg_gameprof.c), `kTsMap` (rg_rsspecs.c) | none: ROM-measured on the user's own rev 2 dumps (docs/phase35-rs/PHASE.md "Recon"): the pointer table every map header agrees with; tilesets by the layouts that use them | addresses, measured | `test_romgen_rs_world.c` (rg_find_map_layouts = stored value, every header agrees, Littleroot's General + Petalburg pair, recipe rows retargeted) |
+| RS ROM layout constants (Emerald's: header 0x1C, layout 24 B, attrs u16 at +0x10, 512/512/6), 34 groups with sizes, 332 layout slots | `GP_RS_COMMON`, `kRsGroupSizes` (rg_gameprof.c) | ROM-measured (group sizes = pointer gaps of gMapGroups); group count and struct shapes cross-checked against pokeruby@5784633 (numbers only) | counts and offsets | `test_romgen_rs_world.c` census (34 groups + sizes, 394 maps, 332 slots all present, 56 tilesets, 55 pairs, 75 outdoor) |
+| RS behaviour sets = Emerald's | `build_emerald_sets(&sRuby/&sSapphire)` (rg_gameprof.c) | pokeruby@5784633 and pokeemerald@731ad5b `include/constants/metatile_behaviors.h`, compared value by value (42 names differ, no value the sets use) | reuse, no new numbers | `test_romgen_rs_world.c` TestRows (every b in 0..511 equal to Emerald's, all twelve sets) |
+| rev 2 cartridge identity | (PHASE.md recon only) | pokeruby@5784633 `ruby_rev2.sha1`, `sapphire_rev2.sha1` | the user's dumps hash to these values | the profile gate (game code + rev byte 2) |
+

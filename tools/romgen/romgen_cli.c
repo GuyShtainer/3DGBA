@@ -517,7 +517,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "romgen: cannot read %s\n", romPath);
         return 1;
     }
-    { const GameProfile *gp = gameprof_detect_romgen(rom, n); printf("game: %s\n", gp == NULL ? "unsupported" : gp->game == GP_EMERALD ? "Emerald" : gp->game == GP_FIRERED ? "FireRed rev 1" : "LeafGreen rev 1"); }
+    { const GameProfile *gp = gameprof_detect_romgen(rom, n); printf("game: %s\n", gp == NULL ? "unsupported" : gp->game == GP_EMERALD ? "Emerald" : gp->game == GP_FIRERED ? "FireRed rev 1" : gp->game == GP_LEAFGREEN ? "LeafGreen rev 1" : gp->game == GP_RUBY ? "Ruby rev 2" : "Sapphire rev 2"); }
     if (dumpModel != NULL) {
         int rc = DumpModel(rom, n, dumpModel);
         free(rom);
@@ -565,6 +565,8 @@ int main(int argc, char **argv)
                out.buildingsSize, out.bModels, out.bPages, out.bPageModels, out.bPlacements, out.bVertices, out.bMasks,
                out.bVariants);
         printf("buildings gate: %u failing model(s)\n", out.buildingsFailed);
+        if (out.buildingsDropped != 0)
+            printf("buildings gate: %u failing model(s) left out (the device draws their fallback box)\n", out.buildingsDropped);
     }
     if (wantRelief && out.relief != NULL && WriteFile(outDir, "relief.bin", out.relief, out.reliefSize))
         printf("relief.bin: %zu bytes, %u rows, %u cells, %u ledge layouts, %u ledge cells (mode %s)\n", out.reliefSize,

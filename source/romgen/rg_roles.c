@@ -196,7 +196,7 @@ static bool is_signpost(Ctx *c, int x, int y)
     /* Phase 34 G2: in FireRed / LeafGreen the signpost behaviour (0x84) IS the sign, whatever stands beside it, and the
      * Emerald lantern / open-post heuristics below are not used (they find 12 cells that are not signs and miss Pallet's two
      * mailboxes, which touch the house wall). Emerald keeps its own tests unchanged: its output is pinned. */
-    if (rg_lprof(L)->game != GP_EMERALD)
+    if (gp_is_kanto(rg_lprof(L)))
         return southOk && gp_beh(&rg_lprof(L)->signpost, rg_behaviour(L, x, y));
     if (southOk && is_post_metatile(c, rg_metatile(L, x, y)))
         return true;
