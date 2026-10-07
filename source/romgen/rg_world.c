@@ -64,7 +64,7 @@ const char *rg_err_str(RgErr e)
 {
     switch (e) {
     case RG_OK: return "ok";
-    case RG_ERR_GAME: return "not a supported game (Emerald, FireRed rev 1, LeafGreen rev 1) or tables missing";
+    case RG_ERR_GAME: return "not a supported game (Emerald, FireRed / LeafGreen rev 1, Ruby / Sapphire rev 2) or tables missing";
     case RG_ERR_LAYOUT_ORDER: return "map header layout id disagrees with the layout table";
     case RG_ERR_LAYOUT_TABLE: return "layout table unreadable";
     case RG_ERR_MAP_GROUPS: return "map group table or map events unreadable";
@@ -196,7 +196,10 @@ static RgErr read_layouts(RgWorld *w, uint16_t (*tsIdx)[2])
     unsigned n = 0, i;
     uint32_t e;
 
-    while (n < RG_MAX_LAYOUTS && ptr_ok(w, tbl + 4u * n, 4)) {
+    /* Phase 35: never past the profile's slot count. On Ruby / Sapphire gMapLayouts is followed directly by the map
+     * headers, whose first word is a layout pointer, so the plausibility walk alone would read Petalburg's header as a
+     * 333rd layout (Emerald 442 and FRLG 384 end at their slot count either way). */
+    while (n < RG_MAX_LAYOUTS && (w->prof->layoutSlots == 0u || n < w->prof->layoutSlots) && ptr_ok(w, tbl + 4u * n, 4)) {
         e = rg_rd32(rom_at(w, tbl + 4u * n));
         if (e != 0 && !layout_plausible(w, e))
             break;

@@ -15,7 +15,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-typedef enum { GP_NONE = 0, GP_EMERALD, GP_FIRERED, GP_LEAFGREEN } GpGame;
+/* Phase 35: Ruby and Sapphire are appended, so the existing values (and romgen_dev's per-game bit) do not move. */
+typedef enum { GP_NONE = 0, GP_EMERALD, GP_FIRERED, GP_LEAFGREEN, GP_RUBY, GP_SAPPHIRE } GpGame;
 
 /* 512 bits: metatile behaviour values 0..0x1FF. */
 typedef struct GpBehSet { uint32_t w[16]; } GpBehSet;
@@ -101,13 +102,25 @@ typedef struct GameProfile {
     unsigned nSpecs;
 } GameProfile;
 
+/* Phase 35: the game families. Kanto = FireRed / LeafGreen (their own behaviour numbers and u32 attributes); Ruby /
+ * Sapphire = the Emerald ROM layer (u16 attributes, the Emerald behaviour sets) with their own table addresses. Emerald's
+ * Zallax-pinned paths (name-order tables, drawn relief, the interior specs) stay Emerald-only: test `game == GP_EMERALD`. */
+static inline bool gp_is_kanto(const GameProfile *p)
+{
+    return p != NULL && (p->game == GP_FIRERED || p->game == GP_LEAFGREEN);
+}
+static inline bool gp_is_rs(const GameProfile *p)
+{
+    return p != NULL && (p->game == GP_RUBY || p->game == GP_SAPPHIRE);
+}
+
 /* Reads the code (0xAC) and revision (0xBC) from a ROM image. NULL = unsupported (wrong game, wrong rev, short
  * buffer). Rows whose game is GP_NONE are never returned. */
 const GameProfile *gameprof_detect(const uint8_t *rom, size_t size);
 
 /* Phase 34 G1: the same detection for romgen (and for vx_host's anchor self-check): it also returns the FireRed and
- * LeafGreen rev 1 rows. gameprof_detect() keeps refusing a non-Emerald row until R2 sets its `rendererOn`, so the
- * renderer is not enabled by accident. */
+ * LeafGreen rev 1 rows, and (Phase 35 S0) the Ruby / Sapphire rev 2 rows. gameprof_detect() keeps refusing a row whose
+ * `rendererOn` is not set (Ruby / Sapphire until their renderer slice), so the renderer is not enabled by accident. */
 const GameProfile *gameprof_detect_romgen(const uint8_t *rom, size_t size);
 
 /* The Emerald row. Its behaviour sets are filled on first use from the existing predicates; the first call

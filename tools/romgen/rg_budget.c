@@ -11,6 +11,7 @@
 #include "rg_bspecs.h"
 #include "rg_buildings.h"
 #include "rg_kspecs.h"
+#include "rg_rsspecs.h"
 #include "rg_run.h"
 #include "rg_world.h"
 
@@ -281,7 +282,7 @@ bool rg_budget_run(const uint8_t *rom, size_t size, RgBudget *out, char *why, si
         specs = rg_specs;
         nSpecs = rg_spec_count;
     } else {
-        specs = rg_kspecs_table(w.prof, &nSpecs);
+        specs = rg_game_specs(w.prof, &nSpecs);
     }
     e = rg_build_models(&w, specs, nSpecs, &ms);
     if (e != RG_OK) {

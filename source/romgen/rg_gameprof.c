@@ -170,6 +170,30 @@ static GameProfile sLeafGreen = {GP_FRLG_COMMON, .game = GP_LEAFGREEN, .code = {
                                  .gfxInfoPtrs = 0x0839FE00u, .fldeffTemplates = 0x083A0060u,
                                  GP_SHRUBS(kLeafGreenShrubs), .grassGround = 0x001};
 
+/* Ruby / Sapphire rev 2 (Phase 35 S0): the ROM layer only, measured on the user's carts (docs/phase35-rs/PHASE.md, recon;
+ * PROVENANCE "ROM-measured"). AXVE / AXPE rev 2. The map data are in Emerald's format (map header 0x1C, layout 24 bytes,
+ * tileset attributes u16 at +0x10, 512 primary metatiles and tiles, 6 primary palettes, the behaviour numbering Emerald
+ * kept), so the Emerald constants and behaviour sets serve. gMapGroups and gMapLayouts were found by searching each ROM for
+ * the table every map header agrees with; the group sizes are that table's pointer gaps (34 groups, 394 maps). Ruby and
+ * Sapphire hold byte-identical blockdata in all 332 layouts and identical content in all 56 tilesets; only the addresses
+ * differ. The renderer anchors are not harvested (all 0, `rendererOn` false): gameprof_detect() refuses these rows. */
+static const uint8_t kRsGroupSizes[34] = {54, 5, 5, 6, 7, 7, 8, 7, 7, 13, 8, 17, 10, 24, 13, 13, 14, 2, 2, 2, 3, 1, 1,
+                                          1, 86, 44, 12, 2, 1, 13, 1, 1, 3, 1};
+
+#define GP_RS_COMMON                                                                                                  \
+    .rev = 2, .groupCount = 34, .groupSizes = kRsGroupSizes, .layoutSlots = 332,                                      \
+    .nPrimMetatiles = NUM_METATILES_IN_PRIMARY, .nPrimTiles = NUM_TILES_IN_PRIMARY, .nPrimPals = NUM_PALS_IN_PRIMARY, \
+    .nMetatilesTotal = NUM_METATILES_TOTAL, .tilesetAttrOff = 0x10, .attrBytes = 2, .behMask = GBA_BEHAVIOR_MASK,     \
+    .layerMask = GBA_ATTR_LAYER_MASK, .layerShift = GBA_ATTR_LAYER_SHIFT, .layoutBytes = GBA_ROM_MAPLAYOUT_BYTES,     \
+    .houseHalfWidth = 5, .houseHeight = 7, .emeraldIdTables = false, .interiors3d = false, .rendererOn = false
+
+static GameProfile sRuby = {GP_RS_COMMON, .game = GP_RUBY, .code = {'A', 'X', 'V', 'E'}, .dataSubdir = "AXVE",
+                            .mapGroups = 0x083085A0u, .mapLayouts = 0x08304F30u, .tsGeneral = 0x08286D0Cu,
+                            .tsBuilding = 0x08286E5Cu};
+static GameProfile sSapphire = {GP_RS_COMMON, .game = GP_SAPPHIRE, .code = {'A', 'X', 'P', 'E'}, .dataSubdir = "AXPE",
+                                .mapGroups = 0x08308530u, .mapLayouts = 0x08304EC0u, .tsGeneral = 0x08286C9Cu,
+                                .tsBuilding = 0x08286DECu};
+
 static void set_bit(GpBehSet *s, unsigned b)
 {
     s->w[b >> 5] |= 1u << (b & 31u);
@@ -273,6 +297,8 @@ static void frlg_rows_init(void)
     if (!built) {
         build_frlg_sets(&sFireRed);
         build_frlg_sets(&sLeafGreen);
+        build_emerald_sets(&sRuby);         /* Phase 35: the behaviour numbering Emerald kept from Ruby / Sapphire */
+        build_emerald_sets(&sSapphire);
         built = true;
     }
 }
@@ -290,7 +316,7 @@ const GameProfile *gameprof_emerald(void)
 
 static const GameProfile *detect(const uint8_t *rom, size_t size, bool renderer)
 {
-    const GameProfile *rows[3];
+    const GameProfile *rows[5];
     unsigned i;
 
     if (rom == NULL || size < GP_HDR_MIN)
@@ -299,7 +325,9 @@ static const GameProfile *detect(const uint8_t *rom, size_t size, bool renderer)
     rows[0] = gameprof_emerald();
     rows[1] = &sFireRed;
     rows[2] = &sLeafGreen;
-    for (i = 0; i < 3u; i++) {
+    rows[3] = &sRuby;
+    rows[4] = &sSapphire;
+    for (i = 0; i < 5u; i++) {
         const GameProfile *r = rows[i];
         if (r->game == GP_NONE || memcmp(rom + GP_HDR_CODE, r->code, 4) != 0)
             continue;

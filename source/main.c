@@ -2812,8 +2812,10 @@ static int run_session(C3D_RenderTarget* top, C3D_RenderTarget* bot, C3D_RenderT
 							char rgCode[5] = "----";
 							if (!rgE[rg]->core) continue;
 							gbacore_game_code(rgE[rg]->core, rgCode);
-							// Emerald, or FireRed / LeafGreen (the profile check inside romgen_dev refuses rev 0 and anything else)
-							if (memcmp(rgCode, "BPEE", 4) == 0 || memcmp(rgCode, "BPRE", 4) == 0 || memcmp(rgCode, "BPGE", 4) == 0)
+							// Emerald, FireRed / LeafGreen or (Phase 35) Ruby / Sapphire; the profile check inside romgen_dev refuses
+							// the revisions it has no row for (FRLG rev 0, RS rev 0 / 1) and anything else
+							if (memcmp(rgCode, "BPEE", 4) == 0 || memcmp(rgCode, "BPRE", 4) == 0 || memcmp(rgCode, "BPGE", 4) == 0
+							    || memcmp(rgCode, "AXVE", 4) == 0 || memcmp(rgCode, "AXPE", 4) == 0)
 								rgRom = (const uint8_t*)gbacore_mem_block(rgE[rg]->core, 8, &rgSz);
 						}
 						romgen_dev_poll(rgRom, rgSz);   // the worker only READS mGBA's ROM buffer; see romgen_dev.h
