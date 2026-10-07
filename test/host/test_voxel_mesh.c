@@ -19,6 +19,8 @@
 #include "vx_fixture.h"
 #include "voxel_atlas.h"
 #include "voxel_mesh_builder.h"
+#include "voxel_tree.h"
+#include "rg_gameprof.h"
 
 static int sChecks, sFails;
 #define CHECK(c) do { ++sChecks; if (!(c)) { ++sFails; printf("FAIL %s:%d  %s\n", __FILE__, __LINE__, #c); } } while (0)
@@ -50,6 +52,40 @@ static void TestBuilderBasics(void)
     VoxelBuilder_SetOrigin(&b, 10, 20);
     VoxelBuilder_Tri(&b, &a, &bb, &c);
     CHECK(tiny[0].x == -10.0f && tiny[0].z == -20.0f);       /* origin is subtracted */
+}
+
+/* look L8: the fence, rock and flower cards - vertex counts, finite, inside their cell, and the heights they promise */
+static void TestPropCards(void)
+{
+    static VoxelVertex v[64];
+    VoxelBuilder b;
+    float top = 0.0f, zmin = 1e9f, zmax = -1e9f;
+
+    VoxelBuilder_Init(&b, v, 64);
+    VoxelTree_EmitFenceCard(&b, 5, 7, 0, 0, 1, 1);
+    CHECK(b.count == 6 && b.dropped == 0 && AllFinite(v, b.count));
+    for (unsigned i = 0; i < b.count; ++i) {
+        if (v[i].y > top) top = v[i].y;
+        if (v[i].x < 5.0f - 1e-4f || v[i].x > 6.0f + 1e-4f) top = 99.0f;
+    }
+    CHECK(top > 0.5f && top < 0.7f);                            /* a fence is 0.5-0.7 of a tile tall, in its own cell */
+    VoxelBuilder_Init(&b, v, 64);
+    VoxelTree_EmitRockCard(&b, 5, 7, 0, 0, 1, 1);
+    CHECK(b.count == 6 && b.dropped == 0 && AllFinite(v, b.count));
+    top = 0.0f;
+    for (unsigned i = 0; i < b.count; ++i) {
+        if (v[i].y > top) top = v[i].y;
+        if (v[i].z < zmin) zmin = v[i].z;
+        if (v[i].z > zmax) zmax = v[i].z;
+    }
+    CHECK(top > 0.5f && top < 0.8f && zmin >= 7.0f - 1e-4f && zmax <= 8.0f + 1e-4f);   /* low, leaning, inside the cell */
+    VoxelBuilder_Init(&b, v, 64);
+    VoxelTree_EmitGrassCard(&b, 5, 7, 0, 0, 1, 1);
+    CHECK(b.count == 6u * VOXEL_GRASS_CARDS && AllFinite(v, b.count));      /* a flower bed's two crossed cards */
+    VoxelBuilder_Init(&b, v, 5);
+    VoxelTree_EmitFenceCard(&b, 0, 0, 0, 0, 1, 1);
+    CHECK(b.count == 3 && b.dropped > 0);                       /* a full chunk drops the triangle that does not fit, and counts it */
+    CHECK(VoxelTree_PropKind(1000u) == GP_PROP_BUSH);           /* out of the table: a bush, never a crash */
 }
 
 static void TestGroundAndAtlas(void)
@@ -143,6 +179,7 @@ int main(void)
 {
     CHECK(fxInit() == 0);
     TestBuilderBasics();
+    TestPropCards();
     TestGroundAndAtlas();
     printf("test_voxel_mesh: %d checks, %d failures\n", sChecks, sFails);
     return sFails != 0;

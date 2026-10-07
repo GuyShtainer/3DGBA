@@ -46,7 +46,10 @@ static void ShrubsAround(const char *label)
         for (int y = in->originY + 1; y < in->originY + in->height - 1; ++y)
             for (int x = in->originX + 1; x < in->originX + in->width - 1; ++x)
             {
-                if (VoxelWorld_GetInstanceAt(x, y) != in || VoxelTree_Shrub(in, VoxelWorld_GetMetatileId(x, y)) < 0)
+                int sh;
+
+                if (VoxelWorld_GetInstanceAt(x, y) != in || (sh = VoxelTree_Shrub(in, VoxelWorld_GetMetatileId(x, y))) < 0
+                 || VoxelTree_PropKind((unsigned)sh) != GP_PROP_BUSH)   /* L8: the props share the table */
                     continue;
                 CHECK(VoxelTree_Shrub(in, VoxelWorld_GetMetatileId(x, y)) == 0 && VoxelWorld_GetMetatileId(x, y) == 0x005);
                 if (with == NULL) { with = in; sx = x; sy = y; }

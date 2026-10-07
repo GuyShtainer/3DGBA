@@ -81,7 +81,7 @@ void VoxelAtlas_SolidUV(VoxelSolidColor color, float *u0, float *v0, float *u1, 
  * layer alone, clear wherever that layer draws nothing, for the card the bush
  * stands up as. Composed once with the atlas, never per frame.
  */
-#define VOXEL_SHRUBS 32u
+#define VOXEL_SHRUBS 48u   /* L1 bushes, then (L8) the props: fences, rocks, flowers */
 #define VOXEL_SHRUB_FIRST (VOXEL_CUT_FIRST + VOXEL_CUTS)
 #define VOXEL_SHRUB_GROUND(k) (VOXEL_SHRUB_FIRST + 2u * (unsigned)(k))
 #define VOXEL_SHRUB_LEAVES(k) (VOXEL_SHRUB_FIRST + 2u * (unsigned)(k) + 1u)

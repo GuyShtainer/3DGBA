@@ -129,6 +129,56 @@ void VoxelTree_EmitShrubCard(VoxelBuilder *builder, int x, int y,
 }
 
 
+unsigned VoxelTree_PropKind(unsigned k)
+{
+    const GameProfile *p = vx_prof();
+
+    return (p->shrubs != NULL && k < p->shrubCount && k < VOXEL_SHRUBS) ? p->shrubs[k].kind : 0u;
+}
+
+/*
+ * 3DGBA (look backlog L8): a fence cell, its own upper layer (posts and rails on a clear background) stood up as one
+ * card on the cell's ground. The card is upright, facing south, sunk a little, its foot at z = y + 0.8 (the pickets'
+ * foot sits in the lower rows of the drawing) and 0.62 tiles tall: the drawing's 16 rows squeezed to 0.62 so posts read
+ * as a fence and not a wall. A slight lean (run 0.06) keeps it off the ground's own lighting plane. Flat-lit (a wall, not
+ * a rounded crown). Two triangles; the ground under it is the cell's lower layer, drawn by the terrain pass.
+ */
+#define FENCE_RISE 0.62f
+#define FENCE_RUN 0.06f
+void VoxelTree_EmitFenceCard(VoxelBuilder *builder, int x, int y,
+                             float u0, float v0, float u1, float v1)
+{
+    float wx = (float)x, foot = (float)y + 0.8f;
+
+    VoxelBuilder_Quad(builder,
+        &(VoxelVertex){wx,        FENCE_RISE, foot - FENCE_RUN, u0, v0, 1.0f},
+        &(VoxelVertex){wx + 1.0f, FENCE_RISE, foot - FENCE_RUN, u1, v0, 1.0f},
+        &(VoxelVertex){wx + 1.0f, 0.0f,       foot,             u1, v1, 1.0f},
+        &(VoxelVertex){wx,        0.0f,       foot,             u0, v1, 1.0f});
+}
+
+/*
+ * 3DGBA (look backlog L8): a rock cell, its own upper layer with the ground colours keyed out (the foam ring of a sea
+ * rock, the grass round a boulder), stood up as one card leaning back 57 degrees from the cell's south edge and 0.70
+ * tall - a low lump, lower than a bush so a 2x2 sea rock's rows do not hide each other. Lit as the rounded volume it
+ * stands for. Two triangles.
+ */
+#define ROCK_RISE 0.70f
+#define ROCK_RUN 0.45f
+void VoxelTree_EmitRockCard(VoxelBuilder *builder, int x, int y,
+                            float u0, float v0, float u1, float v1)
+{
+    float wx = (float)x, foot = (float)y + 1.0f;
+
+    builder->rounded = true;
+    VoxelBuilder_Quad(builder,
+        &(VoxelVertex){wx,        -0.05f + ROCK_RISE, foot - ROCK_RUN, u0, v0, 1.0f},
+        &(VoxelVertex){wx + 1.0f, -0.05f + ROCK_RISE, foot - ROCK_RUN, u1, v0, 1.0f},
+        &(VoxelVertex){wx + 1.0f, -0.05f,             foot,            u1, v1, 1.0f},
+        &(VoxelVertex){wx,        -0.05f,             foot,            u0, v1, 1.0f});
+    builder->rounded = false;
+}
+
 /*
  * 3DGBA (look backlog L2): tall grass. A cell whose behaviour is in the profile's bladeGrass set stands its blades up as
  * a card. The blades are the LOWER layer's drawing (measured: the tall-grass metatile's upper layer is empty, the

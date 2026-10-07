@@ -45,6 +45,9 @@ static void RunShrubs(const uint8_t *rom, size_t n, GpGame game, const char *lab
     for (k = 0; buf != NULL && k < w.prof->shrubCount; k++) {
         const GpShrub *e = &w.prof->shrubs[k];
         char key[64];
+
+        if (e->kind != GP_PROP_BUSH)
+            continue;   /* the L8 props are checked in RunProps */
         const char *line;
         unsigned uses = 0, blocked = 0, l, x, y, upN = 0, upGreen = 0, lowDrawn = 0;
         RgPair *p = NULL;
@@ -102,6 +105,88 @@ static void RunShrubs(const uint8_t *rom, size_t n, GpGame game, const char *lab
     rg_world_close(&w);
 }
 
+/* Look backlog L8: every prop entry (fence, rock, flower) of the profile against the ROM's `props` listing: used on General
+ * outdoor layouts, collision-blocked on at least half its uses for fences and rocks (a flower bed is walkable), its LOWER
+ * layer opaque (the ground, the water) and its UPPER layer the object (fence >= 40 px, rock >= 20 px kept after the key, flower the whole
+ * cell, which the atlas keys against the lower layer). The ground colours of a rock / flower must really be present in its
+ * lower layer: after keying, some upper pixel is left and some is removed. */
+static void RunProps(const uint8_t *rom, size_t n, GpGame game, const char *label)
+{
+    RgWorld w;
+    char *buf = NULL;
+    size_t sz = 0;
+    FILE *mem;
+    unsigned k, props = 0, fences = 0, rocks = 0, flowers = 0;
+
+    CHECK(rg_world_open(&w, rom, n) == RG_OK && w.prof != NULL && w.prof->game == game);
+    if (w.prof == NULL || w.prof->game != game)
+        return;
+    mem = open_memstream(&buf, &sz);
+    CHECK(rg_author_props(&w, mem, NULL, 1) == 0);
+    fclose(mem);
+    for (k = 0; buf != NULL && k < w.prof->shrubCount; k++) {
+        const GpShrub *e = &w.prof->shrubs[k];
+        char key[64];
+        const char *line;
+        unsigned beh, uses = 0, blocked = 0, upper = 0, l, x, y, lowDrawn = 0, kept = 0, keyed = 0;
+        RgPair *p = NULL;
+        RgCellPx lo, up;
+
+        if (e->kind == GP_PROP_BUSH)
+            continue;
+        props++;
+        fences += e->kind == GP_PROP_FENCE_EW || e->kind == GP_PROP_FENCE_NS;
+        rocks += e->kind == GP_PROP_ROCK;
+        flowers += e->kind == GP_PROP_FLOWER;
+        CHECK(e->tileset == 0 && e->metatile < w.prof->nPrimMetatiles);
+        snprintf(key, sizeof key, "ts 0x%08X 0x%03X beh ", (unsigned)e->tileset, (unsigned)e->metatile);
+        line = strstr(buf, key);
+        CHECK(line != NULL && sscanf(line + strlen(key), "0x%x uses %u blocked %u upper %u", &beh, &uses, &blocked, &upper) == 4);
+        CHECK(uses > 0);
+        if (e->kind == GP_PROP_FLOWER)
+            CHECK(blocked == 0 && upper == 256u);
+        else
+            CHECK(2u * blocked >= uses);
+        for (l = 0; l < w.layoutCount && p == NULL; l++) {
+            const RgLayout *L = &w.layouts[l];
+            if (L->present && L->outdoor && L->ts[0]->addr == w.prof->tsGeneral)
+                p = rg_pair_open(&w, L->pairIndex);
+        }
+        CHECK(p != NULL);
+        if (p == NULL)
+            continue;
+        rg_cell_px(p, e->metatile, 0, &lo);
+        rg_cell_px(p, e->metatile, 1, &up);
+        rg_pair_close(p);
+        for (y = 0; y < 16; y++)
+            for (x = 0; x < 16; x++) {
+                unsigned u = (up.drawn[y] >> x) & 1u, c, same = 0;
+
+                lowDrawn += (lo.drawn[y] >> x) & 1u;
+                if (!u)
+                    continue;
+                for (c = 0; c < 256u; c++)
+                    same += lo.c[c / 16u][c % 16u] == up.c[y][x];
+                if (same) keyed++; else kept++;
+            }
+        printf("  %s prop %u kind %u 0x%03X uses %u blocked %u upper %u lower %u keyed %u kept %u\n", label, k, (unsigned)e->kind,
+               (unsigned)e->metatile, uses, blocked, upper, lowDrawn, keyed, kept);
+        CHECK(lowDrawn == 256u);
+        CHECK(upper >= 20u && upper == kept + keyed);
+        if (e->kind == GP_PROP_FENCE_EW || e->kind == GP_PROP_FENCE_NS)
+            CHECK(upper >= 40u && keyed == 0);          /* a fence is its own colours: nothing to key */
+        if (e->kind == GP_PROP_ROCK)
+            CHECK(kept >= 20u && (keyed == 0u || keyed == 41u || keyed == 106u));   /* the rock survives the key (sea rocks: a 41 px foam ring, measured) */
+        if (e->kind == GP_PROP_FLOWER)
+            CHECK(kept >= 20u && keyed >= 20u);         /* the bed's grass goes, the flowers stay */
+    }
+    printf("  %s: %u props = %u fences + %u rocks + %u flowers\n", label, props, fences, rocks, flowers);
+    CHECK(props == (game == GP_EMERALD ? 7u : 30u));
+    CHECK(fences == (game == GP_EMERALD ? 3u : 13u) && rocks == (game == GP_EMERALD ? 3u : 16u) && flowers == 1u);
+    free(buf);
+    rg_world_close(&w);
+}
+
 int main(void)
 {
     static const struct { const char *env; GpGame game; const char *name; } kGames[3] = {
@@ -130,6 +215,7 @@ int main(void)
             continue;
         }
         RunShrubs(rom, n, kGames[i].game, kGames[i].name);
+        RunProps(rom, n, kGames[i].game, kGames[i].name);
         free(rom);
     }
     printf("test_romgen_shrubs: %d checks, %d failures, %d skipped\n", sChecks, sFails, sSkipped);

@@ -400,6 +400,11 @@ bool rg_budget_run(const uint8_t *rom, size_t size, RgBudget *out, char *why, si
             out->layoutsSkipped++;
             continue;
         }
+        /* VoxelAtlas_Build composes page zero only; the shrub/prop slots that spill to a later page stay PENDING and
+           would emit nothing. The vertex count does not depend on which slot it is, so count them as placed (L8). */
+        for (unsigned m = 0; m < VOXEL_METATILE_IDS; ++m)
+            if (map->slotOf[m] == VOXEL_SLOT_PENDING)
+                map->slotOf[m] = 1;
         if (!measure_instance(out, inst, map, scratch, pl, nPl, out->model)) {
             snprintf(why, whySize, "a chunk of %u/%u overflowed the measuring scratch", rm->group, rm->num);
             goto done;

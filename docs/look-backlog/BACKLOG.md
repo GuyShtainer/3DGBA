@@ -313,3 +313,42 @@ own ridge, so the mirrored rear slope is invisible from every in-game angle. Fix
 the lowest camera elevation (~30°) so both slopes are seen from above, keeping the front's in-game look (the front
 slope's projected screen height must still match the art; that may mean a deeper roof, extending the back north of the
 art's top row). Needs a design pass (opus) with in-game before/after at Guy's spots. Queued after L8.
+## L8 DONE (2026-10-07, branch worktree-agent-a8a0d7ecb2b9ea9fc)
+
+Fences, rocks and flowers stand up, reusing the L1 shrub machinery: the `GpShrub` table gained a `kind` (bush, fence E-W,
+fence N-S, rock, flower) and `VOXEL_SHRUBS` went 24 -> 48, so each prop is one more (ground, leaves) slot pair composed
+at atlas time like a bush. No new texture page, no per-frame work. Measured with `romgen author ROM props [MINUSES]`
+(new, rg_author_trees.c; per metatile: layer split, behaviour, uses, blocked share, ground neighbour).
+
+Measured (FR = LG, General tileset, ids art-identical; Emerald in brackets):
+- Fences, all on the UPPER layer over an opaque lower grass/sand layer: 13 ids FR/LG (E-W 0x0E6 0x0E7 0x0EC 0x0ED 0x0D6
+  0x0D7 0x0B4 0x0B5; N-S 0x0EF 0x0F0 0x0F1 0x0F4 0x0F5), blocked on >= half their uses. Emerald 3 ids (0x149 E-W,
+  0x140 0x142 N-S). Fence art is its own colours: nothing keyed.
+- Rocks: 16 ids FR/LG (0x110 0x111 0x118 0x119 0x1CB 0x1CC 0x1D3 0x1D4 0x212 0x213 0x21A 0x21B 0x244 0x245 0x24C 0x24D;
+  land boulders and sea rocks); Emerald 3 (0x0E0-0x0E2). The upper layer carries the ground colours of the cell under it
+  (grass round a boulder, a 41 px foam ring on a sea rock), keyed out against the cell's own lower layer; the water under a
+  sea rock stays and animates. Rocks keep >= 20 px after the key.
+- Flowers: ONE id, General 0x004 (FR/LG and Emerald), a fully opaque upper layer (256 px) over a grass lower layer, walkable.
+  The backlog hint that FR 0x008/0x009 are flowers was wrong: they are grass variants.
+
+Geometry (all lit through `VoxelLighting_Face`, relief lift/shift applied as for bushes):
+- Fence: one upright card 0.62 tile tall at the south side of the cell (foot z = y + 0.8), 6 vertices. Not rounded.
+  Limit: it is a south-facing card for both kinds, so a N-S run reads as a row of posts without a side rail.
+- Rock: one card leaning back, rise 0.70 / run 0.45, rounded shading, 6 vertices (lower than a bush so a 2x2 sea rock's
+  rows do not hide each other).
+- Flower: the existing blade-grass pair of crossed cards, 12 vertices over the 6 of the ground.
+
+Cost (`romgen author ROM budget 0`, before = commit 77e37f5): FR/LG worst chunk 2748 -> 2748; max +204 vertices in a
+chunk (3/54 L246 chunk 4,0), 920 of 2116 chunks changed. Emerald worst chunk 8982 -> 8982 (a building chunk, margin 362 of
+9344); max +216 (26/14 L345), 208 of 5563 chunks changed. 0 chunks over the scratch in all three games. The budget tool
+did not see page-1+ slots (VoxelAtlas_Build composes page zero and leaves the rest PENDING); it now counts them as placed.
+Azahar HUD fps, before / after on N3DS: Gorgeous 23 / 24, Pallet 23 / 23, Viridian 26 / 26; voxel.log has no "chunk
+scratch full".
+
+Evidence (`evidence/`): l8-before|after-gorgeous.png, -pallet.png, -viridian.png (upright stone and picket fences,
+iron fence, flower beds, sign, boulders). Sprites: the player, NPCs and the Pallet sign sit beside the fences and beds in
+those shots with no wrong hiding; no walk-behind sequence was captured. Not done: an Emerald before/after shot, secondary-
+tileset fences (Sevii) beyond what the General table covers, fence side rails for N-S runs, tuning of the 0.62/0.70/0.45
+numbers beyond the first look.
+
+Tests: `make -C tools/romgen test` 28 suites, 0 failures; `vtest` 9 suites, 0 failures (mesh 27, world 8605, frlg 994).

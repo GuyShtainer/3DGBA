@@ -531,3 +531,164 @@ int rg_author_grass(const RgWorld *w, FILE *fp, const char *outDir, const unsign
     free(c);
     return 0;
 }
+
+/* L8 (look backlog): romgen author ROM props [MINUSES] -- see rg_author.h. Every (tileset address, metatile id) of the
+ * General-primary outdoor layouts used at least MINUSES times (default 20): behaviour, collision-blocked uses, the pixels
+ * the upper layer draws (of 256), how often the east / south neighbour is the same id (hz / vt: a fence run's orientation),
+ * and the metatile most often found beside it (nbr, +0x800 = a secondary id: what a prop cell stands on). Contact sheets
+ * <out>/props-N.png, 48 metatiles per page (8 per row, composite, list order). The human picks fences, rocks and flowers
+ * from it; it decides nothing. */
+typedef struct { uint32_t ts; uint16_t m, pair, beh, lay, sx, sy, nbr; unsigned uses, blocked, upper, hz, vt, nbrN; } PrCand;
+
+static void pr_rgb(uint16_t c, unsigned *r, unsigned *g, unsigned *b)
+{
+    *r = (c & 31u) * 255u / 31u;
+    *g = ((c >> 5) & 31u) * 255u / 31u;
+    *b = ((c >> 10) & 31u) * 255u / 31u;
+}
+
+static void pr_composite(RgPair *p, uint16_t m, uint16_t out[16][16])
+{
+    RgCellPx a, b;
+    unsigned x, y;
+
+    rg_cell_px(p, m, 0, &a);
+    rg_cell_px(p, m, 1, &b);
+    for (y = 0; y < 16; y++)
+        for (x = 0; x < 16; x++)
+            out[y][x] = ((b.drawn[y] >> x) & 1u) ? b.c[y][x] : a.c[y][x];
+}
+
+static bool pr_layout_ok(const GameProfile *gp, const RgLayout *L)
+{
+    return L->present && L->outdoor && L->ts[0]->addr == gp->tsGeneral;
+}
+
+int rg_author_props(const RgWorld *w, FILE *fp, const char *outDir, unsigned minUses)
+{
+    const GameProfile *gp = w->prof;
+    unsigned prim = gp->nPrimMetatiles, l, x, y, i, n = 0, cap = 0, kept = 0;
+    PrCand *c = NULL;
+
+    for (l = 0; l < w->layoutCount; l++) {
+        const RgLayout *L = &w->layouts[l];
+        if (!pr_layout_ok(gp, L))
+            continue;
+        for (y = 0; y < L->h; y++)
+            for (x = 0; x < L->w; x++) {
+                unsigned m = rg_metatile(L, (int)x, (int)y);
+                uint32_t ts = m < prim ? 0u : L->ts[1]->addr;
+                for (i = 0; i < n && !(c[i].ts == ts && c[i].m == m); i++) {}
+                if (i == n) {
+                    if (n == cap) {
+                        PrCand *nc;
+                        cap = cap ? cap * 2u : 256u;
+                        nc = (PrCand *)realloc(c, cap * sizeof *c);
+                        if (nc == NULL) { free(c); return 1; }
+                        c = nc;
+                    }
+                    memset(&c[n], 0, sizeof c[n]);
+                    c[n].ts = ts; c[n].m = (uint16_t)m; c[n].pair = L->pairIndex;
+                    c[n].beh = (uint16_t)rg_behaviour(L, (int)x, (int)y);
+                    c[n].lay = L->id; c[n].sx = (uint16_t)x; c[n].sy = (uint16_t)y;
+                    n++;
+                }
+                c[i].uses++;
+                c[i].blocked += rg_blocked(L, (int)x, (int)y);
+                if (x + 1u < L->w && rg_metatile(L, (int)x + 1, (int)y) == m) c[i].hz++;
+                if (y + 1u < L->h && rg_metatile(L, (int)x, (int)y + 1) == m) c[i].vt++;
+            }
+    }
+    for (i = 0; i < n; i++)
+        if (c[i].uses >= minUses)
+            c[kept++] = c[i];
+    n = kept;
+    for (i = 0; i < n; i++) {
+        unsigned ids[512], cnt[512], nid = 0, k;
+        RgPair *p = rg_pair_open(w, c[i].pair);
+        RgCellPx b;
+
+        for (l = 0; l < w->layoutCount; l++) {
+            const RgLayout *L = &w->layouts[l];
+            if (!pr_layout_ok(gp, L))
+                continue;
+            for (y = 0; y < L->h; y++)
+                for (x = 0; x < L->w; x++) {
+                    unsigned m = rg_metatile(L, (int)x, (int)y), d;
+                    if (m != c[i].m || (m < prim ? 0u : L->ts[1]->addr) != c[i].ts)
+                        continue;
+                    for (d = 0; d < 4; d++) {
+                        int nx = (int)x + (d == 0) - (d == 1), ny = (int)y + (d == 2) - (d == 3);
+                        unsigned nm;
+                        if (nx < 0 || ny < 0 || nx >= (int)L->w || ny >= (int)L->h)
+                            continue;
+                        nm = rg_metatile(L, nx, ny);
+                        if (nm == m)
+                            continue;
+                        if (nm >= prim)
+                            nm |= 0x800u;
+                        for (k = 0; k < nid && ids[k] != nm; k++) {}
+                        if (k == nid && nid < 512u) { ids[nid] = nm; cnt[nid] = 0; nid++; }
+                        if (k < nid) cnt[k]++;
+                    }
+                }
+        }
+        for (k = 0; k < nid; k++)
+            if (cnt[k] > c[i].nbrN) { c[i].nbrN = cnt[k]; c[i].nbr = (uint16_t)ids[k]; }
+        if (p == NULL)
+            continue;
+        rg_cell_px(p, c[i].m, 1, &b);
+        rg_pair_close(p);
+        for (y = 0; y < 16; y++)
+            for (x = 0; x < 16; x++)
+                c[i].upper += (b.drawn[y] >> x) & 1u;
+    }
+    for (i = 1; i < n; i++) {
+        PrCand t = c[i];
+        unsigned j = i;
+        while (j > 0 && c[j - 1].uses < t.uses) { c[j] = c[j - 1]; j--; }
+        c[j] = t;
+    }
+    fprintf(fp, "# props: %s, %u metatiles with >= %u uses (idx ts id beh uses blocked upperPx hz vt nbr x)\n",
+            gp->dataSubdir, n, minUses);
+    for (i = 0; i < n; i++)
+        fprintf(fp, "prop %3u ts 0x%08X 0x%03X beh 0x%02X uses %u blocked %u upper %u hz %u vt %u nbr 0x%03X x%u at L%u %u,%u\n",
+                i, c[i].ts, c[i].m, c[i].beh, c[i].uses, c[i].blocked, c[i].upper, c[i].hz, c[i].vt, c[i].nbr, c[i].nbrN,
+                c[i].lay, c[i].sx, c[i].sy);
+    if (outDir != NULL && n > 0) {
+        unsigned page, per = 48;
+
+        if (rg_author_mkdir_p(outDir) != 0) { free(c); return 1; }
+        for (page = 0; page * per < n; page++) {
+            int W = 8 * 64, H = 6 * 64;
+            uint8_t *img = (uint8_t *)calloc((size_t)W * (size_t)H, 4);
+            char path[1100];
+
+            if (img == NULL) { free(c); return 1; }
+            for (i = page * per; i < n && i < (page + 1) * per; i++) {
+                RgPair *p = rg_pair_open(w, c[i].pair);
+                uint16_t px[16][16];
+                unsigned q = i - page * per, cx = (q % 8u) * 64u, cy = (q / 8u) * 64u;
+
+                if (p == NULL) continue;
+                pr_composite(p, c[i].m, px);
+                rg_pair_close(p);
+                for (y = 0; y < 64; y++)
+                    for (x = 0; x < 64; x++) {
+                        uint8_t *o = img + ((size_t)(cy + y) * (size_t)W + cx + x) * 4u;
+                        unsigned r, g, bl;
+
+                        pr_rgb(px[y / 4u][x / 4u], &r, &g, &bl);
+                        o[0] = (uint8_t)r; o[1] = (uint8_t)g; o[2] = (uint8_t)bl; o[3] = 255;
+                        if (x == 0 || y == 0) { o[0] = 255; o[1] = 0; o[2] = 255; }
+                    }
+            }
+            snprintf(path, sizeof path, "%s/props-%u.png", outDir, page);
+            if (!rg_png_write_rgba(path, img, W, H)) { free(img); free(c); return 1; }
+            free(img);
+        }
+        fprintf(stderr, "sheets %s/props-N.png: %u metatiles, 48 per page, 8 per row, list order\n", outDir, n);
+    }
+    free(c);
+    return 0;
+}

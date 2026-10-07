@@ -1203,6 +1203,8 @@ int rg_author_main(int argc, char **argv)
                              nargs == 3 ? atoi(args[2]) : 0);
     } else if (strcmp(cmd, "shrubs") == 0 && nargs <= 1) {
         rc = rg_author_shrubs(&w, stdout, outDir, nargs ? (uint32_t)strtoul(args[0], NULL, 0) : 0u);
+    } else if (strcmp(cmd, "props") == 0 && nargs <= 1) {
+        rc = rg_author_props(&w, stdout, outDir, nargs ? (unsigned)strtoul(args[0], NULL, 0) : 20u);
     } else if (strcmp(cmd, "grass") == 0) {
         unsigned vals[64], nv = 0, a;
         uint32_t gts = 0;

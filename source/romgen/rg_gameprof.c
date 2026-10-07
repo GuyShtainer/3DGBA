@@ -40,19 +40,42 @@ static const int16_t kFrlgTreePart[] = {
  * trunk cell under a bush; three round bushes of the tileset at 0x083DF80C (layout 9); Slateport's round bush; two round
  * bushes of the tileset at 0x083DF86C (layout 345). */
 static const GpShrub kEmeraldShrubs[] = {
-    {0x083DF74Cu, 0x239}, {0x083DF74Cu, 0x23A}, {0x083DF74Cu, 0x242}, {0x083DF74Cu, 0x243}, {0x083DF74Cu, 0x247},
-    {0x083DF80Cu, 0x220}, {0x083DF80Cu, 0x23B}, {0x083DF80Cu, 0x23F},
-    {0x083DF764u, 0x243},
-    {0x083DF86Cu, 0x202}, {0x083DF86Cu, 0x203},
+    {0x083DF74Cu, 0x239, GP_PROP_BUSH}, {0x083DF74Cu, 0x23A, GP_PROP_BUSH}, {0x083DF74Cu, 0x242, GP_PROP_BUSH}, {0x083DF74Cu, 0x243, GP_PROP_BUSH}, {0x083DF74Cu, 0x247, GP_PROP_BUSH},
+    {0x083DF80Cu, 0x220, GP_PROP_BUSH}, {0x083DF80Cu, 0x23B, GP_PROP_BUSH}, {0x083DF80Cu, 0x23F, GP_PROP_BUSH},
+    {0x083DF764u, 0x243, GP_PROP_BUSH},
+    {0x083DF86Cu, 0x202, GP_PROP_BUSH}, {0x083DF86Cu, 0x203, GP_PROP_BUSH},
+    /* Look L8 props, General tileset (ROM-measured, `romgen author ROM props`, PROVENANCE): the white picket row 0x149 and
+     * the fence posts 0x140 / 0x142 (the upper layer is the fence, the lower one grass), the boulders 0x0E0 (on grass),
+     * 0x0E2 (on sand), 0x0E1 (on the cliff colour), and the red flower bed 0x004 (upper layer opaque, keyed against its
+     * own lower layer). Emerald's sea rocks are building-pipeline models already and are not here. */
+    {0, 0x149, GP_PROP_FENCE_EW}, {0, 0x140, GP_PROP_FENCE_NS}, {0, 0x142, GP_PROP_FENCE_NS},
+    {0, 0x0E0, GP_PROP_ROCK}, {0, 0x0E1, GP_PROP_ROCK}, {0, 0x0E2, GP_PROP_ROCK},
+    {0, 0x004, GP_PROP_FLOWER},
 };
 /* FireRed / LeafGreen rev 1: the General round bush 0x005 (Pallet Town, Route 1 and on), and the round bushes 0x2F4 and
  * 0x2E0 of two secondary tilesets (layouts 147 and 100), whose addresses differ by 0x20 between the two games. */
-static const GpShrub kFireRedShrubs[] = {{0, 0x005}, {0x082D4BC4u, 0x2F4}, {0x082D4B7Cu, 0x2E0}};
-static const GpShrub kLeafGreenShrubs[] = {{0, 0x005}, {0x082D4BA4u, 0x2F4}, {0x082D4B5Cu, 0x2E0}};
+/* Look L8 props shared by FireRed and LeafGreen (the General tileset's ids and art are identical, ROM-measured, `romgen
+ * author ROM props`; only the palette differs): the white picket rows 0x0E7 / 0x0EC / 0x0ED and the log row 0x0E6, the
+ * fence posts seen along their run 0x0F4 / 0x0F5 / 0x0EF (white) and 0x0F0 / 0x0F1 (wooden), the grey bollard pairs 0x0D6 /
+ * 0x0D7 / 0x0B4 / 0x0B5, the sea rocks (upper layer = rock plus a foam ring in water colours, lower layer = water): the
+ * four of the open sea 0x110 0x111 0x118 0x119, 0x1CB 0x1CC 0x1D3 0x1D4, 0x212 0x213 0x21A 0x21B and the deep-water copies
+ * 0x244 0x245 0x24C 0x24D, and the red flower bed 0x004. */
+#define GP_FRLG_PROPS \
+    {0, 0x0E7, GP_PROP_FENCE_EW}, {0, 0x0EC, GP_PROP_FENCE_EW}, {0, 0x0ED, GP_PROP_FENCE_EW}, {0, 0x0E6, GP_PROP_FENCE_EW}, \
+    {0, 0x0F4, GP_PROP_FENCE_NS}, {0, 0x0F5, GP_PROP_FENCE_NS}, {0, 0x0EF, GP_PROP_FENCE_NS}, {0, 0x0F0, GP_PROP_FENCE_NS}, \
+    {0, 0x0F1, GP_PROP_FENCE_NS}, {0, 0x0D6, GP_PROP_FENCE_EW}, {0, 0x0D7, GP_PROP_FENCE_EW}, {0, 0x0B4, GP_PROP_FENCE_EW}, \
+    {0, 0x0B5, GP_PROP_FENCE_EW}, \
+    {0, 0x110, GP_PROP_ROCK}, {0, 0x111, GP_PROP_ROCK}, {0, 0x118, GP_PROP_ROCK}, {0, 0x119, GP_PROP_ROCK}, \
+    {0, 0x1CB, GP_PROP_ROCK}, {0, 0x1CC, GP_PROP_ROCK}, {0, 0x1D3, GP_PROP_ROCK}, {0, 0x1D4, GP_PROP_ROCK}, \
+    {0, 0x212, GP_PROP_ROCK}, {0, 0x213, GP_PROP_ROCK}, {0, 0x21A, GP_PROP_ROCK}, {0, 0x21B, GP_PROP_ROCK}, \
+    {0, 0x244, GP_PROP_ROCK}, {0, 0x245, GP_PROP_ROCK}, {0, 0x24C, GP_PROP_ROCK}, {0, 0x24D, GP_PROP_ROCK}, \
+    {0, 0x004, GP_PROP_FLOWER}
+static const GpShrub kFireRedShrubs[] = {{0, 0x005, GP_PROP_BUSH}, {0x082D4BC4u, 0x2F4, GP_PROP_BUSH}, {0x082D4B7Cu, 0x2E0, GP_PROP_BUSH}, GP_FRLG_PROPS};
+static const GpShrub kLeafGreenShrubs[] = {{0, 0x005, GP_PROP_BUSH}, {0x082D4BA4u, 0x2F4, GP_PROP_BUSH}, {0x082D4B5Cu, 0x2E0, GP_PROP_BUSH}, GP_FRLG_PROPS};
 #define GP_SHRUBS(t) .shrubs = t, .shrubCount = (uint8_t)(sizeof t / sizeof t[0])
 /* Look L2: tall-grass metatiles (behaviour 0x02) whose ground is not the General plain grass (grassGround): Emerald 0x206 of
  * the tileset at 0x083DF794 draws its blades over a sandy-brown ground (ROM-measured, `romgen author ROM grass`). */
-static const GpShrub kEmeraldGrassSkip[] = {{0x083DF794u, 0x206}};
+static const GpShrub kEmeraldGrassSkip[] = {{0x083DF794u, 0x206, GP_PROP_BUSH}};
 
 #define GP_FRLG_TREES .treePart = kFrlgTreePart, .treePartCount = sizeof kFrlgTreePart / sizeof kFrlgTreePart[0] / 2u
 

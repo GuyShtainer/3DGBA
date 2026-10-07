@@ -40,6 +40,17 @@ bool VoxelTree_ShrubSource(const void *primaryTileset, const void *secondaryTile
 void VoxelTree_EmitShrubCard(VoxelBuilder *builder, int x, int y,
                              float u0, float v0, float u1, float v1);
 
+/* 3DGBA (look backlog L8): what shrub-table entry k stands up as (GP_PROP_*: 0 bush, fence rows, fence posts, rock, flower
+ * bed), and the two kinds whose art is keyed against the cell's own lower layer (rock, flower: their upper layer carries
+ * ground-coloured pixels round the object). Entry k must be < VOXEL_SHRUBS. */
+unsigned VoxelTree_PropKind(unsigned k);
+#define VOXEL_FENCE_VERTS 6u   /* one upright quad */
+#define VOXEL_ROCK_VERTS 6u    /* one low leaning quad */
+/* The fence card on cell (x, y) (a south-facing upright picket quad) and the rock card, textured [u0,u1] x [v0,v1]
+ * (v0 the top row). The builder's lift applies. */
+void VoxelTree_EmitFenceCard(VoxelBuilder *builder, int x, int y, float u0, float v0, float u1, float v1);
+void VoxelTree_EmitRockCard(VoxelBuilder *builder, int x, int y, float u0, float v0, float u1, float v1);
+
 /* 3DGBA (look backlog L2): tall grass. The index k (< VOXEL_GRASSES) of a cell's metatile among its tileset pair's
  * blade-grass metatiles (profile bladeGrass behaviour, id order), or -1. Only where tree sprites are drawn. */
 int VoxelTree_Grass(const VoxelMapInstance *inst, int metatileId);
