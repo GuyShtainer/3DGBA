@@ -6,7 +6,11 @@
  * edge, which copies the art by row, so the ortho check holds by construction where the geometry is right. Side walls
  * come from RgSideCfg (rg_close_sides): a plain patch of each model's own wall art.
  *
- *   k_cinnabar_mansion   7x4 cells (112x64): the Pokemon Mansion, a two-storey hall under a brown roof */
+ *   k_cinnabar_mansion   7x4 cells (112x64): the Pokemon Mansion, a two-storey hall under a brown roof
+ *   k_cinnabar_lab       7x4 cells (112x64): the Pokemon Lab, a rounded barrel hall (stepped ends)
+ *   k_indigo_league      11x7 cells (176x112): the Pokemon League, a long hall with a gabled pavilion
+ *   k_route22_gate       9x7 cells (144x112): the south half of the Route 22 / 23 gatehouse
+ *   k_route23_gate       9x7 cells (144x112): the north half (roof slab only) */
 #include "rg_bspecs.h"
 
 #include <string.h>
@@ -94,30 +98,15 @@ static bool cb_block(RgPartList *out, const char *name, double x0, double x1, do
     return cb_block_e(out, name, x0, x1, 0, zf, ftop, rtop);
 }
 
-/* A shallow box standing in front of a facade: front face art rows fr0..fr1 (height fr1 - fr0, front depth zf), top
- * face art rows top0..top1 (depth top1 - top0). */
-static bool cb_porch(RgPartList *out, const char *name, double x0, double x1, double zf, double fr0, double fr1,
-                     double top0, double top1)
-{
-    double h = fr1 - fr0;
-    double pts[4][2], rows[4][2];
-
-    cb_pt(pts, 0, zf, 0);
-    cb_pt(pts, 1, zf, h);
-    cb_pt(pts, 2, zf - (top1 - top0), h);
-    cb_pt(pts, 3, zf - (top1 - top0), 0);
-    rows[0][0] = fr0; rows[0][1] = fr1;
-    rows[1][0] = top0; rows[1][1] = top1;
-    rows[2][0] = rows[2][1] = rows[3][0] = rows[3][1] = 0;
-    return cb_profile(out, name, x0, x1, 4, (const double (*)[2])pts, (const double (*)[2])rows);
-}
-
 /* ---- k_cinnabar_mansion: 112x64 art (rect (5,0), 7x4; door (8,3)) --------------------------------------------------- */
 static bool k_cinnabar_mansion(const RgSpec *spec, int a0, int a1, RgPartList *out)
 {
     (void)spec; (void)a0; (void)a1;
     return cb_block(out, "hall", 5, 112, 64, 28, 0) && !out->failed;
 }
+/* The Pokemon Mansion, a front elevation cut by the map top. Rows: the brown roof with three dormers 0-28 (a level top),
+ * the eave frieze 28-34, then two beige storeys with salmon bands and the framed central panel over the dark entrance
+ * 34-64. One flat block 36 high; the panel's checker is transparent art (the ground shows through). */
 static const RgExact kMansionExact[1] = {{5, 0, 112, 64, false}};
 static const RgSideCfg kMansionSide[1] = {
     {NULL, {8, 45, 40, 48}, {64, 0, 80, 24}, 999, true},
