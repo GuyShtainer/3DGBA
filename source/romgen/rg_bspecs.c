@@ -907,9 +907,10 @@ bool rg_close_sides(const RgSpec *s, RgPartList *parts)
  * other solid part. A prism with an open edge is closed in one of three ways:
  *  - pitched: when the front chain (the edges from the front-bottom corner, counter-clockwise, up to the first open one)
  *    ends in a slope that rises toward the back and nothing drawn lies behind it, the roof part of that chain (above the
- *    eave) is mirrored about the ridge, clipped at the footprint's back row, and a back wall drops to the ground. The
- *    rear slope keeps the front's pitch and its rows (a mirrored projection); a parapet over the ridge gets a 45-degree
- *    back in the roof colour;
+ *    eave) is first laid down to RG_ROOF_PITCH (look L6b: same art rows, more depth, less height), then mirrored about
+ *    the ridge, clipped at the footprint's back row, and a back wall drops to the ground. The rear slope keeps the
+ *    front's pitch and its rows (a mirrored projection); a parapet over the ridge gets a 45-degree back in the roof
+ *    colour;
  *  - otherwise every open edge is drawn flat: the side-closure wall patch below the eave, the roof patch above it (a spec
  *    without a RgSideCfg takes a texel of the front wall's and the roof's own rows);
  *  - when rg_spec_parts' front guard finds a flat face showing through the art (a transparent texel of the top in front
@@ -917,6 +918,13 @@ bool rg_close_sides(const RgSpec *s, RgPartList *parts)
  *    edge-on. A face that shows only at its ends is trimmed there instead (at most CB_TRIM px, a quarter of its width). */
 void (*rg_close_backs_log)(const char *spec, const char *part, const char *what);
 
+/* look L6b: the pitch (degrees) a mirrored roof is laid down to. The device camera only ever looks north from the south
+ * (yaw 0); the view ray to a 40 px ridge is 21-33 degrees above the horizon at the default 40-degree pitch and 15-26 at
+ * the lowest preset (34), so a rear slope steeper than that is hidden behind its own ridge. The builders' 45-degree
+ * slopes were exactly that: the house read as a box that stops at the ridge. At 15 the rear slope shows at every preset
+ * (edge-on only at 34 degrees with the house at the top of a tiny map). */
+#define RG_ROOF_PITCH 15.0
+#define RG_DEG2RAD_CB 0.017453292519943295
 #define CB_COVER_STEP 4.0
 #define CB_NO_MIRROR 0x80000000u
 #define CB_CHAMFER 0x40000000u
@@ -1094,6 +1102,25 @@ static bool cb_mirror_prism(RgPrism *pr, unsigned v0, unsigned nChain, double ea
         ;
     if (e >= S)
         e = S - 1;
+    /* look L6b: the roof is laid down to RG_ROOF_PITCH before it is mirrored. Every chain edge above the eave that rises
+     * back more steeply keeps its dz + dy (its art rows: v = z - y at both ends, so the ortho front is the same picture)
+     * and trades height for depth; the points behind it move with it. */
+    for (k = e; k < S; k++) {
+        double dz = c[k + 1][0] - c[k][0], dy = c[k + 1][1] - c[k][1], rows, nd, nh, tp = tan(RG_ROOF_PITCH * RG_DEG2RAD_CB);
+        unsigned j;
+
+        if (dz > -RG_EPS || dy <= RG_EPS || dy / -dz <= tp + 1e-9)
+            continue;
+        rows = -dz + dy;
+        nd = rows / (1 + tp);
+        nh = rows - nd;
+        for (j = k + 1; j <= nChain; j++) {
+            c[j][0] += -nd - dz;
+            c[j][1] += nh - dy;
+        }
+    }
+    rise = c[nChain][1] - c[S][1];
+    axis = c[S][0] - rise / 2;
     for (k = 0; k < nChain; k++)
         cb_add(&q, c[k][0], c[k][1], &ce[k], (cskip >> k) & 1u);
     {
@@ -1124,7 +1151,7 @@ static bool cb_mirror_prism(RgPrism *pr, unsigned v0, unsigned nChain, double ea
             nzv = len > RG_EPS ? dy / len : 0;
             nyv = len > RG_EPS ? -dz / len : 0;
             if (nzv + nyv > RG_EPS && me[k].kind != RG_EM_FLAT)
-                *steep = false;          /* a rear face shallower than 45 degrees would show over the ridge */
+                *steep = false;          /* a rear face shallower than 45 degrees shows over the ridge (L6b: always, by design) */
             if (z < zmin - RG_EPS) {
                 double t = (zmin - prev[0]) / (z - prev[0]);
 

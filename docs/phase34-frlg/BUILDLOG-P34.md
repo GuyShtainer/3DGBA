@@ -813,3 +813,19 @@ M4 (Sevii Islands) is complete: every One to Seven Island outdoor map, Navel Roc
 - Azahar (instance k, EMUTEST_STATE_DIR=/tmp/l6, New 3DS, main vs L6 buildings.bin): Four Island orange house and Five
   Island lilac house gable ends become full gables; Resort Gorgeous, Pallet, Littleroot unchanged (rear halves out of
   view, front unchanged). No "chunk scratch full" in any run. Evidence `look-backlog/evidence/l6-*.png`.
+
+## Look L6b roof backs visible in-game (2026-10-07)
+
+- Cause: every profile gable slope was exactly 45 degrees; the device camera's ray to a ridge rises at 15-40 degrees
+  (pitch presets 34-46), so L6's mirrored rear slopes sat behind their own ridge at every preset.
+- Fix: `cb_mirror_prism` (rg_bspecs.c) lays each chain edge above the eave down to `RG_ROOF_PITCH` = 15 degrees before
+  the mirror, keeping dz + dy (the ortho art rows), so the front picture is unchanged and the rear slope faces the camera.
+  Saltbox alternative (front 45, rear laid down) rejected: needs a stretched rear projection and gives lopsided ends.
+- Tooling: `romgen author ROM roofs [SPEC|TOWN|all]` (pitch/ridge/depth + visibility per preset) and in-game perspective
+  previews `_g34/_g40/_g46/_g40far`.
+- Results: FR/LG `check all` 85/85, exact rects 0/0/0; Emerald 30/34 (pre-existing four), output byte-identical. Budget
+  FR worst model 1200 -> 1956 (rocket warehouse), worst chunk 2748 -> 3432 of 9344. Pin FR = LG buildings.bin 55cbd83c ->
+  51a921db; regions/signposts/relief unchanged. test 28 suites + vtest 9 suites, 0 failures; device build links.
+- Azahar: rear slopes visible at Four and Five Island; Resort Gorgeous inconclusive (roof top under the HUD edge at that
+  spot); Pallet/Littleroot unchanged; no "chunk scratch full". Evidence `look-backlog/evidence/l6b-*.png`.
+

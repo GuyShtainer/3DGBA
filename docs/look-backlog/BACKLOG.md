@@ -313,6 +313,64 @@ own ridge, so the mirrored rear slope is invisible from every in-game angle. Fix
 the lowest camera elevation (~30°) so both slopes are seen from above, keeping the front's in-game look (the front
 slope's projected screen height must still match the art; that may mean a deeper roof, extending the back north of the
 art's top row). Needs a design pass (opus) with in-game before/after at Guy's spots. Queued after L8.
+
+### L6b DONE (2026-10-07, branch worktree-agent-a1200a5f0da221e37)
+
+Measured (`romgen author ROM roofs all`, new; model px, 16 per tile). The diagnosis held with one correction: the slopes
+are not near-vertical, they are **exactly 45 degrees**. `sv_gable` and the hard-coded profiles build every front slope with
+depth = rise (Sevii/Four/Five houses: 17 deep x 17 high, ridge at y 38-39, model depth 34; Cerulean/Vermilion 45 degrees
+too; Lorelei parapet 45). The ortho check projects screen y = z - y (a 45-degree oblique), so any split of a slope with
+the same dz + dy draws the same art rows; the builder had simply taken the 45-degree one.
+
+Camera (voxel_camera.c): yaw 0, eye (8 + min(5, mapMax x 0.2)) tiles south (about 13 in towns), height tan(pitch) x that,
+fovy 35, presets 34/37/40/43/46. The ray to a 40 px ridge rises at 21.6-25.7 degrees (pitch 34), 29.3-32.9 (40), 37.2-40.1
+(46), lower when the ridge is 4 tiles north of screen centre (15.4 / 21.2 / 27.7). A rear slope shows only when its pitch
+is below that elevation; 45 > 40.1, so L6's mirrored rear slopes were hidden at every preset. Hip roofs (Pallet 22,
+route 2 59.6 hip, Emerald 18-22), the Viridian gable (18.9) and flat-backed roofs were not affected.
+
+New in-game-angle previews (`author ROM preview SPEC`, `_g34/_g40/_g46` with the player 2 tiles south, `_g40far` 7 tiles
+south; perspective, fovy 35, the device camera's eye offsets) reproduce Guy's shot: before, the lilac and orange Four
+Island houses end at the pink ridge lip like a box.
+
+Designs compared (previews `evidence/l6b-preview-designs.png`, `l6b-preview-g40.png`; base / A22 / A15 / B20 / B15):
+- **A, lay the slope down** (chosen at 15 degrees): each chain edge above the eave steeper than the target keeps its
+  dz + dy (its art rows), trading height for depth; points behind it move with it; then the L6 mirror. Front ortho
+  picture identical by construction; symmetric gable; no new texture mapping. Rear visible share of the roof at the
+  ridge-ray elevation e: A22 5.0 of 21.4 px rows (23 %) at e 33, about 9 % at e 26 (a sliver in previews); A15 about
+  42 % at e 33, 29 % at e 26 (a clear band in previews). Cost: the front slope's in-game height drops about 5 % at e 40,
+  12 % at e 33 (the roof reads a little flatter).
+- **B, saltbox** (front kept at 45, only the rear laid down to 20 / 15 degrees): bigger rear (48 % / 64 % at e 33) and an
+  unchanged front, but the rear needs a new stretched texture projection (the mirror's rows no longer fit) and the gable
+  ends become asymmetric. Rejected for the extra mapping code and the lopsided ends.
+
+Code (`rg_bspecs.c cb_mirror_prism`, `RG_ROOF_PITCH 15.0`): runs inside `rg_close_backs`, so every mirrored gable in
+every family takes it and nothing per model. Changed: the Sevii, Four and Five Island houses, Lorelei, Rocket warehouse,
+Cerulean, Vermilion (house, fan club, green), Lavender, the cottages, the Day Care, Pewter museum porch (23.2 -> 15,
+newly mirrored: 66 mirrored prisms, was 65). Sizes at R = 34 rows: d 26.8 / h 7.2, ridge y 28.2-29.2, depth 53.6
+(Cerulean/Vermilion house 25.2 / 6.8, depth 50.5; Lavender 27.6 / 7.4, 55.2; Lorelei depth 60.6; Rocket warehouse
+35.5 / 9.5, depth 79). Unchanged: hips, flat roofs, frustums (Center, Mart), towers, and all of Emerald (byte-identical
+output; its houses are hips).
+
+Checks: `check all` FR 85/85 and LG 85/85 PASS, every exact rect still 0/0/0; Emerald 30/34, the same four pre-existing
+round-trip FAILs (hedge, mart, lab, rustboro_gym). Budget (`author ROM budget 0`, same base): FR worst model 1200 -> 1956
+vertices (`k_rocket_warehouse`, limit 3300), worst chunk 2748 -> 3432 of 9344 (3/56 chunk 1,2), 0 over; FR Four Island
+building vertices 18948 -> 20502 (voxel.log). Pins: FR = LG buildings.bin 55cbd83c -> 51a921db4d765e9c5572591f3cb1626550d38f26
+(4736560 -> 4773920 B). Unchanged: Emerald buildings 6d321c3a, regions 007a370f, signposts 38515605, relief 21a837f0,
+`--relief ledges` eb25a383; FRLG regions 3716874d, signposts ba2fde45, relief 32c24146. `make -C tools/romgen test` 28
+suites, `vtest` 9 suites, 0 failures. Device `make -j8` links 3DGBA.3dsx.
+
+Azahar (private instance k, New 3DS, default pitch 40, L6 vs L6b buildings.bin, everything else identical;
+`evidence/l6b-*` = before | after | changed pixels, with a 3x zoom):
+- Four Island (3/15, 22,16), `l6b-fr-four-island.png`: the lilac house now shows a darker rear slope behind the pink
+  ridge, the roof reads as a gable instead of a box; the orange house top-left changes the same way (5223 px).
+- Five Island (3/16, 17,8), `l6b-fr-five-island.png`: both lilac houses gain the rear band (7400 px, incl. a walking NPC).
+- Resort Gorgeous (3/54, 39,11), `l6b-fr-resort-gorgeous.png`: **not proven at this spot.** The house's top sits at the
+  frame's top edge under the HUD bar; after the fix the lower ridge brings the grey crest fully into view, but the rear
+  band is above the visible frame. The g40 preview shows it.
+- Pallet, `l6b-fr-pallet.png`: 52 px of sparkles, otherwise identical (hip roofs). Emerald Littleroot
+  (`l6b-em-littleroot.png`, one run: its files are byte-identical): renders normally.
+- voxel.log: no "chunk scratch full" in any of the 9 runs.
+
 ## L8 DONE (2026-10-07, branch worktree-agent-a8a0d7ecb2b9ea9fc)
 
 Fences, rocks and flowers stand up, reusing the L1 shrub machinery: the `GpShrub` table gained a `kind` (bush, fence E-W,
