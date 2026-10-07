@@ -200,6 +200,26 @@ static const RgSideCfg kTwoHarborSide[1] = {
     {NULL, {20, 82, 24, 86}, {23, 36, 26, 42}, 999, true},
 };
 
+/* ---- k_one_harbor: 112x80 art (rect (9,15), 7x5 on layout 230; door (12,18)) --------------------------------------- */
+/* One Island's harbor (an island-One model; it sits here because it shares Two Island's ferry helper). The same ferry seen
+ * from the other end: the map ends 80 rows down, so only the pier and the front of the ferry's roof are in the art. Rows:
+ * rocks beside the stairs 0-20 (x 0-32 and 80-112), the grey stairs 0-16 and the plank deck 16-59 (x 32-80), its ramp
+ * 59-64, the red roof from 64 (x 16-96) and the tops of the two crane frames at 76-80. The ferry and the crane tops are
+ * clipped by the map edge, so their faces are one row. */
+static bool k_one_harbor(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    (void)spec; (void)a0; (void)a1;
+    return sv_block(out, "rock_w", 0, 32, 20, 16, 0) && sv_block(out, "rock_e", 80, 112, 20, 16, 0) &&
+           sv_block(out, "pier", 32, 80, 64, 59, 0) && sv_block(out, "ferry", 16, 96, 80, 79, 64) &&
+           sv_block(out, "crane_w", 0, 16, 80, 79, 76) && sv_block(out, "crane_e", 96, 112, 80, 79, 76) && !out->failed;
+}
+static const RgExact kOneHarborExact[4] = {
+    {0, 0, 32, 20, false},          /* the west rocks */
+    {80, 0, 112, 20, false},        /* the east rocks */
+    {32, 0, 80, 64, false},         /* the stairs, deck and ramp */
+    {16, 64, 96, 80, false},        /* the ferry's roof */
+};
+
 /* ==== KS1: Three Island (layout 232, map 3/14) =========================================================================== */
 
 /* ---- k_three_house_red: 80x64 art (rect (2,28), 5x4 on layout 232; door (3,31)) ------------------------------------- */
@@ -234,6 +254,8 @@ const RgSpec rg_kspecs_sevii[] = {
      k_sevii_house, 0, 0, kHouseSide},
     {"k_one_network", RG_SPEC_DIRECT, L_ONE, {11, 0, 7, 6}, {0, 0}, SV_GROUND, 1, kNetworkExact, 5,
      k_one_network, 0, 0, NULL},
+    {"k_one_harbor", RG_SPEC_DIRECT, L_ONE, {9, 15, 7, 5}, {0, 0}, SV_SEA, 4, kOneHarborExact, 4,
+     k_one_harbor, 0, 0, kTwoHarborSide},
     {"k_two_gamecorner", RG_SPEC_DIRECT, L_TWO, {37, 6, 5, 4}, {0, 0}, SV_GROUND, 1, kGameCornerExact, 1,
      k_two_gamecorner, 0, 0, kGameCornerSide},
     {"k_two_harbor", RG_SPEC_DIRECT, L_TWO, {7, 7, 7, 7}, {0, 0}, SV_SEA, 4, kTwoHarborExact, 6,
