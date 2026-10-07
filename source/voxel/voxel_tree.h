@@ -40,6 +40,16 @@ bool VoxelTree_ShrubSource(const void *primaryTileset, const void *secondaryTile
 void VoxelTree_EmitShrubCard(VoxelBuilder *builder, int x, int y,
                              float u0, float v0, float u1, float v1);
 
+/* 3DGBA (look backlog L2): tall grass. The index k (< VOXEL_GRASSES) of a cell's metatile among its tileset pair's
+ * blade-grass metatiles (profile bladeGrass behaviour, id order), or -1. Only where tree sprites are drawn. */
+int VoxelTree_Grass(const VoxelMapInstance *inst, int metatileId);
+/* For the atlas: blade-grass entry k of this tileset pair, and its metatile id. */
+bool VoxelTree_GrassSource(const void *primaryTileset, const void *secondaryTileset,
+                           unsigned k, unsigned *metatileId);
+/* The blade card standing on cell (x, y), textured with the blades at [u0,u1] x [v0,v1]. The builder's lift applies. */
+void VoxelTree_EmitGrassCard(VoxelBuilder *builder, int x, int y,
+                             float u0, float v0, float u1, float v1);
+
 /* Appended after the ordinary terrain; these vertices use the tree texture. */
 void VoxelTree_EmitInstance(VoxelBuilder *builder, const VoxelMapInstance *inst,
                             int x0, int y0, int x1, int y1);

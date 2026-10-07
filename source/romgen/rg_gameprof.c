@@ -50,6 +50,9 @@ static const GpShrub kEmeraldShrubs[] = {
 static const GpShrub kFireRedShrubs[] = {{0, 0x005}, {0x082D4BC4u, 0x2F4}, {0x082D4B7Cu, 0x2E0}};
 static const GpShrub kLeafGreenShrubs[] = {{0, 0x005}, {0x082D4BA4u, 0x2F4}, {0x082D4B5Cu, 0x2E0}};
 #define GP_SHRUBS(t) .shrubs = t, .shrubCount = (uint8_t)(sizeof t / sizeof t[0])
+/* Look L2: tall-grass metatiles (behaviour 0x02) whose ground is not the General plain grass (grassGround): Emerald 0x206 of
+ * the tileset at 0x083DF794 draws its blades over a sandy-brown ground (ROM-measured, `romgen author ROM grass`). */
+static const GpShrub kEmeraldGrassSkip[] = {{0x083DF794u, 0x206}};
 
 #define GP_FRLG_TREES .treePart = kFrlgTreePart, .treePartCount = sizeof kFrlgTreePart / sizeof kFrlgTreePart[0] / 2u
 
@@ -104,6 +107,7 @@ static GameProfile sEmerald = {
     .treeGround = kEmeraldTreeGround,
     .treeGroundCount = sizeof kEmeraldTreeGround / sizeof kEmeraldTreeGround[0] / 2u,
     GP_SHRUBS(kEmeraldShrubs),
+    .grassGround = 0x001, .grassSkip = kEmeraldGrassSkip, .grassSkipCount = 1,
     .emeraldIdTables = true,
     .interiors3d = true,
     .rendererOn = true,
@@ -136,12 +140,12 @@ static const uint8_t kFrlgGroupSizes[43] = {5, 123, 60, 66, 4, 6, 8, 10, 6, 8, 2
 static GameProfile sFireRed = {GP_FRLG_COMMON, .game = GP_FIRERED, .code = {'B', 'P', 'R', 'E'}, .dataSubdir = "BPRE",
                                .mapGroups = 0x08352718u, .mapLayouts = 0x0834EBFCu, .tsGeneral = 0x082D4B04u,
                                .tsBuilding = 0x082D4C24u, .weatherPtr = 0x083C2C2Cu, .gfxInfoPtrs = 0x0839FE20u,
-                               .fldeffTemplates = 0x083A0080u, GP_SHRUBS(kFireRedShrubs)};
+                               .fldeffTemplates = 0x083A0080u, GP_SHRUBS(kFireRedShrubs), .grassGround = 0x001};
 static GameProfile sLeafGreen = {GP_FRLG_COMMON, .game = GP_LEAFGREEN, .code = {'B', 'P', 'G', 'E'},
                                  .dataSubdir = "BPGE", .mapGroups = 0x083526F8u, .mapLayouts = 0x0834EBDCu,
                                  .tsGeneral = 0x082D4AE4u, .tsBuilding = 0x082D4C04u, .weatherPtr = 0x083C2A68u,
                                  .gfxInfoPtrs = 0x0839FE00u, .fldeffTemplates = 0x083A0060u,
-                                 GP_SHRUBS(kLeafGreenShrubs)};
+                                 GP_SHRUBS(kLeafGreenShrubs), .grassGround = 0x001};
 
 static void set_bit(GpBehSet *s, unsigned b)
 {
@@ -176,6 +180,7 @@ static void build_emerald_sets(GameProfile *p)
     memset(&p->houseDoor, 0, sizeof p->houseDoor);
     memset(&p->sand, 0, sizeof p->sand);
     memset(&p->tallGrass, 0, sizeof p->tallGrass);
+    memset(&p->bladeGrass, 0, sizeof p->bladeGrass);
     memset(&p->signpost, 0, sizeof p->signpost);
     memset(&p->surfable, 0, sizeof p->surfable);
     memset(&p->reflective, 0, sizeof p->reflective);
@@ -188,6 +193,7 @@ static void build_emerald_sets(GameProfile *p)
         if (rg_is_house_door(b)) set_bit(&p->houseDoor, b);
         if (rg_is_sand(b)) set_bit(&p->sand, b);
         if (is_tall_grass(b)) set_bit(&p->tallGrass, b);
+        if (b == 0x02u) set_bit(&p->bladeGrass, b);   /* L2: tall grass proper (0x03 long, 0x07 short, 0x09 ash grass are not) */
         if (in_surfable(b)) set_bit(&p->surfable, b);
         if (in_reflective(b)) set_bit(&p->reflective, b);
         if (in_ice(b)) set_bit(&p->ice, b);
@@ -213,7 +219,7 @@ static void build_frlg_sets(GameProfile *p)
     GpBehSet zero;
 
     memset(&zero, 0, sizeof zero);
-    p->water = p->jump = p->houseDoor = p->sand = p->tallGrass = p->signpost = zero;
+    p->water = p->jump = p->houseDoor = p->sand = p->tallGrass = p->signpost = p->bladeGrass = zero;
     p->surfable = p->reflective = p->ice = p->shallowFlowing = p->furniture = zero;
     for (i = 0; i < sizeof kWater / sizeof kWater[0]; i++)
         set_bit(&p->water, kWater[i]);
@@ -225,6 +231,7 @@ static void build_frlg_sets(GameProfile *p)
     set_bit(&p->houseDoor, 0x69);                 /* 0x8B / 0x8D are a dresser / the cable-club monitor here */
     set_bit(&p->sand, 0x21);
     set_bit(&p->tallGrass, 0x02);
+    set_bit(&p->bladeGrass, 0x02);
     set_bit(&p->signpost, 0x84);
     set_bit(&p->reflective, 0x10);
     set_bit(&p->reflective, 0x16);

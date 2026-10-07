@@ -2,6 +2,7 @@
  * Original: ZallaxDev/pokeemerald-3Ds-dualscreen @ c330c0a, 3ds_port/src/voxel/voxel_tree.c,
  * MIT License - see source/voxel/NOTICE.md. */
 #include <stddef.h>
+#include <string.h>
 #include "voxel_tree.h"
 #include "voxel_relief.h"
 #include "gba_game.h" /* 3DGBA: VXP() */
@@ -124,6 +125,143 @@ void VoxelTree_EmitShrubCard(VoxelBuilder *builder, int x, int y,
         &(VoxelVertex){wx + 1.0f, sink + rise, foot - run, u1, v0, 1.0f},
         &(VoxelVertex){wx + 1.0f, sink,        foot,       u1, v1, 1.0f},
         &(VoxelVertex){wx,        sink,        foot,       u0, v1, 1.0f});
+    builder->rounded = false;
+}
+
+
+/*
+ * 3DGBA (look backlog L2): tall grass. A cell whose behaviour is in the profile's bladeGrass set stands its blades up as
+ * a card. The blades are the LOWER layer's drawing (measured: the tall-grass metatile's upper layer is empty, the
+ * rustle sprite is what covers the player's feet in the game), so the card is the cell's lower layer with the ground
+ * colour keyed out (voxel_atlas.c) and the flat cell keeps its own ordinary drawing under it.
+ *
+ * Which metatiles: by behaviour, read from the tileset pair's attribute tables, in id order, so an entry's index k
+ * (VOXEL_GRASS_BLADES(k)) is the same wherever the pair is asked, atlas and mesher alike. The lists are cached by the
+ * pair's ROM addresses: the world asks once per cell, per frame of chunk building.
+ * Left out: a metatile a tree table owns (treePart / treeGround: a tree's cell, or a canopy fringe drawn as tall grass),
+ * the profile's measured exceptions (grassSkip), and any pair whose primary tileset is not the General one.
+ */
+#define GRASS_PAIRS 4
+
+typedef struct GrassList
+{
+    const GameProfile *prof;
+    uint32_t primary, secondary;   /* ROM addresses; 0 = the slot is free */
+    unsigned stamp;
+    uint8_t n;
+    uint16_t id[VOXEL_GRASSES];
+} GrassList;
+
+static GrassList sGrassList[GRASS_PAIRS];
+static unsigned sGrassStamp;
+
+static bool GrassSkipped(const GameProfile *p, const struct Tileset *secondary, unsigned id)
+{
+    for (unsigned i = 0; p->grassSkip != NULL && i < p->grassSkipCount; ++i)
+        if (p->grassSkip[i].metatile == id && p->grassSkip[i].tileset != 0
+         && id >= p->nPrimMetatiles && secondary != NULL && secondary->gbaAddr == p->grassSkip[i].tileset)
+            return true;
+    return false;
+}
+
+/* The pair's list, built on first use; NULL for a pair with none or whose attribute tables are not there yet. */
+static const GrassList *GrassOf(const struct Tileset *primary, const struct Tileset *secondary)
+{
+    const GameProfile *p = vx_prof();
+    GrassList *slot = &sGrassList[0];
+    const uint16_t *pa, *sa;
+    unsigned nPrim, nSec, id;
+
+    if (primary == NULL || secondary == NULL || primary->gbaAddr != p->tsGeneral)
+        return NULL;
+    for (unsigned i = 0; i < GRASS_PAIRS; ++i)
+    {
+        if (sGrassList[i].prof == p && sGrassList[i].primary == primary->gbaAddr
+         && sGrassList[i].secondary == secondary->gbaAddr)
+        {
+            sGrassList[i].stamp = ++sGrassStamp;
+            return sGrassList[i].n != 0 ? &sGrassList[i] : NULL;
+        }
+        if (sGrassList[i].stamp < slot->stamp)
+            slot = &sGrassList[i];
+    }
+    pa = Voxel_ResolveAttributes(primary);
+    sa = Voxel_ResolveAttributes(secondary);
+    if (pa == NULL || sa == NULL)
+        return NULL;   /* not loaded yet: ask again, never cache the emptiness */
+    TreeLut();
+    memset(slot, 0, sizeof *slot);
+    nPrim = Voxel_MetatileCount(primary, p->nPrimMetatiles);
+    nSec = Voxel_MetatileCount(secondary, p->nMetatilesTotal - p->nPrimMetatiles);
+    for (id = 0; id < p->nPrimMetatiles + nSec && slot->n < VOXEL_GRASSES; ++id)
+    {
+        unsigned beh;
+
+        if (id < p->nPrimMetatiles)
+        {
+            if (id >= nPrim)
+                continue;
+            beh = (unsigned)pa[id] & (unsigned)p->behMask;
+        }
+        else
+        {
+            beh = (unsigned)sa[id - p->nPrimMetatiles] & (unsigned)p->behMask;
+        }
+        if (id >= TREE_LUT_IDS || !gp_beh(&p->bladeGrass, beh) || sPartLut[id] >= 0 || sGroundLut[id] != (int16_t)id
+         || GrassSkipped(p, secondary, id))
+            continue;
+        slot->id[slot->n++] = (uint16_t)id;
+    }
+    slot->prof = p;
+    slot->primary = primary->gbaAddr;
+    slot->secondary = secondary->gbaAddr;
+    slot->stamp = ++sGrassStamp;
+    return slot->n != 0 ? slot : NULL;
+}
+
+int VoxelTree_Grass(const VoxelMapInstance *inst, int metatileId)
+{
+    const GrassList *g;
+
+    if (inst == NULL || metatileId < 0 || !VoxelWorld_UsesTreeSprites(inst))
+        return -1;
+    g = GrassOf((const struct Tileset *)inst->primaryTileset, (const struct Tileset *)inst->secondaryTileset);
+    for (unsigned k = 0; g != NULL && k < g->n; ++k)
+        if (g->id[k] == (unsigned)metatileId)
+            return (int)k;
+    return -1;
+}
+
+bool VoxelTree_GrassSource(const void *primaryTileset, const void *secondaryTileset,
+                           unsigned k, unsigned *metatileId)
+{
+    const GrassList *g = GrassOf((const struct Tileset *)primaryTileset, (const struct Tileset *)secondaryTileset);
+
+    if (g == NULL || k >= g->n)
+        return false;
+    *metatileId = g->id[k];
+    return true;
+}
+
+/*
+ * One card per cell, standing at the cell's south edge and leaning back, low: the blades' own 16x16 squeezed onto a
+ * slant of about 0.62 tile, rising 0.5. Lit as the rounded volume it stands for, like a crown card, and sunk a little so
+ * its foot meets the ground without a seam. Two triangles.
+ */
+#define GRASS_RISE 0.50f
+#define GRASS_RUN  0.36f
+void VoxelTree_EmitGrassCard(VoxelBuilder *builder, int x, int y,
+                             float u0, float v0, float u1, float v1)
+{
+    const float sink = -0.04f;
+    float wx = (float)x, foot = (float)y + 1.0f;
+
+    builder->rounded = true;
+    VoxelBuilder_Quad(builder,
+        &(VoxelVertex){wx,        sink + GRASS_RISE, foot - GRASS_RUN, u0, v0, 1.0f},
+        &(VoxelVertex){wx + 1.0f, sink + GRASS_RISE, foot - GRASS_RUN, u1, v0, 1.0f},
+        &(VoxelVertex){wx + 1.0f, sink,              foot,             u1, v1, 1.0f},
+        &(VoxelVertex){wx,        sink,              foot,             u0, v1, 1.0f});
     builder->rounded = false;
 }
 

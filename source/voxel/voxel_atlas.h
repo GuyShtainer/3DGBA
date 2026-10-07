@@ -85,7 +85,15 @@ void VoxelAtlas_SolidUV(VoxelSolidColor color, float *u0, float *v0, float *u1, 
 #define VOXEL_SHRUB_FIRST (VOXEL_CUT_FIRST + VOXEL_CUTS)
 #define VOXEL_SHRUB_GROUND(k) (VOXEL_SHRUB_FIRST + 2u * (unsigned)(k))
 #define VOXEL_SHRUB_LEAVES(k) (VOXEL_SHRUB_FIRST + 2u * (unsigned)(k) + 1u)
-#define VOXEL_METATILE_IDS (VOXEL_SHRUB_FIRST + 2u * VOXEL_SHRUBS)
+/*
+ * 3DGBA (look backlog L2): then the tall-grass blade layers (voxel_tree.h): entry k of the tileset pair's tall-grass
+ * metatiles (behaviour in the profile's bladeGrass, in id order) is VOXEL_GRASS_BLADES(k), its lower layer with the
+ * ground colour clear, for the card the blades stand up as. The flat cell keeps its own ordinary slot.
+ */
+#define VOXEL_GRASSES 12u
+#define VOXEL_GRASS_FIRST (VOXEL_SHRUB_FIRST + 2u * VOXEL_SHRUBS)
+#define VOXEL_GRASS_BLADES(k) (VOXEL_GRASS_FIRST + (unsigned)(k))
+#define VOXEL_METATILE_IDS (VOXEL_GRASS_FIRST + VOXEL_GRASSES)
 #define VOXEL_SLOT_ABSENT  0xFFFFu
 #define VOXEL_SLOT_PENDING 0xFFFEu
 #define VOXEL_ATLAS_PAGES ((VOXEL_METATILE_IDS + VOXEL_SOLID_BASE - 1u) / VOXEL_SOLID_BASE)
