@@ -49,6 +49,7 @@
 #include "voxel_grade.h"
 #include "voxel_relief.h"
 #include "voxel_lighting.h"
+#include "voxel_daylight.h"
 #include "voxel_sign.h"
 
 /* 3DGBA: the shader and the tree art are embedded (data/voxel_trees.bin, voxel.v.pica), not romfs. */
@@ -218,6 +219,9 @@ static float sGloomX, sGloomY;
 #endif
 #if CTR_VOXEL_LIGHTING
 static void MakeDapple(void);
+#if CTR_VOXEL_LIGHTING
+static void DayInit(void);
+#endif
 static void MakeRays(void);
 static void MakeMotes(void);
 static void MakeFog(void);
@@ -591,6 +595,7 @@ typedef struct
     uint32_t openEpoch;
     bool openSame;
     uint32_t hash, epoch;
+    uint32_t sunStamp;      /* L4: the baked sun it was lit with (sSunStamp) */
     /* Found stale in epoch `staleEpoch` with signature `staleHash`: not
      * hashed again every frame it waits for its rebuild. */
     uint32_t staleHash, staleEpoch;
@@ -1689,7 +1694,10 @@ bool CtrVoxel_Init(void)
     sReady = true;
     CtrLog_Write(CTR_LOG_VIDEO, "VOXEL stream policy 7: drafts for holes, hashed chunk lookup");
     CtrLog_Write(CTR_LOG_VIDEO, "VOXEL lighting: %s",
-                 CTR_VOXEL_LIGHTING ? "fixed sun + baked shadows + cast sprite shadows" : "disabled");
+                 CTR_VOXEL_LIGHTING ? "baked sun + baked shadows + cast sprite shadows" : "disabled");
+#if CTR_VOXEL_LIGHTING
+    DayInit();
+#endif
     CtrLog_Write(CTR_LOG_VIDEO,
                  "VOXEL init: %u staging + %u billboard vertices (%lu KiB linear), up to %u "
                  "atlases (VRAM first, then linear) of %lu KiB (%ux%u, %u slots), page stream %s, linear free=%lu, VRAM free=%lu",
@@ -2265,6 +2273,206 @@ static void RunAtlasJob(uint64_t started, float budget, bool inFrame)
                  (unsigned long)vramSpaceFree(), (unsigned long)linearSpaceFree());
 }
 
+/* ── The day (look backlog L4) ─────────────────────────────────────────── */
+
+/*
+ * The time of day moves the sun and colours the light (voxel_daylight.h).
+ *
+ * The colour - the grade's tints, the haze, the glow - is uniforms, set from
+ * the continuous clock every frame (DayLight): free, and it never pops. The
+ * sun the chunks are BAKED with moves in steps of VOXEL_SUN_STEP_MINUTES:
+ * a step sets it (VoxelLighting_SetSun) and bumps sSunStamp, and every lit
+ * chunk built under another stamp is then stale but still drawn (VisitSite),
+ * re-baked like any stale chunk - after FrameEnd, against the frame's spare
+ * time - and at most VOXEL_SUN_REBAKES_PER_FRAME of them START per frame
+ * (StartNextJob). A re-bake is never a rescue: it is never built inside the
+ * frame (RequestOverdue). So a step is a wave of a few dozen chunk builds
+ * over a second or two, every ten minutes, each moving its shadows by the
+ * few hundredths of a tile the sun moved; the look changes with the tint.
+ *
+ * The clock: the 3DS's (osGetTime, local time - which mGBA's RTC also reads
+ * for Ruby/Sapphire/Emerald, so every game agrees; FireRed/LeafGreen have no
+ * RTC). sdmc:/3DGBA/daylight.txt overrides it, read once at start-up: "off"
+ * turns the cycle off (L3's fixed sun, no tint: the old picture exactly),
+ * "HH:MM" holds the clock there, "HH:MM xN" runs it N times as fast. There
+ * is no menu row for it.
+ */
+#define VOXEL_DAYLIGHT_PATH "sdmc:/3DGBA/daylight.txt"
+/* Bumped when the baked sun moves; a chunk lit under another is stale. */
+static uint32_t sSunStamp = 1;
+#if CTR_VOXEL_LIGHTING
+static VoxelDayOverride sDay;
+static uint64_t sDayReadTick;
+static unsigned sSunStep;
+static float sDayMinute;
+static VoxelDayTint sDayTint;
+/* The continuous sun: the dapple and the dust follow it, never jumping. */
+static VoxelSunDir sDaySun = {VOXEL_SUN_REF_DX, VOXEL_SUN_REF_DZ};
+static VoxelRebakePacer sRebake;
+/* Sun re-bakes the view still asked for last frame. */
+static unsigned sDayWaiting;
+/* What a wave of re-bakes costs, against the frames before it (DayFrame). */
+static struct
+{
+    bool on;
+    unsigned chunks, waveFrames, steadyFrames;
+    double waveFrameMs, steadyFrameMs, waveWorkMs, steadyWorkMs, waveBuildMs;
+    float waveFrameMax, steadyFrameMax, waveWorkMax, steadyWorkMax;
+    uint64_t lastTick;
+} sWave;
+#endif
+
+static bool DayCycleOn(void)
+{
+#if CTR_VOXEL_LIGHTING
+    return sDay.mode != VOXEL_DAY_OFF;
+#else
+    return false;
+#endif
+}
+
+#if CTR_VOXEL_LIGHTING
+static float DayMinuteNow(void)
+{
+    if (sDay.mode == VOXEL_DAY_FIXED)
+        return VoxelDaylight_OverrideMinute(&sDay, (double)(svcGetSystemTick() - sDayReadTick)
+                                                       / SYSCLOCK_ARM11);
+    /* Milliseconds since 1900 in the console's local time. */
+    return (float)(osGetTime() % (86400ull * 1000ull)) / 60000.0f;
+}
+
+static void DayInit(void)
+{
+    FILE *f = fopen(VOXEL_DAYLIGHT_PATH, "r");
+    char text[64] = "";
+    bool found = f != NULL;
+
+    if (f != NULL)
+    {
+        size_t n = fread(text, 1, sizeof text - 1u, f);
+
+        text[n] = '\0';
+        fclose(f);
+    }
+    VoxelDaylight_ParseOverride(found ? text : NULL, &sDay);
+    sDayReadTick = svcGetSystemTick();
+    VoxelRebake_Init(&sRebake, VOXEL_SUN_REBAKES_PER_FRAME);
+    memset(&sWave, 0, sizeof sWave);
+    if (!DayCycleOn())
+    {
+        CtrLog_Write(CTR_LOG_VIDEO, "VOXEL day: off (%s), L3's fixed sun", VOXEL_DAYLIGHT_PATH);
+        return;
+    }
+    /* Every sun the day will take, before any chunk is hashed: the hash then
+     * reads the same tiles whichever is up (VoxelLighting_WidenReach). */
+    for (unsigned step = 0; step < VOXEL_SUN_STEPS; ++step)
+    {
+        VoxelSunDir sun = VoxelDaylight_StepSun(step);
+
+        VoxelLighting_WidenReach(sun.dx, sun.dz);
+    }
+    sDayMinute = DayMinuteNow();
+    sDayTint = VoxelDaylight_Tint(sDayMinute);
+    sDaySun = VoxelDaylight_Sun(sDayMinute);
+    sSunStep = VoxelDaylight_Step(sDayMinute);
+    {
+        VoxelSunDir sun = VoxelDaylight_StepSun(sSunStep);
+        int west, east, north, south;
+
+        VoxelLighting_SetSun(sun.dx, sun.dz);
+        ++sSunStamp;
+        VoxelLighting_Reach(&west, &east, &north, &south);
+        CtrLog_Write(CTR_LOG_VIDEO, "VOXEL day: %s%s, %02u:%02u (x%.0f), sun step %u (%.3f, %.3f), "
+                     "hash reach W%d E%d N%d S%d",
+                     sDay.mode == VOXEL_DAY_FIXED ? "fixed" : "3DS clock",
+                     found && sDay.mode == VOXEL_DAY_LIVE ? " (daylight.txt not understood)" : "",
+                     (unsigned)sDayMinute / 60u, (unsigned)sDayMinute % 60u, sDay.speed, sSunStep,
+                     sun.dx, sun.dz, west, east, north, south);
+    }
+}
+
+/* Once a frame, before the view is visited: the tint and the continuous sun,
+ * and a new baked sun when the clock has crossed into another step. */
+static void DayUpdate(void)
+{
+    unsigned step;
+
+    if (!DayCycleOn())
+        return;
+    sDayMinute = DayMinuteNow();
+    sDayTint = VoxelDaylight_Tint(sDayMinute);
+    sDaySun = VoxelDaylight_Sun(sDayMinute);
+    /* Under the ground there is no day (DayLight). */
+    VoxelEntities_SetShadowStrength(VoxelWorld_Underground() ? 1.0f : sDayTint.shadow);
+    step = VoxelDaylight_Step(sDayMinute);
+    if (step == sSunStep)
+        return;
+    {
+        VoxelSunDir sun = VoxelDaylight_StepSun(step);
+
+        sSunStep = step;
+        VoxelLighting_SetSun(sun.dx, sun.dz);
+        ++sSunStamp;
+        CtrLog_Write(CTR_LOG_VIDEO, "VOXEL day: %02u:%02u, sun step %u (%.3f, %.3f): re-baking",
+                     (unsigned)sDayMinute / 60u, (unsigned)sDayMinute % 60u, step, sun.dx, sun.dz);
+    }
+}
+
+/*
+ * The cost of a wave, for the log: the frame interval and the module's own
+ * time (update + after-submit builds) while it ran, against the frames since
+ * the last one. `waiting` is how many sun re-bakes the view still asks for.
+ */
+static void DayFrame(unsigned waiting, float workMs)
+{
+    uint64_t now = svcGetSystemTick();
+    float frameMs = sWave.lastTick != 0 ? TicksMs(now - sWave.lastTick) : 0.0f;
+
+    sWave.lastTick = now;
+    if (!DayCycleOn() || frameMs <= 0.0f || frameMs > 250.0f)
+        return;
+    if (waiting != 0 && !sWave.on)
+    {
+        sWave.on = true;
+        sWave.chunks = sWave.waveFrames = 0;
+        sWave.waveFrameMs = sWave.waveWorkMs = sWave.waveBuildMs = 0.0;
+        sWave.waveFrameMax = sWave.waveWorkMax = 0.0f;
+    }
+    if (sWave.on)
+    {
+        ++sWave.waveFrames;
+        sWave.waveFrameMs += frameMs;
+        sWave.waveWorkMs += workMs;
+        if (frameMs > sWave.waveFrameMax) sWave.waveFrameMax = frameMs;
+        if (workMs > sWave.waveWorkMax) sWave.waveWorkMax = workMs;
+        if (waiting == 0)
+        {
+            CtrLog_Write(CTR_LOG_VIDEO, "VOXEL day wave: %u chunks re-baked over %u frames, %.1f ms of "
+                         "builds; frame mean %.2f max %.2f ms, voxel work mean %.2f max %.2f ms | "
+                         "steady %u frames: frame mean %.2f max %.2f ms, voxel work mean %.2f max %.2f ms",
+                         sWave.chunks, sWave.waveFrames, sWave.waveBuildMs,
+                         sWave.waveFrameMs / sWave.waveFrames, sWave.waveFrameMax,
+                         sWave.waveWorkMs / sWave.waveFrames, sWave.waveWorkMax,
+                         sWave.steadyFrames,
+                         sWave.steadyFrames ? sWave.steadyFrameMs / sWave.steadyFrames : 0.0,
+                         sWave.steadyFrameMax,
+                         sWave.steadyFrames ? sWave.steadyWorkMs / sWave.steadyFrames : 0.0,
+                         sWave.steadyWorkMax);
+            sWave.on = false;
+            sWave.steadyFrames = 0;
+            sWave.steadyFrameMs = sWave.steadyWorkMs = 0.0;
+            sWave.steadyFrameMax = sWave.steadyWorkMax = 0.0f;
+        }
+        return;
+    }
+    ++sWave.steadyFrames;
+    sWave.steadyFrameMs += frameMs;
+    sWave.steadyWorkMs += workMs;
+    if (frameMs > sWave.steadyFrameMax) sWave.steadyFrameMax = frameMs;
+    if (workMs > sWave.steadyWorkMax) sWave.steadyWorkMax = workMs;
+}
+#endif
+
 /* ── Building ───────────────────────────────────────────────────────────── */
 
 /* What one chunk stands for: a square of a map, or of the border belt. */
@@ -2369,6 +2577,8 @@ static struct
     uint64_t phaseTicks[JOB_DONE + 1];
     unsigned rays;          /* shadow rays its build cast (VoxelLighting_Rays) */
     uint32_t firstFrame;
+    uint32_t sunStamp;      /* L4: the baked sun it lights with */
+    bool sun;               /* ... and it was asked for only because that sun moved */
     /* Measured by JOB_PACK, a slice of vertices at a time: the chunk's gx0..
      * and gy0.. (VoxelChunk). */
     unsigned packed;
@@ -2412,6 +2622,7 @@ static void JobStart(const ChunkSite *site, VoxelAtlasSlot *atlas, uint32_t hash
     sJob.row = site->y0;
     sJob.col = site->x0;
     sJob.firstFrame = sFrame;
+    sJob.sunStamp = sSunStamp;
     VoxelBuilder_Init(&sBuilder, sScratch, VOXEL_CHUNK_SCRATCH);
     VoxelBuilder_SetAtlas(&sBuilder, &atlas->map);
     VoxelBuilder_SetOrigin(&sBuilder, site->baseX, site->baseY);
@@ -2435,6 +2646,8 @@ static bool JobValid(void)
     const VoxelAtlasSlot *atlas = sJob.atlas;
 
     return sJob.epoch == sEpoch && sJob.beltGrid == sBeltGrid
+        /* A lit chunk must not mix two suns: the caches were reset under it. */
+        && (sJob.site.inst->indoor || sJob.sunStamp == sSunStamp)
         && atlas->valid && atlas->generation == sJob.atlasGeneration
         && atlas->primaryTileset == sJob.site.inst->primaryTileset
         && atlas->secondaryTileset == sJob.site.inst->secondaryTileset;
@@ -2692,6 +2905,7 @@ static BuildResult JobFinish(VoxelChunk *chunk)
     }
     chunk->hash = sJob.hash;
     chunk->epoch = sEpoch;
+    chunk->sunStamp = sJob.sunStamp;
     chunk->staleEpoch = 0;
     chunk->primary = inst->primaryTileset;
     chunk->secondary = inst->secondaryTileset;
@@ -2945,6 +3159,7 @@ typedef struct
     uint32_t hash;
     bool hashKnown;     /* else computed if and when it is built */
     bool done;          /* taken as a job, or being built by the running one */
+    bool sun;           /* L4: stale only because the baked sun moved */
     unsigned key;       /* class, then distance */
     unsigned need, waitIndex;
 } BuildRequest;
@@ -3030,6 +3245,10 @@ static unsigned RequestWait(const ChunkSite *site)
 
 static bool RequestOverdue(const BuildRequest *r)
 {
+    /* A re-bake for the sun is drawn as it was meanwhile, a few hundredths
+     * of a tile off: never worth time inside the frame. */
+    if (r->sun)
+        return false;
     unsigned limit = r->chunk != NULL && r->chunk->draft ? VOXEL_DRAFT_STARVE_FRAMES
                                                           : VOXEL_STARVE_FRAMES;
 
@@ -3098,6 +3317,7 @@ static void Request(const ChunkSite *site, VoxelAtlasSlot *atlas, VoxelChunk *ch
     r->chunk = chunk;
     r->hashKnown = hash != NULL;
     r->done = false;
+    r->sun = false;
     r->hash = hash != NULL ? *hash : 0;
     r->need = need;
     r->waitIndex = RequestWait(site);
@@ -3141,7 +3361,7 @@ static void VisitSite(const ChunkSite *site, VoxelAtlasSlot *atlas,
     const VoxelMapInstance *inst = site->inst;
     VoxelChunk *chunk = FindChunk(site->border, inst->mapGroup, inst->mapNum,
                                   site->cx, site->cy);
-    bool drawable, stale = false, hashKnown = false;
+    bool drawable, stale = false, hashKnown = false, sunOnly = false;
     uint32_t hash = 0;
     bool inView = SiteVisible(site, chunk);
 
@@ -3213,11 +3433,28 @@ static void VisitSite(const ChunkSite *site, VoxelAtlasSlot *atlas,
             chunk->staleEpoch = sEpoch;
         }
     }
+    /* Up to date but for the sun (L4): lit under another, so it is baked
+     * again; the mesh it has is drawn until then. Its hash still holds. */
+    if (!stale && !inst->indoor && chunk->sunStamp != sSunStamp)
+    {
+        stale = sunOnly = true;
+        if (!hashKnown && chunk->epoch == sEpoch)
+        {
+            hashKnown = true;
+            hash = chunk->hash;
+        }
+    }
     if (stale)
+    {
+        unsigned before = sRequestCount;
+
         Request(site, atlas, chunk, hashKnown ? &hash : NULL,
                 inView ? (drawable ? NEED_STALE : NEED_HOLE)
                        : (drawable ? NEED_AHEAD_STALE : NEED_AHEAD),
                 playerX, playerZ);
+        if (sRequestCount != before)
+            sRequests[before].sun = sunOnly;
+    }
     if (!inView)
         return;
     if (drawable)
@@ -3572,10 +3809,16 @@ static bool StartNextJob(float elapsed, float holeMs, float aheadMs)
         if (!r->atlas->valid || r->atlas->primaryTileset != inst->primaryTileset
          || r->atlas->secondaryTileset != inst->secondaryTileset)
             continue;
+#if CTR_VOXEL_LIGHTING
+        /* L4: a wave of sun re-bakes starts a bounded number a frame. */
+        if (r->sun && !VoxelRebake_Take(&sRebake, sFrame))
+            continue;
+#endif
         if (!r->hashKnown)
             r->hash = SiteHash(&r->site);
         r->done = true;
         JobStart(&r->site, r->atlas, r->hash, r->chunk, forView, need == NEED_HOLE);
+        sJob.sun = r->sun;
         sJob.waitIndex = r->waitIndex;
         sJob.overdue = RequestOverdue(r);
         return true;
@@ -3700,6 +3943,13 @@ static unsigned RunJobs(uint64_t started, float holeMs, float aheadMs, bool inFr
             sJob.active = false;
             ++built;
             NoteBuildCost(chunk, &sJob.site, TicksMs(sJob.ticks), sFrame - sJob.firstFrame + 1);
+#if CTR_VOXEL_LIGHTING
+            if (sJob.sun)
+            {
+                ++sWave.chunks;
+                sWave.waveBuildMs += TicksMs(sJob.ticks);
+            }
+#endif
             /* A stale chunk is already on the draw list, which points at its
              * slot; a hole joins it now, if it is on screen. */
             if (!IsDrawn(chunk) && SiteVisible(&sJob.site, chunk))
@@ -4295,6 +4545,10 @@ bool CtrVoxel_Update(void)
     /* The game has left the battle: the field is drawn again, as it was. */
     if (sBattle.on && !VoxelBattle_GameInBattle())
         CtrVoxel_EndBattle();
+#if CTR_VOXEL_LIGHTING
+    /* Last frame's cost, now that its builds after FrameEnd are counted. */
+    DayFrame(sDayWaiting, sStats.updateMs + sStats.afterMs);
+#endif
     started = svcGetSystemTick();
     ++sFrame;
 
@@ -4331,6 +4585,9 @@ bool CtrVoxel_Update(void)
 #endif
         }
     }
+#if CTR_VOXEL_LIGHTING
+    DayUpdate();
+#endif
 
     VoxelWorld_GetLocation(&mapGroup, &mapNum);
     /*
@@ -4426,6 +4683,11 @@ bool CtrVoxel_Update(void)
         UpdateView(sCamera.targetX, sCamera.targetZ, false, cut);
     else
         UpdateView(playerX, playerZ, mapChanged && !cut, cut);
+#if CTR_VOXEL_LIGHTING
+    sDayWaiting = sJob.active && sJob.sun;
+    for (unsigned i = 0; i < sRequestCount; ++i)
+        sDayWaiting += sRequests[i].sun && !sRequests[i].done;
+#endif
     /* The pages drawn from first, then those of every map in view - built
      * or not yet - and last, if there is room, of the maps in the ring. */
     for (unsigned d = 0; d < sDrawCount; ++d)
@@ -4846,6 +5108,33 @@ static VoxelLight LightFor(bool indoor)
     return light;
 }
 
+#if CTR_VOXEL_LIGHTING
+/*
+ * L4: the time of day's colour over the weather's light (voxel_daylight.h).
+ * Under the ground there is no day. By day every factor is 1 and this
+ * changes nothing; the glow (rays, dust, bloom, the dapples' contrast) goes
+ * out at night.
+ */
+static void DayLight(VoxelLight *light)
+{
+    const VoxelDayTint *tint = &sDayTint;
+
+    if (!DayCycleOn() || VoxelWorld_Underground())
+        return;
+    for (int i = 0; i < 3; ++i)
+    {
+        light->sun[i] *= tint->sun[i];
+        light->shade[i] *= tint->shade[i];
+        light->hazeRgb[i] *= tint->haze[i];
+    }
+    light->rays *= tint->glow;
+    light->motes *= tint->glow;
+    light->bloom *= tint->glow;
+    light->dappleLow = 1.0f - (1.0f - light->dappleLow) * tint->glow;
+    light->dappleHigh = 1.0f + (light->dappleHigh - 1.0f) * tint->glow;
+}
+#endif
+
 static void SetGrade(const VoxelLight *light)
 {
     float eye = sCamera.distance / cosf(C3D_AngleFromDegrees(sCamera.pitch));
@@ -5188,8 +5477,8 @@ static void DrawMotes(const C3D_Mtx *view, const VoxelLight *light, const VoxelL
 {
     int originX = (int)floorf(sCamera.targetX), originZ = (int)floorf(sCamera.targetZ);
     float seconds = (float)fmod((double)svcGetSystemTick() / SYSCLOCK_ARM11, 3600.0);
-    float len = sqrtf(VOXEL_SUN_DX * VOXEL_SUN_DX + VOXEL_SUN_DZ * VOXEL_SUN_DZ);
-    float windX = VOXEL_SUN_DX / len * VOXEL_MOTE_WIND, windZ = VOXEL_SUN_DZ / len * VOXEL_MOTE_WIND;
+    float len = sqrtf(sDaySun.dx * sDaySun.dx + sDaySun.dz * sDaySun.dz);
+    float windX = sDaySun.dx / len * VOXEL_MOTE_WIND, windZ = sDaySun.dz / len * VOXEL_MOTE_WIND;
     /* The camera's right and up in the world: the view's first two rows. */
     float rx = view->r[0].x * VOXEL_MOTE_SIZE, ry = view->r[0].y * VOXEL_MOTE_SIZE;
     float rz = view->r[0].z * VOXEL_MOTE_SIZE;
@@ -5270,17 +5559,19 @@ static void DappleUniforms(int worldX, int worldZ)
      * with it. */
     worldX += sDappleAnchorX;
     worldZ += sDappleAnchorZ;
-    float len = sqrtf(VOXEL_SUN_DX * VOXEL_SUN_DX + VOXEL_SUN_DZ * VOXEL_SUN_DZ);
-    float c = VOXEL_SUN_DX / len, s = VOXEL_SUN_DZ / len;
+    /* The day's continuous sun (L4), not the baked one: it never jumps. */
+    float sunX = sDaySun.dx, sunZ = sDaySun.dz;
+    float len = sqrtf(sunX * sunX + sunZ * sunZ);
+    float c = sunX / len, s = sunZ / len;
     float su = 1.0f / VOXEL_DAPPLE_PERIOD;
     float sv = 1.0f / (VOXEL_DAPPLE_PERIOD * VOXEL_DAPPLE_STRETCH);
     float u0 = (c * (float)worldX + s * (float)worldZ - sDappleDrift) * su;
     float v0 = (c * (float)worldZ - s * (float)worldX) * sv;
 
     C3D_FVUnifSet(GPU_VERTEX_SHADER, sUniDappleU,
-                  c * su, (c * VOXEL_SUN_DX + s * VOXEL_SUN_DZ) * su, s * su, u0 - floorf(u0));
+                  c * su, (c * sunX + s * sunZ) * su, s * su, u0 - floorf(u0));
     C3D_FVUnifSet(GPU_VERTEX_SHADER, sUniDappleV,
-                  -s * sv, (c * VOXEL_SUN_DZ - s * VOXEL_SUN_DX) * sv, c * sv, v0 - floorf(v0));
+                  -s * sv, (c * sunZ - s * sunX) * sv, c * sv, v0 - floorf(v0));
 }
 
 /*
@@ -5742,7 +6033,12 @@ void CtrVoxel_Draw(C3D_RenderTarget *target, float eyeOffset)
     const VoxelMapInstance *current = VoxelWorld_Instance(0);
     bool indoor = current != NULL && current->indoor;
     VoxelLight light = LightFor(indoor), unlit = LightFor(true);
-    bool dapples = DapplesOn(&light);
+    bool dapples;
+#if CTR_VOXEL_LIGHTING
+    if (!indoor)
+        DayLight(&light);
+#endif
+    dapples = DapplesOn(&light);
 #if CTR_VOXEL_LIGHTING
     float fog = !indoor && sHaveFog ? VoxelWorld_FogDensity() : 0.0f;
     bool cave = fog > 0.0f && VoxelWorld_Underground();

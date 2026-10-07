@@ -10,7 +10,7 @@ CFLAGS  += -I$(SRC) -I$(ROOT)/source/voxel
 # Phase 34 B0: the authoring tool (`romgen author ...`) and, for `author check`'s round trip, the vendored voxel consumer.
 AUTHOR  := rg_author.c rg_author_trees.c rg_png.c rg_budget.c
 AUTHVOX := $(foreach v,voxel_world voxel_regions voxel_relief voxel_building voxel_sign voxel_arena voxel_atlas \
-           voxel_mesh_builder voxel_tree voxel_lighting voxel_grade voxel_entities voxel_camera vx_adapter vx_snapshot \
+           voxel_mesh_builder voxel_tree voxel_lighting voxel_daylight voxel_grade voxel_entities voxel_camera vx_adapter vx_snapshot \
            vx_data ctr_shims_pure vx_battle_stub,$(ROOT)/source/voxel/$(v).c)
 AUTHFLAGS := -DVOXEL_HOST_FILES -DCTR_VOXEL_LIGHTING=1 -DRG_AUTHOR_CONSUMER
 
@@ -29,8 +29,8 @@ build/romgen_mem: romgen_cli.c $(AUTHOR) rg_author.h rg_png.h rg_memcount.c rg_m
 # One suite: `make -C tools/romgen test T=relief_ledge`. Uses build/tests/ (git-ignored with build/).
 T ?= *
 VOXSRC := voxel_world voxel_regions voxel_relief voxel_building voxel_sign voxel_arena voxel_atlas voxel_mesh_builder \
-          voxel_tree voxel_lighting voxel_grade voxel_entities voxel_camera vx_adapter vx_snapshot vx_lz77 vx_behavior \
-          vx_data ctr_shims_pure vx_battle_stub
+          voxel_tree voxel_lighting voxel_daylight voxel_grade voxel_entities voxel_camera vx_adapter vx_snapshot vx_lz77 \
+          vx_behavior vx_data ctr_shims_pure vx_battle_stub
 TESTFLAGS := -std=c11 -Wall -Wextra -O2 -ffp-contract=off -fsanitize=address,undefined -DVOXEL_HOST_FILES \
              -DCTR_VOXEL_LIGHTING=1 -I$(SRC) -I$(ROOT)/source/voxel -I$(ROOT)/test/host
 test:
@@ -46,12 +46,12 @@ test:
 VX := $(ROOT)/source/voxel
 VFLAGS := -std=c11 -Wall -Wextra -O2 -fsanitize=address,undefined
 VWORLD := $(foreach v,voxel_world voxel_regions voxel_relief voxel_building voxel_sign voxel_arena voxel_atlas \
-          voxel_mesh_builder voxel_tree voxel_lighting voxel_grade voxel_entities voxel_camera vx_adapter vx_snapshot \
-          vx_lz77 vx_behavior vx_data ctr_shims_pure vx_battle_stub,$(VX)/$(v).c) $(SRC)/rg_gameprof.c
+          voxel_mesh_builder voxel_tree voxel_lighting voxel_daylight voxel_grade voxel_entities voxel_camera vx_adapter \
+          vx_snapshot vx_lz77 vx_behavior vx_data ctr_shims_pure vx_battle_stub,$(VX)/$(v).c) $(SRC)/rg_gameprof.c
 VADAPT := $(foreach v,vx_adapter vx_snapshot vx_lz77 vx_behavior ctr_shims_pure,$(VX)/$(v).c) $(SRC)/rg_gameprof.c
 vtest:
 	@mkdir -p build/vtests
-	@set -e; for t in entities mesh world frlg; do \
+	@set -e; for t in entities mesh world frlg daylight; do \
 	  $(CC) $(VFLAGS) -DVOXEL_HOST_FILES -DCTR_VOXEL_LIGHTING=1 -DVOXEL_LIGHTING_TESTS -I$(VX) -I$(SRC) -I$(ROOT)/test/host \
 	    $(ROOT)/test/host/test_voxel_$$t.c $(VWORLD) -lm -o build/vtests/$$t; \
 	  echo "== test_voxel_$$t"; (cd $(ROOT) && tools/romgen/build/vtests/$$t) | tail -3; done

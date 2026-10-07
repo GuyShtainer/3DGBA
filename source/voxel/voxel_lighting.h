@@ -6,6 +6,7 @@
 #define CTR_VOXEL_LIGHTING_H
 
 #include "voxel_mesh_builder.h"
+#include "voxel_daylight.h"
 
 /* Standalone host consumers retain the original mesh unless explicitly enabled. */
 #ifndef CTR_VOXEL_LIGHTING
@@ -23,13 +24,19 @@
  * from the front and above; this makes the baked terrain/building shadows
  * agree with them. Elevation: horizontal length 0.79 over height 1 = 52 deg.
  * A south wall gets 0.65 of the sun's face term, a west wall 0.45, a roof 1;
- * north and east walls take ambient. (L4: a day cycle only has to drive these
- * two numbers, then VoxelLighting_Reset() and re-bake.)
+ * north and east walls take ambient. That vector is VOXEL_SUN_REF_DX/DZ
+ * (voxel_daylight.h), the sun until something sets another.
+ *
+ * L4: the day cycle moves it in steps (ctr_voxel.c, VoxelLighting_SetSun) and
+ * re-bakes the chunks. The people's cast shadows read the same baked sun every
+ * frame, so they agree with the terrain's; the dapple and the dust follow the
+ * day's continuous sun instead (ctr_voxel.c), so they never jump.
  *
  * Nothing assumes a sign: the march, the reach boxes and the hash derive
  * their extents from the signs of DX and DZ. */
-#define VOXEL_SUN_DX 0.45f
-#define VOXEL_SUN_DZ (-0.65f)
+extern float gVoxelSunDX, gVoxelSunDZ;
+#define VOXEL_SUN_DX gVoxelSunDX
+#define VOXEL_SUN_DZ gVoxelSunDZ
 #define VOXEL_LIGHT_REACH 8
 /* The light of what the sun does not reach: a cast shadow, and a face turned
  * away from the sun. The same number, so a wall and the shadow it casts on
@@ -42,6 +49,16 @@
  * were read from changes - a live tile, the set of maps or their origins -
  * and needed at no other time: the caches outlive builds and frames. */
 void VoxelLighting_Reset(void);
+/* The sun the bake uses from now on; forgets the caches (VoxelLighting_Reset),
+ * whose answers were for the old one. Chunks baked before keep the old sun
+ * until they are built again: the caller re-bakes them. */
+void VoxelLighting_SetSun(float dx, float dz);
+/* The chunk hash's margins: how far past a chunk, on each side, the casters
+ * that shade it may stand. By default the current sun's. A sun that moves
+ * must widen them to every direction it will take BEFORE any chunk is
+ * hashed, so a chunk's hash reads the same tiles whichever sun is up. */
+void VoxelLighting_WidenReach(float dx, float dz);
+void VoxelLighting_Reach(int *west, int *east, int *north, int *south);
 uint32_t VoxelLighting_Hash(int x0, int z0, int x1, int z1);
 float VoxelLighting_Sample(float x, float y, float z);
 /* Rays cast so far (samples not found in the cache), for the build logs. */

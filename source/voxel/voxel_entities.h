@@ -54,6 +54,10 @@ int VoxelEntities_PlayerVertexFirst(void);
  * cast shadow: one quad (VOXEL_CAST_SHADOW_VERTICES), alpha in `shade`.
  * Returns the number of slots re-decoded this frame.
  */
+/* L4: how strong the cast shadows are, as a share of their daytime strength
+ * (the day cycle's tint, voxel_daylight.h): 1 by day and by default. */
+void VoxelEntities_SetShadowStrength(float strength);
+
 unsigned VoxelEntities_Emit(VoxelBuilder *builder, uint16_t *atlas,
                             const VoxelCamera *camera, VoxelBuilder *shadows,
                             VoxelBuilder *reflections);

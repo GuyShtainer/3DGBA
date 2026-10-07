@@ -507,6 +507,12 @@ static void EmitDecal(VoxelBuilder *builder, const VoxelSpriteSlot *slot, unsign
 #define VOXEL_CAST_SHADOW_ALPHA 0.36f
 #define VOXEL_CAST_SHADOW_LIFT 0.03f    /* over decals (0.02) */
 #define VOXEL_CAST_SHADOW_LIT 0.70f     /* sample at or below: no sun */
+static float sShadowStrength = 1.0f;    /* L4: the day's share (VoxelEntities_SetShadowStrength) */
+
+void VoxelEntities_SetShadowStrength(float strength)
+{
+    sShadowStrength = strength;
+}
 
 static void EmitCastShadow(VoxelBuilder *shadows, const VoxelSpriteSlot *slot, unsigned index,
                            float worldX, float worldZ, float rightX, float rightZ, float stretch,
@@ -541,7 +547,9 @@ static void EmitCastShadow(VoxelBuilder *shadows, const VoxelSpriteSlot *slot, u
         return;
     if (strength > 1.0f)
         strength = 1.0f;
-    strength *= VOXEL_CAST_SHADOW_ALPHA;
+    strength *= VOXEL_CAST_SHADOW_ALPHA * sShadowStrength;
+    if (strength <= 0.0f)
+        return;
     VoxelBuilder_Quad(shadows,
         &(VoxelVertex){ax,      ya, az + za,      u0, v1, strength},
         &(VoxelVertex){bx,      yb, bz + zb,      u1, v1, strength},
