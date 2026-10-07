@@ -24,15 +24,16 @@
     S5 (interiors, rev 0/1) not started, "if wanted".
   - **Phase 36 Hoenn census** (`docs/phase36-hoenn/PHASE.md`, slices H1-H6): **H1 merged** (Dewford, Mauville,
     Verdanturf, Fallarbor, Slateport). Census Emerald 82/160, Ruby 80/139.
-  - **H2 BANKED AS WIP, NOT MERGED** — branch `worktree-agent-af1235a0a6e26f511` (worktree
+  - **H2 GATED, NOT MERGED YET (2026-10-08)** — branch `worktree-agent-af1235a0a6e26f511` (worktree
     `.claude/worktrees/agent-af1235a0a6e26f511`), commits `2d7eba2` (recipes: gym_fortree, gym_lavaridge,
     fortree_hut ×6, pacifidlog_hut ×5; all `check` 0/0/0 on Emerald + Ruby, budget 0 over; census Emerald 95/160,
-    Ruby 93/139) + `3cd9652` (`docs/phase36-hoenn/BUILDLOG-H2.md`). RED only on expected buildings pins:
-    test_romgen_expand (4), export (1), interior (2), rs_world (8; `pinned == 37` → 41). To finish: in that worktree,
-    run the tests with ROM env vars, update the 4 test files like H1's `d5f89ca`, run vtest + `make -j8`, Azahar
-    before/after (Fortree 0.4, Lavaridge 0.12, Pacifidlog 0.15 + one Ruby town; check the Fortree canopy/log cards
-    near doors and ladders), then merge + gate. Fortree is a deliberate approximation (hut on the ground; deck and
-    ladder stay flat so the player isn't buried).
+    Ruby 93/139), `3cd9652` (BUILDLOG-H2), `b95b8f9` (repins; its Ruby SHA-1/size/vertices were estimates) and
+    `6628a2b` (measured Ruby pins). Gate on 6628a2b: 30 romgen + 11 vtest suites 0 failures, `make -j8` links.
+    H2 pins: Emerald buildings 48b231f4 (311 models, 2931 placements, 89364 vertices); R=S buildings 3eafee01
+    (89 models, 2118 placements, 41274 vertices); every other pin unchanged. Remaining: Azahar before/after
+    (Fortree 0.4, Lavaridge 0.12, Pacifidlog 0.15 + one Ruby town; check the Fortree canopy/log cards near doors
+    and ladders) — a sonnet agent is capturing it in that worktree — then merge + gate. Fortree is a deliberate
+    approximation (hut on the ground; deck and ladder stay flat so the player isn't buried).
   - Pins on 11d90c9: Emerald buildings f3ce7c8e, regions 007a370f, signposts 38515605, relief 21a837f0, ledges
     eb25a383; FR=LG buildings 5ba2cc16, regions 3716874d, signposts ba2fde45, relief 32c24146; R=S buildings
     91257d8b, regions 1a09cd5f, signposts 9b4d379c, relief 215a12d9.
