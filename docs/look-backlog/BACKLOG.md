@@ -72,3 +72,10 @@ After the side-wall fix (55ddb82) every Kanto building has closed west/east ends
 patches cut from the model's own art (the ROM has no side-view drawing). Guy's Day Care view now shows a solid wall,
 yet a plain one. Future: dress the end walls from the front art (repeat the facade's wall band, base stripe and a
 window from the same building) so a side reads like the front. Size: small-medium, Kanto table only.
+
+## Pause menu ENHANCE tidy (2026-10-07)
+
+The orphaned "Time-of-day light" and "Vivid mode" labels are erased from all 6 `pause-bot-enhance` plates
+(`tools/plate_erase_rows.py`), and VOXEL 3D / 3D ANGLE / 3D ZOOM now sit directly under LDR Bloom (y141 / y181 / y227).
+The tab scrolls 27 px (was 136); ZOOM's seg is the only thing below the fold. The smoke test's `press-ctm` channel
+drives 3D ANGLE (`voxPitch` 2 -> 4) instead of the deleted tilt row. Screens: `evidence/pm-enhance-{indigo,daylight}[-scrolled].png`.
