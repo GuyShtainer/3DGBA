@@ -391,6 +391,25 @@ static void TestSun(void)
 }
 #endif
 
+/* Look backlog L2: the grass profile. Blade grass is behaviour 0x02 alone (not long 0x03, short 0x07, ash 0x09), the
+ * ground key is the plain-grass metatile 0x001, and the skip list holds the one sandy-ground Emerald tileset. */
+static void TestGrassProfile(void)
+{
+    const GameProfile *em = gameprof_emerald();
+    unsigned n = 0;
+
+    for (unsigned b = 0; b < 512; ++b)
+        if (gp_beh(&em->bladeGrass, b)) { ++n; CHECK(b == 0x02u); }
+    CHECK(n == 1 && gp_beh(&em->tallGrass, 0x02) && gp_beh(&em->tallGrass, 0x03));
+    CHECK(!gp_beh(&em->bladeGrass, 0x03) && !gp_beh(&em->bladeGrass, 0x07) && !gp_beh(&em->bladeGrass, 0x09));
+    CHECK(em->grassGround == 0x001u);
+    CHECK(em->grassSkip != NULL && em->grassSkipCount == 1 && em->grassSkip[0].tileset == 0x083DF794u
+          && em->grassSkip[0].metatile == 0x206u);
+    CHECK(VOXEL_GRASS_FIRST == VOXEL_SHRUB_FIRST + 2u * VOXEL_SHRUBS && VOXEL_METATILE_IDS == VOXEL_GRASS_FIRST + VOXEL_GRASSES);
+    CHECK(VOXEL_GRASS_BLADES(0) == VOXEL_GRASS_FIRST && VOXEL_GRASS_BLADES(VOXEL_GRASSES - 1) < VOXEL_METATILE_IDS);
+    CHECK(VOXEL_GRASS_CARDS == 2u);
+}
+
 int main(void)
 {
     CHECK(fxInit() == 0);
@@ -401,6 +420,7 @@ int main(void)
     TestHashes();
     TestTreeTables();
     TestShrubTables();
+    TestGrassProfile();
 #if CTR_VOXEL_LIGHTING && defined(VOXEL_LIGHTING_TESTS)
     TestSun();
 #endif

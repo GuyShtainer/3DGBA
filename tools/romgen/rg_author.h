@@ -52,6 +52,9 @@ int rg_author_trees(const RgWorld *w, FILE *fp, const char *outDir, int sheetLo,
 int rg_author_trees_list(const RgWorld *w, FILE *fp);
 /* L1: one-cell foliage candidates (primary and secondary ids) for the shrub table; contact sheet <outDir>/shrubs.png. */
 int rg_author_shrubs(const RgWorld *w, FILE *fp, const char *outDir, uint32_t onlyTs);
+/* L2: tall-grass metatiles by behaviour (or given ids) with their layer split; contact sheet <outDir>/grass.png. */
+int rg_author_grass(const RgWorld *w, FILE *fp, const char *outDir, const unsigned *behs, unsigned nBehs,
+                    uint32_t ts, const unsigned *ids, unsigned nIds);
 
 /* Pixel helpers shared with the tests. */
 int rg_author_mkdir_p(const char *path);

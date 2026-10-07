@@ -1107,6 +1107,17 @@ int rg_author_main(int argc, char **argv)
                              nargs == 3 ? atoi(args[2]) : 0);
     } else if (strcmp(cmd, "shrubs") == 0 && nargs <= 1) {
         rc = rg_author_shrubs(&w, stdout, outDir, nargs ? (uint32_t)strtoul(args[0], NULL, 0) : 0u);
+    } else if (strcmp(cmd, "grass") == 0) {
+        unsigned vals[64], nv = 0, a;
+        uint32_t gts = 0;
+        bool byId = nargs >= 3 && strcmp(args[0], "ids") == 0;
+
+        if (byId)
+            gts = (uint32_t)strtoul(args[1], NULL, 0);
+        for (a = byId ? 2u : 0u; a < (unsigned)nargs && nv < 64u; a++)
+            vals[nv++] = (unsigned)strtoul(args[a], NULL, 0);
+        if (!byId && nv == 0) { vals[0] = 2; vals[1] = 3; vals[2] = 7; vals[3] = 9; nv = 4; }
+        rc = rg_author_grass(&w, stdout, outDir, vals, byId ? 0u : nv, gts, vals, byId ? nv : 0u);
     } else if (strcmp(cmd, "check") == 0 && nargs <= 1) {
         const char *key = nargs == 1 ? args[0] : "all";
         unsigned matched = 0, failed = 0;

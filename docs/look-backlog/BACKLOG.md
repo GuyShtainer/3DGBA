@@ -6,7 +6,7 @@ points, with the cause found in the code:
 | # | Guy's note | Cause (checked 2026-10-06) | Fix direction | Size |
 |---|---|---|---|---|
 | L1 (DONE, see below) | "the trees near the entrance to the cave in Dewford are flat on top" | `voxel_tree.c` `VoxelTree_Part` knows only the General-tileset tree metatiles (0x1D4-0x1E7, 0x1EC/0x1ED, the small trees 0x016/0x017/0x0C6/0x0C7/0x1F4/0x1F5). The Route 106 / Dewford shrubs on sand are metatiles 0x124, 0x239, 0x242, 0x243 (`romgen author emerald.gba art 22 42 17 12 3`). They are not in the table, so they render as flat ground art. Seen in `docs/phase33-romgen/evidence/s37-full-r106.png` (foreground). | Scan all outdoor layouts for foliage metatiles missing from the table (the T1 foliage rule: at least 50 % foliage pixels), then add them as VOXEL_TREE_SMALL or as a new "shrub" part. Emerald table only; the FRLG table comes from T1. | small |
-| L2 | "the grass is still flat" | Upstream renders tall grass as ground texture. Only the rustle field effect is a sprite. There is no grass geometry. | Tall-grass cells (behaviour set) get low crossed or billboard blade cards from the cell's own art, swaying optionally. Budget: many cells per screen, so instance it cheaply and test the frame time on hardware. | medium |
+| L2 (DONE, see below) | "the grass is still flat" | Upstream renders tall grass as ground texture. Only the rustle field effect is a sprite. There is no grass geometry. | Tall-grass cells (behaviour set) get low crossed or billboard blade cards from the cell's own art, swaying optionally. Budget: many cells per screen, so instance it cheaply and test the frame time on hardware. | medium |
 | L3 (DONE, see below) | "the lighting is somewhat off. The shadow has a single direction which doesn't add up: the NPCs are lit from the front" | `voxel_lighting.h`: a fixed sun in the northwest (`VOXEL_SUN_DX 0.85`, `DZ 0.55`), so shadows fall southeast, towards the camera side. The GBA sprite art is shaded as if lit from the front and above. The baked terrain shadows and the sprite shading disagree. | Move the sun in front of the scene (south, high), so cast shadows fall away from the camera. Check that `voxel_lighting.c`'s ray march does not assume a northwest sun (its reach box is built from DX/DZ signs). | small-medium |
 | L4 | "maybe for future: live lighting that changes with the day (use the 3DS clock or the RTC for RSE)" | The lighting is baked once into the chunk colours. | Sun angle and colour from the time of day. The source is the 3DS clock (osGetTime), which is also what mGBA's RTC reads for RSE, so all games agree. FRLG have no RTC, so they use the 3DS clock. Re-bake chunks incrementally when the sun has moved enough (minutes, not frames), plus a global tint (dawn, day, dusk, night). Future, after L3. | large |
 
@@ -131,4 +131,42 @@ roofs are not there. The fences and rocks are also flat, not only flowers and gr
 | L7 (BUG) | Trainer Tower: no entrance, foot not seated (Guy: "there is no enterence to the battle tower") | The model HAS a plinth + porch with a door (`ks3-preview-k_trainer_tower-flfr.png`), but in-game (`guy-1007/88c9ed28-image.jpg`, KS3's `ks3-fr-trainertower.png`) the tower face runs straight into flat grass: the plinth/porch rows are not drawn or sit below ground. Suspect: placement clip / ground offset of the lower exact rects, or rect rows below the placement. | Reproduce at 3/62 (59,9), compare the placement rect vs the model's lower parts, fix so the porch + door stand on the plinth in front of the tower; add a test that the porch prism is emitted at placement. | small |
 | L8 | Flat fences (Resort Gorgeous, Pallet), rocks (sea rocks, boulders), flowers | No prop geometry for these metatiles: they render as ground art. | A prop part like the L1 shrub card: fence = thin upright card along the fence line (posts/rails from the upper layer), rocks = low rounded card/box, flowers = small upright card (check layer split; L2 reports it). Per-game tables like GpShrub. | medium |
 
-Order (lead): L2 (running) → L7 Trainer Tower entrance (bug) → L6 roofs → L5 side-wall dressing → L8 fences/rocks/flowers → L4 day cycle.
+Order (lead): L2 (DONE) → L7 Trainer Tower entrance (bug) → L6 roofs → L5 side-wall dressing → L8 fences/rocks/flowers → L4 day cycle.
+## L2 DONE (2026-10-07, branch worktree-agent-a51e8b9b69c45d499)
+
+Tall grass stands up as two low, lit blade cards over its own flat cell. Evidence: `evidence/l2-em-r101-*`, `l2-em-grass-*`
+(player standing in grass), `l2-fr-r1-*`, `l2-fr-grass-*` (each `-before` / `-after`, Azahar N3DS).
+
+**Finding that changed the design.** The blades are on the LOWER layer (upper layer 0 px on Emerald 0x00D and FR 0x00D, measured with
+`romgen author ROM grass`), not the upper one as the L1 shrubs are. The cell's lower layer is blades over plain-grass colour, so the blade
+slot is the lower layer with the plain-grass metatile's colours keyed to transparent (`grassGround` = 0x001; 3 key colours per game).
+
+**Which cells.** By behaviour, not a hand list: profile `bladeGrass` = {0x02} on both Emerald and FRLG (`romgen author ROM grass`
+lists every (tileset, id, behaviour, uses, upper-layer px)). At most `VOXEL_GRASSES` (12) per tileset pair.
+Excluded: Emerald 0x03 long grass (Route 119), 0x07 short grass, 0x09 ash grass (different art, not tufts); Emerald (0x083DF794, 0x206),
+blades over sandy-brown ground (`grassSkip`); tree-owned metatiles; border cells; building cells; sea-edge cases unverified.
+
+**Design.** `VoxelTree_EmitGrassCard` (`voxel_tree.c`): two quads, 12 vertices. Back card foot z = y+0.5, rise 0.40, run 0.12, u mirrored;
+front card foot z = y+1.0, rise 0.55, run 0.14; sunk 0.04; `rounded` so `VoxelLighting_Face` lights it as crown. The blade slot reuses the shrub
+atlas machinery (`VOXEL_GRASS_BLADES(k)`, 12 ids after the shrub ids, same 4 atlas pages, no new texture page, no per-frame keying; keying
+happens once at atlas compose). The flat cell keeps its slot, so a cell with no ready blade slot is just flat. Tried and rejected: one card
+(too subtle), two equal tall cards (solid dark carpet), one tall card (hedge bands with bare stripes). No sway: it needs a per-material
+vertex-shader uniform or CPU re-meshing, neither is nearly free.
+
+**Cost.** 12 added vertices per grass cell (18 total with the flat quad). A full 8x8 chunk: 1152 against the 9344 scratch limit.
+Densest 26x16 window over every General-primary layout (`romgen author ROM grass`): Emerald 116 cells = 1392 added vertices; FR/LG
+305 cells (L317 at 28,9) = 3660 added vertices, against the 96K-vertex arena (Rustboro draws 54K). No LOD or degradation was needed.
+Azahar HUD fps (25 cap): Emerald Route 101 25 -> 26; Emerald player in grass 25 -> 25; FR Route 1 25 -> 23; FR dense grass 25 -> 23.
+Hardware fps is unmeasured.
+
+**Sprites in grass.** The player and NPCs in grass are drawn normally: the cards are depth-tested geometry, no z-fighting, no sprite hidden;
+at the steep pitch the lowest legs are partly behind the front card, which reads as standing in grass. The rustle effect sprite is untouched.
+
+**Flowers (not implemented).** Measured: FR 0x008 / 0x009 (Route 1 flowers, ~3000 uses each) are lower-layer only (upper 0 px), behaviour 0,
+so the same mechanism (key the plain-grass colours out of the lower layer) would cover them with a tileset-id list instead of a behaviour
+(flowers have no behaviour). Emerald 0x004 (631 uses) is the opposite: fully opaque on the UPPER layer (256 px), so it would need the source
+layer switched to the upper/composite. Cost per flower cell would be the same 6-12 vertices.
+
+**Tests.** `test_voxel_frlg.c` GrassAround (classification only 0x02, GrassSource round trip and bound, blade slot present and distinct,
+a grass cell emits 6 + 6*VOXEL_GRASS_CARDS = 18 vertices); `test_voxel_world.c` TestGrassProfile (bladeGrass == {0x02}, ground, skip list,
+id layout).

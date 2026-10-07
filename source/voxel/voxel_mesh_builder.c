@@ -1027,6 +1027,26 @@ static void EmitShrubCard(VoxelBuilder *builder, const VoxelMapInstance *inst, i
     builder->shift = 0.0f;
 }
 
+/*
+ * 3DGBA (look backlog L2): a tall-grass cell's blades (voxel_tree.h), the cell's lower layer keyed against the plain
+ * grass colour, stood up as a low card over the flat cell, which keeps its ordinary drawing and slot. Nothing on a
+ * modelled building's cells, nor when the atlas has no slot for the blades yet (the cell is then just flat).
+ */
+static void EmitGrassCard(VoxelBuilder *builder, const VoxelMapInstance *inst, int x, int y)
+{
+    int grass = VoxelTree_Grass(inst, VoxelWorld_GetMetatileId(x, y));
+    float u0, v0, u1, v1;
+
+    if (grass < 0 || VoxelBuildings_CellAt(inst, x, y, NULL, NULL)
+     || !MetatileUV(builder, (int)VOXEL_GRASS_BLADES(grass), &u0, &v0, &u1, &v1))
+        return;
+    builder->lift = VoxelRelief_CellLift(inst, x, y);
+    builder->shift = VoxelRelief_CellShift(inst, x, y);
+    VoxelTree_EmitGrassCard(builder, x, y, u0, v0, u1, v1);
+    builder->lift = 0.0f;
+    builder->shift = 0.0f;
+}
+
 /* One row of the ground pass over [x0,x1), already clipped to the instance. */
 void VoxelMesh_EmitGroundRow(VoxelBuilder *builder, const VoxelMapInstance *inst,
                              int x0, int x1, int y)
@@ -1046,6 +1066,7 @@ void VoxelMesh_EmitGroundRow(VoxelBuilder *builder, const VoxelMapInstance *inst
         if (shape == VOXEL_SHAPE_VOID)
             continue;
         EmitShrubCard(builder, inst, x, y);   /* L1: the bush; its ground follows as any cell's */
+        EmitGrassCard(builder, inst, x, y);   /* L2: tall grass's blades over its flat cell */
         /* A lifted cell lays its own drawing on its relief. A slope - rock,
          * stairs - is nothing but that; a level lifted cell still carries
          * whatever stands on it, drawn below with the same lift. */

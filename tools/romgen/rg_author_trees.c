@@ -407,3 +407,127 @@ int rg_author_shrubs(const RgWorld *w, FILE *fp, const char *outDir, uint32_t on
     free(c);
     return 0;
 }
+
+/* L2 (look backlog): `romgen author ROM grass [BEH...]`: every (tileset address, metatile id) whose behaviour is one of the
+ * listed values (default 2 3 7 9 = the Emerald profile's tall-grass set), with its uses and the layer split of its drawing:
+ * the pixels the upper layer draws (idx != 0; the lower layer always draws all 256), plus the contact sheet <out>/grass.png
+ * (a row per metatile: lower layer | upper layer on magenta | composite). `grass ids TS ID...` lists the given ids of
+ * tileset TS (1 = the primary) the same way, whatever their behaviour (flowers have none). Measuring only: decides nothing. */
+typedef struct { uint32_t ts; uint16_t m, pair, beh, lay, sx, sy; unsigned uses, upper; } GrCand;
+
+int rg_author_grass(const RgWorld *w, FILE *fp, const char *outDir, const unsigned *behs, unsigned nBehs,
+                    uint32_t ts, const unsigned *ids, unsigned nIds)
+{
+    const GameProfile *gp = w->prof;
+    unsigned prim = gp->nPrimMetatiles, l, x, y, i, k, n = 0, cap = 0;
+    GrCand *c = NULL;
+
+    for (l = 0; l < w->layoutCount; l++) {
+        const RgLayout *L = &w->layouts[l];
+        if (!L->present || L->ts[0]->addr != gp->tsGeneral)   /* another primary tileset: the same ids mean other art */
+            continue;
+        for (y = 0; y < L->h; y++)
+            for (x = 0; x < L->w; x++) {
+                unsigned m = rg_metatile(L, (int)x, (int)y);
+                uint32_t cts = m < prim ? 0u : L->ts[1]->addr;
+                unsigned beh = rg_behaviour(L, (int)x, (int)y);
+                bool want = false;
+                if (nIds) {
+                    for (k = 0; k < nIds; k++)
+                        want = want || (ids[k] == m && cts == (ts == 1u ? 0u : ts));
+                } else {
+                    for (k = 0; k < nBehs; k++)
+                        want = want || behs[k] == beh;
+                }
+                if (!want)
+                    continue;
+                for (i = 0; i < n && !(c[i].ts == cts && c[i].m == m); i++) {}
+                if (i == n) {
+                    if (n == cap) {
+                        GrCand *nc;
+                        cap = cap ? cap * 2u : 64u;
+                        nc = (GrCand *)realloc(c, cap * sizeof *c);
+                        if (nc == NULL) { free(c); return 1; }
+                        c = nc;
+                    }
+                    memset(&c[n], 0, sizeof c[n]);
+                    c[n].ts = cts; c[n].m = (uint16_t)m; c[n].pair = L->pairIndex; c[n].beh = (uint16_t)beh;
+                    c[n].lay = L->id; c[n].sx = (uint16_t)x; c[n].sy = (uint16_t)y;
+                    n++;
+                }
+                c[i].uses++;
+            }
+    }
+    for (i = 0; i < n; i++) {
+        RgPair *p = rg_pair_open(w, c[i].pair);
+        RgCellPx b;
+        if (p == NULL) continue;
+        rg_cell_px(p, c[i].m, 1, &b);
+        rg_pair_close(p);
+        for (y = 0; y < 16; y++)
+            for (x = 0; x < 16; x++)
+                c[i].upper += (b.drawn[y] >> x) & 1u;
+    }
+    for (i = 1; i < n; i++) {
+        GrCand t = c[i];
+        unsigned j = i;
+        while (j > 0 && c[j - 1].uses < t.uses) { c[j] = c[j - 1]; j--; }
+        c[j] = t;
+    }
+    if (!nIds) {
+        /* the densest screenful: the most cells of the listed behaviours in a 26 x 16 window (the view is about 25 x 15
+         * tiles) of any General-primary layout, with a card budget (12 vertices a cell) */
+        unsigned best = 0, bl = 0, bx = 0, by = 0, wy, wx;
+        for (l = 0; l < w->layoutCount; l++) {
+            const RgLayout *L = &w->layouts[l];
+            if (!L->present || L->ts[0]->addr != gp->tsGeneral)
+                continue;
+            for (wy = 0; wy < L->h; wy++)
+                for (wx = 0; wx < L->w; wx++) {
+                    unsigned cnt = 0, yy, xx;
+                    for (yy = wy; yy < wy + 16u && yy < L->h; yy++)
+                        for (xx = wx; xx < wx + 26u && xx < L->w; xx++) {
+                            unsigned b = rg_behaviour(L, (int)xx, (int)yy);
+                            for (k = 0; k < nBehs; k++)
+                                cnt += (behs[k] == b);
+                        }
+                    if (cnt > best) { best = cnt; bl = L->id; bx = wx; by = wy; }
+                }
+        }
+        fprintf(fp, "# densest 26x16 window: %u cells at L%u %u,%u = %u grass-card vertices\n", best, bl, bx, by, best * 12u);
+    }
+    fprintf(fp, "# grass: %s, %u metatiles (idx ts id beh uses upperPx/256)\n", gp->dataSubdir, n);
+    for (i = 0; i < n; i++)
+        fprintf(fp, "grass %3u ts 0x%08X 0x%03X beh 0x%02X uses %u upper %u at L%u %u,%u\n", i, c[i].ts, c[i].m, c[i].beh,
+                c[i].uses, c[i].upper, c[i].lay, c[i].sx, c[i].sy);
+    if (outDir != NULL && n > 0) {
+        int W = 3 * 64, H = (int)n * 64;
+        uint8_t *img = (uint8_t *)calloc((size_t)W * (size_t)H, 4);
+        char path[1100];
+        if (img == NULL || rg_author_mkdir_p(outDir) != 0) { free(img); free(c); return 1; }
+        for (i = 0; i < n; i++) {
+            RgPair *p = rg_pair_open(w, c[i].pair);
+            RgCellPx a, b;
+            if (p == NULL) continue;
+            rg_cell_px(p, c[i].m, 0, &a);
+            rg_cell_px(p, c[i].m, 1, &b);
+            rg_pair_close(p);
+            for (y = 0; y < 64; y++)
+                for (x = 0; x < 192; x++) {
+                    unsigned col = x / 64u, px = (x % 64u) / 4u, py = y / 4u, r, g, bl;
+                    bool up = ((b.drawn[py] >> px) & 1u) != 0u;
+                    uint8_t *o = img + ((size_t)(i * 64u + y) * (size_t)W + x) * 4u;
+                    if (col == 0)      rgb888(a.c[py][px], &r, &g, &bl);
+                    else if (col == 1) { if (up) rgb888(b.c[py][px], &r, &g, &bl); else { r = 255; g = 0; bl = 255; } }
+                    else               { if (up) rgb888(b.c[py][px], &r, &g, &bl); else rgb888(a.c[py][px], &r, &g, &bl); }
+                    o[0] = (uint8_t)r; o[1] = (uint8_t)g; o[2] = (uint8_t)bl; o[3] = 255;
+                }
+        }
+        snprintf(path, sizeof path, "%s/grass.png", outDir);
+        if (!rg_png_write_rgba(path, img, W, H)) { free(img); free(c); return 1; }
+        fprintf(stderr, "sheet %s: %u metatiles, lower | upper | composite\n", path, n);
+        free(img);
+    }
+    free(c);
+    return 0;
+}

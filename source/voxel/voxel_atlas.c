@@ -193,6 +193,8 @@ static bool CutSourceOf(const struct Tileset *primary, const struct Tileset *sec
 /* `hidden` beyond the four upper quarters: the upper layer alone, clear
  * where it draws nothing (a shrub's leaves, voxel_atlas.h). */
 #define SHRUB_LEAVES_ONLY 0x10u
+/* ... and (look L2) the lower layer alone with the pair's ground colour clear: tall grass's blades. */
+#define GRASS_BLADES_ONLY 0x20u
 
 static bool AtlasSourceOf(const struct Tileset *primary, const struct Tileset *secondary,
                           unsigned id, unsigned *metatile, unsigned *hidden, const uint8_t **cut)
@@ -205,6 +207,11 @@ static bool AtlasSourceOf(const struct Tileset *primary, const struct Tileset *s
         *metatile = id;
         *hidden = 0;
         return true;
+    }
+    if (id >= VOXEL_GRASS_FIRST)
+    {
+        *hidden = GRASS_BLADES_ONLY | 0xFu;
+        return VoxelTree_GrassSource(primary, secondary, id - VOXEL_GRASS_FIRST, metatile);
     }
     if (id >= VOXEL_SHRUB_FIRST)
     {
@@ -253,6 +260,9 @@ static bool AtlasSourceOf(const struct Tileset *primary, const struct Tileset *s
  * sVoid below). A quadrant whose tiles are missing draws nothing and does not
  * count as black.
  */
+#define GRASS_KEY_MAX 8u
+static unsigned GrassGroundKey(const struct AtlasSource *src, uint16_t key[GRASS_KEY_MAX]);
+
 static bool ComposeAt(const struct AtlasSource *src, const uint16_t *entries,
                       uint16_t *dest, unsigned baseX, unsigned baseY, unsigned width,
                       unsigned hidden, const uint8_t *cut)
@@ -333,7 +343,54 @@ static bool ComposeAt(const struct AtlasSource *src, const uint16_t *entries,
             if ((row >> x) & 1u)
                 dest[CtrVideo_Texel(baseX + x, baseY + y, width)] &= (uint16_t)~1u;
     }
+    if ((hidden & GRASS_BLADES_ONLY) != 0u)
+    {
+        /* look L2: tall grass's blades: the lower layer with the ground's colours clear, so the card is the blades
+         * alone and the flat cell under it shows through */
+        uint16_t key[GRASS_KEY_MAX];
+        unsigned nKey = GrassGroundKey(src, key);
+
+        for (unsigned y = 0; y < VOXEL_ATLAS_SLOT; ++y)
+            for (unsigned x = 0; x < VOXEL_ATLAS_SLOT; ++x)
+            {
+                uint16_t *texel = &dest[CtrVideo_Texel(baseX + x, baseY + y, width)];
+
+                for (unsigned k = 0; k < nKey; ++k)
+                    if (*texel == key[k])
+                    {
+                        *texel = 0;
+                        break;
+                    }
+            }
+        black = false;
+    }
     return black;
+}
+
+/* The colours of the profile's plain-grass metatile (its lower layer): what tall grass keys out. Empty when the pair
+ * does not draw that metatile, leaving the whole drawing as blades. */
+static unsigned GrassGroundKey(const struct AtlasSource *src, uint16_t key[GRASS_KEY_MAX])
+{
+    uint16_t tile[VOXEL_ATLAS_SLOT * VOXEL_ATLAS_SLOT];
+    const uint16_t *entries = MetatileEntries(src, VXP(grassGround));
+    unsigned n = 0;
+
+    if (entries == NULL)
+        return 0;
+    memset(tile, 0, sizeof tile);
+    ComposeAt(src, entries, tile, 0, 0, VOXEL_ATLAS_SLOT, 0xFu, NULL);
+    for (unsigned y = 0; y < VOXEL_ATLAS_SLOT; ++y)
+        for (unsigned x = 0; x < VOXEL_ATLAS_SLOT; ++x)
+        {
+            uint16_t texel = tile[CtrVideo_Texel(x, y, VOXEL_ATLAS_SLOT)];
+            unsigned k = 0;
+
+            while (k < n && key[k] != texel)
+                ++k;
+            if (k == n && n < GRASS_KEY_MAX)
+                key[n++] = texel;
+        }
+    return n;
 }
 
 static bool ComposeMetatile(const struct AtlasSource *src, const uint16_t *entries,

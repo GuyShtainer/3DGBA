@@ -78,6 +78,60 @@ static void ShrubsAround(const char *label)
     }
 }
 
+/* Look backlog L2: tall grass (behaviour 0x02) stands up as two blade cards over its own flat cell. On the instances
+ * around Pallet the atlas composes the blade slot (distinct from the flat slot), a grass cell emits 6 flat + 12 card
+ * vertices, and every grass cell is behaviour 0x02 only. */
+static void GrassAround(const char *label)
+{
+    static uint16_t atlas[VOXEL_ATLAS_PIXELS];
+    static VoxelAtlasMap map;
+    const VoxelMapInstance *with = NULL;
+    int cells = 0, gx = 0, gy = 0, k0 = -1;
+    unsigned m = 0;
+
+    for (int i = 0; i < (int)VoxelWorld_InstanceCount(); ++i)
+    {
+        const VoxelMapInstance *in = VoxelWorld_Instance(i);
+
+        for (int y = in->originY + 1; y < in->originY + in->height - 1; ++y)
+            for (int x = in->originX + 1; x < in->originX + in->width - 1; ++x)
+            {
+                int k;
+
+                if (VoxelWorld_GetInstanceAt(x, y) != in || (k = VoxelTree_Grass(in, VoxelWorld_GetMetatileId(x, y))) < 0)
+                    continue;
+                CHECK(VoxelWorld_GetMetatileBehavior(x, y) == 0x02u);
+                CHECK(VoxelTree_GrassSource(in->primaryTileset, in->secondaryTileset, (unsigned)k, &m)
+                      && m == (unsigned)VoxelWorld_GetMetatileId(x, y));
+                if (with == NULL) { with = in; gx = x; gy = y; k0 = k; }
+                ++cells;
+            }
+    }
+    printf("  %s: %d interior grass cells, first at %d,%d\n", label, cells, gx, gy);
+    CHECK(cells > 0 && with != NULL);
+    if (with == NULL)
+        return;
+    CHECK(!VoxelTree_GrassSource(with->primaryTileset, with->secondaryTileset, VOXEL_GRASSES, &m));
+    CHECK(VoxelTree_Grass(with, -1) == -1 && VoxelTree_Grass(with, 1024) == -1 && VoxelTree_Grass(with, 0x005) == -1);
+    CHECK(VoxelAtlas_Build(with, atlas, &map, false) && !map.overflowed);
+    CHECK(map.slotOf[VOXEL_GRASS_BLADES(k0)] != 0 && map.slotOf[VOXEL_GRASS_BLADES(k0)] != VOXEL_SLOT_ABSENT);
+    CHECK(map.slotOf[VOXEL_GRASS_BLADES(k0)] != map.slotOf[VoxelWorld_GetMetatileId(gx, gy)]);
+    {
+        VoxelBuilder b;
+        float top = -1.0f;
+
+        VoxelMesh_BeginWindow(gx, gy, gx + 1, gy + 1);
+        VoxelBuilder_Init(&b, sVerts, 64);
+        VoxelBuilder_SetAtlas(&b, &map);
+        VoxelMesh_EmitGroundRow(&b, with, gx, gx + 1, gy);
+        for (unsigned i = 0; i < b.count; ++i)
+            if (sVerts[i].y > top) top = sVerts[i].y;
+        printf("  %s: grass cell %d,%d emits %u vertices, card top %.3f\n", label, gx, gy, b.count, top);
+        CHECK(b.count == 6 + 6 * VOXEL_GRASS_CARDS && b.dropped == 0);
+        CHECK(top > 0.4f && top < 0.7f);
+    }
+}
+
 static void RunGame(const char *env, GpGame game, const char *label)
 {
     size_t n = 0;
@@ -199,6 +253,7 @@ static void RunGame(const char *env, GpGame game, const char *label)
         CHECK(trees > 0);        /* Pallet's tree wall resolves to tree parts (Kanto's table, slice T1) */
         CHECK(VoxelWorld_BorderMetatile(-2, -2) >= 0 && VoxelWorld_BorderMetatile(30, 30) >= 0);
         ShrubsAround(label);
+        GrassAround(label);
         free(snap);
     }
     FrFree(&st);

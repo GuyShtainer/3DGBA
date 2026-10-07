@@ -53,6 +53,7 @@ typedef struct GameProfile {
     uint8_t layoutBytes;           /* MapLayout size read and bounds-checked */
     uint32_t tsGeneral, tsBuilding; /* 0 = derive at runtime */
     GpBehSet water, jump, houseDoor, sand, tallGrass, signpost;    /* romgen sets */
+    GpBehSet bladeGrass;           /* look L2: behaviours that grow blade cards (tall grass proper: 0x02) */
     GpBehSet surfable, reflective, ice, shallowFlowing, furniture; /* renderer sets */
     uint8_t houseHalfWidth, houseHeight;   /* rg_roles is_house window */
     /* ---- RAM and ROM anchors: renderer only ---- */
@@ -81,7 +82,14 @@ typedef struct GameProfile {
      * fixed General tree texture by id alone, a shrub from the cell's own atlas art and keyed by tileset too. */
     const GpShrub *shrubs;
     uint8_t shrubCount;
-    bool emeraldIdTables;          /* Fortree puddles, GenericBuilding interior ids: Emerald only */
+    /* Look L2 (tall grass), read by voxel_tree.c: a metatile whose behaviour is in `bladeGrass` stands up as a card of
+     * its own LOWER layer (the blades are drawn there, the upper layer is empty) with the ground colour keyed out;
+     * the flat cell keeps its own drawing. `grassGround` is the plain-grass metatile whose colours are that ground,
+     * `grassSkip` the measured (tileset, id) exceptions whose ground is some other colour. */
+    uint16_t grassGround;
+    const GpShrub *grassSkip;
+    uint8_t grassSkipCount;
+    bool emeraldIdTables;         /* Fortree puddles, GenericBuilding interior ids: Emerald only */
     bool interiors3d;              /* false on FRLG: indoor maps hand back to the 2D frame */
     bool rendererOn;               /* gameprof_detect() returns the row only when set (Emerald; FRLG from R2) */
     const struct RgSpec *specs;    /* building recipe table (romgen); wired in G1, NULL until then */
