@@ -1,9 +1,9 @@
 // test_romgen_rs_world.c -- Phase 35 S0: romgen opens Ruby and Sapphire (rev 2) and writes all four files.
 // Synthetic gate checks (rev 2 only, romgen-only: the renderer path refuses both), the profile rows (Emerald's ROM constants
 // and behaviour sets), then on the real carts: the census pins (docs/phase35-rs/PHASE.md "Recon"), Ruby vs Sapphire
-// blockdata, the recipe table (Emerald's exterior rows, components retargeted), and a full rg_run whose regions / signposts /
-// relief / buildings files are pinned by SHA-1 and read back by the vendored consumers. Ruby and Sapphire give byte-identical
-// files. ROMs: ROMGEN_ROM_RUBY / ROMGEN_ROM_SAPP, else ruby.gba / sapphire.gba beside ROMGEN_ROM (rg_fixture.h); without
+// blockdata, the recipe table (Emerald's exterior rows, components retargeted; S4: six rows repinned, the RS lab), and a
+// full rg_run whose regions / signposts / relief / buildings files are pinned by SHA-1 and read back by the vendored
+// consumers. Ruby and Sapphire give byte-identical files. ROMs: ROMGEN_ROM_RUBY / ROMGEN_ROM_SAPP, else ruby.gba / sapphire.gba beside ROMGEN_ROM (rg_fixture.h); without
 // them the real-ROM part prints SKIP.
 //
 //   ROMGEN_ROM_RUBY=$PWD/roms/ruby.gba ROMGEN_ROM_SAPP=$PWD/roms/sapphire.gba make -C tools/romgen test T=rs_world
@@ -14,6 +14,7 @@
 #include <unistd.h>
 
 #include "rg_fixture.h"
+#include "rg_buildings.h"
 #include "rg_gameprof.h"
 #include "rg_rsspecs.h"
 #include "rg_run.h"
@@ -31,7 +32,8 @@ static int sChecks, sFails, sSkipped;
 #define REGIONS_SHA1 "1a09cd5fa1eab91dd0fa11f88b42b038856144d8"
 #define SIGNPOSTS_SHA1 "9b4d379cb2a40e522d3e681ed03110785f3243d4"
 #define RELIEF_SHA1 "215a12d9c4ee8f4747e66d895f37d6ed1f8c4b5c"
-#define BUILDINGS_SHA1 "a03a3b74d1ff120440169285ba2a61dab24ee074"
+/* S4: a03a3b74 -> 40135582 (oldale_house and the Rustboro set repinned to the RS layouts, rs_littleroot_lab in the lab) */
+#define BUILDINGS_SHA1 "40135582461dc05eee3828faf332c244e17acfad"
 #define LITTLEROOT_LAYOUT 10u      /* the town whose two houses match Emerald's pins */
 
 static const uint8_t kGroupSizes[34] = {54, 5, 5, 6, 7, 7, 8, 7, 7, 13, 8, 17, 10, 24, 13, 13, 14, 2, 2, 2, 3, 1, 1,
@@ -160,18 +162,34 @@ static void TestRows(void)
     }
 }
 
-/* ---- the recipe table: Emerald's rows without the interiors, components on this cart's secondary tilesets ---- */
+/* ---- the recipe table: Emerald's rows without the interiors, components on this cart's secondary tilesets; S4: the six rows
+ * whose RS buildings are unchanged repinned to the RS layouts, the lab replaced by the RS-own rs_littleroot_lab ---- */
 static void TestSpecs(const Cart *C)
 {
+    static const char *kRepinned[6] = {"oldale_house", "rustboro_stone", "rustboro_olive", "gym_rustboro", "devon_corporation",
+                                       "rustboro_fountain"};
     const RgSpec *t;
-    unsigned n = 0, i, interiors = 0, comp = 0, j;
+    unsigned n = 0, i, interiors = 0, comp = 0, j, k, repinned = 0, pinned = 0, matching = 0;
 
     t = rg_game_specs(C->w.prof, &n);
     for (i = 0; i < rg_spec_count; i++) interiors += rg_specs[i].kind == RG_SPEC_INTERIOR;
     CHECK(t != NULL && t != rg_specs && n == rg_spec_count - interiors);
     for (i = 0, j = 0; t != NULL && i < rg_spec_count; i++) {
         if (rg_specs[i].kind == RG_SPEC_INTERIOR) continue;
+        if (strcmp(rg_specs[i].name, "littleroot_lab") == 0) {
+            CHECK(j < n && strcmp(t[j].name, "rs_littleroot_lab") == 0 && t[j].kind == RG_SPEC_DIRECT);
+            CHECK(t[j].layoutId == rg_specs[i].layoutId && t[j].layoutFnv == rg_specs[i].layoutFnv);
+            CHECK(t[j].ext != NULL);                  /* look L5 side dressing on the RS-own recipe */
+            j++;
+            continue;
+        }
         CHECK(j < n && strcmp(t[j].name, rg_specs[i].name) == 0 && t[j].kind == rg_specs[i].kind);
+        for (k = 0; k < 6; k++)
+            if (strcmp(t[j].name, kRepinned[k]) == 0) {
+                CHECK(t[j].layoutId == rg_specs[i].layoutId && t[j].layoutFnv != rg_specs[i].layoutFnv);
+                CHECK(t[j].layoutFnv == (t[j].layoutId == 4 ? 0x5FF68C82u : 0x37D810BEu));
+                repinned++;
+            }
         if (t[j].kind == RG_SPEC_COMPONENTS) {
             const RgComponentsCfg *cfg = (const RgComponentsCfg *)t[j].ext;
             CHECK(cfg != NULL && (cfg->secondaryAddr == C->petalburg || cfg->secondaryAddr == C->rustboro));
@@ -179,9 +197,16 @@ static void TestSpecs(const Cart *C)
         }
         j++;
     }
-    CHECK(comp > 0);
-    printf("  %s: %u recipe rows (%u Emerald rows, %u interiors left out, %u components retargeted)\n", C->name, n,
-           rg_spec_count, interiors, comp);
+    CHECK(comp > 0 && repinned == 6);
+    /* every pinned row now names this cart's layout (S0: 7 of 16 did not) */
+    for (j = 0; t != NULL && j < n; j++) {
+        if (t[j].layoutId == 0) continue;
+        pinned++;
+        matching += t[j].layoutId <= C->w.layoutCount && rg_layout_fnv(&C->w.layouts[t[j].layoutId - 1u]) == t[j].layoutFnv;
+    }
+    CHECK(pinned == 16 && matching == 16);
+    printf("  %s: %u recipe rows (%u Emerald rows, %u interiors left out, %u components retargeted, %u repinned, %u/%u pins "
+           "match)\n", C->name, n, rg_spec_count, interiors, comp, repinned, matching, pinned);
     n = 7;
     CHECK(rg_rsspecs_table(gameprof_emerald(), &n) == NULL && n == 0);
 }
@@ -304,10 +329,10 @@ static void Run(Cart *C)
     CHECK(o->regionsSize == 256216u && memcmp(o->regions, "VXR5", 4) == 0);
     CHECK(o->signsSize == 16136u && o->signCount == 224 && o->headCount == 22 && o->emptyMasks == 3);
     CHECK(o->reliefSize == 22872u && o->rst.ledgeLayouts == 20 && o->rst.ledgeCells == 851 && o->rst.drawnRows == 0);
-    CHECK(o->buildingsSize == 2389332u && o->bModels == 52 && o->bPages == 58 && o->bPlacements == 2067);
-    CHECK(o->bVertices == 20412 && o->bMasks == 49 && o->bVariants == 66);
-    /* the one recipe whose layout pin matches but whose art does not (the lab roof) is left out: fallback box */
-    CHECK(o->buildingsFailed == 1 && o->buildingsDropped == 1 && strcmp(o->failedNames[0], "littleroot_lab") == 0);
+    CHECK(o->buildingsSize == 3016324u && o->bModels == 64 && o->bPages == 58 && o->bPlacements == 2081);
+    CHECK(o->bVertices == 35508 && o->bMasks == 57 && o->bVariants == 66);
+    /* S4: every model passes its art gate (S0 left the Emerald lab out here; rs_littleroot_lab replaces it) */
+    CHECK(o->buildingsFailed == 0 && o->buildingsDropped == 0);
     CHECK(o->roleCount[VOXEL_ROLE_SIGNPOST] == 224);
     Sha1(o->regions, o->regionsSize, C->sha[0]);
     Sha1(o->signs, o->signsSize, C->sha[1]);
