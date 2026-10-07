@@ -11,7 +11,7 @@
 
 - **2026-10-07 — RESUME POINT (Guy restarted the Mac mid-H2).** `main` = `11d90c9`, all local, NOTHING PUSHED,
   nothing hardware-run. Gate on 11d90c9 green: 30 romgen + 11 vtest suites (41) 0 failures, device build links;
-  `3DGBA.cia` last built 2026-10-07 21:17 (= L9 merge `2c30eff`; H1 not yet in a .cia — run `make cia`).
+  `3DGBA.cia` last built 2026-10-07 23:07 from 11d90c9 (includes H1).
   Done this day (all merged `--no-ff` as Guy, each gated):
   - **Look backlog** (`docs/look-backlog/BACKLOG.md`): L2 tall-grass blades, L3 sun to camera side, L7 Trainer
     Tower/Silph entrances (chunk-scratch overflow) + budget tool, L6 closed backs, L8 fences/rocks/flowers,
