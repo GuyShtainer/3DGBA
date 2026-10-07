@@ -92,4 +92,19 @@ extern const RgSideCfg rg_h_battle_tent_v_side[1];
     {"battle_tent_verdanturf", RG_SPEC_DIRECT, L_H_VERDANTURF, {1, 3, 5, 5}, {0, 0}, H_GRASS_V,                    \
      rg_h_battle_tent_v_exact, 2, rg_h_battle_tent_v, 0, 0, rg_h_battle_tent_v_side},
 
+/* ---- Fallarbor Town (layout 14; Ruby / Sapphire retarget it, rg_rsspecs.c) ---- */
+#define L_H_FALLARBOR 14, 0xE11C240Cu
+#define H_DIRT {0x279}, 1
+bool rg_h_fallarbor_house(const RgSpec *s, int a0, int a1, RgPartList *out);
+extern const RgExact rg_h_fallarbor_house_exact[3];
+extern const RgSideCfg rg_h_fallarbor_house_side[1];
+
+#define RG_HSPECS_FALLARBOR_ROWS                                                                                     \
+    {"fallarbor_house_n", RG_SPEC_DIRECT, L_H_FALLARBOR, {0, 3, 4, 4}, {0, 0}, H_DIRT,                             \
+     rg_h_fallarbor_house_exact, 3, rg_h_fallarbor_house, 0, 0, rg_h_fallarbor_house_side},                        \
+    {"fallarbor_house_s", RG_SPEC_DIRECT, L_H_FALLARBOR, {5, 14, 4, 4}, {0, 0}, H_DIRT,                            \
+     rg_h_fallarbor_house_exact, 3, rg_h_fallarbor_house, 0, 0, rg_h_fallarbor_house_side},                       \
+    {"battle_tent_fallarbor", RG_SPEC_DIRECT, L_H_FALLARBOR, {6, 3, 5, 5}, {0, 0}, H_DIRT,                         \
+     rg_h_battle_tent_v_exact, 2, rg_h_battle_tent_v, 0, 0, rg_h_battle_tent_v_side},
+
 #endif

@@ -842,6 +842,7 @@ const RgSpec rg_specs[] = {
     RG_HSPECS_DEWFORD_ROWS
     RG_HSPECS_MAUVILLE_ROWS
     RG_HSPECS_VERDANTURF_ROWS
+    RG_HSPECS_FALLARBOR_ROWS
     /* sp:1296-1375 the 13 interior rows: a room cut into pieces (rg_brooms.c); layout ids and pins as SPEC-S2 3.1 */
     {"pc1f", RG_SPEC_INTERIOR, 61, 0xBBF5FE0Du, {0, 0, 0, 0}, {0, 0}, {0x202}, 1, NULL, 0, NULL, 0, 0, &rg_room_pc1f},
     {"pc2f", RG_SPEC_INTERIOR, 62, 0x2C4488F9u, {0, 0, 0, 0}, {0, 0}, {0x202}, 1, NULL, 0, NULL, 0, 0, &rg_room_pc2f},

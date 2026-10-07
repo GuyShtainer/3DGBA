@@ -28,3 +28,9 @@ const RgSpec rg_rsspecs_verdanturf[] = {
      kContestExact, 2, rs_contest_hall, 0, 0, kContestSide},
 };
 const unsigned rg_rsspecs_verdanturf_count = sizeof(rg_rsspecs_verdanturf) / sizeof(rg_rsspecs_verdanturf[0]);
+
+const RgSpec rg_rsspecs_fallarbor[] = {
+    {"rs_contest_fallarbor", RG_SPEC_DIRECT, 14, 0x434DB33Eu, {6, 3, 5, 5}, {0, 0}, {0x279}, 1, kContestExact, 2,
+     rs_contest_hall, 0, 0, kContestSide},
+};
+const unsigned rg_rsspecs_fallarbor_count = sizeof(rg_rsspecs_fallarbor) / sizeof(rg_rsspecs_fallarbor[0]);
