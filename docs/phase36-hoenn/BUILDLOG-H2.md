@@ -43,6 +43,30 @@ art implies a shallow (about 26 px) hut, so the depth is 28. The thatch's 2 px o
 - Pins still to be re-read and recorded: Emerald buildings (f3ce7c8e) and Ruby = Sapphire buildings (91257d8b). Every
   other pin must stay byte-identical (list in PHASE.md).
 
+## Evidence (Azahar, 2026-10-08)
+
+Private emutest instance h (New 3DS, `--keep-n3ds`, voxel on with the default instance's settings.bin), warp-save copies
+of emerald-lavaridge.sav / ruby.sav (originals untouched; the copies were deleted afterwards). Same app build before and
+after; only the staged `buildings.bin` and its three sibling .bin files change (before = the CLI output of the base
+recipes, SHA-1 Emerald f3ce7c8e, Ruby 91257d8b; after = the H2 outputs, 48b231f4 and 3eafee01). No "chunk scratch full"
+in any of the 5 after runs. The device log shows `311 models on 118 pages, 2931 placements, 89364 vertices` (Emerald, all
+four Emerald runs) and `89 models on 58 pages, 2118 placements, 41274 vertices` (Ruby). Side-by-side shots (left before,
+right after) and the after voxel logs are in `evidence/`; the Ruby shot is local only (ROM-derived art). The Fortree huts
+shot and the Ruby after shot were taken at the window's 1x scale (the window had moved to another display) and are
+upscaled 2x (nearest) in the side-by-side; the others are native. Night lighting in every shot (the 3DS clock was 02:01).
+
+| spot (player) | before | after |
+|---|---|---|
+| Fortree 0.4 (21,13) | the gym is a low thatch-roofed block | the gym stands in 3D with a tall roof, its roof top runs off the top of the screen; the hut at the left edge stands up |
+| Fortree huts 0.4 (10,7) | the huts are flat map art (canopy, dark doorway, deck) | the upper huts stand with a low palm canopy and the dark doorway still visible under it; the near hut at the bottom shows a large green canopy over its front, so its doorway is not visible from this camera; the log stacks beside the ladder read as thin wooden strips, nothing wrong seen; a small brown wedge shows left of the upper right hut's canopy |
+| Lavaridge 0.12 (5,17) | the gym is a low block with its sign | the gym stands in 3D, roof and facade read right; a large house roof in the foreground covers the lower half in both |
+| Pacifidlog 0.15 (16,15) | the two huts are flat | both huts stand as octagonal thatched domes with a finial on top; no rear faces above the roof; a darker blue rectangle shows in the water around the north hut's base, where the deck art would be |
+| Ruby Fortree 0.4 (21,13) | the gym is a low block | the gym stands in 3D, same as Emerald |
+
+Not seen in Azahar: Lavaridge gym's painted sign on the east wall (the camera looks at the south face), the Fortree
+huts' other four treehouses, Pacifidlog's other three huts, Ruby Lavaridge and Pacifidlog, Sapphire. The Fortree
+huts' canopy hides the near hut's doorway at this camera angle; whether that matters in play is for Guy to judge.
+
 ## Next
 
 1. Export the ROM paths (as in H1), run `make -C tools/romgen test`, and read the new values. Update the four test files
