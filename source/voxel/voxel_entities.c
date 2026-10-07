@@ -430,10 +430,14 @@ static float CardPush(float cx, float cz, float halfW, float height)
  * and raised by `rise`: an object stands on the centre of its tile, feet on
  * the ground; a field effect that belongs to an object is drawn in that
  * object's place, moved from it as it is on the GBA screen.
+ *
+ * `split` rows from the feet up (look L9), the card is drawn as two quads,
+ * the same picture in the same place: the player's x-ray (ctr_voxel.c) then
+ * draws only the upper one. Returns the upper quad's first vertex.
  */
-static void EmitBillboard(VoxelBuilder *builder, const VoxelSpriteSlot *slot, unsigned index,
-                          float cx, float cz, float offX, float offZ, float rise,
-                          float rightX, float rightZ, float stretch, float shade)
+static unsigned EmitBillboardSplit(VoxelBuilder *builder, const VoxelSpriteSlot *slot, unsigned index,
+                                   float cx, float cz, float offX, float offZ, float rise,
+                                   float rightX, float rightZ, float stretch, float shade, int split)
 {
     unsigned baseX = (index % VOXEL_SPRITE_COLUMNS) * VOXEL_SPRITE_SLOT_DIM;
     unsigned baseY = (index / VOXEL_SPRITE_COLUMNS) * VOXEL_SPRITE_SLOT_DIM;
@@ -457,11 +461,38 @@ static void EmitBillboard(VoxelBuilder *builder, const VoxelSpriteSlot *slot, un
     float ax = px - rightX * halfW, az = pz - rightZ * halfW;
     float bx = px + rightX * halfW, bz = pz + rightZ * halfW;
 
-    VoxelBuilder_Quad(builder,
-        &(VoxelVertex){ax, lift,          az, u0, v1, shade},
-        &(VoxelVertex){bx, lift,          bz, u1, v1, shade},
-        &(VoxelVertex){bx, lift + height, bz, u1, v0, shade},
-        &(VoxelVertex){ax, lift + height, az, u0, v0, shade});
+    if (split > 0 && split < rows)
+    {
+        float ys = lift + height * (float)split / (float)rows;
+        float vs = 1.0f - (baseY + rows - split) / (float)VOXEL_SPRITE_ATLAS_DIM;
+
+        VoxelBuilder_Quad(builder,
+            &(VoxelVertex){ax, lift, az, u0, v1, shade},
+            &(VoxelVertex){bx, lift, bz, u1, v1, shade},
+            &(VoxelVertex){bx, ys,   bz, u1, vs, shade},
+            &(VoxelVertex){ax, ys,   az, u0, vs, shade});
+        lift = ys;
+        v1 = vs;
+        height *= (float)(rows - split) / (float)rows;
+    }
+    {
+        unsigned first = builder->count;
+
+        VoxelBuilder_Quad(builder,
+            &(VoxelVertex){ax, lift,          az, u0, v1, shade},
+            &(VoxelVertex){bx, lift,          bz, u1, v1, shade},
+            &(VoxelVertex){bx, lift + height, bz, u1, v0, shade},
+            &(VoxelVertex){ax, lift + height, az, u0, v0, shade});
+        return first;
+    }
+}
+
+static void EmitBillboard(VoxelBuilder *builder, const VoxelSpriteSlot *slot, unsigned index,
+                          float cx, float cz, float offX, float offZ, float rise,
+                          float rightX, float rightZ, float stretch, float shade)
+{
+    (void)EmitBillboardSplit(builder, slot, index, cx, cz, offX, offZ, rise,
+                             rightX, rightZ, stretch, shade, 0);
 }
 
 /*
@@ -647,6 +678,15 @@ bool8 CtrSprite_IsVoxelWeather(const struct Sprite *sprite);   /* sprite.c */
 #define VOXEL_EFFECTS_MAX VOXEL_SPRITE_SLOTS
 /* How far an effect card sits in front of or behind the object it belongs to. */
 #define VOXEL_EFFECT_DEPTH 0.04f
+/*
+ * look L9: rows from the feet of the player in tall grass that the x-ray
+ * leaves out: half the grass tile. The L2 blade cards in front hide only the
+ * lowest rows (the front card's top meets the player's plane about three
+ * rows up), and the standing grass covers them anyway; x-rayed, those feet
+ * showed as pale marks floating under the grass. The x-ray still shows the
+ * player hidden by anything taller (roofs, crowns).
+ */
+#define VOXEL_GRASS_XRAY_ROWS 8
 
 typedef struct
 {
@@ -658,6 +698,7 @@ typedef struct
     float rise;              /* onto what it rides */
     float shade;
     bool outdoor;            /* casts a shadow */
+    bool inGrass;            /* tall grass stands on its tile (L9) */
 } VoxelObjectCard;
 
 typedef struct
@@ -683,6 +724,14 @@ static bool IsTileEffect(GbaPtr template)
 {
     return template == gFieldEffectObjectTemplatePointers[FLDEFFOBJ_TALL_GRASS]
         || template == gFieldEffectObjectTemplatePointers[FLDEFFOBJ_LONG_GRASS];
+}
+
+/* look L9: the tile effect that stands up in front of its object rather than
+ * lying on the ground: tall grass, the grass L2 stands up as blade cards. */
+bool VoxelEntities_StandsTileEffect(GbaPtr template)
+{
+    return template != 0
+        && template == gFieldEffectObjectTemplatePointers[FLDEFFOBJ_TALL_GRASS];
 }
 
 static bool IsDecal(GbaPtr template)
@@ -897,6 +946,7 @@ unsigned VoxelEntities_Emit(VoxelBuilder *builder, uint16_t *atlas, const VoxelC
         card->rise = 0.0f;
         card->shade = shade;
         card->outdoor = outdoor;
+        card->inGrass = false;
     }
 
     for (unsigned id = 0; id < MAX_SPRITES && effectCount < VOXEL_EFFECTS_MAX; ++id)
@@ -928,6 +978,13 @@ unsigned VoxelEntities_Emit(VoxelBuilder *builder, uint16_t *atlas, const VoxelC
         effect->tile = IsTileEffect(sprite->template);
         effect->owner = effect->decal || effect->tile ? -1 : EffectOwner(sprite, objects);
         effect->front = effect->owner < 0 || DrawnOver(sprite, objects[effect->owner].sprite);
+        /* look L9: the objects standing on a tile whose tall grass stands up. */
+        if (effect->tile && VoxelEntities_StandsTileEffect(sprite->template))
+            for (unsigned i = 0; i < VOXEL_SPRITE_SLOTS && i < OBJECT_EVENTS_COUNT; ++i)
+                if (objects[i].drawn
+                 && gObjectEvents[i].currentCoords.x == sprite->data[1]
+                 && gObjectEvents[i].currentCoords.y == sprite->data[2])
+                    objects[i].inGrass = true;
         /* Behind its object and below its feet: what the object rides. Only
          * the surf mon is ridden; grass behind a walker's feet, as it steps
          * onto or off a tile of it, lifted the walker a moment. */
@@ -971,10 +1028,14 @@ unsigned VoxelEntities_Emit(VoxelBuilder *builder, uint16_t *atlas, const VoxelC
             EmitReflection(reflections, &sSlots[i], i, card->worldX, card->worldZ,
                            rightX, rightZ, stretch);
         unsigned first = builder->count;
-        EmitBillboard(builder, &sSlots[i], i, card->worldX + 0.5f, card->worldZ + 0.5f,
-                      0.0f, 0.0f, rise, rightX, rightZ, stretch, card->shade);
-        if (i == gPlayerAvatar.objectEventId && builder->count == first + 6)
-            sPlayerVertexFirst = (int)first;
+        /* look L9: in tall grass the player's lowest rows are its own quad,
+         * which the x-ray leaves out (VOXEL_GRASS_XRAY_ROWS). */
+        bool split = i == gPlayerAvatar.objectEventId && card->inGrass;
+        unsigned upper = EmitBillboardSplit(builder, &sSlots[i], i, card->worldX + 0.5f,
+                                            card->worldZ + 0.5f, 0.0f, 0.0f, rise, rightX, rightZ,
+                                            stretch, card->shade, split ? VOXEL_GRASS_XRAY_ROWS : 0);
+        if (i == gPlayerAvatar.objectEventId && builder->count == first + (split ? 12u : 6u))
+            sPlayerVertexFirst = (int)upper;
     }
 
     for (unsigned e = 0; e < effectCount; ++e)
@@ -993,9 +1054,8 @@ unsigned VoxelEntities_Emit(VoxelBuilder *builder, uint16_t *atlas, const VoxelC
         base = sprite->y + sprite->centerToCornerVecY + h;
         if (effect->tile)
         {
-            /* Lying on its own tile over the ground's drawing of it, which it
-             * animates: stood up as a card it read as a flat picture on top
-             * of the tile instead of the tile itself. */
+            /* On its own tile, never placed from its object: it stays there
+             * while the object walks on. */
             float cx = (float)(sprite->data[1] - MAP_OFFSET) + 0.5f;
             float cz = (float)(sprite->data[2] - MAP_OFFSET) + 0.5f;
             float shade = 1.0f;
@@ -1011,7 +1071,35 @@ unsigned VoxelEntities_Emit(VoxelBuilder *builder, uint16_t *atlas, const VoxelC
             }
             if (fabsf(cx - camera->targetX) > 24.0f || fabsf(cz - camera->targetZ) > 24.0f)
                 continue;
-            EmitDecal(builder, &sSlots[effect->slot], effect->slot, cx, cz, shade);
+            if (!VoxelEntities_StandsTileEffect(sprite->template))
+            {
+                /* Long grass lies on the ground's drawing of it, which it
+                 * animates: no blade cards stand on long grass. */
+                EmitDecal(builder, &sSlots[effect->slot], effect->slot, cx, cz, shade);
+                continue;
+            }
+            /*
+             * look L9: tall grass stands up on its tile, just in front of an
+             * object standing there, as the GBA draws it over the object's
+             * feet. Laid flat (before L9) it lay under the L2 blade cards,
+             * nothing came in front of the legs but the low front blade card
+             * (about three sprite rows), and an object in grass read as pasted
+             * on top of it. The tuft that stays while the object stands still
+             * (frame 0) is its lower seven rows: on the ground at the sprites'
+             * scale it covers the feet as on the GBA screen, and a step's
+             * rustle stands up around the legs. Lit like an object on its tile.
+             */
+#if CTR_VOXEL_LIGHTING
+            {
+                const VoxelMapInstance *inst = VoxelWorld_GetInstanceAt((int)floorf(cx), (int)floorf(cz));
+
+                if (inst != NULL && !inst->indoor)
+                    shade = VoxelLighting_Sample(cx, 0.75f, cz);
+            }
+#endif
+            EmitBillboard(builder, &sSlots[effect->slot], effect->slot, cx, cz,
+                          towardX * VOXEL_EFFECT_DEPTH, towardZ * VOXEL_EFFECT_DEPTH, 0.0f,
+                          rightX, rightZ, stretch, shade);
             continue;
         }
         if (effect->owner >= 0)
