@@ -249,6 +249,66 @@ static const RgExact kPortExact[8] = {
     {96, 74, 112, 98, false},
 };
 
+/* ==== KS2: Four Island (layout 233, map 3/15) and Five Island (layout 234, map 3/16) =================================== */
+/* Four Island's Center (17,18) and Mart (21,24), Five Island's Center are the K2 landmark models (k_center / k_mart). */
+
+#define L_FOUR 233, 0xF927FC39u
+#define L_FIVE 234, 0u
+#define L_RESORT 246, 0u
+#define L_MEADOW 248, 0u
+
+/* A gabled house seen from the front, as one profile prism: the facade rows wallTop..front (a wall front - wallTop
+ * high), a dark eave strip eaveTop..wallTop, and the roof as a 45-degree slope from art row eaveTop up to roofTop (the
+ * rows run z - y). `paraTop` (0 = none) adds a thin parapet standing on the roof's back edge, drawn from art rows
+ * paraTop..roofTop. Every house of KS2 (orange, purple, the Five Island edge house, Lorelei's house, the Rocket
+ * Warehouse) is this shape with other rows. */
+static bool sv_gable(RgPartList *out, const char *name, double width, double front, double wallTop, double eaveTop,
+                     double roofTop, double paraTop)
+{
+    double pts[7][2], rows[7][2];
+    unsigned n = 0;
+    double y1 = front - wallTop;            /* the wall top */
+    double y2 = front - eaveTop;            /* the eave top, where the roof starts */
+    double d = (eaveTop - roofTop) / 2.0;   /* the 45-degree roof: d deep and d high */
+    double rise = paraTop > 0 ? roofTop - paraTop : 0;
+
+    memset(rows, 0, sizeof(rows));
+    sv_pt(pts, n, front, 0);
+    rows[n][0] = wallTop; rows[n][1] = front;
+    n++;
+    sv_pt(pts, n, front, y1);
+    rows[n][0] = eaveTop; rows[n][1] = wallTop;
+    n++;
+    sv_pt(pts, n, front, y2);
+    rows[n][0] = roofTop; rows[n][1] = eaveTop;
+    n++;
+    sv_pt(pts, n, front - d, y2 + d);
+    if (rise > 0) {
+        rows[n][0] = paraTop; rows[n][1] = roofTop;
+        n++;
+        sv_pt(pts, n, front - d, y2 + d + rise);
+    }
+    n++;
+    sv_pt(pts, n, front - d - 7, y2 + d + rise);
+    n++;
+    sv_pt(pts, n, front - d - 7, 0);
+    n++;
+    return sv_profile(out, name, 0, width, n, (const double (*)[2])pts, (const double (*)[2])rows) && !out->failed;
+}
+
+/* ---- k_four_house_orange: 64x64 art (rect (11,10), 4x4 on layout 233; door (12,13)) --------------------------------- */
+/* Four Island's orange-roofed house: grass 0-8, the yellow-lipped orange roof 8-42, the dark eave 42-46, a blue door and
+ * a window in a pale facade 46-64. The same rows as the One Island house, at 64 wide. */
+static bool k_four_house_orange(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    (void)spec; (void)a0; (void)a1;
+    return sv_gable(out, "house", 64, 64, 46, 42, 8, 0);
+}
+static const RgExact kFourOrangeExact[1] = {{0, 8, 64, 64, false}};
+static const RgSideCfg kFourOrangeSide[1] = {
+    {NULL, {10, 50, 14, 60}, {10, 24, 14, 28}, 22, true},
+};
+
 const RgSpec rg_kspecs_sevii[] = {
     {"k_sevii_house", RG_SPEC_DIRECT, L_ONE, {18, 6, 5, 4}, {1, 4}, SV_GROUND, 1, kHouseExact, 1,
      k_sevii_house, 0, 0, kHouseSide},
@@ -264,5 +324,7 @@ const RgSpec rg_kspecs_sevii[] = {
      k_sevii_house, 0, 0, kHouseRedSide},
     {"k_three_port", RG_SPEC_DIRECT, L_PORT, {9, 12, 7, 7}, {0, 0}, SV_SEA_PORT, 4, kPortExact, 8,
      k_three_port, 0, 0, kTwoHarborSide},
+    {"k_four_house_orange", RG_SPEC_DIRECT, L_FOUR, {11, 10, 4, 4}, {0, 0}, SV_GROUND, 1, kFourOrangeExact, 1,
+     k_four_house_orange, 0, 0, kFourOrangeSide},
 };
 const unsigned rg_kspecs_sevii_count = sizeof(rg_kspecs_sevii) / sizeof(rg_kspecs_sevii[0]);
