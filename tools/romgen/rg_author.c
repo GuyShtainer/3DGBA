@@ -650,6 +650,104 @@ static bool oblique(const RgMesh *m, const RgImage *art, double azDeg, double pi
     return true;
 }
 
+/* look L6b: the model as the device camera sees it (voxel_camera.c + Mtx_Persp): the player stands `north` px south of
+ * the model's front, the eye 13 tiles (208 px, a town-sized map at zoom 100) further south and tan(pitch) * 208 up,
+ * looking at the player's feet, a 35-degree vertical field of view. Drawn at twice the 240-row screen, cropped. */
+static bool game_view(const RgMesh *m, const RgImage *art, double pitchDeg, double north, RgImage *out)
+{
+    const double PI = 3.14159265358979323846, H = 480.0, W = 800.0, D = 208.0, CH = 1200.0;
+    const double F = (H / 2.0) / tan(17.5 * PI / 180.0);
+    double cx = 0, zmax = -1e30, eye[3], tgt[3], f[3], r[3] = {1, 0, 0}, u[3], len;
+    double minx = 1e30, maxx = -1e30, miny = 1e30, maxy = -1e30;
+    unsigned i, k, n = 0;
+    RgRaster ras;
+    int x, y, X0, Y0, X1, Y1;
+
+    for (i = 0; i < m->n; i++)
+        for (k = 0; k < 3; k++) {
+            cx += m->t[i].p[k].x;
+            if (m->t[i].p[k].z > zmax)
+                zmax = m->t[i].p[k].z;
+            n++;
+        }
+    if (n == 0)
+        return false;
+    cx /= n;
+    tgt[0] = cx; tgt[1] = 0; tgt[2] = zmax + north;
+    eye[0] = cx; eye[1] = tan(pitchDeg * PI / 180.0) * D; eye[2] = tgt[2] + D;
+    f[0] = tgt[0] - eye[0]; f[1] = tgt[1] - eye[1]; f[2] = tgt[2] - eye[2];
+    len = sqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]);
+    f[0] /= len; f[1] /= len; f[2] /= len;
+    /* up = r x f */
+    u[0] = r[1] * f[2] - r[2] * f[1];
+    u[1] = r[2] * f[0] - r[0] * f[2];
+    u[2] = r[0] * f[1] - r[1] * f[0];
+    if (!rg_raster_init(&ras, (int)W, (int)CH))
+        return false;
+    for (i = 0; i < m->n; i++) {
+        const RgTri *t = &m->t[i];
+        double vs[3][6];
+        bool ok = true;
+
+        if (t->flags & (RG_TAG_DEPTH | RG_TAG_BEHIND))
+            continue;
+        for (k = 0; k < 3; k++) {
+            double d[3] = {t->p[k].x - eye[0], t->p[k].y - eye[1], t->p[k].z - eye[2]};
+            double xc = d[0] * r[0] + d[1] * r[1] + d[2] * r[2];
+            double yc = d[0] * u[0] + d[1] * u[1] + d[2] * u[2];
+            double zc = d[0] * f[0] + d[1] * f[1] + d[2] * f[2];
+
+            if (zc < 1.0) {
+                ok = false;
+                break;
+            }
+            vs[k][0] = W / 2 + F * xc / zc;
+            vs[k][1] = CH - H / 2 - F * yc / zc;     /* the screen centre low on a tall canvas: far models fit */
+            vs[k][2] = 1.0 / zc;
+            vs[k][3] = 1.0 / zc;
+            vs[k][4] = t->p[k].u / zc;
+            vs[k][5] = t->p[k].v / zc;
+        }
+        if (ok)
+            rg_raster_draw(&ras, vs, art, t->shade, (int16_t)t->tag);
+    }
+    for (y = 0; y < ras.h; y++)
+        for (x = 0; x < ras.w; x++)
+            if (ras.owner[(size_t)y * (size_t)ras.w + (size_t)x] >= 0) {
+                if (x < minx) minx = x;
+                if (x > maxx) maxx = x;
+                if (y < miny) miny = y;
+                if (y > maxy) maxy = y;
+            }
+    if (maxx < minx) {
+        rg_raster_free(&ras);
+        return false;
+    }
+    X0 = (int)minx - 8; Y0 = (int)miny - 8; X1 = (int)maxx + 9; Y1 = (int)maxy + 9;
+    if (X0 < 0) X0 = 0;
+    if (Y0 < 0) Y0 = 0;
+    if (X1 > ras.w) X1 = ras.w;
+    if (Y1 > ras.h) Y1 = ras.h;
+    if (!rg_img_new(out, X1 - X0, Y1 - Y0)) {
+        rg_raster_free(&ras);
+        return false;
+    }
+    for (y = Y0; y < Y1; y++)
+        for (x = X0; x < X1; x++) {
+            size_t px = (size_t)y * (size_t)ras.w + (size_t)x;
+            uint8_t *o = out->px + ((size_t)(y - Y0) * (size_t)out->w + (size_t)(x - X0)) * 4u;
+
+            if (ras.owner[px] >= 0) {
+                o[0] = ras.rgb[px * 3u]; o[1] = ras.rgb[px * 3u + 1u]; o[2] = ras.rgb[px * 3u + 2u];
+            } else {
+                o[0] = 70; o[1] = 120; o[2] = 70;      /* grass-ish ground, so the roof's silhouette reads */
+            }
+            o[3] = 255;
+        }
+    rg_raster_free(&ras);
+    return true;
+}
+
 /* Builds the one-spec model; NULL + message when the layout pin does not match. */
 static bool build_one(const RgWorld *w, const RgSpec *spec, RgBuildModels *ms)
 {
@@ -823,6 +921,26 @@ int rg_author_preview(const RgWorld *w, const char *outDir, const RgSpec *spec)
             snprintf(name, sizeof(name), "%s_%s.png", spec->name, views[v].suffix);
             rc |= write_png(outDir, name, &ob);
             rg_img_free(&ob);
+        }
+    }
+    {
+        /* look L6b: the device camera at the five pitch presets' ends and the default, the player two tiles south of the
+         * front; "g40far" stands the model seven tiles north (the top of the screen, where the ray is flattest) */
+        static const struct { const char *suffix; double pitch, north; } gv[4] = {
+            {"g34", 34.0, 32.0}, {"g40", 40.0, 32.0}, {"g46", 46.0, 32.0}, {"g40far", 40.0, 112.0}};
+        unsigned v;
+
+        for (v = 0; v < 4; v++) {
+            RgImage gi;
+
+            if (!game_view(&m->mesh, &m->art, gv[v].pitch, gv[v].north, &gi)) {
+                fprintf(stderr, "romgen author: the %s view failed\n", gv[v].suffix);
+                rc = 1;
+                continue;
+            }
+            snprintf(name, sizeof(name), "%s_%s.png", spec->name, gv[v].suffix);
+            rc |= write_png(outDir, name, &gi);
+            rg_img_free(&gi);
         }
     }
     if (m->spec->parts != NULL && m->comp == NULL && m->prop == NULL && m->spec->kind != RG_SPEC_INTERIOR)
@@ -1089,6 +1207,89 @@ static uint8_t *read_file(const char *path, size_t *n)
     return b;
 }
 
+/* ------------------------------------------------------------------------------------------------------------------ */
+/* roofs (look L6b): the pitch of every roof face, so a rear slope hidden behind its own ridge shows as a number       */
+/* ------------------------------------------------------------------------------------------------------------------ */
+
+/* The in-game camera (voxel_camera.c): the eye stands `dist` tiles south of the player, tan(pitch) * dist above the
+ * ground, and Mtx_Persp's vertical field of view is 35 degrees. A face sloping back down at `a` degrees is seen from the
+ * eye only when the view ray's elevation at it is above a. The ray to a ridge at height yr (px), n tiles north of the
+ * player: atan((tan(pitch) * dist - yr / 16) / (dist + n)). `dist` is 8 + min(5, mapMax / 5) at zoom 100: 9 on a small
+ * map, 13 from a 25-cell map up. */
+static double roof_elev(double pitchDeg, double dist, double ridgePx, double north)
+{
+    return atan((tan(pitchDeg * 3.14159265358979323846 / 180.0) * dist - ridgePx / 16.0) / (dist + north)) * 180.0 /
+           3.14159265358979323846;
+}
+
+static void roofs_one(const RgWorld *w, const RgSpec *spec, FILE *fp)
+{
+    RgBuildModels ms;
+    RgPartList parts;
+    unsigned i, k;
+
+    if (spec->parts == NULL || spec->kind == RG_SPEC_INTERIOR)
+        return;
+    if (rg_build_models(w, spec, 1, &ms) != RG_OK || ms.n == 0) {
+        fprintf(fp, "%-24s (not built)\n", spec->name);
+        return;
+    }
+    rg_parts_init(&parts);
+    if (ms.m[0].comp == NULL && ms.m[0].prop == NULL && rg_spec_parts(spec, &ms.m[0].art, &parts)) {
+        for (i = 0; i < parts.n; i++) {
+            const RgPart *p = rg_parts_at(&parts, i);
+            double fp_ = -1, rp = -1, ridge = 0, zmin = 1e9, zmax = -1e9, fd = 0, fh = 0;
+
+            if (p == NULL)
+                continue;
+            if (p->kind == RG_P_PRISM && !rg_prism_is_sheet(&p->u.prism)) {
+                const RgPrism *pr = &p->u.prism;
+
+                for (k = 0; k < pr->nPoly; k++) {
+                    const double *a = pr->poly[k], *b = pr->poly[(k + 1) % pr->nPoly];
+                    double dz = b[0] - a[0], dy = b[1] - a[1], ang;
+
+                    if (a[0] < zmin) zmin = a[0];
+                    if (a[0] > zmax) zmax = a[0];
+                    if (a[1] > ridge) ridge = a[1];
+                    if (dz > -0.5 || fabs(dy) < 0.5)
+                        continue;          /* only faces running back (north) and up or down */
+                    ang = atan2(fabs(dy), -dz) * 180.0 / 3.14159265358979323846;
+                    if (dy > 0 && hypot(dz, dy) > 4.0 && (fp_ < 0 || hypot(dz, dy) > hypot(fd, fh))) {
+                        fp_ = ang; fd = -dz; fh = dy;
+                    } else if (dy < 0 && hypot(dz, dy) > 4.0 && ang > rp) {
+                        rp = ang;
+                    }
+                }
+                if (fp_ < 0 && rp < 0)
+                    continue;
+                fprintf(fp, "%-24s %-14s prism  front %5.1f (%4.1f deep %4.1f high)  rear %5.1f  ridge y %5.1f  depth %5.1f\n",
+                        spec->name, p->name, fp_, fd, fh, rp, ridge, zmax - zmin);
+            } else if (p->kind == RG_P_HIPROOF) {
+                const RgHip *h = &p->u.hip;
+
+                fprintf(fp, "%-24s %-14s hip    front %5.1f (%4.1f deep %4.1f high)  rear %5.1f  ridge y %5.1f  depth %5.1f\n",
+                        spec->name, p->name, h->pitch, h->zf - h->zrf, h->rise, h->pitch, h->yr, h->zf - h->zb);
+            }
+        }
+    }
+    rg_parts_free(&parts);
+    rg_models_free(&ms);
+}
+
+static void roofs_camera(FILE *fp)
+{
+    static const double pitches[5] = {34, 37, 40, 43, 46};
+    unsigned i;
+
+    fprintf(fp, "camera: elevation of the view ray to a ridge 40 px high (dist 9 = small map, 13 = large), deg\n");
+    fprintf(fp, "  pitch | d9 n0  d9 n4 | d13 n0 d13 n4 | screen-top ray\n");
+    for (i = 0; i < 5; i++)
+        fprintf(fp, "  %5.0f | %5.1f %5.1f | %5.1f %6.1f | %5.1f\n", pitches[i], roof_elev(pitches[i], 9, 40, 0),
+                roof_elev(pitches[i], 9, 40, 4), roof_elev(pitches[i], 13, 40, 0), roof_elev(pitches[i], 13, 40, 4),
+                pitches[i] - 17.5);
+}
+
 static void usage(void)
 {
     fprintf(stderr,
@@ -1098,6 +1299,7 @@ static void usage(void)
             "  preview SPEC\n"
             "  check [SPEC|TOWN|all] [--expect N]\n"
             "  placements SPEC\n"
+            "  roofs [SPEC|TOWN|all]   (look L6b: front / rear slope pitch, ridge height and depth of every roof part)\n"
             "  budget [PCT]    (vertices of every model and every map chunk vs the device scratch; lists >= PCT%%, default 80)\n"
             "  trees [LO HI [LAYOUT]]   (list the tree metatiles; or a contact sheet PNG of metatiles LO..HI-1, LAYOUT's tilesets)\n"
             "  shrubs [TS]     (one-cell foliage candidates, primary and secondary, + contact sheet shrubs.png; TS: every id of that tileset)\n"
@@ -1233,6 +1435,13 @@ int rg_author_main(int argc, char **argv)
         fprintf(stderr, "romgen author: budget needs the voxel consumer (-DRG_AUTHOR_CONSUMER)\n");
         rc = 2;
 #endif
+    } else if (strcmp(cmd, "roofs") == 0 && nargs <= 1) {
+        const char *key = nargs == 1 ? args[0] : "all";
+
+        roofs_camera(stdout);
+        for (i = 0; i < nSpecs; i++)
+            if (spec_matches(&specs[i], key))
+                roofs_one(&w, &specs[i], stdout);
     } else if (strcmp(cmd, "check") == 0 && nargs <= 1) {
         const char *key = nargs == 1 ? args[0] : "all";
         unsigned matched = 0, failed = 0;
