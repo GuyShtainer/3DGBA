@@ -6,7 +6,7 @@
 //         source/voxel/voxel_world.c source/voxel/voxel_regions.c source/voxel/voxel_relief.c \
 //         source/voxel/voxel_building.c source/voxel/voxel_sign.c source/voxel/voxel_arena.c \
 //         source/voxel/voxel_atlas.c source/voxel/voxel_mesh_builder.c source/voxel/voxel_tree.c \
-//         source/voxel/voxel_lighting.c source/voxel/voxel_grade.c source/voxel/voxel_entities.c \
+//         source/voxel/voxel_lighting.c source/voxel/voxel_daylight.c source/voxel/voxel_grade.c source/voxel/voxel_entities.c \
 //         source/voxel/voxel_camera.c source/voxel/vx_adapter.c source/voxel/vx_snapshot.c \
 //         source/voxel/vx_lz77.c source/voxel/vx_behavior.c source/voxel/vx_data.c \
 //         source/voxel/ctr_shims_pure.c source/voxel/vx_battle_stub.c source/romgen/rg_gameprof.c -lm -o /tmp/tvwo && /tmp/tvwo

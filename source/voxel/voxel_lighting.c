@@ -74,10 +74,63 @@ static float sCeiling;
 static float sMapCeiling[MAX_VOXEL_MAP_INSTANCES];
 static unsigned sMapCeilings;
 
+/* THE sun (voxel_lighting.h): L3's until VoxelLighting_SetSun moves it. */
+float gVoxelSunDX = VOXEL_SUN_REF_DX, gVoxelSunDZ = VOXEL_SUN_REF_DZ;
+
 /* The ray's horizontal run, in tiles, along each axis. */
 #define SUN_ABS(v) ((v) < 0.0f ? -(v) : (v))
-#define RUN_X (SUN_ABS(VOXEL_SUN_DX) * (float)VOXEL_LIGHT_REACH)
-#define RUN_Z (SUN_ABS(VOXEL_SUN_DZ) * (float)VOXEL_LIGHT_REACH)
+
+/*
+ * The chunk hash's margins, a side at a time (VoxelLighting_Hash): rays run
+ * towards the sun, out past whichever sides its signs say, as far as its run.
+ * Unset, they are the current sun's; widened, the union of every sun given.
+ */
+static struct
+{
+    bool set;
+    int west, east, north, south;
+} sReach;
+
+static void SunReach(float dx, float dz, int *west, int *east, int *north, int *south)
+{
+    int runX = (int)(SUN_ABS(dx) * (float)VOXEL_LIGHT_REACH) + 1;
+    int runZ = (int)(SUN_ABS(dz) * (float)VOXEL_LIGHT_REACH) + 1;
+
+    *west = dx > 0.0f ? runX : 0;
+    *east = dx < 0.0f ? runX : 0;
+    *north = dz > 0.0f ? runZ : 0;
+    *south = dz < 0.0f ? runZ : 0;
+}
+
+void VoxelLighting_WidenReach(float dx, float dz)
+{
+    int west, east, north, south;
+
+    if (!sReach.set)
+    {
+        SunReach(VOXEL_SUN_DX, VOXEL_SUN_DZ, &sReach.west, &sReach.east, &sReach.north,
+                 &sReach.south);
+        sReach.set = true;
+    }
+    SunReach(dx, dz, &west, &east, &north, &south);
+    if (west > sReach.west) sReach.west = west;
+    if (east > sReach.east) sReach.east = east;
+    if (north > sReach.north) sReach.north = north;
+    if (south > sReach.south) sReach.south = south;
+}
+
+void VoxelLighting_Reach(int *west, int *east, int *north, int *south)
+{
+    if (sReach.set)
+    {
+        *west = sReach.west;
+        *east = sReach.east;
+        *north = sReach.north;
+        *south = sReach.south;
+    }
+    else
+        SunReach(VOXEL_SUN_DX, VOXEL_SUN_DZ, west, east, north, south);
+}
 
 static int Tile(float n)
 {
@@ -130,6 +183,13 @@ static void MapCeilings(void)
         }
         sMapCeiling[sMapCeilings++] = top;
     }
+}
+
+void VoxelLighting_SetSun(float dx, float dz)
+{
+    gVoxelSunDX = dx;
+    gVoxelSunDZ = dz;
+    VoxelLighting_Reset();
 }
 
 void VoxelLighting_Reset(void)
@@ -482,9 +542,9 @@ uint32_t VoxelLighting_Hash(int x0, int z0, int x1, int z1)
      * x sign, its z sign), so those are the margins the shadows come from.
      * Also keep the chunk's own north margin and a tile of neighbours on
      * every side for AO and face visibility. */
-    int runX = (int)(RUN_X) + 1, runZ = (int)(RUN_Z) + 1;
-    int west = VOXEL_SUN_DX > 0.0f ? runX : 0, east = VOXEL_SUN_DX < 0.0f ? runX : 0;
-    int north = VOXEL_SUN_DZ > 0.0f ? runZ : 0, south = VOXEL_SUN_DZ < 0.0f ? runZ : 0;
+    int west, east, north, south;
+
+    VoxelLighting_Reach(&west, &east, &north, &south);
     int hx0 = x0 - west - 1, hz0 = z0 - (north > VOXEL_CHUNK_MARGIN_NORTH
                                           ? north : VOXEL_CHUNK_MARGIN_NORTH) - 1;
     int hx1 = x1 + east + 1, hz1 = z1 + south + 2;
