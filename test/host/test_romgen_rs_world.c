@@ -212,13 +212,14 @@ static void TestSpecs(const Cart *C)
     }
     CHECK(comp > 0 && repinned == 6 && replaced == 3);
     /* every pinned row now names this cart's layout (S0: 7 of 16 did not); 16 -> 37: Phase 36 H1's 21 Hoenn rows (the
-     * Verdanturf, Fallarbor and Slateport ones retargeted to the RS layouts, rg_rsspecs.c) */
+     * Verdanturf, Fallarbor and Slateport ones retargeted to the RS layouts, rg_rsspecs.c); 37 -> 41: Phase 36 H2's 4 Hoenn rows
+     * (gym_fortree, gym_lavaridge, fortree_hut, pacifidlog_hut) */
     for (j = 0; t != NULL && j < n; j++) {
         if (t[j].layoutId == 0) continue;
         pinned++;
         matching += t[j].layoutId <= C->w.layoutCount && rg_layout_fnv(&C->w.layouts[t[j].layoutId - 1u]) == t[j].layoutFnv;
     }
-    CHECK(pinned == 37 && matching == 37);
+    CHECK(pinned == 41 && matching == 41);
     printf("  %s: %u recipe rows (%u Emerald rows, %u interiors left out, %u components retargeted, %u repinned, %u/%u pins "
            "match)\n", C->name, n, rg_spec_count, interiors, comp, repinned, matching, pinned);
     n = 7;
@@ -345,8 +346,11 @@ static void Run(Cart *C)
     CHECK(o->reliefSize == 22872u && o->rst.ledgeLayouts == 20 && o->rst.ledgeCells == 851 && o->rst.drawnRows == 0);
     /* 3016324 B, 64 models, 2081 placements, 35508 vertices, 57 masks -> 3518812 / 85 / 2105 / 39252 / 60: Phase 36 H1
      * (Dewford, Mauville, Verdanturf, Fallarbor, Slateport; three Contest Halls in the Battle Tents' place) */
-    CHECK(o->buildingsSize == 3518812u && o->bModels == 85 && o->bPages == 58 && o->bPlacements == 2105);
-    CHECK(o->bVertices == 39252 && o->bMasks == 60 && o->bVariants == 66);
+    /* 3016324 B, 64 models, 2081 placements, 35508 vertices, 57 masks -> 3518812 / 85 / 2105 / 39252 / 60: Phase 36 H1
+     * (Dewford, Mauville, Verdanturf, Fallarbor, Slateport; three Contest Halls in the Battle Tents' place)
+     * -> 3650372 / 89 / 2118 / 41256 / 69: Phase 36 H2 (Fortree, Lavaridge, Pacifidlog: 4 models, 13 placements) */
+    CHECK(o->buildingsSize == 3650372u && o->bModels == 89 && o->bPages == 58 && o->bPlacements == 2118);
+    CHECK(o->bVertices == 41256 && o->bMasks == 69 && o->bVariants == 66);
     /* S4: every model passes its art gate (S0 left the Emerald lab out here; rs_littleroot_lab replaces it) */
     CHECK(o->buildingsFailed == 0 && o->buildingsDropped == 0);
     CHECK(o->roleCount[VOXEL_ROLE_SIGNPOST] == 224);
