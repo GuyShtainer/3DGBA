@@ -14,7 +14,12 @@
 #include <string.h>
 
 #define L_ONE 230, 0x60EA96AFu
+#define L_TWO 231, 0x9AB6DD1Fu
+#define L_THREE 232, 0x76E27C1Eu
+#define L_BRINK 239, 0u
+#define L_PORT 241, 0u
 #define SV_GROUND {0x001}
+#define SV_SEA {627, 619, 628, 632}        /* the sea's open-water metatiles (the water is the ground; at most 4 entries) */
 
 static void sv_pt(double (*poly)[2], unsigned i, double z, double y)
 {
@@ -130,10 +135,84 @@ static const RgExact kNetworkExact[5] = {
     {40, 66, 72, 96, false},        /* the porch */
 };
 
+/* ==== KS1: Two Island (layout 231, map 3/13) ============================================================================ */
+
+/* A flat-roofed block over x0..x1: the facade runs art rows ftop..zf (a vertical face, height zf - ftop), the level roof
+ * top runs rows rtop..ftop behind it. */
+static bool sv_block(RgPartList *out, const char *name, double x0, double x1, double zf, double ftop, double rtop)
+{
+    double h = zf - ftop;
+    double pts[4][2], rows[4][2];
+
+    sv_pt(pts, 0, zf, 0);
+    sv_pt(pts, 1, zf, h);
+    sv_pt(pts, 2, rtop + h, h);
+    sv_pt(pts, 3, rtop + h, 0);
+    rows[0][0] = ftop; rows[0][1] = zf;
+    rows[1][0] = rtop; rows[1][1] = ftop;
+    rows[2][0] = rows[2][1] = rows[3][0] = rows[3][1] = 0;
+    return sv_profile(out, name, x0, x1, 4, (const double (*)[2])pts, (const double (*)[2])rows);
+}
+
+/* ---- k_two_gamecorner: 80x64 art (rect (37,6), 5x4 on layout 231; door (39,9)) -------------------------------------- */
+/* The Joyful Game Corner: a flat-roofed hall. Rows: the grey frame line 0, the cream parapet 1-5, the blue skylight
+ * 6-33 inside it, the cream rim 34-41, the dark facade line 42, the facade 43-62 (yellow diamond bands, the glass door
+ * under a pink awning with yellow lights at x 26-48) and the base 62-64. One block 22 high. */
+static bool k_two_gamecorner(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    (void)spec; (void)a0; (void)a1;
+    return sv_block(out, "hall", 0, 80, 64, 42, 0) && !out->failed;
+}
+static const RgExact kGameCornerExact[1] = {{0, 0, 80, 64, false}};
+static const RgSideCfg kGameCornerSide[1] = {
+    {NULL, {2, 10, 4, 46}, {2, 10, 4, 46}, 999, true},
+};
+
+/* ---- k_two_harbor: 112x112 art (rect (7,7), 7x7 on layout 231; door (10,8)) ----------------------------------------- */
+/* The Two Island harbor: the Seagallop ferry moored at a plank pier, drawn as an elevation over water (the sea tiles
+ * are ground quarters, so they are transparent). Rows: the pier deck 0-28 and its grey ramp 28-33 (x 32-80), the ferry's
+ * red corrugated roof 33-80 over its grey hull with the red-triangle sign 80-112 (x 16-96), and two red cranes at each
+ * side (x 0-16 and 96-112, rows 42-74 and 74-106). Four flat blocks and the pier slab. */
+static bool k_two_harbor(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    (void)spec; (void)a0; (void)a1;
+    return sv_block(out, "pier", 32, 80, 33, 26, 0) &&
+           sv_block(out, "ferry", 16, 96, 104, 80, 33) &&
+           sv_block(out, "crane_nw", 0, 16, 66, 56, 42) && sv_block(out, "crane_sw", 0, 16, 98, 88, 74) &&
+           sv_block(out, "crane_ne", 96, 112, 66, 56, 42) && sv_block(out, "crane_se", 96, 112, 98, 88, 74) &&
+           !out->failed;
+}
+static const RgExact kTwoHarborExact[6] = {
+    {32, 0, 80, 33, false},         /* the pier deck and its ramp */
+    {16, 33, 96, 104, false},       /* the ferry: roof, hull, sign */
+    {0, 42, 16, 66, false},         /* the west cranes (the water reflections below each are not modelled) */
+    {0, 74, 16, 98, false},
+    {96, 42, 112, 66, false},       /* the east cranes */
+    {96, 74, 112, 98, false},
+};
+static const RgSideCfg kTwoHarborSide[1] = {
+    {NULL, {20, 82, 24, 86}, {23, 36, 26, 42}, 999, true},
+};
+
+/* ==== KS1: Three Island (layout 232, map 3/14) =========================================================================== */
+
+/* ---- k_three_house_red: 80x64 art (rect (2,28), 5x4 on layout 232; door (3,31)) ------------------------------------- */
+/* The one red-roofed house of Three Island: the purple house's elevation with a red roof (same rows: lip 8-9, roof
+ * 9-42, eave 42-46, facade 46-64), so it reuses k_sevii_house's builder. */
+static const RgSideCfg kHouseRedSide[1] = {
+    {NULL, {40, 58, 44, 60}, {7, 24, 9, 30}, 22, true},
+};
+
 const RgSpec rg_kspecs_sevii[] = {
     {"k_sevii_house", RG_SPEC_DIRECT, L_ONE, {18, 6, 5, 4}, {1, 4}, SV_GROUND, 1, kHouseExact, 1,
      k_sevii_house, 0, 0, kHouseSide},
     {"k_one_network", RG_SPEC_DIRECT, L_ONE, {11, 0, 7, 6}, {0, 0}, SV_GROUND, 1, kNetworkExact, 5,
      k_one_network, 0, 0, NULL},
+    {"k_two_gamecorner", RG_SPEC_DIRECT, L_TWO, {37, 6, 5, 4}, {0, 0}, SV_GROUND, 1, kGameCornerExact, 1,
+     k_two_gamecorner, 0, 0, kGameCornerSide},
+    {"k_two_harbor", RG_SPEC_DIRECT, L_TWO, {7, 7, 7, 7}, {0, 0}, SV_SEA, 4, kTwoHarborExact, 6,
+     k_two_harbor, 0, 0, kTwoHarborSide},
+    {"k_three_house_red", RG_SPEC_DIRECT, L_THREE, {2, 28, 5, 4}, {1, 4}, SV_GROUND, 1, kHouseExact, 1,
+     k_sevii_house, 0, 0, kHouseRedSide},
 };
 const unsigned rg_kspecs_sevii_count = sizeof(rg_kspecs_sevii) / sizeof(rg_kspecs_sevii[0]);
