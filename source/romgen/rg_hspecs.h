@@ -20,6 +20,16 @@ bool rg_h_profile(RgPartList *out, const char *name, double x0, double x1, bool 
 /* The end (z1, y1) of a slope that climbs from (z0, y0) over `rows` art rows at `deg` degrees (art row = z - y). */
 void rg_h_slope(double z0, double y0, double rows, double deg, double *z1, double *y1);
 
+/* A gable seen from the front, `width` px wide and `height` art rows tall: the wall carries rows eave..height, a
+ * RG_H_PITCH slope rows ridge..eave, a 5-degree cap rows 0..ridge; the top ends one pixel short of the (skipped) back
+ * drop, which rg_close_backs mirrors into the rear slope. */
+bool rg_h_gable(RgPartList *out, double width, double height, double eave, double ridge);
+
+/* A flat-roofed block `width` px wide and `height` art rows tall: the wall carries rows wallTop..height, the level top
+ * the rows above it. The top ends one pixel short of the (skipped) back drop, so the face rg_close_backs lays there sits
+ * behind art row 0 instead of tying with the top's back edge. Part name "block". */
+bool rg_h_flat(RgPartList *out, double width, double height, double wallTop);
+
 /* ---- Dewford Town (layout 12) ---- */
 #define L_H_DEWFORD 12, 0xB67B1972u
 #define H_SAND {0x124}, 1
@@ -62,5 +72,24 @@ extern const RgSideCfg rg_h_game_corner_side[1];
      2, rg_h_mauville_block, 0, 0, rg_h_mauville_block_side},                                                        \
     {"game_corner", RG_SPEC_DIRECT, L_H_MAUVILLE, {5, 10, 7, 4}, {0, 0}, H_GRASS1, rg_h_game_corner_exact,           \
      5, rg_h_game_corner, 0, 0, rg_h_game_corner_side},
+
+/* ---- Verdanturf Town (layout 15; Ruby / Sapphire retarget it, rg_rsspecs.c) ---- */
+#define L_H_VERDANTURF 15, 0x8866E384u
+#define H_GRASS_V {0x001, 0x204, 0x205}, 3
+bool rg_h_verdanturf_house(const RgSpec *s, int width, int a1, RgPartList *out);
+bool rg_h_battle_tent_v(const RgSpec *s, int a0, int a1, RgPartList *out);
+extern const RgExact rg_h_verdanturf_house_exact[3];
+extern const RgExact rg_h_verdanturf_house_w_exact[3];
+extern const RgExact rg_h_battle_tent_v_exact[2];
+extern const RgSideCfg rg_h_verdanturf_house_side[1];
+extern const RgSideCfg rg_h_battle_tent_v_side[1];
+
+#define RG_HSPECS_VERDANTURF_ROWS                                                                                    \
+    {"verdanturf_house", RG_SPEC_DIRECT, L_H_VERDANTURF, {0, 11, 4, 4}, {0, 0}, H_GRASS_V,                         \
+     rg_h_verdanturf_house_exact, 3, rg_h_verdanturf_house, 64, 0, rg_h_verdanturf_house_side},                    \
+    {"verdanturf_house_w", RG_SPEC_DIRECT, L_H_VERDANTURF, {8, 11, 5, 4}, {0, 0}, H_GRASS_V,                       \
+     rg_h_verdanturf_house_w_exact, 3, rg_h_verdanturf_house, 80, 0, rg_h_verdanturf_house_side},                  \
+    {"battle_tent_verdanturf", RG_SPEC_DIRECT, L_H_VERDANTURF, {1, 3, 5, 5}, {0, 0}, H_GRASS_V,                    \
+     rg_h_battle_tent_v_exact, 2, rg_h_battle_tent_v, 0, 0, rg_h_battle_tent_v_side},
 
 #endif

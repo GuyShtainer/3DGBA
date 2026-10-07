@@ -30,23 +30,11 @@ bool rg_h_mauville_gable(const RgSpec *spec, int width, int a1, RgPartList *out)
            !out->failed;
 }
 
-/* A flat-roofed block `width` px wide and `height` art rows tall: the wall carries rows wallTop..height, the level top the
- * rows above it. As in the gables, the top ends one pixel short of the back wall (a skipped step) so the closure face
- * L6 lays there sits behind art row 0 instead of tying with the top's back edge. */
-static bool flat_block(RgPartList *out, double width, double height, double wallTop)
-{
-    double h = height - wallTop, zb = height - wallTop;
-    const double pts[5][2] = {{height, 0}, {height, h}, {zb, h}, {zb - 1, h}, {zb - 1, 0}};
-    const double rows[5][2] = {{wallTop, height}, {0, wallTop}, {0, 0}, {0, 0}, {0, 0}};
-
-    return rg_h_profile(out, "block", 0, width, true, 5, pts, rows) && !out->failed;
-}
-
 /* Rows (x 0-63): the grey roof with its skylight border 0-40, the yellow facade with two windows 40-80. */
 bool rg_h_mauville_block(const RgSpec *spec, int a0, int a1, RgPartList *out)
 {
     (void)spec; (void)a0; (void)a1;
-    return flat_block(out, 64, 80, 40);
+    return rg_h_flat(out, 64, 80, 40);
 }
 
 /* Rows (x 0-111): the corrugated roof 0-26 (its corners rounded off inside the top blocks), the eave 26-32, the sign
@@ -54,7 +42,7 @@ bool rg_h_mauville_block(const RgSpec *spec, int a0, int a1, RgPartList *out)
 bool rg_h_game_corner(const RgSpec *spec, int a0, int a1, RgPartList *out)
 {
     (void)spec; (void)a0; (void)a1;
-    return flat_block(out, 112, 64, 26);
+    return rg_h_flat(out, 112, 64, 26);
 }
 
 const RgExact rg_h_mauville_house_exact[2] = {

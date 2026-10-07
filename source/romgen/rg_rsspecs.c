@@ -10,7 +10,7 @@
 
 #include "rg_kspecs.h"
 
-#define RG_RSSPECS_MAX 64u          /* Emerald's table has 34 rows */
+#define RG_RSSPECS_MAX 96u          /* Emerald's table has 46 rows after Phase 36 H1 */
 #define RG_RS_COMP_MAX 8u
 
 /* The secondary tilesets Emerald's components expanders name, at their Ruby and Sapphire addresses: Petalburg (layout 1's
@@ -32,15 +32,21 @@ static const struct { const char *name; uint16_t layoutId; uint32_t fnv; } kReta
     {"gym_rustboro", 4, 0x5FF68C82u},
     {"devon_corporation", 4, 0x5FF68C82u},
     {"rustboro_fountain", 4, 0x5FF68C82u},
+    /* Phase 36 H1: Verdanturf's houses (the Contest Hall is RS-own, below) */
+    {"verdanturf_house", 15, 0x92F55851u},
+    {"verdanturf_house_w", 15, 0x92F55851u},
 };
 
 /* Phase 35 S4: RS-own recipes (rg_rsspecs_<town>.c, the Kanto files' pattern) in the place of an Emerald row whose art gate
  * fails on this cartridge. */
 extern const RgSpec rg_rsspecs_littleroot[];
 extern const unsigned rg_rsspecs_littleroot_count;
+extern const RgSpec rg_rsspecs_verdanturf[];       /* rg_rsspecs_h1.c, Phase 36 H1 */
+extern const unsigned rg_rsspecs_verdanturf_count;
 
 static const struct { const char *name; const RgSpec *rows; const unsigned *count; } kReplace[] = {
     {"littleroot_lab", rg_rsspecs_littleroot, &rg_rsspecs_littleroot_count},   /* RS draws the lab roof differently */
+    {"battle_tent_verdanturf", rg_rsspecs_verdanturf, &rg_rsspecs_verdanturf_count},  /* RS: the Contest Hall */
 };
 
 static RgSpec sTable[2][RG_RSSPECS_MAX];

@@ -41,3 +41,29 @@ void rg_h_slope(double z0, double y0, double rows, double deg, double *z1, doubl
     *z1 = z0 - dz;
     *y1 = y0 + rows - dz;
 }
+
+bool rg_h_gable(RgPartList *out, double width, double height, double eave, double ridge)
+{
+    double pts[6][2], rows[6][2] = {{0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}};
+    double zs, ys, zr, yr;
+
+    rg_h_slope(height, height - eave, eave - ridge, RG_H_PITCH, &zs, &ys);
+    rg_h_slope(zs, ys, ridge, 5, &zr, &yr);
+    pts[0][0] = height; pts[0][1] = 0;              rows[0][0] = eave; rows[0][1] = height;
+    pts[1][0] = height; pts[1][1] = height - eave;  rows[1][0] = ridge; rows[1][1] = eave;
+    pts[2][0] = zs; pts[2][1] = ys;                 rows[2][0] = 0; rows[2][1] = ridge;
+    pts[3][0] = zr; pts[3][1] = yr;
+    pts[4][0] = zr - 1; pts[4][1] = yr;
+    pts[5][0] = zr - 1; pts[5][1] = 0;
+    return rg_h_profile(out, "house", 0, width, true, 6, (const double (*)[2])pts, (const double (*)[2])rows) &&
+           !out->failed;
+}
+
+bool rg_h_flat(RgPartList *out, double width, double height, double wallTop)
+{
+    double h = height - wallTop, zb = height - wallTop;
+    const double pts[5][2] = {{height, 0}, {height, h}, {zb, h}, {zb - 1, h}, {zb - 1, 0}};
+    const double rows[5][2] = {{wallTop, height}, {0, wallTop}, {0, 0}, {0, 0}, {0, 0}};
+
+    return rg_h_profile(out, "block", 0, width, true, 5, pts, rows) && !out->failed;
+}
