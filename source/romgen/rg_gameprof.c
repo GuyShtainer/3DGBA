@@ -182,7 +182,9 @@ static GameProfile sLeafGreen = {GP_FRLG_COMMON, .game = GP_LEAFGREEN, .code = {
  * cross-checked against the PokeDNA rev-2 symbol list (numbers only); every value with its method is in docs/PROVENANCE.md
  * and docs/phase35-rs/PHASE.md. The RAM block is identical on Ruby and Sapphire. Two layout differences from Emerald /
  * FRLG: gSaveBlock1 is a struct in EWRAM, not a pointer (`sb1Direct`), and gMain's inBattle byte is 0x43D (the RS Main
- * has 4 more bytes before it). The object events are in IWRAM. S2 switches `rendererOn` on. */
+ * has 4 more bytes before it). The object events are in IWRAM. S2: `rendererOn` is set, gameprof_detect() returns these
+ * rows; vx_host runs the anchor self-check on every bind and settled map and falls back to 2D on a failure. Indoor maps
+ * hand back to the 2D frame (`interiors3d` false). */
 static const uint8_t kRsGroupSizes[34] = {54, 5, 5, 6, 7, 7, 8, 7, 7, 13, 8, 17, 10, 24, 13, 13, 14, 2, 2, 2, 3, 1, 1,
                                           1, 86, 44, 12, 2, 1, 13, 1, 1, 3, 1};
 
@@ -191,7 +193,7 @@ static const uint8_t kRsGroupSizes[34] = {54, 5, 5, 6, 7, 7, 8, 7, 7, 13, 8, 17,
     .nPrimMetatiles = NUM_METATILES_IN_PRIMARY, .nPrimTiles = NUM_TILES_IN_PRIMARY, .nPrimPals = NUM_PALS_IN_PRIMARY, \
     .nMetatilesTotal = NUM_METATILES_TOTAL, .tilesetAttrOff = 0x10, .attrBytes = 2, .behMask = GBA_BEHAVIOR_MASK,     \
     .layerMask = GBA_ATTR_LAYER_MASK, .layerShift = GBA_ATTR_LAYER_SHIFT, .layoutBytes = GBA_ROM_MAPLAYOUT_BYTES,     \
-    .houseHalfWidth = 5, .houseHeight = 7, .emeraldIdTables = false, .interiors3d = false, .rendererOn = false,     \
+    .houseHalfWidth = 5, .houseHeight = 7, .emeraldIdTables = false, .interiors3d = false, .rendererOn = true,      \
     .gMain = 0x03001770u, .sb1Ptr = 0x02025734u, .sb1Direct = true, .backupLayout = 0x03004870u, .backupMap = 0,      \
     .mapHeader = 0x0202E828u, .objEvents = 0x030048A0u, .playerAvatar = 0x0202E858u, .sprites = 0x02020004u,          \
     .plttUnfaded = 0x0202EAC8u, .paletteFade = 0x0202F388u, .mainFlagsOff = 0x43D, .playerAvatarBytes = 0x24,        \

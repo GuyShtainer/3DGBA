@@ -73,8 +73,8 @@ gym_rustboro, devon_corporation, rustboro_fountain) and fall back to the extrude
 | Slice | What | Done when |
 |---|---|---|
 | **S0** (built) | romgen ROM layer: AXVE/AXPE rev 2 profile rows (romgen-only, `rendererOn` false), layoutSlots cap, Emerald exterior recipes retargeted (interiors dropped, components expanders pointed at the RS Petalburg/Rustboro tilesets), art-failing models left out on RS, Emerald signpost heuristic, ledges relief | host suite `test_romgen_rs_world` green with pins; all Emerald/FRLG pins unchanged; device builds link (with and without `ROMGEN_DEV_HOOK=1`) |
-| S1 | RS renderer anchors + self-check: gSaveBlock1 is a DIRECT struct (no pointer, needs a profile flag), gMain/gMapHeader/gPlayerAvatar/gSprites/palette buffers (the `RS_PROFILE_BODY_RAM` values in gamestate.c are a start, from .sym), weather, gfxInfo and field-effect tables harvested from rev 2 ROM literal pools, cb2Overworld measured live | anchor check passes in Azahar on both carts; wrong ROM disables cleanly |
-| S2 | renderer on (`rendererOn`), Azahar captures of Littleroot and Rustboro in 3D | test_voxel_* counts unchanged + an RS row; shots |
+| **S1** (built) | RS renderer anchors + self-check: gSaveBlock1 is a DIRECT struct (no pointer, needs a profile flag), gMain/gMapHeader/gPlayerAvatar/gSprites/palette buffers (the `RS_PROFILE_BODY_RAM` values in gamestate.c are a start, from .sym), weather, gfxInfo and field-effect tables harvested from rev 2 ROM literal pools, cb2Overworld measured live | anchor check passes in Azahar on both carts; wrong ROM disables cleanly |
+| **S2** (built) | renderer on (`rendererOn`), Azahar captures of Littleroot and Rustboro in 3D | test_voxel_* counts unchanged + an RS row; shots |
 | S3 | RS tree / shrub / grass / prop tables (ROM-measured with `romgen author ROM shrubs/props`) | host pins + Azahar |
 | S4 | RS-specific recipes: Littleroot lab (RS roof), Oldale, Rustboro set (stone, olive, gym, Devon, fountain) | per-recipe gates 0/0/0, placements pinned |
 | S5 | interiors (if wanted), rev 0 / 1 profiles (measure first) | |
@@ -114,3 +114,71 @@ four files are **byte-identical to the host pins** (buildings a03a3b74, regions 
 "chunk scratch full" line to check. A 3D town capture needs S1 + S2.
 
 The boot screenshot (`evidence/s0-ruby-boot-2d.top.png`) is kept locally and not committed (ROM-derived art).
+
+## S1 + S2 (built, 2026-10-07)
+
+### Anchors and how each was measured
+
+Measured on the user's rev 2 carts (Ruby AXVE, Sapphire AXPE). "Literal count" = how many ROM literal-pool words hold the
+address (the same count on both carts, the RAM block is one value); every address was cross-checked against the PokeDNA
+pokeruby rev-2 symbol list (numbers only, nothing copied). The live column is the in-app self-check (`rg_anchor.c`) in
+Azahar.
+
+| anchor | Ruby | Sapphire | method | live (Azahar) |
+|---|---|---|---|---|
+| gMain | 0x03001770 | same | literal count 694 | checks 11, 20 |
+| gSaveBlock1 (direct struct, `sb1Direct`) | 0x02025734 | same | literal count 339; RS has no SaveBlock1 pointer | checks 12, 14, 16 |
+| backupLayout | 0x03004870 | same | literal count 24 | checks 13, 14 |
+| backupMap | 0 (derived) | same | read from backupLayout.map (gBackupMapData 0x02029828, 4 literals) | check 13 |
+| mapHeader | 0x0202E828 | same | literal count 99 | check 15 |
+| objEvents (IWRAM) | 0x030048A0 | same | literal count 276 | check 16 |
+| playerAvatar (0x24 bytes) | 0x0202E858 | same | literal count 202 | checks 16, 17 |
+| sprites | 0x02020004 | same | literal count 1298 | check 17 |
+| plttUnfaded | 0x0202EAC8 | same | literal count 72 | (palette path) |
+| paletteFade | 0x0202F388 | same | literal count 371; it is the literal at CB2_Overworld +0x28 | checks 10, 18 |
+| mainFlagsOff (inBattle) | 0x43D | same | the gMain literal pools hold 0x43D 48 times, 0x439 never | check 20 |
+| weatherPtr (ROM word -> 0x0202F7E8) | 0x08396FDC | 0x08396E24 | the ROM word holding gWeather, 108 references | checks 9, 19 |
+| weatherOff | {0x6D0, 0x6C6, 0x730, 0x6FB, 0x724} | same | Emerald's; ROM immediates: 0x6D0 as `mov #0xDA; lsl #3` (11), 0x730 as `mov #0xE6; lsl #3` (4), 0x6C6 (20), 0x6FB (4), 0x724 (4) in pools | check 19 |
+| gfxInfoPtrs (218) | 0x0836DC70 | 0x0836DC00 | pointer run whose records carry a ROM pointer at +0x1C; slot 218 is the field-effect table (34 literal refs), so 218 records | check 7 |
+| fldeffTemplates (36) | 0x0836DFD8 | 0x0836DF68 | the table right after; thumb callbacks; palette tags in Emerald's index order | check 8 |
+| cb2Overworld | 0x080543C5 | 0x080543C9 | `push {lr}`, the &gPaletteFade literal at +0x28, 8 thumb references; live: check 20 passes on the overworld | checks 10, 20 |
+| cb2OverworldBasic | 0x080543B9 | 0x080543BD | 0xB500 `push {lr}` thunk, 1 reference | checks 10, 20 |
+
+Struct offsets are Emerald's (pokeruby numbers only): MapHeader, ObjectEvent, Sprite, PlayerAvatar, PaletteFadeControl,
+ObjectEventGraphicsInfo, the backup layout, Weather. The ROM checks 5 / 6 read the General / Building primaries from
+maps (0, 0) and (1, 0) on RS (FRLG: (3, 0) / (4, 0)).
+
+### Results
+
+- Host: `make -C tools/romgen test` 29 suites, `vtest` 11 suites (new `test_voxel_rs`), 0 failures, 0 skipped. Changed
+  counts only: test_romgen_gameprof 5799 -> 5925 (RS row pins, the ROM checks on both real carts with one corrupted
+  copy per check, synthetic RAM checks through the RS layout), test_romgen_rs_world 8341 -> 8349 (renderer detection,
+  rev 2 only), test_voxel_rs 96 (new: Littleroot 0.9 and Rustboro 0.3 built from each ROM through snapshot -> adapter ->
+  world; instances 0.9 0.16 0.10 and 0.3 0.30 0.19 0.31 0.29 0.20 0.0 0.14). Every other count identical.
+- Pins unchanged (romgen CLI): Emerald buildings 6d321c3a, regions 007a370f, signposts 38515605, relief 21a837f0,
+  ledges eb25a383; FR = LG buildings 5ba2cc16, regions 3716874d, signposts ba2fde45, relief 32c24146; Ruby = Sapphire
+  buildings a03a3b74, regions 1a09cd5f, signposts 9b4d379c, relief 215a12d9.
+- Device: `make -j8` and `make -j8 ROMGEN_DEV_HOOK=1` link.
+- **Hardware: not run.**
+
+### Evidence (Azahar, 2026-10-07)
+
+Private emutest instance q (New 3DS, `--keep-n3ds`, the S0 romgen output staged in `voxel/AXVE` and `voxel/AXPE`,
+voxel on), warp-save copies of ruby.sav / sapphire.sav (continue-game warp; the originals are untouched):
+
+| run | voxel.log | look |
+|---|---|---|
+| Ruby, Littleroot (0.9) at (10, 10) | `vx: rom anchors ok (AXVE rev 2)`, `vx: anchors ok (AXVE rev 2) map 0.9` | 3D: both houses stand as models with roofs, the lab is the fallback box (left out in S0), flowers and ground flat |
+| Ruby, Rustboro (0.3) at (16, 30) | `... map 0.3` | 3D: the town's buildings stand as models / boxes, the lamp posts and NPCs as sprites |
+| Sapphire, Littleroot (0.9) | `vx: rom anchors ok (AXPE rev 2)`, `... (AXPE rev 2) map 0.9` | same as Ruby |
+| Ruby with the header revision forged to 1 | `vx: not detected: game AXVE rev 1 (supported: ...)` | plain 2D, no crash |
+
+No "chunk scratch full" line in any run. Memory: the newlib malloc high-water mark is 36,773,888 B with the renderer on
+(the same in all three towns) against 35,602,432 B with it refused (the rev-1 run), +1.1 MiB; linear free at voxel init
+14,174,208 B, VRAM free after the first atlas 205,824 B. The Old 3DS was not tried (S0: on-device romgen ran out of
+memory there).
+
+Looks honestly: trees, shrubs and props are flat until S3 (no RS tables yet); RS-only buildings without a recipe (the
+lab, Rustboro's stone set, Devon, the gym) are boxes or missing until S4. Shots are kept locally, not committed
+(ROM-derived art): `evidence/s2-ruby-littleroot.top.png`, `s2-ruby-rustboro.top.png`, `s2-sapphire-littleroot.top.png`,
+`s2-ruby-rev1-refused.top.png`; the voxel.log of each run is committed beside them (`*.voxel.log.txt`).

@@ -122,7 +122,7 @@ const GameProfile *gameprof_detect(const uint8_t *rom, size_t size);
 
 /* Phase 34 G1: the same detection for romgen (and for vx_host's anchor self-check): it also returns the FireRed and
  * LeafGreen rev 1 rows, and (Phase 35 S0) the Ruby / Sapphire rev 2 rows. gameprof_detect() keeps refusing a row whose
- * `rendererOn` is not set (Ruby / Sapphire until their renderer slice), so the renderer is not enabled by accident. */
+ * `rendererOn` is not set, so the renderer is not enabled by accident (every row has it since Phase 35 S2). */
 const GameProfile *gameprof_detect_romgen(const uint8_t *rom, size_t size);
 
 /* The Emerald row. Its behaviour sets are filled on first use from the existing predicates; the first call

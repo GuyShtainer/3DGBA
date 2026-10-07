@@ -111,12 +111,13 @@ static void TestGate(void)
             rom[0xBC] = (uint8_t)rev;
             p = gameprof_detect_romgen(rom, sizeof rom);
             CHECK((p != NULL) == (rev == 2));
+            CHECK((gameprof_detect(rom, sizeof rom) != NULL) == (rev == 2));   /* S2: the renderer too, rev 2 only */
         }
         rom[0xBC] = 2;
         p = gameprof_detect_romgen(rom, sizeof rom);
         CHECK(p != NULL && p->game == (c == 0 ? GP_RUBY : GP_SAPPHIRE) && gp_is_rs(p) && !gp_is_kanto(p));
         CHECK(p != NULL && memcmp(p->dataSubdir, codes[c], 4) == 0 && p->dataSubdir[4] == 0);
-        CHECK(gameprof_detect(rom, sizeof rom) == NULL);                /* S0 is romgen-only: the renderer stays off */
+        CHECK(gameprof_detect(rom, sizeof rom) == p && p->rendererOn);  /* S2: the renderer detects RS rev 2 */
         CHECK(rg_world_open(&w, rom, sizeof rom) == RG_ERR_GAME);       /* header ok, tables outside this tiny buffer */
     }
     CHECK(!gp_is_rs(gameprof_emerald()) && !gp_is_kanto(gameprof_emerald()));
@@ -140,7 +141,7 @@ static void TestRows(void)
         if (p == NULL) continue;
         CHECK(p->mapGroups == sCart[c].mapGroups && p->mapLayouts == sCart[c].mapLayouts);
         CHECK(p->tsGeneral == sCart[c].general && p->tsBuilding == sCart[c].building);
-        CHECK(p->groupCount == 34 && p->layoutSlots == 332 && !p->rendererOn);
+        CHECK(p->groupCount == 34 && p->layoutSlots == 332 && p->rendererOn);   /* S2: the renderer is on */
         CHECK(p->groupSizes != NULL && memcmp(p->groupSizes, kGroupSizes, sizeof kGroupSizes) == 0);
         CHECK(p->nPrimMetatiles == e->nPrimMetatiles && p->nPrimTiles == e->nPrimTiles && p->nPrimPals == e->nPrimPals);
         CHECK(p->nMetatilesTotal == e->nMetatilesTotal && p->tilesetAttrOff == e->tilesetAttrOff && p->attrBytes == e->attrBytes);

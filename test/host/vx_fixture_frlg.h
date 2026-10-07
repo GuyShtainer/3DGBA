@@ -75,7 +75,7 @@ static void FrBuildAt(FrState *s, const uint8_t *rom, const GameProfile *p, cons
 }
 
 /* FireRed / LeafGreen: Pallet Town (3, 0). */
-static void FrBuild(FrState *s, const uint8_t *rom, const GameProfile *p, const struct MapHeader *hdr, int px, int py)
+static inline void FrBuild(FrState *s, const uint8_t *rom, const GameProfile *p, const struct MapHeader *hdr, int px, int py)
 {
     FrBuildAt(s, rom, p, hdr, 3, 0, px, py);
 }
