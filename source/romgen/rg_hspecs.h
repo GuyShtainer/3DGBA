@@ -170,11 +170,13 @@ extern const RgSideCfg rg_h_fortree_hut_side[2];
 /* ---- Pacifidlog Town (layout 16): the five huts are one drawing, one model ---- */
 #define L_H_PACIFIDLOG 16, 0x0CDAE2A1u
 #define H_SEA {0x170}, 1
+/* the footprint fill is ground[0]: the plank deck (0x221, under all five huts) goes first, the open sea second */
+#define H_PACIFIDLOG_DECK {0x221, 0x170}, 2
 bool rg_h_pacifidlog_hut(const RgSpec *s, int a0, int a1, RgPartList *out);
 extern const RgExact rg_h_pacifidlog_hut_exact[3];
 
 #define RG_HSPECS_PACIFIDLOG_ROWS                                                                                    \
-    {"pacifidlog_hut", RG_SPEC_DIRECT, L_H_PACIFIDLOG, {15, 10, 3, 4}, {0, 0}, H_SEA, rg_h_pacifidlog_hut_exact,    \
+    {"pacifidlog_hut", RG_SPEC_DIRECT, L_H_PACIFIDLOG, {15, 10, 3, 4}, {0, 0}, H_PACIFIDLOG_DECK, rg_h_pacifidlog_hut_exact,    \
      3, rg_h_pacifidlog_hut, 0, 0, NULL},
 
 #endif

@@ -34,8 +34,9 @@ static int sChecks, sFails, sSkipped;
 #define RELIEF_SHA1 "215a12d9c4ee8f4747e66d895f37d6ed1f8c4b5c"
 /* S4: a03a3b74 -> 40135582 (oldale_house and the Rustboro set repinned to the RS layouts, rs_littleroot_lab in the lab);
  * Phase 36 H1: 40135582 -> 91257d8b (21 Hoenn models: Dewford, Mauville, Verdanturf, Fallarbor, Slateport);
- * Phase 36 H2: 91257d8b -> 3eafee01 (4 Hoenn models: Fortree, Lavaridge, Pacifidlog) */
-#define BUILDINGS_SHA1 "3eafee01fb3c7b4654a195718bfab93343cd27e8"
+ * Phase 36 H2: 91257d8b -> 3eafee01 (4 Hoenn models: Fortree, Lavaridge, Pacifidlog)
+ * Phase 36 H2: 3eafee01 -> 7257e9b6 (Pacifidlog hut footprint filled with the deck, not the sea) */
+#define BUILDINGS_SHA1 "7257e9b610db837a400de851120a221bfd826120"
 #define LITTLEROOT_LAYOUT 10u      /* the town whose two houses match Emerald's pins */
 
 static const uint8_t kGroupSizes[34] = {54, 5, 5, 6, 7, 7, 8, 7, 7, 13, 8, 17, 10, 24, 13, 13, 14, 2, 2, 2, 3, 1, 1,
