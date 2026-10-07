@@ -254,7 +254,7 @@ static const RgExact kPortExact[8] = {
 
 #define L_FOUR 233, 0xF927FC39u
 #define L_FIVE 234, 0x2AA31FFFu
-#define L_RESORT 246, 0u
+#define L_RESORT 246, 0x7C0F16BEu
 #define L_MEADOW 248, 0u
 
 /* A gabled house seen from the front, as one profile prism: the facade rows wallTop..front (a wall front - wallTop
@@ -372,6 +372,22 @@ static const RgSideCfg kFourHarborSide[1] = {
  * reflections 710 / 726 / 718 / 734 / 711 / 727 / 719 / 735 against Four's 646 / 662 / 654 / 670 / 647 / 663 / 655), over
  * the sea metatile 299. So it shares Four's builder, exact rects and side tiles under its own pin and rect. */
 
+/* ==== KS2: Resort Gorgeous (layout 246, map 3/54) ======================================================================= */
+
+/* ---- k_lorelei_house: 80x64 art (rect (38,5), 5x4 on layout 246; door (39,8)) --------------------------------------- */
+/* Lorelei's house: a brown tiled roof under a row of white and grey battlement pillars (rows 2-9), over a pale facade
+ * with a barred door and a window. Rows: grass 0-1, the battlements 2-9, the roof lip 9-19, the roof 20-42, the dark eave
+ * 43-45, the facade 46-64. The gabled house of sv_gable plus its parapet. */
+static bool k_lorelei_house(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    (void)spec; (void)a0; (void)a1;
+    return sv_gable(out, "house", 80, 64, 46, 43, 9, 2);
+}
+static const RgExact kLoreleiExact[1] = {{0, 2, 80, 64, false}};
+static const RgSideCfg kLoreleiSide[1] = {
+    {NULL, {73, 50, 76, 56}, {77, 24, 79, 28}, 21, true},
+};
+
 const RgSpec rg_kspecs_sevii[] = {
     {"k_sevii_house", RG_SPEC_DIRECT, L_ONE, {18, 6, 5, 4}, {1, 4}, SV_GROUND, 1, kHouseExact, 1,
      k_sevii_house, 0, 0, kHouseSide},
@@ -397,5 +413,7 @@ const RgSpec rg_kspecs_sevii[] = {
      k_four_harbor, 0, 0, kFourHarborSide},
     {"k_five_harbor", RG_SPEC_DIRECT, L_FIVE, {9, 14, 7, 6}, {0, 0}, {299}, 1, kFourHarborExact, 6,
      k_four_harbor, 0, 0, kFourHarborSide},
+    {"k_lorelei_house", RG_SPEC_DIRECT, L_RESORT, {38, 5, 5, 4}, {0, 0}, SV_GROUND, 1, kLoreleiExact, 1,
+     k_lorelei_house, 0, 0, kLoreleiSide},
 };
 const unsigned rg_kspecs_sevii_count = sizeof(rg_kspecs_sevii) / sizeof(rg_kspecs_sevii[0]);
