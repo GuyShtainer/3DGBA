@@ -1,7 +1,9 @@
 /* rg_rsspecs.c -- the Ruby / Sapphire building recipe table (3DGBA, GPLv3). Pure C. See rg_rsspecs.h.
  *
- * No recipe of its own: the rows are Emerald's (rg_bspecs.c, whose Zallax-derived builders keep their MIT notice there),
- * copied, with the interior rows left out and the components expanders pointed at this cartridge's tileset. */
+ * The rows are Emerald's (rg_bspecs.c, whose Zallax-derived builders keep their MIT notice there), copied, with the interior
+ * rows left out and the components expanders pointed at this cartridge's tileset. Phase 35 S4 moves the pins of the rows
+ * whose buildings are unchanged on RS (kRetarget) and puts RS-own recipes in the place of the rows RS draws differently
+ * (kReplace). */
 #include "rg_rsspecs.h"
 
 #include <string.h>
@@ -17,6 +19,28 @@
 static const struct { uint32_t emerald, ruby, sapphire; } kTsMap[] = {
     {0x083DF71Cu, 0x08286D24u, 0x08286CB4u},   /* Petalburg */
     {0x083DF734u, 0x08286D3Cu, 0x08286CCCu},   /* Rustboro */
+};
+
+/* Phase 35 S4: Emerald rows whose layout is not byte-identical on Ruby / Sapphire, but whose building cells are
+ * (ROM-measured: `romgen author ROM art` cell dumps of both carts). Oldale differs from Emerald's in one tree cell (18,3);
+ * Rustboro in 24 cells, none inside a recipe's rect (Devon's entrance posts stand one row higher, two trees and a few path
+ * cells). The row keeps its builder, rect and art gates; only the pin moves to this cartridge's layout. */
+static const struct { const char *name; uint16_t layoutId; uint32_t fnv; } kRetarget[] = {
+    {"oldale_house", 11, 0x37D810BEu},
+    {"rustboro_stone", 4, 0x5FF68C82u},
+    {"rustboro_olive", 4, 0x5FF68C82u},
+    {"gym_rustboro", 4, 0x5FF68C82u},
+    {"devon_corporation", 4, 0x5FF68C82u},
+    {"rustboro_fountain", 4, 0x5FF68C82u},
+};
+
+/* Phase 35 S4: RS-own recipes (rg_rsspecs_<town>.c, the Kanto files' pattern) in the place of an Emerald row whose art gate
+ * fails on this cartridge. */
+extern const RgSpec rg_rsspecs_littleroot[];
+extern const unsigned rg_rsspecs_littleroot_count;
+
+static const struct { const char *name; const RgSpec *rows; const unsigned *count; } kReplace[] = {
+    {"littleroot_lab", rg_rsspecs_littleroot, &rg_rsspecs_littleroot_count},   /* RS draws the lab roof differently */
 };
 
 static RgSpec sTable[2][RG_RSSPECS_MAX];
@@ -41,9 +65,23 @@ static void build(unsigned g, bool sapphire)
     sCount[g] = 0;
     for (i = 0; i < rg_spec_count && sCount[g] < RG_RSSPECS_MAX; i++) {
         RgSpec s = rg_specs[i];
+        unsigned k, j;
 
         if (s.kind == RG_SPEC_INTERIOR)
             continue;
+        for (k = 0; k < sizeof kReplace / sizeof kReplace[0]; k++)
+            if (strcmp(s.name, kReplace[k].name) == 0)
+                break;
+        if (k < sizeof kReplace / sizeof kReplace[0]) {   /* the RS rows, in the Emerald row's place */
+            for (j = 0; j < *kReplace[k].count && sCount[g] < RG_RSSPECS_MAX; j++)
+                sTable[g][sCount[g]++] = kReplace[k].rows[j];
+            continue;
+        }
+        for (k = 0; k < sizeof kRetarget / sizeof kRetarget[0]; k++)
+            if (strcmp(s.name, kRetarget[k].name) == 0) {
+                s.layoutId = kRetarget[k].layoutId;
+                s.layoutFnv = kRetarget[k].fnv;
+            }
         if (s.kind == RG_SPEC_COMPONENTS) {
             if (s.ext == NULL || nComp >= RG_RS_COMP_MAX)
                 continue;
