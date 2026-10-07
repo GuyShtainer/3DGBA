@@ -765,3 +765,26 @@ M4 (Sevii Islands) is complete: every One to Seven Island outdoor map, Navel Roc
 - Fix: `kTowerSide` patches enlarged to the largest flat rects (tower 6x89, pillars 2x34, edge 28x2): 744 triangles. `kSilphSide` likewise (wall (51,14,53,72), roof (4,15,11,76)): 968. check k_trainer_tower and k_saffron_silph PASS (ortho 0/0/0, density empty, side 0 open, round trip ok).
 - FR = LG buildings.bin SHA-1 459645ee... -> b0f63cdcfe902d1bc8a229631cd5872303608478. Not fixed: `k_pokemon_tower` (20464 triangles) and `k_power_plant` (9292) have the same cause; their flat patches are too small to get under the scratch (best 5488 / 5050 triangles).
 - Evidence: look-backlog/evidence/l7-{before,after}-{a,b}.png, l7-silph-{before,after}.png.
+
+## Look L7 follow-up: chunk vertex budget (2026-10-07)
+
+- New `romgen author ROM budget [PCT]` (tools/romgen/rg_budget.{c,h}): every model's triangles/vertices and every
+  chunk's vertices (ground, trees, models) in device order, from an in-process rg_run (relief FULL) read back by the
+  vendored consumer. Before: FR = LG 3 chunks over the 9344 scratch (Pokemon Tower 62874, Power Plant 28512, Lavender
+  3/4 chunk 1,1 10044 with two houses); Emerald 0 over, worst 8982 (96 %, sea props, 0/47 chunk 1,0).
+- Generator: a cap piece on a single-colour patch is one polygon (uv at the patch centre, `~clamp`) instead of one fan
+  per tile repeat (`rg_geom.c`, outdoor models via `RgMesh.flatPatch` in `rg_buildings.c`; interiors untouched). FRLG
+  model triangles 56151 -> 5186 (Tower 20464 -> 176, Plant 9292 -> 282); Emerald six houses -64 each. 455 preview
+  images pixel-identical before/after. After: FR = LG 0 over, worst 2712; Emerald unchanged chunks, worst still 96 %.
+- Gate: `author check` FAILs a model over 3300 vertices (heaviest terrain under a model 5892); new suite
+  `test_romgen_budget` (all three games, each in a child process: in one process FR after Emerald under-counts, 2286 vs
+  2712) fails on any chunk over the scratch; it fails on the pre-fix generator.
+- Pins: FR = LG buildings.bin b0f63cdc -> e9f54cdded903d5caff027d2d9fefdb4114b59b7; Emerald buildings.bin 2929c764 ->
+  ec2f3292ea0ade4dd7d7d913bee8d34d0e5b33b9 (7898476 -> 7870828 B, 80520 -> 79368 vertices). Unchanged: Emerald regions
+  007a370f, signposts 38515605, relief 21a837f0, `--relief ledges` eb25a383; FRLG regions 3716874d, signposts ba2fde45,
+  relief 32c24146.
+- `make -C tools/romgen test`: 28 suites (27 + budget), 0 failures; `vtest`: 9 suites, 0 failures. `check all`: FR 85/85
+  and LG 85/85 PASS; Emerald 30/34 (hedge, mart, lab, rustboro_gym "the placement's cell does not resolve" in the round
+  trip, identical on the pre-change build: pre-existing). Device `make -j8` links 3DGBA.3dsx.
+- Azahar: Tower and Power Plant drawn whole, no "chunk scratch full" in voxel.log (before: 17844 + 234 refused on 3/4,
+  6390 on 3/28). Evidence `look-backlog/evidence/budget-*.png`.
