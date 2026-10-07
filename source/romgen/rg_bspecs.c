@@ -3,6 +3,7 @@
  * (littleroot_house, HOUSE_EXACT, the first two SPECS rows), MIT License - see source/voxel/NOTICE.md.
  * Portions Copyright (c) Dust Zallax, MIT. */
 #include "rg_bspecs.h"
+#include "rg_hspecs.h"
 #include "rg_brooms.h"
 
 #include <math.h>
@@ -837,6 +838,8 @@ const RgSpec rg_specs[] = {
      rg_devon, 0, 0, NULL},
     {"rustboro_fountain", RG_SPEC_DIRECT, L_RUSTBORO, {27, 38, 3, 3}, {0, 0}, RUST_GROUND, kFountainExact, 1,
      rg_fountain, 0, 0, NULL},
+    /* Phase 36: the Hoenn recipes (rg_hspecs.h, our own work), ahead of the interior rows */
+    RG_HSPECS_DEWFORD_ROWS
     /* sp:1296-1375 the 13 interior rows: a room cut into pieces (rg_brooms.c); layout ids and pins as SPEC-S2 3.1 */
     {"pc1f", RG_SPEC_INTERIOR, 61, 0xBBF5FE0Du, {0, 0, 0, 0}, {0, 0}, {0x202}, 1, NULL, 0, NULL, 0, 0, &rg_room_pc1f},
     {"pc2f", RG_SPEC_INTERIOR, 62, 0x2C4488F9u, {0, 0, 0, 0}, {0, 0}, {0x202}, 1, NULL, 0, NULL, 0, 0, &rg_room_pc2f},
