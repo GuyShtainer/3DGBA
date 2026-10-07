@@ -298,7 +298,7 @@ static void TestRealRom(void)
      * (layout 11), the gym in Petalburg (1) and Rustboro (4) */
     {
         unsigned totalPl = 0;
-        int centerPetal = 0, centerOldale = 0, gymL1 = 0, gymL4 = 0, gymRL1 = 0, gymRL4 = 0;
+        int centerPetal = 0, centerOldale = 0, centerPacif = 0, gymL1 = 0, gymL4 = 0, gymRL1 = 0, gymRL4 = 0;
 
         for (i = 0; i < ms.n; i++) {
             const RgSpec *sp = ms.m[i].spec;
@@ -314,6 +314,10 @@ static void TestRealRom(void)
                 if (!strcmp(sp->name, "pokemon_center")) {
                     if (pl.p[k].layout == 1) centerPetal = 1;
                     if (pl.p[k].layout == 11) centerOldale = 1;
+                    if (pl.p[k].layout == 16) {   /* Phase 36 H2: Pacifidlog's centre stands on the deck (0x221), not the sea */
+                        centerPacif = 1;
+                        CHECK(pl.p[k].ground == 0x221);
+                    }
                 }
                 if (!strcmp(sp->name, "gym")) { if (pl.p[k].layout == 1) gymL1 = 1; if (pl.p[k].layout == 4) gymL4 = 1; }
                 if (!strcmp(sp->name, "gym_rustboro")) { if (pl.p[k].layout == 1) gymRL1 = 1; if (pl.p[k].layout == 4) gymRL4 = 1; }
@@ -323,7 +327,7 @@ static void TestRealRom(void)
             totalPl += pl.n;
             rg_placements_free(&pl);
         }
-        CHECK(centerPetal && centerOldale);
+        CHECK(centerPetal && centerOldale && centerPacif);
         /* the gym is placed in layout 1 (by `gym`) and layout 4 (by `gym_rustboro`): Rustboro's copy has its own roof and
          * flanks, so the Petalburg model does not match there and vice versa (separate refs) */
         CHECK(gymL1 && gymRL4 && !gymL4 && !gymRL1);

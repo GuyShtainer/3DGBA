@@ -507,6 +507,44 @@ static int cmp_pos(const void *a, const void *b)
     return x[0] != y[0] ? (x[0] < y[0] ? -1 : 1) : 0;
 }
 
+/* Phase 36 H2: the commonest metatile of the rect and its ring that is walkable and neither water nor a house door, in
+ * first-seen order; -1 when there is none. A hut on a deck or a centre on a pier has mostly sea round it, so the ring's
+ * own winner is water, and the footprint corners the model leaves open showed as sea where the drawing has planks. */
+static int dry_ground(const RgLayout *E, int px, int py, unsigned cw, unsigned ch)
+{
+    const GameProfile *gp = rg_lprof(E);
+    uint16_t count[1024], order[1024];
+    unsigned nOrder = 0, k, best = 0;
+    int xx, yy;
+
+    if (gp == NULL || cw == 0 || ch == 0)
+        return -1;
+    memset(count, 0, sizeof(count));
+    for (yy = py - 1; yy <= py + (int)ch; yy++) {
+        for (xx = px - 1; xx <= px + (int)cw; xx++) {
+            unsigned cell, mt, b;
+
+            if (rg_off(E, xx, yy))
+                continue;
+            cell = rg_rd16(E->blocks + 2u * ((size_t)yy * E->w + (size_t)xx));
+            mt = cell & 0x3FFu;
+            b = rg_attr(E, (uint16_t)mt) & gp->behMask;
+            if ((cell & 0xC00u) != 0 || gp_beh(&gp->water, b) || gp_beh(&gp->houseDoor, b))
+                continue;
+            if (count[mt] == 0)
+                order[nOrder++] = (uint16_t)mt;
+            if (count[mt] < UINT16_MAX)
+                count[mt]++;
+        }
+    }
+    if (nOrder == 0)
+        return -1;
+    for (k = 1; k < nOrder; k++)
+        if (count[order[k]] > count[order[best]])
+            best = k;
+    return (int)order[best];
+}
+
 /* One candidate (px, py) in layout E (gen:1117-1172): a placement is pushed when every core cell matches. */
 static RgErr try_place(const RgWorld *w, const FindPlan *fp, PairCache *pc, const RgLayout *E, int px, int py,
                        RgPlacementList *out)
@@ -561,6 +599,12 @@ static RgErr try_place(const RgWorld *w, const FindPlan *fp, PairCache *pc, cons
             if (ring[b][1] > ring[best][1])
                 best = b;
         ground = (uint16_t)ring[best][0];
+        if (gp_beh(&rg_lprof(E)->water, rg_attr(E, ground) & rg_lprof(E)->behMask)) {
+            int dry = dry_ground(E, px, py, cw, ch);   /* Phase 36 H2: a building in the sea stands on planks */
+
+            if (dry >= 0)
+                ground = (uint16_t)dry;
+        }
     }
     memset(&pl, 0, sizeof(pl));
     pl.layout = E->id;
