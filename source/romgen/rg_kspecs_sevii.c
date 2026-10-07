@@ -249,6 +249,161 @@ static const RgExact kPortExact[8] = {
     {96, 74, 112, 98, false},
 };
 
+/* ==== KS2: Four Island (layout 233, map 3/15) and Five Island (layout 234, map 3/16) =================================== */
+/* Four Island's Center (17,18) and Mart (21,24), Five Island's Center are the K2 landmark models (k_center / k_mart). */
+
+#define L_FOUR 233, 0xF927FC39u
+#define L_FIVE 234, 0x2AA31FFFu
+#define L_RESORT 246, 0x7C0F16BEu
+#define L_MEADOW 248, 0x70F9C5B3u
+
+/* A gabled house seen from the front, as one profile prism: the facade rows wallTop..front (a wall front - wallTop
+ * high), a dark eave strip eaveTop..wallTop, and the roof as a 45-degree slope from art row eaveTop up to roofTop (the
+ * rows run z - y). `paraTop` (-1 = none) adds a thin parapet standing on the roof's back edge, drawn from art rows
+ * paraTop..roofTop. Every house of KS2 (orange, purple, the Five Island edge house, Lorelei's house, the Rocket
+ * Warehouse) is this shape with other rows. */
+static bool sv_gable(RgPartList *out, const char *name, double width, double front, double wallTop, double eaveTop,
+                     double roofTop, double paraTop)
+{
+    double pts[7][2], rows[7][2];
+    unsigned n = 0;
+    double y1 = front - wallTop;            /* the wall top */
+    double y2 = front - eaveTop;            /* the eave top, where the roof starts */
+    double d = (eaveTop - roofTop) / 2.0;   /* the 45-degree roof: d deep and d high */
+    double rise = paraTop >= 0 ? roofTop - paraTop : 0;
+
+    memset(rows, 0, sizeof(rows));
+    sv_pt(pts, n, front, 0);
+    rows[n][0] = wallTop; rows[n][1] = front;
+    n++;
+    sv_pt(pts, n, front, y1);
+    rows[n][0] = eaveTop; rows[n][1] = wallTop;
+    n++;
+    sv_pt(pts, n, front, y2);
+    rows[n][0] = roofTop; rows[n][1] = eaveTop;
+    n++;
+    sv_pt(pts, n, front - d, y2 + d);
+    if (rise > 0) {
+        rows[n][0] = paraTop; rows[n][1] = roofTop;
+        n++;
+        sv_pt(pts, n, front - d, y2 + d + rise);
+    }
+    n++;
+    sv_pt(pts, n, front - d - 7, y2 + d + rise);
+    n++;
+    sv_pt(pts, n, front - d - 7, 0);
+    n++;
+    return sv_profile(out, name, 0, width, n, (const double (*)[2])pts, (const double (*)[2])rows) && !out->failed;
+}
+
+/* ---- k_four_house_orange: 64x64 art (rect (11,10), 4x4 on layout 233; door (12,13)) --------------------------------- */
+/* Four Island's orange-roofed house: grass 0-8, the yellow-lipped orange roof 8-42, the dark eave 42-46, a blue door and
+ * a window in a pale facade 46-64. The same rows as the One Island house, at 64 wide. */
+static bool k_four_house_orange(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    (void)spec; (void)a0; (void)a1;
+    return sv_gable(out, "house", 64, 64, 46, 42, 8, -1);
+}
+static const RgExact kFourOrangeExact[1] = {{0, 8, 64, 64, false}};
+static const RgSideCfg kFourOrangeSide[1] = {
+    {NULL, {10, 50, 14, 60}, {10, 24, 14, 28}, 22, true},
+};
+
+/* ---- k_four_house: 80x64 art (rect (24,23), 5x4 on layout 233; door (25,26)) ---------------------------------------- */
+/* The lilac-roofed house that stands on Four Island (three times) and Five Island: rows 1-3 of the rect are the same cells
+ * everywhere (649-653 / 657-661 / 665-669), only the top row differs (a grass roof-top cell, a cliff-side one), so
+ * matchRows is (1, 4) and the art is taken from the grass-topped one at (24,23). Grass 0-8, the pale roof lip 9-19,
+ * the lilac roof 20-42, the dark eave 43-45, a barred door and a window in the facade 46-64. */
+static bool k_four_house(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    (void)spec; (void)a0; (void)a1;
+    return sv_gable(out, "house", 80, 64, 46, 43, 9, -1);
+}
+static const RgExact kFourPurpleExact[1] = {{0, 9, 80, 64, false}};
+static const RgSideCfg kFourPurpleSide[1] = {
+    {NULL, {50, 58, 54, 60}, {77, 24, 79, 28}, 21, true},
+};
+
+/* ---- k_five_house_edge: 48x64 art (rect (21,6), 3x4 on layout 234; door (22,9)) ------------------------------------- */
+/* Five Island's lilac house at the map's east edge: the same house as k_four_house, but its right two cells lie outside
+ * the 24-wide map, so the rect is only three cells (48 px) wide and the top row holds bushes. Same rows as k_four_house
+ * (roof lip 9-19, roof 20-42, eave 43-45, facade 46-64) at width 48; the bushes (rows 0-8) are above the exact rect. */
+static bool k_five_house_edge(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    (void)spec; (void)a0; (void)a1;
+    return sv_gable(out, "house", 48, 64, 46, 43, 9, -1);
+}
+static const RgExact kFiveEdgeExact[1] = {{0, 9, 48, 64, false}};
+static const RgSideCfg kFiveEdgeSide[1] = {
+    {NULL, {41, 58, 45, 60}, {45, 24, 47, 28}, 21, true},
+};
+
+/* ---- k_four_harbor: 112x96 art (rect (7,28), 7x6 on layout 233; door (10,28)) -------------------------------------- */
+/* Four Island's harbor: the Two Island ferry (sv_ferry's blocks) with the map's pier cut 17 rows lower, so the rect is
+ * 6 cells tall and starts at the pier's deck. Rows (Two Island's minus 17): the plank pier x 32-80 rows 0-11 with its
+ * ramp 11-16, the red roof 16-63 over the grey hull 63-87 (x 16-96), and a crane at each side (x 0-16 and 96-112, rows
+ * 25-49 and 57-81). The sea quarters (metatile 627) are the ground; the reflections under the cranes are not modelled. */
+static bool sv_ferry_cut(RgPartList *out, double dy)
+{
+    return sv_block(out, "pier", 32, 80, 33 - dy, 28 - dy, 0) && sv_block(out, "ferry", 16, 96, 104 - dy, 80 - dy, 33 - dy) &&
+           sv_block(out, "crane_nw", 0, 16, 66 - dy, 56 - dy, 42 - dy) && sv_block(out, "crane_sw", 0, 16, 98 - dy, 88 - dy, 74 - dy) &&
+           sv_block(out, "crane_ne", 96, 112, 66 - dy, 56 - dy, 42 - dy) && sv_block(out, "crane_se", 96, 112, 98 - dy, 88 - dy, 74 - dy) &&
+           !out->failed;
+}
+static bool k_four_harbor(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    (void)spec; (void)a0; (void)a1;
+    return sv_ferry_cut(out, 17);
+}
+static const RgExact kFourHarborExact[6] = {
+    {32, 0, 80, 16, false},         /* the pier deck and its ramp */
+    {16, 16, 96, 87, false},        /* the ferry: roof, hull, sign */
+    {0, 25, 16, 49, false},         /* the west cranes (the water reflections below each are not modelled) */
+    {0, 57, 16, 81, false},
+    {96, 25, 112, 49, false},       /* the east cranes */
+    {96, 57, 112, 81, false},
+};
+static const RgSideCfg kFourHarborSide[1] = {
+    {NULL, {20, 70, 24, 74}, {18, 24, 22, 30}, 999, true},
+};
+
+/* ---- k_five_harbor: 112x96 art (rect (9,14), 7x6 on layout 234; door (12,14)) -------------------------------------- */
+/* Five Island's harbor: the same pier, ferry and cranes as k_four_harbor (the cells match except the crane-side sea
+ * reflections 710 / 726 / 718 / 734 / 711 / 727 / 719 / 735 against Four's 646 / 662 / 654 / 670 / 647 / 663 / 655), over
+ * the sea metatile 299. So it shares Four's builder, exact rects and side tiles under its own pin and rect. */
+
+/* ==== KS2: Resort Gorgeous (layout 246, map 3/54) ======================================================================= */
+
+/* ---- k_lorelei_house: 80x64 art (rect (38,5), 5x4 on layout 246; door (39,8)) --------------------------------------- */
+/* Lorelei's house: a brown tiled roof under a row of white and grey battlement pillars (rows 2-9), over a pale facade
+ * with a barred door and a window. Rows: grass 0-1, the battlements 2-9, the roof lip 9-19, the roof 20-42, the dark eave
+ * 43-45, the facade 46-64. The gabled house of sv_gable plus its parapet. */
+static bool k_lorelei_house(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    (void)spec; (void)a0; (void)a1;
+    return sv_gable(out, "house", 80, 64, 46, 43, 9, 2);
+}
+static const RgExact kLoreleiExact[1] = {{0, 2, 80, 64, false}};
+static const RgSideCfg kLoreleiSide[1] = {
+    {NULL, {73, 50, 76, 56}, {77, 24, 79, 28}, 21, true},
+};
+
+/* ==== KS2: Five Isle Meadow (layout 248, map 3/56) ====================================================================== */
+
+/* ---- k_rocket_warehouse: 96x80 art (rect (9,17), 6x5 on layout 248; door (12,21)) ----------------------------------- */
+/* The Rocket Warehouse: a wide brown-roofed hall with a row of treetops along its roof ridge (rows 0-8). Rows: the ridge
+ * trees 0-8, the roof 8-53 (an orange sheet with a brown rim), the dark eave 53-56, a tan wall with a glass double door
+ * (x 48-64) and a bush at the lower left 56-80. The sv_gable shape with a taller wall (24) and a parapet of 8 rows. */
+static bool k_rocket_warehouse(const RgSpec *spec, int a0, int a1, RgPartList *out)
+{
+    (void)spec; (void)a0; (void)a1;
+    return sv_gable(out, "hall", 96, 80, 56, 53, 8, 0);
+}
+static const RgExact kWarehouseExact[1] = {{0, 0, 96, 80, false}};
+static const RgSideCfg kWarehouseSide[1] = {
+    {NULL, {88, 60, 92, 70}, {88, 14, 91, 40}, 27, true},
+};
+
 const RgSpec rg_kspecs_sevii[] = {
     {"k_sevii_house", RG_SPEC_DIRECT, L_ONE, {18, 6, 5, 4}, {1, 4}, SV_GROUND, 1, kHouseExact, 1,
      k_sevii_house, 0, 0, kHouseSide},
@@ -264,5 +419,19 @@ const RgSpec rg_kspecs_sevii[] = {
      k_sevii_house, 0, 0, kHouseRedSide},
     {"k_three_port", RG_SPEC_DIRECT, L_PORT, {9, 12, 7, 7}, {0, 0}, SV_SEA_PORT, 4, kPortExact, 8,
      k_three_port, 0, 0, kTwoHarborSide},
+    {"k_four_house_orange", RG_SPEC_DIRECT, L_FOUR, {11, 10, 4, 4}, {0, 0}, SV_GROUND, 1, kFourOrangeExact, 1,
+     k_four_house_orange, 0, 0, kFourOrangeSide},
+    {"k_four_house", RG_SPEC_DIRECT, L_FOUR, {24, 23, 5, 4}, {1, 4}, SV_GROUND, 1, kFourPurpleExact, 1,
+     k_four_house, 0, 0, kFourPurpleSide},
+    {"k_five_house_edge", RG_SPEC_DIRECT, L_FIVE, {21, 6, 3, 4}, {0, 0}, SV_GROUND, 1, kFiveEdgeExact, 1,
+     k_five_house_edge, 0, 0, kFiveEdgeSide},
+    {"k_four_harbor", RG_SPEC_DIRECT, L_FOUR, {7, 28, 7, 6}, {0, 0}, {627}, 1, kFourHarborExact, 6,
+     k_four_harbor, 0, 0, kFourHarborSide},
+    {"k_five_harbor", RG_SPEC_DIRECT, L_FIVE, {9, 14, 7, 6}, {0, 0}, {299}, 1, kFourHarborExact, 6,
+     k_four_harbor, 0, 0, kFourHarborSide},
+    {"k_lorelei_house", RG_SPEC_DIRECT, L_RESORT, {38, 5, 5, 4}, {0, 0}, SV_GROUND, 1, kLoreleiExact, 1,
+     k_lorelei_house, 0, 0, kLoreleiSide},
+    {"k_rocket_warehouse", RG_SPEC_DIRECT, L_MEADOW, {9, 17, 6, 5}, {0, 0}, SV_GROUND, 1, kWarehouseExact, 1,
+     k_rocket_warehouse, 0, 0, kWarehouseSide},
 };
 const unsigned rg_kspecs_sevii_count = sizeof(rg_kspecs_sevii) / sizeof(rg_kspecs_sevii[0]);
