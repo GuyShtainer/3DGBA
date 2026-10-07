@@ -147,4 +147,37 @@ extern const RgSideCfg rg_h_shipyard_side[1];
     {"battle_tent_slateport", RG_SPEC_DIRECT, L_H_SLATEPORT, {8, 8, 5, 5}, {0, 0}, H_SLATE_GROUND,                 \
      rg_h_battle_tent_v_exact, 2, rg_h_battle_tent_v, 0, 0, rg_h_battle_tent_v_side},
 
+/* ======== Phase 36 slice H2 ======== */
+
+/* ---- Fortree City (layout 5) ---- */
+#define L_H_FORTREE 5, 0xC5D353C6u
+#define H_FOREST {0x0C6}, 1
+bool rg_h_fortree_hut(const RgSpec *s, int a0, int a1, RgPartList *out);
+extern const RgExact rg_h_fortree_hut_exact[3];
+extern const RgSideCfg rg_h_fortree_hut_side[2];
+
+#define RG_HSPECS_FORTREE_ROWS                                                                                       \
+    {"fortree_hut", RG_SPEC_DIRECT, L_H_FORTREE, {8, 1, 5, 3}, {1, 3}, H_FOREST, rg_h_fortree_hut_exact, 3,         \
+     rg_h_fortree_hut, 0, 0, rg_h_fortree_hut_side},                                                                 \
+    {"gym_fortree", RG_SPEC_DIRECT, L_H_FORTREE, {19, 7, 6, 5}, {0, 0}, H_GRASS1, kGymExact, 4, rg_gym, 0, 0, NULL},
+
+/* ---- Lavaridge Town (layout 13) ---- */
+#define L_H_LAVARIDGE 13, 0x306B069Fu
+#define RG_HSPECS_LAVARIDGE_ROWS                                                                                     \
+    {"gym_lavaridge", RG_SPEC_DIRECT, L_H_LAVARIDGE, {2, 11, 6, 5}, {0, 0}, H_GRASS1, kGymExact, 4, rg_gym, 0, 0,   \
+     NULL},
+
+/* ---- Pacifidlog Town (layout 16): the five huts are one drawing, one model ---- */
+#define L_H_PACIFIDLOG 16, 0x0CDAE2A1u
+#define H_SEA {0x170}, 1
+/* the plank deck (0x221, under all five huts) and the open sea are both ground, not hut art; the footprint fill
+ * comes from try_place (rg_buildings.c), which picks the planks for a building in the sea */
+#define H_PACIFIDLOG_DECK {0x221, 0x170}, 2
+bool rg_h_pacifidlog_hut(const RgSpec *s, int a0, int a1, RgPartList *out);
+extern const RgExact rg_h_pacifidlog_hut_exact[3];
+
+#define RG_HSPECS_PACIFIDLOG_ROWS                                                                                    \
+    {"pacifidlog_hut", RG_SPEC_DIRECT, L_H_PACIFIDLOG, {15, 10, 3, 4}, {0, 0}, H_PACIFIDLOG_DECK, rg_h_pacifidlog_hut_exact,    \
+     3, rg_h_pacifidlog_hut, 0, 0, NULL},
+
 #endif

@@ -507,6 +507,44 @@ static int cmp_pos(const void *a, const void *b)
     return x[0] != y[0] ? (x[0] < y[0] ? -1 : 1) : 0;
 }
 
+/* Phase 36 H2: the commonest metatile of the rect and its ring that is walkable and neither water nor a house door, in
+ * first-seen order; -1 when there is none. A hut on a deck or a centre on a pier has mostly sea round it, so the ring's
+ * own winner is water, and the footprint corners the model leaves open showed as sea where the drawing has planks. */
+static int dry_ground(const RgLayout *E, int px, int py, unsigned cw, unsigned ch)
+{
+    const GameProfile *gp = rg_lprof(E);
+    uint16_t count[1024], order[1024];
+    unsigned nOrder = 0, k, best = 0;
+    int xx, yy;
+
+    if (gp == NULL || cw == 0 || ch == 0)
+        return -1;
+    memset(count, 0, sizeof(count));
+    for (yy = py - 1; yy <= py + (int)ch; yy++) {
+        for (xx = px - 1; xx <= px + (int)cw; xx++) {
+            unsigned cell, mt, b;
+
+            if (rg_off(E, xx, yy))
+                continue;
+            cell = rg_rd16(E->blocks + 2u * ((size_t)yy * E->w + (size_t)xx));
+            mt = cell & 0x3FFu;
+            b = rg_attr(E, (uint16_t)mt) & gp->behMask;
+            if ((cell & 0xC00u) != 0 || gp_beh(&gp->water, b) || gp_beh(&gp->houseDoor, b))
+                continue;
+            if (count[mt] == 0)
+                order[nOrder++] = (uint16_t)mt;
+            if (count[mt] < UINT16_MAX)
+                count[mt]++;
+        }
+    }
+    if (nOrder == 0)
+        return -1;
+    for (k = 1; k < nOrder; k++)
+        if (count[order[k]] > count[order[best]])
+            best = k;
+    return (int)order[best];
+}
+
 /* One candidate (px, py) in layout E (gen:1117-1172): a placement is pushed when every core cell matches. */
 static RgErr try_place(const RgWorld *w, const FindPlan *fp, PairCache *pc, const RgLayout *E, int px, int py,
                        RgPlacementList *out)
@@ -561,6 +599,12 @@ static RgErr try_place(const RgWorld *w, const FindPlan *fp, PairCache *pc, cons
             if (ring[b][1] > ring[best][1])
                 best = b;
         ground = (uint16_t)ring[best][0];
+        if (gp_beh(&rg_lprof(E)->water, rg_attr(E, ground) & rg_lprof(E)->behMask)) {
+            int dry = dry_ground(E, px, py, cw, ch);   /* Phase 36 H2: a building in the sea stands on planks */
+
+            if (dry >= 0)
+                ground = (uint16_t)dry;
+        }
     }
     memset(&pl, 0, sizeof(pl));
     pl.layout = E->id;
@@ -1095,7 +1139,8 @@ static size_t fail(RgBuildStats *st, RgErr e, const char *field)
 }
 
 /* gen:1454-1482 ground_variants: every metatile a props model stands on, less the quarters of its upper layer the
- * model stands for, keyed by (tileset, metatile, quarters); the first layout (model order, then `at` order) wins. */
+ * model stands for, keyed by (tileset, metatile, quarters); the first layout (model order, then `at` order) wins.
+ * Phase 36 H2: and every water cell of a building (water_quads), at each placement where it is water. */
 typedef struct Variant { uint16_t lid, mt; uint8_t q; } Variant;
 typedef struct VKey { uint32_t ts; uint16_t mt; uint8_t q; uint16_t lid; } VKey;
 
@@ -1108,7 +1153,42 @@ static int cmp_variant(const void *a, const void *b)
     return x->q != y->q ? (x->q < y->q ? -1 : 1) : 0;
 }
 
-static RgErr ground_variants(const RgWorld *w, const RgBuildModels *ms, Variant **out, unsigned *n)
+/* Phase 36 H2: the cells of a building that are water at one of its placements - a Pacifidlog hut's roof, drawn over the
+ * sea north of the deck it stands on. Their ground is the metatile less its whole upper layer (0xF): the sea, and not the
+ * placement's one ground, the planks. *out stays NULL when no cell is water; props models (their own quads) and
+ * interiors keep their rules. */
+static bool cell_is_water(const RgLayout *E, int x, int y)
+{
+    return !rg_off(E, x, y) && gp_beh(&rg_lprof(E)->water, rg_behaviour(E, x, y));
+}
+
+static RgErr water_quads(const RgWorld *w, const RgBuildModel *m, const RgPlacementList *pl, uint8_t **out)
+{
+    unsigned cells = (unsigned)m->w * m->h, i, k;
+
+    *out = NULL;
+    if (m->quads != NULL || m->nAt > 0 || m->spec->kind == RG_SPEC_INTERIOR)
+        return RG_OK;
+    for (i = 0; i < pl->n; i++) {
+        const RgLayout *E;
+
+        if (pl->p[i].layout == 0 || pl->p[i].layout > w->layoutCount)
+            continue;
+        E = &w->layouts[pl->p[i].layout - 1];
+        for (k = 0; k < cells; k++) {
+            if ((m->owned != NULL && !m->owned[k]) ||
+                !cell_is_water(E, pl->p[i].px + (int)(k % m->w), pl->p[i].py + (int)(k / m->w)))
+                continue;
+            if (*out == NULL && (*out = (uint8_t *)calloc(cells, 1)) == NULL)
+                return RG_ERR_NOMEM;
+            (*out)[k] = 0xFu;
+        }
+    }
+    return RG_OK;
+}
+
+static RgErr ground_variants(const RgWorld *w, const RgBuildModels *ms, const RgPlacementList *pls, uint8_t *const *wq,
+                             Variant **out, unsigned *n)
 {
     VKey *keys = NULL;
     unsigned nKeys = 0, capKeys = 0, mi, a, k;
@@ -1117,24 +1197,33 @@ static RgErr ground_variants(const RgWorld *w, const RgBuildModels *ms, Variant 
     *n = 0;
     for (mi = 0; mi < ms->n; mi++) {
         const RgBuildModel *m = &ms->m[mi];
+        const uint8_t *quads = m->nAt > 0 ? m->quads : wq[mi];
+        unsigned nPos = m->nAt > 0 ? m->nAt : (wq[mi] != NULL ? pls[mi].n : 0u);
 
-        for (a = 0; a < m->nAt; a++) {
-            const RgLayout *E = &w->layouts[m->at[a].lid - 1];
+        for (a = 0; a < nPos; a++) {
+            unsigned lid = m->nAt > 0 ? m->at[a].lid : pls[mi].p[a].layout;
+            int ax = m->nAt > 0 ? m->at[a].x : pls[mi].p[a].px, ay = m->nAt > 0 ? m->at[a].y : pls[mi].p[a].py;
+            const RgLayout *E;
 
+            if (lid == 0 || lid > w->layoutCount)
+                continue;
+            E = &w->layouts[lid - 1];
             for (k = 0; k < (unsigned)m->w * m->h; k++) {
                 int x, y;
                 unsigned mt, q, t;
                 uint32_t ts;
 
-                if (m->quads[k] == 0)
+                if (quads[k] == 0)
                     continue;
-                x = m->at[a].x + (int)(k % m->w);
-                y = m->at[a].y + (int)(k / m->w);
+                x = ax + (int)(k % m->w);
+                y = ay + (int)(k / m->w);
+                if (m->nAt == 0 && !cell_is_water(E, x, y))
+                    continue;                           /* this copy draws something else there: its own ground */
                 if (x < 0 || y < 0 || x >= (int)E->w || y >= (int)E->h)
                     continue;                           /* across a seam: the map next door draws it */
                 mt = rg_rd16(E->blocks + 2u * ((size_t)y * E->w + (size_t)x)) & 0x3FFu;
                 ts = mt < rg_lprof(E)->nPrimMetatiles ? E->ts[0]->addr : E->ts[1]->addr;
-                q = m->quads[k];
+                q = quads[k];
                 for (t = 0; t < nKeys; t++)
                     if (keys[t].ts == ts && keys[t].mt == mt && keys[t].q == q)
                         break;
@@ -1189,6 +1278,7 @@ size_t rg_buildings_write(const RgWorld *w, const RgBuildModels *models, uint8_t
     RgMaskSet masks;
     Variant *variants = NULL;
     unsigned nVariants = 0;
+    uint8_t **wq = NULL;
     int (*crop)[4] = NULL;
     PageModel *pms = NULL;
     unsigned nPms = 0, capPms = 0;
@@ -1210,7 +1300,8 @@ size_t rg_buildings_write(const RgWorld *w, const RgBuildModels *models, uint8_t
     recCount = (uint32_t *)calloc(nm ? nm : 1u, 4);
     recHeights = (uint32_t *)calloc(nm ? nm : 1u, 4);
     crop = (int (*)[4])calloc(nm ? nm : 1u, sizeof(*crop));
-    if (pls == NULL || recFirst == NULL || recCount == NULL || recHeights == NULL || crop == NULL) {
+    wq = (uint8_t **)calloc(nm ? nm : 1u, sizeof(*wq));
+    if (pls == NULL || recFirst == NULL || recCount == NULL || recHeights == NULL || crop == NULL || wq == NULL) {
         result = fail(st, RG_ERR_NOMEM, "alloc");
         goto cleanup;
     }
@@ -1220,6 +1311,11 @@ size_t rg_buildings_write(const RgWorld *w, const RgBuildModels *models, uint8_t
         e = rg_find_placements(w, &models->m[mi], &pls[mi]);
         if (e != RG_OK) {
             result = fail(st, e, "find_placements");
+            goto cleanup;
+        }
+        e = water_quads(w, &models->m[mi], &pls[mi], &wq[mi]);
+        if (e != RG_OK) {
+            result = fail(st, e, "water_quads");
             goto cleanup;
         }
         {
@@ -1304,7 +1400,7 @@ size_t rg_buildings_write(const RgWorld *w, const RgBuildModels *models, uint8_t
                 bool owned = m->owned == NULL || m->owned[k];
 
                 bb_u8(&heights, owned ? hb[k] : 255u);
-                bb_u8(&quarters, m->quads != NULL ? m->quads[k] : 0u);
+                bb_u8(&quarters, m->quads != NULL ? m->quads[k] : wq[mi] != NULL ? wq[mi][k] : 0u);
                 bb_u16(&footBuf, maskOf[k] < 0 ? 0xFFFFu : (unsigned)maskOf[k]);
             }
             totalCells += cells;
@@ -1534,7 +1630,7 @@ size_t rg_buildings_write(const RgWorld *w, const RgBuildModels *models, uint8_t
         goto cleanup;
     }
 
-    e = ground_variants(w, models, &variants, &nVariants);
+    e = ground_variants(w, models, pls, wq, &variants, &nVariants);
     if (e != RG_OK) { result = fail(st, e, "variants"); goto cleanup; }
     if (nVariants > RG_MAX_VARIANTS) { result = fail(st, RG_ERR_TOO_BIG, "variants"); goto cleanup; }
 
@@ -1625,6 +1721,10 @@ cleanup:
         for (mi = 0; mi < nm; mi++)
             rg_placements_free(&pls[mi]);
     free(pls);
+    if (wq != NULL)
+        for (mi = 0; mi < nm; mi++)
+            free(wq[mi]);
+    free(wq);
     free(variants);
     free(found); free(recFirst); free(recCount); free(recHeights); free(crop); free(pms); free(placements);
     if (texels != NULL)

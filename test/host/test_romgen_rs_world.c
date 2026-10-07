@@ -33,8 +33,13 @@ static int sChecks, sFails, sSkipped;
 #define SIGNPOSTS_SHA1 "9b4d379cb2a40e522d3e681ed03110785f3243d4"
 #define RELIEF_SHA1 "215a12d9c4ee8f4747e66d895f37d6ed1f8c4b5c"
 /* S4: a03a3b74 -> 40135582 (oldale_house and the Rustboro set repinned to the RS layouts, rs_littleroot_lab in the lab);
- * Phase 36 H1: 40135582 -> 91257d8b (21 Hoenn models: Dewford, Mauville, Verdanturf, Fallarbor, Slateport) */
-#define BUILDINGS_SHA1 "91257d8b2ff5a894db3d7c2b2e85e890ea08275e"
+ * Phase 36 H1: 40135582 -> 91257d8b (21 Hoenn models: Dewford, Mauville, Verdanturf, Fallarbor, Slateport);
+ * Phase 36 H2: 91257d8b -> 3eafee01 (4 Hoenn models: Fortree, Lavaridge, Pacifidlog)
+ * Phase 36 H2: 3eafee01 -> 7257e9b6 (Pacifidlog hut footprint filled with the deck, not the sea)
+ * Phase 36 H2: 7257e9b6 -> aad730ec (a building in the sea takes its footprint ground from the planks: the five
+ *   Pacifidlog huts and the Pokemon Center on 0x221, two route houses; sizes and counts unchanged)
+ * Phase 36 H2: aad730ec -> a00bb5ae (a building's water cells draw the sea under the roof, not the planks: 66 -> 75 variants) */
+#define BUILDINGS_SHA1 "a00bb5ae01f41d7fb0499469529cd857feb12e52"
 #define LITTLEROOT_LAYOUT 10u      /* the town whose two houses match Emerald's pins */
 
 static const uint8_t kGroupSizes[34] = {54, 5, 5, 6, 7, 7, 8, 7, 7, 13, 8, 17, 10, 24, 13, 13, 14, 2, 2, 2, 3, 1, 1,
@@ -212,13 +217,14 @@ static void TestSpecs(const Cart *C)
     }
     CHECK(comp > 0 && repinned == 6 && replaced == 3);
     /* every pinned row now names this cart's layout (S0: 7 of 16 did not); 16 -> 37: Phase 36 H1's 21 Hoenn rows (the
-     * Verdanturf, Fallarbor and Slateport ones retargeted to the RS layouts, rg_rsspecs.c) */
+     * Verdanturf, Fallarbor and Slateport ones retargeted to the RS layouts, rg_rsspecs.c); 37 -> 41: Phase 36 H2's 4 Hoenn rows
+     * (gym_fortree, gym_lavaridge, fortree_hut, pacifidlog_hut) */
     for (j = 0; t != NULL && j < n; j++) {
         if (t[j].layoutId == 0) continue;
         pinned++;
         matching += t[j].layoutId <= C->w.layoutCount && rg_layout_fnv(&C->w.layouts[t[j].layoutId - 1u]) == t[j].layoutFnv;
     }
-    CHECK(pinned == 37 && matching == 37);
+    CHECK(pinned == 41 && matching == 41);
     printf("  %s: %u recipe rows (%u Emerald rows, %u interiors left out, %u components retargeted, %u repinned, %u/%u pins "
            "match)\n", C->name, n, rg_spec_count, interiors, comp, repinned, matching, pinned);
     n = 7;
@@ -345,8 +351,12 @@ static void Run(Cart *C)
     CHECK(o->reliefSize == 22872u && o->rst.ledgeLayouts == 20 && o->rst.ledgeCells == 851 && o->rst.drawnRows == 0);
     /* 3016324 B, 64 models, 2081 placements, 35508 vertices, 57 masks -> 3518812 / 85 / 2105 / 39252 / 60: Phase 36 H1
      * (Dewford, Mauville, Verdanturf, Fallarbor, Slateport; three Contest Halls in the Battle Tents' place) */
-    CHECK(o->buildingsSize == 3518812u && o->bModels == 85 && o->bPages == 58 && o->bPlacements == 2105);
-    CHECK(o->bVertices == 39252 && o->bMasks == 60 && o->bVariants == 66);
+    /* 3016324 B, 64 models, 2081 placements, 35508 vertices, 57 masks -> 3518812 / 85 / 2105 / 39252 / 60: Phase 36 H1
+     * (Dewford, Mauville, Verdanturf, Fallarbor, Slateport; three Contest Halls in the Battle Tents' place)
+     * -> 3650196 / 89 / 2118 / 41274 / 69: Phase 36 H2 (Fortree, Lavaridge, Pacifidlog: 4 models, 13 placements)
+     * -> 3650252, 66 -> 75 variants: Phase 36 H2, a building's water cells draw the sea under the roof (quarters 0xF variants), 9 variants */
+    CHECK(o->buildingsSize == 3650252u && o->bModels == 89 && o->bPages == 58 && o->bPlacements == 2118);
+    CHECK(o->bVertices == 41274 && o->bMasks == 69 && o->bVariants == 75);
     /* S4: every model passes its art gate (S0 left the Emerald lab out here; rs_littleroot_lab replaces it) */
     CHECK(o->buildingsFailed == 0 && o->buildingsDropped == 0);
     CHECK(o->roleCount[VOXEL_ROLE_SIGNPOST] == 224);

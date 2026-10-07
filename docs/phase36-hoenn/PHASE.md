@@ -1,6 +1,6 @@
 # PHASE 36 — Hoenn census follow-up (romgen building recipes)
 
-Status: **H1 built** (2026-10-07, `BUILDLOG-H1.md`); H2-H6 planned. Nothing hardware-run.
+Status: **H1 built** (2026-10-07, `BUILDLOG-H1.md`); **H2 built** (2026-10-08, `BUILDLOG-H2.md`; with two footprint-ground fixes for buildings in the sea, all games); H3-H6 planned. Nothing hardware-run.
 
 ## Goal
 
@@ -50,7 +50,7 @@ The Kanto K-slice loop of Phase 34 (`docs/phase34-frlg/BUILDLOG-P34.md`), run on
 - `budget 0`: 0 over on both games.
 - Pins: Emerald buildings and Ruby = Sapphire buildings change. Each change is recorded in its test with the reason.
   Every other output stays byte-identical: Emerald regions 007a370f, signposts 38515605, relief 21a837f0, ledges
-  eb25a383; FR = LG buildings 5ba2cc16, regions 3716874d, signposts ba2fde45, relief 32c24146; RS regions 1a09cd5f,
+  eb25a383; FR = LG buildings 8f2e72bf, regions 3716874d, signposts ba2fde45, relief 32c24146; RS regions 1a09cd5f,
   signposts 9b4d379c, relief 215a12d9.
 - `make -C tools/romgen test` (30 suites) and `vtest` (11): read every suite's "N checks, 0 failures" line. Device
   `make -j8` links.
