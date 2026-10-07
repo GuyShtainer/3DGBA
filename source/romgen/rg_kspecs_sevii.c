@@ -464,12 +464,17 @@ static const RgExact kTowerExact[5] = {
     {30, 90, 114, 110, false},      /* the platform: battlements and front edge */
     {61, 112, 83, 128, false},      /* the porch door */
 };
+/* The end-cap patches are the LARGEST pixel-flat rects of the 144x128 art around the old 4x4 ones: a cap is tessellated
+ * one quad per repeat of its patch, so the 4x4 patches made 4036 of the model's 4148 triangles (12444 vertices, more than
+ * the 9344-vertex chunk scratch holds) and the builder refused the tail of the model: the platform and the porch with
+ * the door, its last parts, were never drawn in-game (look L7). Flat: the wall x 55-61 rows 0-89, the left pillar
+ * x 14-16 rows 56-90, the right x 128-130 rows 56-90, the grey platform edge x 31-59 rows 104-106. */
 static const RgSideCfg kTowerSide[5] = {
-    {"tower", {55, 0, 59, 4}, {55, 0, 59, 4}, 999, false},
-    {"tierup", {55, 0, 59, 4}, {55, 0, 59, 4}, 999, false},
-    {"wing_w", {14, 70, 16, 74}, {14, 70, 16, 74}, 999, false},
-    {"wing_e", {128, 70, 130, 74}, {128, 70, 130, 74}, 999, false},
-    {NULL, {45, 104, 47, 106}, {45, 104, 47, 106}, 999, true},
+    {"tower", {55, 0, 61, 89}, {55, 0, 61, 89}, 999, false},
+    {"tierup", {55, 0, 61, 89}, {55, 0, 61, 89}, 999, false},
+    {"wing_w", {14, 56, 16, 90}, {14, 56, 16, 90}, 999, false},
+    {"wing_e", {128, 56, 130, 90}, {128, 56, 130, 90}, 999, false},
+    {NULL, {31, 104, 59, 106}, {31, 104, 59, 106}, 999, true},
 };
 
 const RgSpec rg_kspecs_sevii[] = {

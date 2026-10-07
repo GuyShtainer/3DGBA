@@ -305,8 +305,8 @@ static void Sha1(const uint8_t *d, size_t n, char hex[41])
     free(m);
 }
 
-/* The FR buildings.bin of the Kanto models so far (K1 Pallet, K2 landmarks, K3 Viridian, K4 Pewter, K5 Cerulean, K6 Vermilion and Routes 5-8, K7 Lavender and Route 10, K8 Celadon, K9 Fuchsia and Safari Zone, K10 Saffron, K11 Cinnabar, Indigo Plateau and Routes 22/23, KS1 Sevii One/Two/Three + Cape Brink + Three Isle Port, KS2 Four/Five Island + Resort Gorgeous + Five Isle Meadow, KS3 Six/Seven Island + Water Path + Sevault Canyon + Trainer Tower + Navel Rock + Birth Island); FR = LG. Re-pinned for Phase 34 side walls (end faces closed). */
-#define PALLET_BUILDINGS_SHA1 "459645eea1eb02938065f02f905370425a32eb70"
+/* The FR buildings.bin of the Kanto models so far (K1 Pallet, K2 landmarks, K3 Viridian, K4 Pewter, K5 Cerulean, K6 Vermilion and Routes 5-8, K7 Lavender and Route 10, K8 Celadon, K9 Fuchsia and Safari Zone, K10 Saffron, K11 Cinnabar, Indigo Plateau and Routes 22/23, KS1 Sevii One/Two/Three + Cape Brink + Three Isle Port, KS2 Four/Five Island + Resort Gorgeous + Five Isle Meadow, KS3 Six/Seven Island + Water Path + Sevault Canyon + Trainer Tower + Navel Rock + Birth Island); FR = LG. Re-pinned for Phase 34 side walls (end faces closed); re-pinned 459645ee -> b0f63cdc by look L7 (the Trainer Tower and Silph Co. end-cap patches enlarged: 4148 -> 744 and 3488 -> 968 triangles so their platform, porch and entrance fit a chunk). */
+#define PALLET_BUILDINGS_SHA1 "b0f63cdcfe902d1bc8a229631cd5872303608478"
 
 static uint8_t *sPalletBin[2];
 static size_t sPalletBinSize[2];
@@ -783,6 +783,52 @@ static void TestPallet(const char *name, const char *env, GpGame game, int idx)
             fclose(mem);
             CHECK(strstr(buf, "L236 8 23  (map 3/18)\n") != NULL);
             free(buf);
+        }
+        /* Look L7: the Trainer Tower's platform and porch (its LAST parts) were never drawn in-game: the model was 4148
+         * triangles (12444 vertices) because its end caps were one quad per 4x4 patch, and a map chunk's vertex scratch
+         * (ctr_voxel.c VOXEL_CHUNK_SCRATCH, 9344) refused the tail. Pin: the model stays far under that budget, and the
+         * platform front (z 96-110, y <= 6) and the porch face (z 128, y <= 18, inside the 9x8-cell rect) are in the mesh. */
+        {
+            RgBuildModels ms;
+            unsigned t, plat = 0, porch = 0, over = 0;
+
+            memset(&ms, 0, sizeof(ms));
+            CHECK(rg_build_models(&w, &k[84], 1, &ms) == RG_OK && ms.n == 1 && strcmp(ms.m[0].spec->name, "k_trainer_tower") == 0);
+            if (ms.n == 1) {
+                const RgMesh *mesh = &ms.m[0].mesh;
+
+                CHECK(mesh->n * 3u <= 4000u);               /* was 12444; the chunk scratch is 9344 with the ground in it */
+                for (t = 0; t < mesh->n; t++) {
+                    const RgTri *tr = &mesh->t[t];
+                    double zmax = tr->p[0].z, ymax = tr->p[0].y, zmin = tr->p[0].z;
+                    unsigned j;
+
+                    for (j = 1; j < 3; j++) {
+                        if (tr->p[j].z > zmax) zmax = tr->p[j].z;
+                        if (tr->p[j].z < zmin) zmin = tr->p[j].z;
+                        if (tr->p[j].y > ymax) ymax = tr->p[j].y;
+                    }
+                    if (zmax > 128.0 + 1e-6 || zmin < 0.0)
+                        over++;                             /* nothing outside the art rect rows 0-7 */
+                    if (zmax >= 110.0 - 1e-6 && zmax <= 110.0 + 1e-6 && ymax <= 6.0 + 1e-6)
+                        plat++;                             /* the platform's front edge */
+                    if (zmax >= 128.0 - 1e-6 && ymax <= 18.0 + 1e-6 && ymax > 6.0)
+                        porch++;                            /* the porch's front face, the door */
+                }
+                CHECK(over == 0 && plat > 0 && porch > 0);
+            }
+            rg_models_free(&ms);
+        }
+        /* The same cause on Silph Co. (9342 of 9344 scratch vertices, 824 triangles refused: its entrance canopy was never
+         * drawn): its end-cap patches are now the large flat ones, 968 triangles. */
+        for (i = 0; i < nk; i++) {
+            RgBuildModels ms;
+
+            if (strcmp(k[i].name, "k_saffron_silph") != 0)
+                continue;
+            memset(&ms, 0, sizeof(ms));
+            CHECK(rg_build_models(&w, &k[i], 1, &ms) == RG_OK && ms.n == 1 && ms.m[0].mesh.n * 3u <= 4000u);
+            rg_models_free(&ms);
         }
     }
     rg_world_close(&w);
