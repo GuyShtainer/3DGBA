@@ -3,11 +3,36 @@
 > Living resume doc maintained by the `handoff` skill. The **Current status** and **Next steps**
 > sections are always kept current — start there to resume. The **Session log** grows downward,
 > newest first, and is never pruned.
-> Last updated: 2026-08-17 (phases 24-30 — all 8 HMs accounted for, 6 planned by touch; the
+> Last updated: 2026-10-07 (look backlog L2-L9 done, Ruby/Sapphire 3D (phase 35 S0-S4), Hoenn census H1; Guy restarting the Mac — see Current status top bullet). Earlier: 2026-08-17 (phases 24-30 — all 8 HMs accounted for, 6 planned by touch; the
 > census's broken rows closed; the FIRST REAL HARDWARE TEST of the touch layer found SIX
 > defects, four fixed, all one root cause. Earlier entry: 2026-08-14, phase 21 — TOUCH CENSUS COMPLETE: 143-screen catalog for all 5 games, 61 screens visited + photographed cb2-certain in the emulator, ~60 zero-guess fingerprints harvested, and the master touch plan written — `docs/phase21-touch-census/TOUCH-PLAN.md` + `REPORT.md`. Headline finds: the BPRE profile is rev0 and the user's cart is rev1 → ALL FireRed menu/battle touch silently dead (exact rev1 fixes harvested); undetected screens leak walk keys (the residual) — both CURED and COMMITTED on main (slice 22.0 landed 2026-08-14: a51c50d the GCTX_TITLE/GCTX_FULLUI promotion + dual-rev anchors, 305242f the LG-rev1 row + newKeys fix; test_profiles 546→1295, 14 suites 240,765 checks green, .3dsx+.cia rebuilt))
 
 ## Current status
+
+- **2026-10-07 — RESUME POINT (Guy restarted the Mac mid-H2).** `main` = `11d90c9`, all local, NOTHING PUSHED,
+  nothing hardware-run. Gate on 11d90c9 green: 30 romgen + 11 vtest suites (41) 0 failures, device build links;
+  `3DGBA.cia` last built 2026-10-07 21:17 (= L9 merge `2c30eff`; H1 not yet in a .cia — run `make cia`).
+  Done this day (all merged `--no-ff` as Guy, each gated):
+  - **Look backlog** (`docs/look-backlog/BACKLOG.md`): L2 tall-grass blades, L3 sun to camera side, L7 Trainer
+    Tower/Silph entrances (chunk-scratch overflow) + budget tool, L6 closed backs, L8 fences/rocks/flowers,
+    **L6b** gables laid 45→15° so the rear slope shows (`RG_ROOF_PITCH`), **L5** Kanto end walls dressed from
+    front art (`rg_close_sides`/`sd_dress`), **L4** live day cycle (`source/voxel/voxel_daylight.c`; DEFAULT ON;
+    off/override via `sdmc:/3DGBA/daylight.txt` = `off` | `HH:MM` | `HH:MM xN`), **L9** characters no longer
+    flat in tall grass (guest grass tuft re-staged upright in front of the actor, `voxel_entities.c`).
+  - **Phase 35 Ruby/Sapphire** (`docs/phase35-rs/PHASE.md`): rev 2 only (AXVE/AXPE). S0 romgen layer, S1 RAM/ROM
+    anchors (`sb1Direct`, `mainFlagsOff`), S2 renderer ON, S3 foliage tables, S4 lab/Oldale/Rustboro recipes.
+    S5 (interiors, rev 0/1) not started, "if wanted".
+  - **Phase 36 Hoenn census** (`docs/phase36-hoenn/PHASE.md`, slices H1-H6): **H1 merged** (Dewford, Mauville,
+    Verdanturf, Fallarbor, Slateport). Census Emerald 82/160, Ruby 80/139.
+  - **H2 WAS IN FLIGHT** (Fortree, Lavaridge gym, Pacifidlog huts) in worktree
+    `.claude/worktrees/agent-af1235a0a6e26f511` (branch `worktree-agent-af1235a0a6e26f511`, base 11d90c9). The
+    restart kills that agent. On resume: `git -C <that worktree> log --oneline 11d90c9..` — if it has commits,
+    review + gate them; else remove the worktree and re-dispatch H2 from PHASE.md's H2 row + BUILDLOG-H1.md method.
+  - Pins on 11d90c9: Emerald buildings f3ce7c8e, regions 007a370f, signposts 38515605, relief 21a837f0, ledges
+    eb25a383; FR=LG buildings 5ba2cc16, regions 3716874d, signposts ba2fde45, relief 32c24146; R=S buildings
+    91257d8b, regions 1a09cd5f, signposts 9b4d379c, relief 215a12d9.
+  - **Open decision for Guy:** Ruby/Sapphire game screenshots are kept OUT of git (ROM-derived art; earlier phases
+    committed Emerald/FR shots). They lived in the session scratchpad (`/private/tmp/...`) — likely lost on restart.
 
 - **2026-10-06 — old 3D attempts removed** (Guy: the voxel world replaces them all): phase 31 diorama,
   phase 14 tilt, and the 2D depth-pop/grid-warp/DoF/bloom/light/Vivid passes are gone (`8edd20c`,
@@ -90,6 +115,21 @@
 - **COMMITTED / UNCOMMITTED (corrected 2026-08-04):** the state-F/Celio wireless work (runs #1–#10), the entire UI redesign (assets.*, theme.*, ui.*, the composited screens), the **phase-13 diagnostics layer** (`19375eb`) and the **phase-14 tilt** (`ae35079`) are all **committed** on `main` — the older "everything is uncommitted" note was stale. **Uncommitted right now = phase 15, the phase-16 E5 fix pass + sweep, and ALL of phase 17.** Phase 17 adds: `source/uigeom.{c,h}`, `source/uihit.{c,h}`, `test/host/test_uigeom.c`, `test/host/test_uihit.c`, `test/host/test_theme.c`, `test/host/ctr_shim.h`, `docs/phase17-uifix/`, plus modifications to `main.c`, `rompicker.{c,h}`, `assets.{c,h}`, `theme.{c,h}`, `touch.{c,h}`, `ui.{c,h}`, `wireless.c`, `tools/build_assets.sh` and one harness fixture movie. Older note: **phase 15 only:** the new files `source/presence.{c,h}`, `presence_read.{c,h}`, `presence_art.{c,h}`, `presence_ui.{c,h}`, `gbatext.{c,h}`, `fieldgate.h`, `test/host/test_presence.c`, `docs/phase15-presence/`, plus modifications to `main.c`, `gamestate.{c,h}`, `diag.{c,h}`, `assets.{c,h}`, `ui.{c,h}`, `tilt.{c,h}`, `test/host/test_diag.c` and `test/host/test_tilt.c`. Nothing is **pushed** (still local-only). Commit/push is gated on the user asking (CLAUDE.md) + the release-prep checklist (Next steps).
 
 ## Next steps (resume here)
+
+**2026-10-07 queue (Guy: "just dont stop, you can keep going"):**
+1. Recover/redo **H2** (see Current status). Then **H3** Lilycove, **H4** Mossdeep + Sootopolis, **H5** routes/landmarks,
+   **H6** Battle Frontier (Emerald only). One agent at a time, worktree, opus for recipe authoring; merge `--no-ff`
+   as Guy; gate after every merge (romgen CLI on E/E-ledges/FR/LG/R/S + shasums, `make -C tools/romgen test`,
+   `make -C tools/romgen vtest`, `make -j8`; count every suite's "checks, 0 failures" line — 41 expected).
+2. Hardware run by Guy (nothing above is HW-proven). Watch: day-cycle re-bake hitches (Azahar max 4-vsync frame
+   in 6/15 waves), Slateport shipyard hiding the walkway north of it, roof fronts ~5-12% shorter (L6b), night tint
+   making actors in grass hard to see, Old 3DS memory with RS (3.0 MB+ buildings.bin).
+3. Small follow-ups: north-south fence rails; device chunk-scratch fallback (log every refusing chunk, reserve the
+   tail for models); Emerald 0/47 sea-prop chunk at 96%; Emerald `check all` pre-existing fails (hedge, mart, lab,
+   rustboro_gym); L5 flat-roof ends; dawn tint greyish; caves re-bake needlessly on sun steps; nits list in BACKLOG.
+4. Optional: Phase 35 S5 (RS interiors, rev 0/1).
+
+**Older queue below (pre-voxel-look work), kept for reference:**
 
 **PHASE 32 (voxel 3D world + widescreen + per-eye stereo + touch panel) — HARDWARE RUN, blocks P6 closeout.**
 `3DGBA.cia` 2026-10-05 20:51. Emulator-proven: the Zallax voxel world renders upright, full 400x240, from the
@@ -385,6 +425,18 @@ Iterate in **Azahar** (Citra successor). **Sign off only on real New 3DS** — 3
 ---
 
 ## Session log
+
+### Session — 2026-10-07 — look backlog L2-L9, Ruby/Sapphire in 3D, Hoenn census H1
+Guy's notes drove it: "side walls are not perfect, some roofs are not there. The fences and rocks are also flat",
+"there is no enterence to the battle tower", roofs: "The back is missing", night lighting "thats great", and on Ruby
+Route 102 "the characters are kinda flat". Root causes worth remembering: missing entrances = silent per-chunk
+vertex scratch overflow (fixed by single-polygon flat caps + a budget test); invisible roof backs = 45° rear slope
+hidden behind the ridge at the 34-46° camera (fixed by 15° pitch, front art unchanged); flat actors in grass = the
+GBA's tall-grass tuft laid flat under the 3D blades (fixed by an upright tuft billboard + player quad split). Ruby/
+Sapphire rev 2 got the full stack (romgen, anchors measured from literal pools, renderer, foliage, recipes). Phase 36
+started on the 81 Hoenn rows that both Emerald and RS lacked; H1 merged, H2 in flight at restart. Portable lessons
+went to the learn skill (`3ds-homebrew-and-emulator-hosting.md` "Rebuilding a 2D guest's world as 3D geometry",
+toolkit commit 92d0024).
 
 ### Session — 2026-08-17
 
