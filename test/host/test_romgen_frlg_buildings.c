@@ -193,7 +193,7 @@ static void TestCensus(const char *name, const char *env, int idx)
     CHECK(c->doorWarps == 191 && c->mapWarps == 55 && c->caveWarps == 31);
     CHECK(c->n == 152);
     CHECK(c->mainland == 108 && c->sevii == 44);
-    CHECK(c->covered == 117);                                              /* K1 Pallet 3 + K2 landmarks 36 + K3 Viridian, Route 2, Forest gates 8 + K4 Pewter 3 + K5 Cerulean 6, Route 25 1 + K6 Vermilion 4, Routes 5-8 9 + 3 reuse (Saffron x2, Route 15) + K7 Lavender 5 (Tower, three houses, Power Plant) + K8 Celadon 7 (Dept. Store, Mansion, Game Corner, Prize Room, house x3) + K9 Fuchsia, Safari Zone, Routes 11/12/16/18 18 (Fuchsia hall x4, house, Safari entrance, Safari halls, rest houses x4, two gates, two cottages, two Route 12/16 gates) + K10 Saffron 9 (Silph Co., Dojo, Gym, house x3 doors, two gates; map 3/10 only) + K11 5 (Cinnabar Mansion and Lab, Indigo League building, the Route 22 / 23 gate halves; every mainland row is now covered except the excluded S.S. Anne gangway) */
+    CHECK(c->covered == 131);                                              /* K1 Pallet 3 + K2 landmarks 36 + K3 Viridian, Route 2, Forest gates 8 + K4 Pewter 3 + K5 Cerulean 6, Route 25 1 + K6 Vermilion 4, Routes 5-8 9 + 3 reuse (Saffron x2, Route 15) + K7 Lavender 5 (Tower, three houses, Power Plant) + K8 Celadon 7 (Dept. Store, Mansion, Game Corner, Prize Room, house x3) + K9 Fuchsia, Safari Zone, Routes 11/12/16/18 18 (Fuchsia hall x4, house, Safari entrance, Safari halls, rest houses x4, two gates, two cottages, two Route 12/16 gates) + K10 Saffron 9 (Silph Co., Dojo, Gym, house x3 doors, two gates; map 3/10 only) + K11 5 (Cinnabar Mansion and Lab, Indigo League building, the Route 22 / 23 gate halves; every mainland row is now covered except the excluded S.S. Anne gangway) + KS1 14 (One Island: Network Center and harbor, two purple houses; Two Island: Game Corner, harbor, purple house; Three Island: four purple houses and the red house; Cape Brink: purple house; Three Isle Port) */
     memset(cnt, 0, sizeof(cnt));
     for (i = 0; i < c->n; i++) {
         const RgCensusRow *r = &c->row[i];
@@ -242,7 +242,7 @@ static void TestCensus(const char *name, const char *env, int idx)
 
         census_print(&w, c, rg_kspecs_table(w.prof, &nkt), -1, -1, fp);
         fclose(fp);
-        CHECK(buf != NULL && strstr(buf, "covered 117 / 152\n") != NULL && strstr(buf, "152 placements (108 mainland, 44 sevii)") != NULL);
+        CHECK(buf != NULL && strstr(buf, "covered 131 / 152\n") != NULL && strstr(buf, "152 placements (108 mainland, 44 sevii)") != NULL);
         free(buf);
     }
     rg_world_close(&w);
@@ -305,8 +305,8 @@ static void Sha1(const uint8_t *d, size_t n, char hex[41])
     free(m);
 }
 
-/* The FR buildings.bin of the Kanto models so far (K1 Pallet, K2 landmarks, K3 Viridian, K4 Pewter, K5 Cerulean, K6 Vermilion and Routes 5-8, K7 Lavender and Route 10, K8 Celadon, K9 Fuchsia and Safari Zone, K10 Saffron, K11 Cinnabar, Indigo Plateau and Routes 22/23); FR = LG. Re-pinned for Phase 34 side walls (end faces closed). */
-#define PALLET_BUILDINGS_SHA1 "dc1fb2fc864867740a180ed04c005b6358b6814e"
+/* The FR buildings.bin of the Kanto models so far (K1 Pallet, K2 landmarks, K3 Viridian, K4 Pewter, K5 Cerulean, K6 Vermilion and Routes 5-8, K7 Lavender and Route 10, K8 Celadon, K9 Fuchsia and Safari Zone, K10 Saffron, K11 Cinnabar, Indigo Plateau and Routes 22/23, KS1 Sevii One/Two/Three + Cape Brink + Three Isle Port); FR = LG. Re-pinned for Phase 34 side walls (end faces closed). */
+#define PALLET_BUILDINGS_SHA1 "94c73e6a0b97b25871d8238f59d985e550876a14"
 
 static uint8_t *sPalletBin[2];
 static size_t sPalletBinSize[2];
@@ -347,8 +347,8 @@ static void TestPallet(const char *name, const char *env, GpGame game, int idx)
     }
     CHECK(rg_world_open(&w, rom, n) == RG_OK && w.prof->game == game);
     k = rg_kspecs_table(w.prof, &nk);
-    CHECK(k != NULL && nk == 66);                                          /* K1-K11: 66 Kanto models */
-    if (k != NULL && nk == 66) {
+    CHECK(k != NULL && nk == 73);                                          /* K1-K11: 66 Kanto models + KS1: 7 Sevii models */
+    if (k != NULL && nk == 73) {
         char *buf = NULL;
         size_t sz = 0;
         FILE *mem;
@@ -647,13 +647,56 @@ static void TestPallet(const char *name, const char *env, GpGame game, int idx)
                 free(buf);
             }
         }
+        /* KS1: the Sevii Islands One, Two and Three (+ Cape Brink, Three Isle Port). Table order from index 66. The purple
+         * house is one spec with 8 placements (One 2, Two 1, Three 4, Cape Brink 1); every other model has one. Every
+         * check text must show both side lines closed ("0 of N open"). */
+        {
+            static const char *const nm[7] = {"k_sevii_house", "k_one_network", "k_one_harbor", "k_two_gamecorner",
+                                              "k_two_harbor", "k_three_house_red", "k_three_port"};
+            static const unsigned lay[7] = {230, 230, 230, 231, 231, 232, 241};
+            static const uint32_t fnv[7] = {0x60EA96AFu, 0x60EA96AFu, 0x60EA96AFu, 0x9AB6DD1Fu, 0x9AB6DD1Fu, 0x76E27C1Eu,
+                                            0x9A123C3Eu};
+            static const unsigned np[7] = {8, 1, 1, 1, 1, 1, 1};
+            static const char *const first[7] = {"L230 18 6  (map 3/12)", "L230 11 0  (map 3/12)", "L230 9 15  (map 3/12)",
+                                                 "L231 37 6  (map 3/13)", "L231 7 7  (map 3/13)", "L232 2 28  (map 3/14)",
+                                                 "L241 9 12  (map 3/49)"};
+
+            for (i = 0; i < 7; i++) {
+                char line[96];
+
+                CHECK(strcmp(k[66 + i].name, nm[i]) == 0);
+                CHECK(k[66 + i].layoutId == lay[i] && k[66 + i].layoutFnv == fnv[i]);
+                CheckSpecText(&w, &k[66 + i], np[i]);
+                buf = NULL; sz = 0;
+                mem = open_memstream(&buf, &sz);
+                CHECK(rg_author_check(&w, &k[66 + i], (int)np[i], mem) == 0);
+                fclose(mem);
+                CHECK(strstr(buf, "side west: 0 of ") != NULL && strstr(buf, "side east: 0 of ") != NULL);
+                CHECK(strstr(buf, "FAIL: open side") == NULL && strstr(buf, "RESULT PASS") != NULL);
+                free(buf);
+                buf = NULL; sz = 0;
+                mem = open_memstream(&buf, &sz);
+                CHECK(rg_author_placements(&w, &k[66 + i], mem) == 0);
+                fclose(mem);
+                snprintf(line, sizeof(line), "%s: %u placement(s) across 384 layouts", nm[i], np[i]);
+                CHECK(strstr(buf, line) != NULL && strstr(buf, first[i]) != NULL);
+                free(buf);
+            }
+            /* the Cape Brink house is the 8th placement of the purple house (door in map 3/47) */
+            buf = NULL; sz = 0;
+            mem = open_memstream(&buf, &sz);
+            CHECK(rg_author_placements(&w, &k[66], mem) == 0);
+            fclose(mem);
+            CHECK(strstr(buf, "L239 11 13  (map 3/47)\n") != NULL && strstr(buf, "L232 12 16  (map 3/14)\n") != NULL);
+            free(buf);
+        }
     }
     rg_world_close(&w);
     memset(&opts, 0, sizeof(opts));
     opts.wantBuildings = true;
     CHECK(rg_run(rom, n, &opts, &out) == RG_OK);
     CHECK(out.buildings != NULL && out.buildingsSize > 24 && memcmp(out.buildings, "VXB7", 4) == 0);
-    CHECK(out.bModels == 66 && out.bPlacements == 130 && out.buildingsFailed == 0);
+    CHECK(out.bModels == 73 && out.bPlacements == 144 && out.buildingsFailed == 0);
     CHECK(out.regions != NULL && out.signs == NULL && out.relief == NULL);   /* G2: regions are always made; signposts only on wantSigns; relief stays off for FRLG */
     CHECK(out.layouts == 384 && out.maps == 425 && out.outdoorMaps == 76);
     if (out.buildings != NULL) {
@@ -693,7 +736,7 @@ static void TestPallet(const char *name, const char *env, GpGame game, int idx)
     }
     rg_output_free(&out);
     free(rom);
-    printf("%s: Kanto K1-K11 -> 66 models, 130 placements, buildings.bin %zu bytes\n", name, sPalletBinSize[idx]);
+    printf("%s: Kanto K1-K11 + Sevii KS1 -> 73 models, 144 placements, buildings.bin %zu bytes\n", name, sPalletBinSize[idx]);
 }
 
 /* ---- 3b. the side-closure check on synthetic models (no ROM): an open-sided prism fails, a capped one passes ---- */
