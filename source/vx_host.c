@@ -77,7 +77,7 @@ static void LogAnchorFail(const GameProfile *p, int check)
              (unsigned)vx_anchor_last_value(), p->code, (unsigned)p->rev);
 }
 
-/* ROM half of the self-check, once per bind, for a FireRed / LeafGreen row. False = not detected (2D). */
+/* ROM half of the self-check, once per bind, for a FireRed / LeafGreen or Ruby / Sapphire row. False = not detected (2D). */
 static bool ProbeRom(const GameProfile *p, const uint8_t *rom, size_t sz)
 {
     int r;
@@ -120,7 +120,7 @@ static void ProbeRam(GbaCore *top)
     cb2 = Rd32At(iw, sProbe->gMain - 0x03000000u + 4u);
     if (cb2 != sProbe->cb2Overworld && cb2 != sProbe->cb2OverworldBasic)
         return;   /* not an overworld frame (title, battle, a warp in progress) */
-    sb1 = Rd32At(iw, sProbe->sb1Ptr - 0x03000000u);
+    sb1 = sProbe->sb1Direct ? sProbe->sb1Ptr : Rd32At(iw, sProbe->sb1Ptr - 0x03000000u);   /* RS: the struct itself */
     if (sb1 < 0x02000000u || sb1 - 0x02000000u > 0x3FFF0u)
         loc = 0xFFFFFFFEu;
     else

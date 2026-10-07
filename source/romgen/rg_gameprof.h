@@ -65,6 +65,8 @@ typedef struct GameProfile {
     /* ---- RAM and ROM anchors: renderer only ---- */
     uint32_t gMain, sb1Ptr, backupLayout, backupMap, mapHeader, objEvents, playerAvatar, sprites, plttUnfaded,
         paletteFade;               /* backupMap: fixed EWRAM address (Emerald); 0 = derive from the live pointer (R2) */
+    bool sb1Direct;                /* Ruby / Sapphire: sb1Ptr IS the SaveBlock1 struct (EWRAM), there is no pointer to it */
+    uint16_t mainFlagsOff;         /* gMain byte whose bit 1 is inBattle: 0x439 Emerald / FRLG, 0x43D Ruby / Sapphire */
     uint8_t playerAvatarBytes;     /* 0x24 / 0x20 */
     uint32_t weather;              /* Emerald: the struct's address directly */
     uint32_t weatherPtr;           /* FRLG: a ROM constant that holds the EWRAM address (R1); 0 on Emerald */
@@ -97,7 +99,7 @@ typedef struct GameProfile {
     uint8_t grassSkipCount;
     bool emeraldIdTables;         /* Fortree puddles, GenericBuilding interior ids: Emerald only */
     bool interiors3d;              /* false on FRLG: indoor maps hand back to the 2D frame */
-    bool rendererOn;               /* gameprof_detect() returns the row only when set (Emerald; FRLG from R2) */
+    bool rendererOn;               /* gameprof_detect() returns the row only when set (Emerald; FRLG from R2; RS from S2) */
     const struct RgSpec *specs;    /* building recipe table (romgen); wired in G1, NULL until then */
     unsigned nSpecs;
 } GameProfile;

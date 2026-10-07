@@ -1,4 +1,5 @@
-/* rg_anchor.c -- the anchor self-check, see rg_anchor.h (Phase 34 R1, SPEC section 3.3). GPLv3, pure C. */
+/* rg_anchor.c -- the anchor self-check, see rg_anchor.h (Phase 34 R1, SPEC section 3.3; Phase 35 S1 adds the Ruby /
+ * Sapphire rev 2 rows). GPLv3, pure C. */
 #include "rg_anchor.h"
 
 #include <string.h>
@@ -9,9 +10,9 @@
 #define IW_BASE 0x03000000u
 #define IW_SIZE 0x8000u
 
-/* Struct offsets (pokefirered@037335f numbers, the same in FireRed and LeafGreen; shared with gba_game.h). */
+/* Struct offsets (pokefirered@037335f numbers, the same in FireRed and LeafGreen; shared with gba_game.h). Ruby / Sapphire
+ * share them all (pokeruby numbers) except gMain's inBattle byte, which the profile carries (`mainFlagsOff`). */
 #define OFF_MAIN_CB2 0x04u
-#define OFF_MAIN_FLAGS 0x439u
 #define MAIN_INBATTLE 0x02u
 #define OFF_MH_LAYOUT 0x00u
 #define OFF_MH_LAYOUT_ID 0x12u
@@ -104,9 +105,11 @@ static int ewram_has(uint32_t addr, uint32_t n)
 
 /* ---- ROM checks ------------------------------------------------------------------------- */
 
-static int is_frlg(const GameProfile *p)
+/* The rows with harvested anchors: FireRed / LeafGreen rev 1 (Phase 34) and Ruby / Sapphire rev 2 (Phase 35). Emerald's
+ * anchors are the Zallax-pinned constants and are not checked here. */
+static int is_checked(const GameProfile *p)
 {
-    return p != NULL && (p->game == GP_FIRERED || p->game == GP_LEAFGREEN);
+    return gp_is_kanto(p) || gp_is_rs(p);
 }
 
 static uint32_t primary_of(const GameProfile *p, const uint8_t *rom, size_t size, unsigned group, unsigned num)
@@ -127,7 +130,7 @@ int vx_anchor_check_rom(const GameProfile *p, const uint8_t *rom, size_t size)
 
     sLastValue = 0;
     /* 1: header */
-    if (!is_frlg(p) || rom == NULL || size < 0xC0u)
+    if (!is_checked(p) || rom == NULL || size < 0xC0u)
         return fail(1, 0);
     if (memcmp(rom + 0xAC, p->code, 4) != 0 || rom[0xBC] != p->rev)
         return fail(1, ((uint32_t)rom[0xAC] << 24) | ((uint32_t)rom[0xAD] << 16) | ((uint32_t)rom[0xAE] << 8) | rom[0xAF]);
@@ -169,11 +172,13 @@ int vx_anchor_check_rom(const GameProfile *p, const uint8_t *rom, size_t size)
                 return fail(4, (g << 8) | n);
         }
     }
-    /* 5, 6: the two primary tilesets */
-    v = primary_of(p, rom, size, 3, 0);
+    /* 5, 6: the two primary tilesets, read from an outdoor and an indoor map whose layouts use them: FRLG (3, 0) / (4, 0),
+     * Ruby / Sapphire (0, 0) / (1, 0) (Petalburg City and a house of Littleroot, measured: their layouts' primary pointers) */
+    g = gp_is_rs(p) ? 0u : 3u;
+    v = primary_of(p, rom, size, g, 0);
     if (v != p->tsGeneral)
         return fail(5, v);
-    v = primary_of(p, rom, size, 4, 0);
+    v = primary_of(p, rom, size, g + 1u, 0);
     if (v != p->tsBuilding)
         return fail(6, v);
     /* 7: the object graphics table: ROM pointers to records whose images pointer is a ROM pointer */
@@ -236,6 +241,12 @@ static const uint8_t *iw_at(const VxaRam *r, uint32_t addr, uint32_t n)
     return r->iwram + (addr - IW_BASE);
 }
 
+/* Either work RAM bank, by address (the object events are in EWRAM on FRLG, in IWRAM on Ruby / Sapphire). */
+static const uint8_t *ram_at(const VxaRam *r, uint32_t addr, uint32_t n)
+{
+    return addr >= IW_BASE ? iw_at(r, addr, n) : ew_at(r, addr, n);
+}
+
 int vx_anchor_check_ram(const GameProfile *p, const uint8_t *rom, size_t size, const VxaRam *ram)
 {
     const uint8_t *main_, *sb1, *bkl, *mh, *pa, *obj, *spr, *pf, *wp;
@@ -244,17 +255,19 @@ int vx_anchor_check_ram(const GameProfile *p, const uint8_t *rom, size_t size, c
     unsigned grp, num, oid, sid;
 
     sLastValue = 0;
-    if (!is_frlg(p) || rom == NULL || ram == NULL || ram->ewram == NULL || ram->iwram == NULL)
+    if (!is_checked(p) || rom == NULL || ram == NULL || ram->ewram == NULL || ram->iwram == NULL)
         return fail(11, 0);
     /* 11: callback2 */
-    main_ = iw_at(ram, p->gMain, OFF_MAIN_FLAGS + 1u);
-    if (main_ == NULL)
+    main_ = iw_at(ram, p->gMain, p->mainFlagsOff + 1u);
+    if (main_ == NULL || p->mainFlagsOff <= OFF_MAIN_CB2)
         return fail(11, 0);
     cb2 = r32(main_ + OFF_MAIN_CB2);
     if (!is_thumb_rom(size, cb2))
         return fail(11, cb2);
-    /* 12: sb1 */
-    {
+    /* 12: sb1: through the IWRAM pointer (FRLG), or the EWRAM struct itself (Ruby / Sapphire) */
+    if (p->sb1Direct) {
+        sb1a = p->sb1Ptr;
+    } else {
         const uint8_t *s = iw_at(ram, p->sb1Ptr, 4u);
         sb1a = (s != NULL) ? r32(s) : 0;
     }
@@ -294,7 +307,7 @@ int vx_anchor_check_ram(const GameProfile *p, const uint8_t *rom, size_t size, c
         return fail(15, id);
     /* 16: the player object */
     pa = ew_at(ram, p->playerAvatar, p->playerAvatarBytes);
-    obj = ew_at(ram, p->objEvents, 16u * OBJ_STRIDE);
+    obj = ram_at(ram, p->objEvents, 16u * OBJ_STRIDE);
     if (pa == NULL || obj == NULL)
         return fail(16, 0);
     oid = pa[5];
@@ -326,11 +339,11 @@ int vx_anchor_check_ram(const GameProfile *p, const uint8_t *rom, size_t size, c
         return fail(19, wp[p->weatherOff[0]]);
     if (wp[p->weatherOff[1]] > 3u)
         return fail(19, 0x100u | wp[p->weatherOff[1]]);
-    /* 20: an overworld callback, not in battle (the gMain +4 / +0x439 offsets are consistent) */
+    /* 20: an overworld callback, not in battle (the gMain +4 / +mainFlagsOff offsets are consistent) */
     if (cb2 != p->cb2Overworld && cb2 != p->cb2OverworldBasic)
         return fail(20, cb2);
-    if ((main_[OFF_MAIN_FLAGS] & MAIN_INBATTLE) != 0)
-        return fail(20, main_[OFF_MAIN_FLAGS]);
+    if ((main_[p->mainFlagsOff] & MAIN_INBATTLE) != 0)
+        return fail(20, main_[p->mainFlagsOff]);
     sLastValue = 0;
     return 0;
 }

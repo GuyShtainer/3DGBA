@@ -34,6 +34,12 @@ static bool CopyIwram(const VxMemSrc *src, uint32_t addr, void *dst, size_t n)
     return true;
 }
 
+/* Either bank, by address: the object events are in EWRAM (Emerald, FRLG) or IWRAM (Ruby / Sapphire). */
+static bool CopyRam(const VxMemSrc *src, uint32_t addr, void *dst, size_t n)
+{
+    return addr >= GBA_IWRAM_BASE ? CopyIwram(src, addr, dst, n) : CopyEwram(src, addr, dst, n);
+}
+
 /* Little-endian u16 array from a host byte pointer. */
 static void DecodeU16(uint16_t *dst, const uint8_t *raw, size_t count)
 {
@@ -65,11 +71,17 @@ bool vx_snapshot_take(VxSnapshot *snap, const VxMemSrc *src)
     if (!CopyIwram(src, VXP(gMain) + GBA_OFF_MAIN_CALLBACK2, ptr, 4))
         return false;
     snap->cb2 = Rd32(ptr);
-    snap->inBattle = (src->iwram[VXP(gMain) - GBA_IWRAM_BASE + GBA_OFF_MAIN_FLAGS]
-                      & GBA_MAIN_INBATTLE_BIT) != 0;
+    if (!CopyIwram(src, VXP(gMain) + VXP(mainFlagsOff), ptr, 1))   /* 0x439 Emerald / FRLG, 0x43D Ruby / Sapphire */
+        return false;
+    snap->inBattle = (ptr[0] & GBA_MAIN_INBATTLE_BIT) != 0;
 
     snap->sb1Valid = false;
-    if (CopyIwram(src, VXP(sb1Ptr), ptr, 4))
+    if (VXP(sb1Direct))   /* Ruby / Sapphire: gSaveBlock1 is the EWRAM struct itself */
+    {
+        snap->sb1Ptr = VXP(sb1Ptr);
+        snap->sb1Valid = CopyEwram(src, snap->sb1Ptr, snap->sb1, sizeof(snap->sb1));
+    }
+    else if (CopyIwram(src, VXP(sb1Ptr), ptr, 4))
     {
         snap->sb1Ptr = Rd32(ptr);
         snap->sb1Valid = CopyEwram(src, snap->sb1Ptr, snap->sb1, sizeof(snap->sb1));
@@ -98,7 +110,7 @@ bool vx_snapshot_take(VxSnapshot *snap, const VxMemSrc *src)
     }
 
     if (!CopyEwram(src, VXP(mapHeader), snap->mapHeader, sizeof(snap->mapHeader))
-     || !CopyEwram(src, VXP(objEvents), snap->objEvents, sizeof(snap->objEvents))
+     || !CopyRam(src, VXP(objEvents), snap->objEvents, sizeof(snap->objEvents))
      || !CopyEwram(src, VXP(playerAvatar), snap->playerAvatar, VXP(playerAvatarBytes))
      || !CopyEwram(src, VXP(sprites), snap->sprites, sizeof(snap->sprites))
      || !CopyEwram(src, VXP(paletteFade), snap->paletteFade, sizeof(snap->paletteFade)))

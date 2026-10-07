@@ -114,6 +114,7 @@ static GameProfile sEmerald = {
     .sprites = GBA_ADDR_SPRITES,
     .plttUnfaded = GBA_ADDR_PLTT_UNFADED,
     .paletteFade = GBA_ADDR_PALETTE_FADE,
+    .mainFlagsOff = GBA_OFF_MAIN_FLAGS,
     .playerAvatarBytes = GBA_PLAYER_AVATAR_BYTES,
     .weather = GBA_ADDR_WEATHER,
     .weatherPtr = 0,
@@ -151,7 +152,7 @@ static const uint8_t kFrlgGroupSizes[43] = {5, 123, 60, 66, 4, 6, 8, 10, 6, 8, 2
     .rev = 1, .groupCount = 43, .groupSizes = kFrlgGroupSizes, .layoutSlots = 384, .nPrimMetatiles = 640,         \
     .nPrimTiles = 640, .nPrimPals = 7, .nMetatilesTotal = 1024, .tilesetAttrOff = 0x14, .attrBytes = 4,           \
     .behMask = 0x1FF, .layerMask = 0x60000000u, .layerShift = 29, .layoutBytes = 26, .houseHalfWidth = 8,          \
-    .houseHeight = 7, .playerAvatarBytes = 0x20, .gfxInfoCount = 152, .fldeffCount = 36, .emeraldIdTables = false,  \
+    .houseHeight = 7, .mainFlagsOff = 0x439, .playerAvatarBytes = 0x20, .gfxInfoCount = 152, .fldeffCount = 36, .emeraldIdTables = false,  \
     .interiors3d = false, .rendererOn = true,                                                                      \
     .gMain = 0x030030F0u, .sb1Ptr = 0x03005008u, .backupLayout = 0x03005040u, .backupMap = 0,                     \
     .mapHeader = 0x02036DFCu, .objEvents = 0x02036E38u, .playerAvatar = 0x02037078u, .sprites = 0x0202063Cu,      \
@@ -176,7 +177,12 @@ static GameProfile sLeafGreen = {GP_FRLG_COMMON, .game = GP_LEAFGREEN, .code = {
  * kept), so the Emerald constants and behaviour sets serve. gMapGroups and gMapLayouts were found by searching each ROM for
  * the table every map header agrees with; the group sizes are that table's pointer gaps (34 groups, 394 maps). Ruby and
  * Sapphire hold byte-identical blockdata in all 332 layouts and identical content in all 56 tilesets; only the addresses
- * differ. The renderer anchors are not harvested (all 0, `rendererOn` false): gameprof_detect() refuses these rows. */
+ * differ.
+ * S1: the renderer anchors, measured on both carts (rev 2) by ROM literal-pool reference counts and instruction patterns,
+ * cross-checked against the PokeDNA rev-2 symbol list (numbers only); every value with its method is in docs/PROVENANCE.md
+ * and docs/phase35-rs/PHASE.md. The RAM block is identical on Ruby and Sapphire. Two layout differences from Emerald /
+ * FRLG: gSaveBlock1 is a struct in EWRAM, not a pointer (`sb1Direct`), and gMain's inBattle byte is 0x43D (the RS Main
+ * has 4 more bytes before it). The object events are in IWRAM. S2 switches `rendererOn` on. */
 static const uint8_t kRsGroupSizes[34] = {54, 5, 5, 6, 7, 7, 8, 7, 7, 13, 8, 17, 10, 24, 13, 13, 14, 2, 2, 2, 3, 1, 1,
                                           1, 86, 44, 12, 2, 1, 13, 1, 1, 3, 1};
 
@@ -185,14 +191,21 @@ static const uint8_t kRsGroupSizes[34] = {54, 5, 5, 6, 7, 7, 8, 7, 7, 13, 8, 17,
     .nPrimMetatiles = NUM_METATILES_IN_PRIMARY, .nPrimTiles = NUM_TILES_IN_PRIMARY, .nPrimPals = NUM_PALS_IN_PRIMARY, \
     .nMetatilesTotal = NUM_METATILES_TOTAL, .tilesetAttrOff = 0x10, .attrBytes = 2, .behMask = GBA_BEHAVIOR_MASK,     \
     .layerMask = GBA_ATTR_LAYER_MASK, .layerShift = GBA_ATTR_LAYER_SHIFT, .layoutBytes = GBA_ROM_MAPLAYOUT_BYTES,     \
-    .houseHalfWidth = 5, .houseHeight = 7, .emeraldIdTables = false, .interiors3d = false, .rendererOn = false
+    .houseHalfWidth = 5, .houseHeight = 7, .emeraldIdTables = false, .interiors3d = false, .rendererOn = false,     \
+    .gMain = 0x03001770u, .sb1Ptr = 0x02025734u, .sb1Direct = true, .backupLayout = 0x03004870u, .backupMap = 0,      \
+    .mapHeader = 0x0202E828u, .objEvents = 0x030048A0u, .playerAvatar = 0x0202E858u, .sprites = 0x02020004u,          \
+    .plttUnfaded = 0x0202EAC8u, .paletteFade = 0x0202F388u, .mainFlagsOff = 0x43D, .playerAvatarBytes = 0x24,        \
+    .weather = 0, .weatherOff = {0x6D0, 0x6C6, 0x730, 0x6FB, 0x724}, .gfxInfoCount = 218, .fldeffCount = 36
 
 static GameProfile sRuby = {GP_RS_COMMON, .game = GP_RUBY, .code = {'A', 'X', 'V', 'E'}, .dataSubdir = "AXVE",
                             .mapGroups = 0x083085A0u, .mapLayouts = 0x08304F30u, .tsGeneral = 0x08286D0Cu,
-                            .tsBuilding = 0x08286E5Cu};
+                            .tsBuilding = 0x08286E5Cu, .weatherPtr = 0x08396FDCu, .gfxInfoPtrs = 0x0836DC70u,
+                            .fldeffTemplates = 0x0836DFD8u, .cb2Overworld = 0x080543C5u, .cb2OverworldBasic = 0x080543B9u};
 static GameProfile sSapphire = {GP_RS_COMMON, .game = GP_SAPPHIRE, .code = {'A', 'X', 'P', 'E'}, .dataSubdir = "AXPE",
                                 .mapGroups = 0x08308530u, .mapLayouts = 0x08304EC0u, .tsGeneral = 0x08286C9Cu,
-                                .tsBuilding = 0x08286DECu};
+                                .tsBuilding = 0x08286DECu, .weatherPtr = 0x08396E24u, .gfxInfoPtrs = 0x0836DC00u,
+                                .fldeffTemplates = 0x0836DF68u, .cb2Overworld = 0x080543C9u,
+                                .cb2OverworldBasic = 0x080543BDu};
 
 static void set_bit(GpBehSet *s, unsigned b)
 {
