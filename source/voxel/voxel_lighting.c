@@ -532,7 +532,7 @@ static void RawQuad(VoxelBuilder *builder, const VoxelVertex *a,
 float VoxelLighting_Face(float nx, float ny, float nz)
 {
     /* n . sun over up . sun, the sun unnormalised at (-DX, 1, -DZ), +Z south:
-     * level ground is 1, a south wall -DZ (0.70), a west wall DX (0.30),
+     * level ground is 1, a south wall -DZ (0.65), a west wall DX (0.45),
      * north and east walls <= 0 (ambient). */
     float length = sqrtf(nx * nx + ny * ny + nz * nz);
     float facing;

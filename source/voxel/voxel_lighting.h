@@ -21,15 +21,15 @@
  * DZ is therefore NEGATIVE and shadows travel (+DX, +DZ) = north and a touch
  * east: away from the camera, up the screen. The GBA sprites are drawn lit
  * from the front and above; this makes the baked terrain/building shadows
- * agree with them. Elevation: horizontal length 0.76 over height 1 = 53 deg.
- * A south wall gets 0.70 of the sun's face term, a west wall 0.30, a roof 1;
+ * agree with them. Elevation: horizontal length 0.79 over height 1 = 52 deg.
+ * A south wall gets 0.65 of the sun's face term, a west wall 0.45, a roof 1;
  * north and east walls take ambient. (L4: a day cycle only has to drive these
  * two numbers, then VoxelLighting_Reset() and re-bake.)
  *
  * Nothing assumes a sign: the march, the reach boxes and the hash derive
  * their extents from the signs of DX and DZ. */
-#define VOXEL_SUN_DX 0.30f
-#define VOXEL_SUN_DZ (-0.70f)
+#define VOXEL_SUN_DX 0.45f
+#define VOXEL_SUN_DZ (-0.65f)
 #define VOXEL_LIGHT_REACH 8
 /* The light of what the sun does not reach: a cast shadow, and a face turned
  * away from the sun. The same number, so a wall and the shadow it casts on
