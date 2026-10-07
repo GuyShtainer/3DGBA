@@ -206,7 +206,7 @@ RgErr rg_build_models(const RgWorld *w, const RgSpec *specs, unsigned nSpecs, Rg
             rg_parts_init(&parts);
             m->mesh.flatPatch = art_rect_flat;
             m->mesh.flatCtx = &m->art;
-            ok = s->parts(s, s->arg0, s->arg1, &parts) && rg_close_sides(s, &parts) && rg_parts_emit(&parts, &m->mesh);
+            ok = rg_spec_parts(s, &m->art, &parts) && rg_parts_emit(&parts, &m->mesh);
             m->mesh.flatPatch = NULL;   /* the art may move with the model array; nothing emits after this */
             m->mesh.flatCtx = NULL;
             rg_parts_free(&parts);

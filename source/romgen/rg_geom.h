@@ -93,6 +93,10 @@ typedef struct RgTile {          /* vb:268-277 */
 typedef struct RgProj {          /* vb:250-265 */
     bool hasLo, hasHi;
     double lo, hi;
+    /* look L6: the art row is read at the point mirrored about z = axis, v = (2 axis - z) - y: a rear face takes the
+     * pixels of the front face it mirrors (rg_close_backs). */
+    bool mirror;
+    double axis;
 } RgProj;
 typedef struct RgStrip {         /* vb:535-611; call rg_strip_fin after filling */
     double fixed[2];
@@ -140,10 +144,12 @@ typedef enum { RG_P_PRISM, RG_P_HIPROOF, RG_P_FRUSTUM, RG_P_VAULT, RG_P_WALLS, R
                RG_P_FACET, RG_P_PLAINWALL, RG_P_DECAL, RG_P_CYLINDER, RG_P_FOUNTAIN_TOP, RG_P_JET,
                RG_P_RELIEF, RG_P_MOUND } RgPartKind;
 
-typedef enum { RG_EM_NONE = 0, RG_EM_PROJ, RG_EM_STRIP, RG_EM_TILE } RgEdgeKind;
-typedef struct RgEdgeMat { RgEdgeKind kind; RgProj proj; RgStrip strip; RgTile tile; } RgEdgeMat;
+/* RG_EM_FLAT (look L6): one polygon of the single texel (u, v) = flat[0], flat[1], tagged ~clamp: a plain face. */
+typedef enum { RG_EM_NONE = 0, RG_EM_PROJ, RG_EM_STRIP, RG_EM_TILE, RG_EM_FLAT } RgEdgeKind;
+typedef struct RgEdgeMat { RgEdgeKind kind; RgProj proj; RgStrip strip; RgTile tile; double flat[2];
+                           double trim[2]; } RgEdgeMat;   /* look L6: trim = px left out at x0, x1 (PROJ, FLAT) */
 
-#define RG_PRISM_PTS 8
+#define RG_PRISM_PTS 12                      /* 8 until look L6: a mirrored gable doubles the front's outline */
 #define RG_PRISM_CAPS 4
 typedef struct RgPrism {         /* vb:419-440 */
     double x0, x1;
@@ -155,6 +161,9 @@ typedef struct RgPrism {         /* vb:419-440 */
     unsigned nCaps;
     bool west, east;
     uint32_t skip;                           /* bit i = edge i skipped */
+    uint32_t closed;                         /* look L6: bit i = edge i was added by rg_close_backs */
+    bool mirrored;                           /* look L6: rg_close_backs mirrored the roof (the outline was rebuilt) */
+    bool chamfered;                          /* look L6: rg_close_backs ran a 45-degree back from the front top */
 } RgPrism;
 
 typedef struct RgHip {           /* vb:653-704 */
@@ -285,5 +294,11 @@ bool rg_poly_inside(const double (*poly)[2], unsigned n, double z, double y, dou
  * in its own section. Calls cb(ctx, z, y) per cell; returns the count. Sheets neither block nor count. */
 typedef void (*RgCellFn)(void *ctx, double z, double y);
 unsigned rg_prism_exposed(const RgPartList *parts, unsigned idx, bool east, RgCellFn cb, void *ctx);
+
+/* look L6: a part's solid as (z, y) polygons in the plane x = const, for the back-closure pass and its check. A non-sheet
+ * prism is its section over x0 + margin .. x1 - margin; a hip roof its eave box and hip (the ends lean in by `run`) plus
+ * the ridge's box; a frustum the plan's z-span at x up to the wall top. Other kinds (and a sheet) are not solids: 0. */
+#define RG_SEC_PTS 16u
+unsigned rg_part_section(const RgPart *p, double x, double margin, double (*sec)[RG_SEC_PTS][2], unsigned *n);
 
 #endif

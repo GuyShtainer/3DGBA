@@ -360,6 +360,7 @@ RgProj rg_proj_rows(double lo, double hi)
 {
     RgProj p;
 
+    memset(&p, 0, sizeof(p));
     p.hasLo = p.hasHi = true;
     p.lo = lo;
     p.hi = hi;
@@ -803,6 +804,81 @@ unsigned rg_prism_exposed(const RgPartList *parts, unsigned idx, bool east, RgCe
     return count;
 }
 
+/* ---- solids (look L6) ---------------------------------------------------------------------- */
+
+unsigned rg_part_section(const RgPart *p, double x, double margin, double (*sec)[RG_SEC_PTS][2], unsigned *n)
+{
+    if (p->kind == RG_P_PRISM) {
+        const RgPrism *pr = &p->u.prism;
+        unsigned k;
+
+        if (rg_prism_is_sheet(pr) || x < pr->x0 + margin || x > pr->x1 - margin || pr->nPoly > RG_SEC_PTS)
+            return 0;
+        for (k = 0; k < pr->nPoly; k++) {
+            sec[0][k][0] = pr->poly[k][0];
+            sec[0][k][1] = pr->poly[k][1];
+        }
+        n[0] = pr->nPoly;
+        return 1;
+    }
+    if (p->kind == RG_P_HIPROOF) {
+        /* below the eave a box, above it the hip (its ends lean in by `run` over the rise), then the ridge's box */
+        const RgHip *h = &p->u.hip;
+        double fm, ym, rise = h->yr - h->ye;
+        unsigned c = 0;
+
+        if (x < h->x0 + margin || x > h->x1 - margin)
+            return 0;
+        fm = h->run > RG_EPS ? (x - h->x0 < h->x1 - x ? x - h->x0 : h->x1 - x) / h->run : 1.0;
+        if (fm > 1.0)
+            fm = 1.0;
+        ym = h->ye + fm * rise;
+        sec[c][0][0] = h->zf; sec[c][0][1] = h->y0;
+        sec[c][1][0] = h->zf; sec[c][1][1] = h->ye;
+        sec[c][2][0] = h->zf - fm * (h->zf - h->zrf); sec[c][2][1] = ym;
+        sec[c][3][0] = h->zb + fm * (h->zrb - h->zb); sec[c][3][1] = ym;
+        sec[c][4][0] = h->zb; sec[c][4][1] = h->ye;
+        sec[c][5][0] = h->zb; sec[c][5][1] = h->y0;
+        n[c++] = 6;
+        if (h->ridge && fm >= 1.0) {
+            sec[c][0][0] = h->zrf; sec[c][0][1] = h->yr;
+            sec[c][1][0] = h->zrf; sec[c][1][1] = h->yt;
+            sec[c][2][0] = h->zrb; sec[c][2][1] = h->yt;
+            sec[c][3][0] = h->zrb; sec[c][3][1] = h->yr;
+            n[c++] = 4;
+        }
+        return c;
+    }
+    if (p->kind == RG_P_FRUSTUM) {
+        /* the plan's z-interval at x up to the wall top (a convex plan; the band and top are judged as the wall's box) */
+        const RgFrustum *f = &p->u.frustum;
+        double zlo = 1e30, zhi = -1e30, xlo = 1e30, xhi = -1e30;
+        unsigned k;
+
+        for (k = 0; k < f->nPlan; k++) {
+            const double *a = f->plan[k], *b = f->plan[(k + 1) % f->nPlan];
+
+            if (a[0] < xlo) xlo = a[0];
+            if (a[0] > xhi) xhi = a[0];
+            if ((a[0] - x) * (b[0] - x) <= 0.0 && fabs(b[0] - a[0]) > RG_EPS) {
+                double z = a[1] + (b[1] - a[1]) * (x - a[0]) / (b[0] - a[0]);
+
+                if (z < zlo) zlo = z;
+                if (z > zhi) zhi = z;
+            }
+        }
+        if (x < xlo + margin || x > xhi - margin || !(zhi > zlo))
+            return 0;
+        sec[0][0][0] = zhi; sec[0][0][1] = 0.0;
+        sec[0][1][0] = zhi; sec[0][1][1] = f->wallTop;
+        sec[0][2][0] = zlo; sec[0][2][1] = f->wallTop;
+        sec[0][3][0] = zlo; sec[0][3][1] = 0.0;
+        n[0] = 4;
+        return 1;
+    }
+    return 0;
+}
+
 static bool emit_prism(const RgPrism *pr, const char *name, RgMesh *m)
 {
     const double (*poly)[2] = pr->poly;
@@ -842,7 +918,9 @@ static bool emit_prism(const RgPrism *pr, const char *name, RgMesh *m)
         if (mat->kind == RG_EM_PROJ) {
             double cuts[4] = {0.0, 1.0, 0.0, 0.0};
             unsigned nc = 2, k, j;
-            double va = a[0] - a[1], vb = b[0] - b[1];
+            bool mir = mat->proj.mirror;
+            double ax2 = 2 * mat->proj.axis;
+            double va = mir ? (ax2 - a[0]) - a[1] : a[0] - a[1], vb = mir ? (ax2 - b[0]) - b[1] : b[0] - b[1];
             char ctg[RG_TAG_LEN];
             uint16_t plain, clamped;
 
@@ -876,11 +954,11 @@ static bool emit_prism(const RgPrism *pr, const char *name, RgMesh *m)
 
                 pa[0] = a[0] + (b[0] - a[0]) * ta;  pa[1] = a[1] + (b[1] - a[1]) * ta;
                 pb[0] = a[0] + (b[0] - a[0]) * tb;  pb[1] = a[1] + (b[1] - a[1]) * tb;
-                midv = (pa[0] - pa[1] + pb[0] - pb[1]) / 2;
+                midv = mir ? ((ax2 - pa[0]) - pa[1] + (ax2 - pb[0]) - pb[1]) / 2 : (pa[0] - pa[1] + pb[0] - pb[1]) / 2;
                 clampLo = mat->proj.hasLo && midv < mat->proj.lo;
                 clampHi = mat->proj.hasHi && midv > mat->proj.hi;
                 for (j = 0; j < 4; j++) {
-                    double x = xs[j] ? x1 : x0;
+                    double x = xs[j] ? x1 - mat->trim[1] : x0 + mat->trim[0];
                     const double *p = ps[j] ? pb : pa;
                     double v;
 
@@ -889,11 +967,21 @@ static bool emit_prism(const RgPrism *pr, const char *name, RgMesh *m)
                     else if (clampHi)
                         v = mat->proj.hi - 0.5;
                     else
-                        v = p[0] - p[1];
+                        v = mir ? (ax2 - p[0]) - p[1] : p[0] - p[1];
                     quad[j] = V(x, p[1], p[0], x, v);
                 }
                 rg_mesh_poly(m, quad, 4, shade, clampLo || clampHi ? clamped : plain);
             }
+        } else if (mat->kind == RG_EM_FLAT) {
+            char ctg[RG_TAG_LEN];
+            RgVtx quad[4];
+
+            tag_cat(ctg, tg, "~clamp");
+            quad[0] = V(x0 + mat->trim[0], a[1], a[0], mat->flat[0], mat->flat[1]);
+            quad[1] = V(x1 - mat->trim[1], a[1], a[0], mat->flat[0], mat->flat[1]);
+            quad[2] = V(x1 - mat->trim[1], b[1], b[0], mat->flat[0], mat->flat[1]);
+            quad[3] = V(x0 + mat->trim[0], b[1], b[0], mat->flat[0], mat->flat[1]);
+            rg_mesh_poly(m, quad, 4, shade, rg_mesh_tag(m, ctg));
         } else if (mat->kind == RG_EM_STRIP) {
             const double *start = mat->strip.fromEnd ? b : a, *end = mat->strip.fromEnd ? a : b;
             double tv[3] = {0.0, end[1] - start[1], end[0] - start[0]}, tdir[3];
@@ -1077,6 +1165,14 @@ static bool emit_hip(const RgHip *h, const char *name, RgMesh *m)
             tag_cat(tg, name, ".teeth"); rg_strip_face(m, ft, 4, o, ex, up, &teeth, RG_SHADE_ART, tg);
             o[0] = 0; o[1] = yt; o[2] = zr;
             tag_cat(tg, name, ".cap"); rg_strip_face(m, fc, 4, o, ex, back, &cap, RG_SHADE_ART, tg);
+            {
+                /* look L6: the ridge's back face, the teeth again (upstream drew the front only, so from behind or
+                 * above the ridge stood open). It faces north, behind the cap: the ortho view never sees it. */
+                double bt[4][3] = {{sb, yr, zq}, {sa, yr, zq}, {sa, yt, zq}, {sb, yt, zq}};
+
+                o[0] = 0; o[1] = yr; o[2] = zq;
+                tag_cat(tg, name, ".teeth_n"); rg_strip_face(m, bt, 4, o, ex, up, &teeth, RG_SHADE_BACK, tg);
+            }
         }
     }
     {
