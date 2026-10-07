@@ -1,5 +1,5 @@
 // test_voxel_entities.c -- host test for the entity module (voxel_entities.c): sub-tile movement
-// interpolation, the STEP table, Emit on the synthetic fixture. Phase 32 P2, SPEC-port section 9.2.
+// interpolation, the STEP table, Emit on the synthetic fixture, look L9 tall grass. Phase 32 P2, SPEC-port section 9.2.
 // STEP: the five step lengths in voxel_entities.c (16,8,6,4,2) were re-derived from the game ROM
 // (BPEE 0x0850E768, five u16) and are re-checked here when roms/emerald.gba is present.
 //
@@ -116,12 +116,112 @@ static void TestEmit(void)
     E8(OBJ, 0x01);
 }
 
+/*
+ * look L9: tall grass stands up in front of an object on its tile, and the
+ * player standing in it is two quads so the x-ray can leave the feet out.
+ * Sprite 6 is the GBA's tall grass field effect (template FLDEFFOBJ_TALL_GRASS
+ * of the fixture's table at 0x085059F8: 0x08700000 + 0x40 * 4), 16x16, on the
+ * player's tile (map 12,13 = world 5,6); long grass (15) is the control.
+ */
+#define FX_TALL_GRASS 0x08700100u
+#define FX_LONG_GRASS 0x087003C0u
+#define GRASS_SPR (SPR + 6u * 0x44u)
+
+static void PutGrass(uint32_t spr, uint32_t template, int mapX, int mapY)
+{
+    E16(spr + 0, 0x0040);                       /* y 0x40, square */
+    E16(spr + 2, 0x0080 | (1u << 14));          /* x 0x80, size 1: 16x16 */
+    E16(spr + 4, 0x200 | (3u << 12));           /* its own tiles, not the player's */
+    E32(spr + 0x14, template);
+    E16(spr + 0x20, 128); E16(spr + 0x22, 72);
+    E16(spr + 0x2E + 2, (uint32_t)mapX); E16(spr + 0x2E + 4, (uint32_t)mapY);
+    E8(spr + 0x3E, 0x03);                       /* inUse, coordOffsetEnabled */
+}
+
+static float MinY(const VoxelVertex *v, unsigned n)
+{ float m = v[0].y; for (unsigned i = 1; i < n; ++i) if (v[i].y < m) m = v[i].y; return m; }
+static float MaxY(const VoxelVertex *v, unsigned n)
+{ float m = v[0].y; for (unsigned i = 1; i < n; ++i) if (v[i].y > m) m = v[i].y; return m; }
+
+static void TestTallGrass(void)
+{
+    static uint16_t atlas[VOXEL_SPRITE_PIXELS];
+    static VoxelVertex verts[4096];
+    VoxelBuilder b;
+    VoxelCamera cam;
+    unsigned n0;
+
+    E8(SPR + 0x3E, 0x03);                       /* the player's sprite on the map: drawn */
+    Take();
+    CHECK(VoxelEntities_StandsTileEffect(FX_TALL_GRASS));
+    CHECK(!VoxelEntities_StandsTileEffect(FX_LONG_GRASS));
+    CHECK(!VoxelEntities_StandsTileEffect(0));
+    VoxelCamera_Init(&cam);
+    VoxelEntities_Reset();
+    VoxelBuilder_Init(&b, verts, 4096);
+    VoxelEntities_Emit(&b, atlas, &cam, NULL, NULL);
+    n0 = b.count;
+    CHECK(VoxelEntities_PlayerVertexFirst() == 0);                    /* one quad, the first */
+
+    /* tall grass on the player's tile: one more quad for the grass, one for the split */
+    PutGrass(GRASS_SPR, FX_TALL_GRASS, 12, 13);
+    Take();
+    VoxelBuilder_Init(&b, verts, 4096);
+    VoxelEntities_Emit(&b, atlas, &cam, NULL, NULL);
+    CHECK(b.dropped == 0 && b.count == n0 + 12);
+    if (b.count == n0 + 12)
+    {
+        const VoxelVertex *lo = &verts[0], *hi = &verts[6], *g = &verts[b.count - 6];
+        float yaw = cam.yaw * (3.14159265358979323846f / 180.0f);
+        float stretch = 1.0f / sqrtf(cosf(cam.pitch * (3.14159265358979323846f / 180.0f)));
+        float tx = sinf(yaw), tz = cosf(yaw);
+        float pmx = (lo[0].x + lo[1].x) * 0.5f, pmz = (lo[0].z + lo[1].z) * 0.5f;
+        float gmx = (g[0].x + g[1].x) * 0.5f, gmz = (g[0].z + g[1].z) * 0.5f;
+
+        CHECK(VoxelEntities_PlayerVertexFirst() == 6);                /* x-ray draws the upper quad */
+        /* the split: lower quad 8 rows tall, upper quad picks up where it ends, in u/v too */
+        CHECK(Near(MaxY(lo, 6) - MinY(lo, 6), 8.0f * stretch / 16.0f));
+        CHECK(Near(MinY(hi, 6), MaxY(lo, 6)));
+        CHECK(Near(hi[0].v, lo[2].v) && Near(hi[0].u, lo[0].u) && Near(hi[1].u, lo[1].u));
+        CHECK(Near(lo[0].x, hi[0].x) && Near(lo[0].z, hi[0].z));     /* same plane */
+        /* the grass stands up (not a decal), feet on the ground with the player's */
+        CHECK(MaxY(g, 6) - MinY(g, 6) > 0.5f);
+        CHECK(Near(MinY(g, 6), MinY(lo, 6)));
+        CHECK(Near(g[0].x, g[5].x) && Near(g[0].z, g[5].z));        /* vertical edge */
+        /* 0.04 in front of the player's card, towards the camera, not sideways */
+        CHECK(fabsf((gmx - pmx) * tx + (gmz - pmz) * tz - 0.04f) < 1e-3f);
+        CHECK(fabsf((gmx - pmx) * tz - (gmz - pmz) * tx) < 1e-3f);
+    }
+
+    /* the NPC (map 15,9) in tall grass is not split: the x-ray is the player's */
+    PutGrass(GRASS_SPR, FX_TALL_GRASS, 15, 9);
+    Take();
+    VoxelBuilder_Init(&b, verts, 4096);
+    VoxelEntities_Emit(&b, atlas, &cam, NULL, NULL);
+    CHECK(b.count == n0 + 6 && VoxelEntities_PlayerVertexFirst() == 0);
+
+    /* long grass on the player's tile stays a decal on the ground, the player one quad */
+    PutGrass(GRASS_SPR, FX_LONG_GRASS, 12, 13);
+    Take();
+    VoxelBuilder_Init(&b, verts, 4096);
+    VoxelEntities_Emit(&b, atlas, &cam, NULL, NULL);
+    CHECK(b.count == n0 + 6 && VoxelEntities_PlayerVertexFirst() == 0);
+    if (b.count == n0 + 6)
+    {
+        const VoxelVertex *g = &verts[b.count - 6];
+        CHECK(MaxY(g, 6) - MinY(g, 6) < 0.05f);
+    }
+    E8(GRASS_SPR + 0x3E, 0);
+    E8(SPR + 0x3E, 0x01);
+}
+
 int main(void)
 {
     CHECK(fxInit() == 0);
     TestStepTable();
     TestMovement();
     TestEmit();
+    TestTallGrass();
     printf("test_voxel_entities: %d checks, %d failures\n", sChecks, sFails);
     return sFails != 0;
 }
