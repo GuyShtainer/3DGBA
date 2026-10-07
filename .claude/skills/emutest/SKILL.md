@@ -104,7 +104,7 @@ FAIL. Run it after ANY harness change; run `smoke.sh --rom` to also exercise Tie
 
 **Tier A — zero permission, no ROMs** (the default): boot ROM-less (the app falls
 through the empty picker into a dead-core session), play a synthesized movie that drives
-the pause menu, watch `g_prefs.tiltLevel` flip over gdb, menu-QUIT, confirm the app exit
+the pause menu, watch `g_prefs.voxPitch` flip over gdb, menu-QUIT, confirm the app exit
 closed the RSP session. RUN → PRESS → READ-STATE with nothing granted.
 
 **Tier B — `--rom`**: stages copies of the user's `dual-gba/` ROMs+saves as fixtures
