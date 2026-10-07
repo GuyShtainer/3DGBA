@@ -170,11 +170,13 @@ static void WriteAndRead(const RgWorld *w, const RgBuildModels *ms)
     printf("buildings.bin: %zu bytes, %u pages, %u models, %u pageModels, %u vertices, %u placements, %u masks, %u variants\n",
            sz, st.pages, st.models, st.pageModels, st.vertices, st.placements, st.masks, st.variants);
     CHECK(st.err == RG_OK && st.variants <= RG_MAX_VARIANTS && st.pages <= RG_MAX_PAGES);
-    /* pins (this ROM, S2.6): 67 S2.5 models + 200 interior pieces + 19 bare twins */
-    CHECK(st.models == 286 && st.variants == 66 && st.pages == 118 && st.pageModels == 630 && st.placements == 2894u);
+    /* pins (this ROM, S2.6): 67 S2.5 models + 200 interior pieces + 19 bare twins; 286 -> 307 models, 630 -> 651
+     * pageModels, 2894 -> 2918 placements: Phase 36 H1 (Dewford, Mauville, Verdanturf, Fallarbor, Slateport): 21 direct models, 24 placements (interiors unchanged) */
+    CHECK(st.models == 307 && st.variants == 66 && st.pages == 118 && st.pageModels == 651 && st.placements == 2918u);
     /* 7898476 B / 80520 vertices -> 7870828 / 79368: the look-L7 flat-cap merge (outdoor models; interiors unchanged);
-     * -> 7873564 / 79482: look L6, the hip-roof ridge's back face (outdoor models; interiors unchanged) */
-    CHECK(sz == 7873564u && st.vertices == 79482u && st.masks == 56u);
+     * -> 7873564 / 79482: look L6, the hip-roof ridge's back face (outdoor models; interiors unchanged);
+     * -> 8475268 / 87360, 59 masks: Phase 36 H1's outdoor models (interiors unchanged) */
+    CHECK(sz == 8475268u && st.vertices == 87360u && st.masks == 59u);
     CHECK(memcmp(buf, "VXB7", 4) == 0 && sz % 4 == 0);
     {
         VoxelMapInstance inst;

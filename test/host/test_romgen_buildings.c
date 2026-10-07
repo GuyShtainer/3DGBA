@@ -236,8 +236,9 @@ static void TestRealRom(void)
         static RgSpec direct[32];
         unsigned nd = 0;
 
-        for (i = 0; i < rg_spec_count; i++)
-            if (rg_specs[i].kind == RG_SPEC_DIRECT)
+        /* the Phase 36 Hoenn rows (rg_hspecs.h) follow these; their pins live in check, census and the world pins */
+        for (i = 0; i < rg_spec_count && strcmp(rg_specs[i].name, "dewford_house_w") != 0; i++)
+            if (rg_specs[i].kind == RG_SPEC_DIRECT && nd < 32)
                 direct[nd++] = rg_specs[i];
         CHECK(nd == 14);
         CHECK(rg_build_models(&w, direct, nd, &ms) == RG_OK);
