@@ -28,6 +28,16 @@
 //   TEST 13 legacy FP_WK_NONE behaviour is bit-for-bit unchanged  T4.4 last row
 //   TEST 14 the stall at a blocked WK_NONE terminal is ARRIVAL   FIX PASS finding 1
 
+// fixtures_fieldpath.h holds bytes copied from the user's own ROMs, so it is never committed
+// (gitignored). Without the local copy this suite SKIPS LOUDLY instead of failing to build.
+#if !__has_include("fixtures_fieldpath.h")
+#include <stdio.h>
+int main(void) {
+	printf("test_fieldpath — SKIPPED: test/host/fixtures_fieldpath.h (ROM-derived, local only) is absent\n");
+	return 0;
+}
+#else
+
 #include <stdio.h>
 #include <string.h>
 #include "../../source/fieldpath.h"
@@ -554,3 +564,5 @@ int main(void) {
 	printf("\n%d checks, %d failures\n", g_checks, g_fail);
 	return g_fail ? 1 : 0;
 }
+
+#endif /* __has_include("fixtures_fieldpath.h") */

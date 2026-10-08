@@ -76,6 +76,12 @@ CFLAGS	+=	$(MGBA_DEFS) $(MGBA_INC)
 ROMGEN_DEV_HOOK ?= 0
 CFLAGS	+=	-DROMGEN_DEV_HOOK=$(ROMGEN_DEV_HOOK)
 
+# The voxel tree art is game art, so it is never committed (gitignored). A local copy
+# (tools/voxel/pack_trees.py) is embedded when present; without it the voxel world has no trees.
+ifneq ($(wildcard $(TOPDIR)/data/voxel_trees.bin),)
+CFLAGS	+=	-DHAVE_VOXEL_TREES=1
+endif
+
 CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions -std=gnu++11
 
 ASFLAGS	:=	-g $(ARCH)

@@ -54,7 +54,9 @@
 
 /* 3DGBA: the shader and the tree art are embedded (data/voxel_trees.bin, voxel.v.pica), not romfs. */
 #include "voxel_shbin.h"
+#if HAVE_VOXEL_TREES
 #include "voxel_trees_bin.h"
+#endif
 #define VOXEL_SHADER_PATH "embedded voxel.shbin"
 
 #ifndef CTR_VOXEL_TRACE
@@ -1661,9 +1663,14 @@ bool CtrVoxel_Init(void)
         /* 3DGBA: embedded art instead of fopen(romfs). */
         size_t bytes = VOXEL_TREE_TEXTURE_DIM * VOXEL_TREE_TEXTURE_DIM * sizeof(uint16_t);
 
+#if HAVE_VOXEL_TREES
         if (voxel_trees_bin_size != bytes)
             goto fail;
         memcpy(sTreeAtlas.data, voxel_trees_bin, bytes);
+#else
+        /* No local tree art (it is game art, never committed): all texels transparent. */
+        memset(sTreeAtlas.data, 0, bytes);
+#endif
         VoxelGrade_Texels(sTreeAtlas.data, VOXEL_TREE_TEXTURE_DIM * VOXEL_TREE_TEXTURE_DIM);
         BrightenCrowns(sTreeAtlas.data);
     }
