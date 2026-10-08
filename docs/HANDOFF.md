@@ -15,7 +15,8 @@
   rs_mossdeep_space), sootopolis_tower x3, sootopolis_box x6, gym_sootopolis. Census Emerald 124/160, Ruby 122/139.
   Azahar evidence in BUILDLOG-H4 (Emerald only). **Look backlog:** the Space Center's 82 px wall hides the rocket from
   the south; the pointed dwellings read the same as before from the default camera (placed, not proven 3D on screen);
-  the door-less dwelling twins are flat art. NOTHING PUSHED, nothing hardware-run. Next: H5 routes and landmarks.
+  the door-less dwelling twins are flat art. NOTHING PUSHED, nothing hardware-run. Next: H5 routes and landmarks, IN FLIGHT
+  (sonnet agent in its own worktree off `44deb51`, brief = session scratchpad `h5-brief.md`; nothing of it merged yet).
 
 - **2026-10-08 — H3 LILYCOVE MERGED** (`cf95177`, `--no-ff`; branch and worktree removed). Gate on main green:
   41 / 41 suites, device build links; `3DGBA.cia` rebuilt from `cf95177`. NOTHING PUSHED, nothing hardware-run.
