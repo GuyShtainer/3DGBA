@@ -59,7 +59,27 @@ front of the wall.
   signposts ba2fde45, relief 32c24146; RS regions 1a09cd5f, signposts 9b4d379c, relief 215a12d9; Ruby == Sapphire.
 - Full gate (`gate-run.sh`): all six CLI outputs rc 0; `test` 30 and `vtest` 11, "suites ok: 41 (expect 41)"; device `make -j8` rc 0. Emerald buildings CLI SHA-1 f127285a (full and ledges runs), Ruby = Sapphire 2dc3a918.
 
+## Evidence (Azahar, 2026-10-08)
+
+Private emutest instance (New 3DS), warp-save copies placed on Lilycove 0/5 (originals untouched; copies deleted
+afterwards). The worktree's own app build, before and after; only the staged .bin files change: before = main `a89dffa`
+(buildings Emerald 5b2711bb, Ruby a00bb5ae), after = this slice (f127285a, 2dc3a918). Device logs: Emerald 311 models /
+2931 placements / 89364 vertices before, 319 / 2943 / 91284 after; Ruby 89 / 2118 / 41274 before, 97 / 2130 / 43194
+after; no "chunk scratch full" in any of the 12 runs. The window was at 1x scale (450x270): every side-by-side is
+upscaled 2x (nearest). Night lighting (the 3DS clock read 02:01). The Ruby shot is local only (ROM-derived art).
+
+| spot (player) | before | after |
+|---|---|---|
+| store and museum (19,9), `h3-sm-before-after.png` | flat art | the museum stands as a tower over two wings; the store is a tall facade with its sign, running off the top of the frame, nothing walkable behind it; the blue house below stands with a gable and a side wall, its shadow on the road |
+| museum steps (9,8), `h3-sm2-before-after.png` | flat art | the tower and wings stand; the steps stay flat; the player beside the steps and an NPC draw in front of the museum, nothing hidden |
+| Contest Hall and wooden house (30,24), `h3-hw-before-after.png` | flat art | the hall stands as a red-fronted block under its flat blue roof; the wooden house stands with its three roofs; **a thin dark vertical seam at the hall's right edge** |
+| pavilion and a blue house (12,24), `h3-pv-before-after.png` | flat art | the blue house stands, gabled; the pavilion's roof edge shows its scallops |
+| cave mouth (75,9, on a sea rock), `h3-cave-before-after.png` | the arch is flat art in the cliff | the arch stands as a rock block with the dark doorway, seated in the cliff (no float, no cut, no z-fight); **short thin black lines at the base either side of the arch**. The black lines on the near sea rock are in the before as well |
+| Ruby, store and museum (19,9), local only | flat art | the museum and the store stand as on Emerald; the steps stay readable with the player in front |
+
 ## Next
 
-H4 Mossdeep / Sootopolis. Azahar before / after for Lilycove on Emerald plus Ruby is still to do (the cave mouth and the
-museum's entrance first).
+1. Merge into main; H4 Mossdeep / Sootopolis.
+2. Look backlog, not blocking: the seam on the Contest Hall's right edge and the black lines at the cave arch's base
+   (both thin, at 1x capture scale; a full-size capture or hardware would show whether they matter).
+3. Hardware: pending, as for every slice.
