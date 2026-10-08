@@ -9,9 +9,13 @@
 
 ## Current status
 
-- **2026-10-08 — MERGE IN PROGRESS H4** — merging branch `worktree-agent-ad7621eb35f0d67b9` @ `07b9836` (built, gate
-  41/41, Azahar evidence in BUILDLOG-H4) into main `9f8938a`. If this line is still here, the merge or its main gate did not
-  finish: check `git log`, re-run `SP/gate-run.sh` on main (expect Emerald buildings ec319d0e, R = S b7432279, 41/41).
+- **2026-10-08 — H4 MOSSDEEP / SOOTOPOLIS MERGED** (`ee69eb3`, `--no-ff`; branch and worktree removed). Gate on main
+  green: 41 / 41 suites, device build links, Emerald buildings ec319d0e, R = S b7432279, every other pin unchanged;
+  `3DGBA.cia` rebuilt from `ee69eb3`. Recipes: mossdeep_house x5, mossdeep_wide, mossdeep_space (RS: own row
+  rs_mossdeep_space), sootopolis_tower x3, sootopolis_box x6, gym_sootopolis. Census Emerald 124/160, Ruby 122/139.
+  Azahar evidence in BUILDLOG-H4 (Emerald only). **Look backlog:** the Space Center's 82 px wall hides the rocket from
+  the south; the pointed dwellings read the same as before from the default camera (placed, not proven 3D on screen);
+  the door-less dwelling twins are flat art. NOTHING PUSHED, nothing hardware-run. Next: H5 routes and landmarks.
 
 - **2026-10-08 — H3 LILYCOVE MERGED** (`cf95177`, `--no-ff`; branch and worktree removed). Gate on main green:
   41 / 41 suites, device build links; `3DGBA.cia` rebuilt from `cf95177`. NOTHING PUSHED, nothing hardware-run.
