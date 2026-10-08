@@ -45,7 +45,7 @@ with no further edit). Include path: vendored files keep `#include "voxel_world.
 | `voxel_file.h` | — | as-is (`VOXEL_HOST_FILES` ⇒ fopen for the host build, else `CtrData_Open`) |
 | `voxel.v.pica` | 85 | as-is (built to `voxel_shbin.h`/`_shbin` by the Makefile rule) |
 | `NOTICE.md` | 34 | copied verbatim to `source/voxel/NOTICE.md` (carries both MIT notices) |
-| `3ds_port/assets/voxel/trees/*.png` | — | vendored as MIT original art (made by upstream `scripts/gen_voxel_trees.py`; not game-derived) |
+| `3ds_port/assets/voxel/trees/*.png` | — | **corrected 2026-10-08:** NOT original art — Emerald's own tree metatiles (99.7–100% pixel match; upstream's MIT grant excludes game graphics). Never committed; builds embed a local copy only when present |
 
 **Not vendored:** `voxel_battle.c/.h` (replaced by our stub, §2.9), all of `3ds_video*.c`,
 `3ds_settings.c`, `3ds_data.c`, `3ds_pak.c`, `3ds_assets.c`, `main_3ds.c`, every

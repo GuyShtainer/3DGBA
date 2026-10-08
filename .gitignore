@@ -56,13 +56,40 @@ test/fixtures/dio_*
 # agent worktrees
 .claude/worktrees/
 
-# phase 32: user-built voxel data and paks are never committed; the MIT tree art is the exception
+# phase 32: user-built voxel data and paks are never committed
 *.pak
 voxel/*.bin
-!data/voxel_trees.bin
 
 # phase 33: host romgen CLI build output
 tools/romgen/build/
 
 # Phase 34 B0: ROM-derived authoring pictures (tools/romgen/out/) are never committed
 tools/romgen/out/
+
+# release-legal-audit 2026-10-08 — never committed, kept on the local disk only:
+# emulator evidence (game frames, ROM-derived renders) and screenshots
+docs/**/evidence/**
+docs/**/evidence-*.png
+tools/3dgba-ui-audit.html
+# the voxel tree art is Emerald's own tree graphics (upstream's MIT grant excludes it);
+# data/voxel_trees.bin is already covered by data/*.bin
+assets/voxel/trees/
+# bytes copied from the user's ROMs
+test/host/fixtures_fieldpath.h
+# docs that quote decompiled game code or game text
+docs/kb/celio/audit/trade-machine.md
+docs/kb/celio/audit/room-mechanics.md
+docs/kb/celio/audit/link-layer.md
+docs/phase15-presence/SPEC-data.md
+docs/phase21-touch-census/LANE-B-TAPVERIFY.md
+docs/phase21-touch-census/LANE-D-FULL.md
+docs/phase21-touch-census/LANE-F-EXECUTOR.md
+docs/phase21-touch-census/LANE-R-REACH.md
+docs/phase21-touch-census/SPEC-hm-waterfall.md
+# internal legal audit reports
+docs/legal/
+# on-device log archives (trainer name / IDs)
+netlogs-archive-*.tar.gz
+# python bytecode
+__pycache__/
+*.pyc

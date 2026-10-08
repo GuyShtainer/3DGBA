@@ -131,10 +131,12 @@ distributed version or fork must also remain open-source under the GPL.
 ## Credits & third-party
 
 - **[mGBA](https://mgba.io/)** by endrift powers the emulation — licensed **MPL-2.0**. 3DGBA
-  links mGBA built from upstream commit `92621ea` with one local change to
-  `src/gba/CMakeLists.txt` (so the link-cable code links); per MPL-2.0 that file stays MPL-2.0
-  and its source is available — the exact change is the committed patch
-  [`patches/mgba-92621ea-cmakelists.patch`](patches/mgba-92621ea-cmakelists.patch) (also described
+  links mGBA built from upstream commit `92621ea` with two local changes: one to
+  `src/gba/CMakeLists.txt` (so the link-cable code links) and one to the software video renderer
+  (`video-software.{c,h}`). Per MPL-2.0 those files stay MPL-2.0 and their source is available —
+  the exact changes are the committed patches
+  [`patches/mgba-92621ea-cmakelists.patch`](patches/mgba-92621ea-cmakelists.patch) and
+  [`patches/mgba-backdrop-key.patch`](patches/mgba-backdrop-key.patch) (also described
   in `docs/kb/mgba-integration.md`). MPL-2.0 is GPL-compatible.
 - Built with **devkitPro** / **libctru** / **citro2d / citro3d**.
 - Gen-3 RAM addresses + struct offsets were found by referencing the

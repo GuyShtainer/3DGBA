@@ -23,7 +23,7 @@
 //   WALK   walking a plain step of the plan
 //   FACE   holding the direction until the GAME says the avatar faces the obstacle
 //   A      settling, then the A pulse aimed at it
-//   DLG    waiting for the script to talk ("This tree looks like it can be CUT down!")
+//   DLG    waiting for the script to talk (the "this tree can be cut" message)
 //   YESNO  advancing the message box(es) until the yes/no menu exists
 //   ANSWER pressing YES, on a level, because Gen 3's yes/no ignores its first five frames
 //   DONE   waiting for the move to actually land (the surf bit, or the object going inactive)

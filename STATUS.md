@@ -28,7 +28,7 @@ games (Sonic, Kirby, etc.).
 | **Touch "smart pointer" fixes** (tap-vs-drag thresholds and other fixes after the first hardware test failed in six ways) | ❌ Four of the six defects are fixed, but **none of the fixes is hardware-tested**. Touch events are logged to the SD card for the next test. |
 | **Diagnostics layer** (crash dumps, on-device logs, game-state logger) | ❌ **Not hardware-tested** |
 | **Co-op presence** (see the other game's player walking on your map; same console only) | ❌ **Not hardware-tested** |
-| **Voxel 3D overworld** for FireRed/LeafGreen, Emerald and Ruby/Sapphire: buildings generated on the device from your own ROM (no game art is shipped), Hoenn landmark models, stereo 3D, depth of field and bloom | ❌ **Not hardware-tested.** Checked in Azahar only. Known visual bugs are listed in `docs/phase36-hoenn/LOOK-BUGS.md`. |
+| **Voxel 3D overworld** for FireRed/LeafGreen, Emerald and Ruby/Sapphire: buildings generated on the device from your own ROM (no game art is shipped), Hoenn landmark models, stereo 3D, depth of field and bloom | ❌ **Not hardware-tested.** Checked in Azahar only. Known visual bugs are listed in `docs/phase36-hoenn/LOOK-BUGS.md`. Builds from this repo draw no trees: the tree art is the game's own, so it isn't shipped. |
 | **Removed:** the older 2.5D depth-pop, tilt and HD-2D post effects (replaced by the voxel world) | — see `docs/REMOVED-3D-ATTEMPTS.md` |
 | **Emulator self-test harness** (`tools/emutest/`, drives Azahar for automated checks) | Dev tooling only, runs on a Mac |
 

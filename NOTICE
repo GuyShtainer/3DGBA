@@ -11,7 +11,7 @@ License: GNU General Public License v3.0 (compatible with 3DGBA's GPL-3.0)
 
 3DGBA's wireless Game Boy Advance link (the "local termination" trade path,
 source/celiolink.c / celiolink.h / celiolink_payloads.h and the state-F driver
-in source/gbacore.c) is a clean-room reimplementation of the technique
+in source/gbacore.c) is an independent reimplementation of the technique
 pioneered by the Celio-Link project, which brings the Pokemon Generation III
 games online via a USB dongle + relay server.
 
@@ -60,7 +60,9 @@ Voxel overworld (source/voxel/)
 The 3D overworld renderer in source/voxel/ is vendored from ZallaxDev/pokeemerald-3Ds-dualscreen
 (commit c330c0a, MIT), which itself reuses logic from gradenGnostic/pokeemerald-multiplatform
 (commit db1cab3d, MIT). Files are modified for 3DGBA and carry a header saying so. The pret
-decompilation is not included; game data (emerald3ds.pak) is never shipped. Both notices follow in full.
+decompilation is not included; game data (emerald3ds.pak) is never shipped. Upstream's tree PNGs
+(assets/voxel/trees/) are Emerald's own tree graphics, which upstream's MIT grant excludes, so
+3DGBA does not ship them: builds embed a local copy only when one is present. Both notices follow in full.
 
 ### ZallaxDev / Pokemon Emerald 3Ds Dual Screen contributors (MIT)
 
