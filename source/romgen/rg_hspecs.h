@@ -182,7 +182,7 @@ extern const RgExact rg_h_pacifidlog_hut_exact[3];
 
 /* ======== Phase 36 slice H3 ======== */
 
-/* ---- Lilycove City (layout 6; Ruby / Sapphire retarget it and add RS-own rows, rg_rsspecs.c) ---- */
+/* ---- Lilycove City (layout 6; Ruby / Sapphire retarget every row, rg_rsspecs.c: no RS-own row) ---- */
 #define L_H_LILYCOVE 6, 0x7A998B47u
 bool rg_h_lilycove_house(const RgSpec *s, int width, int a1, RgPartList *out);
 extern const RgExact rg_h_lilycove_house_exact[2];
