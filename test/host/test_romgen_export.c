@@ -202,9 +202,10 @@ static void TestRealRom(void)
      * look L6: the hip-roof ridge gets its back face, 38 triangles; -> 8475268 / 87360, 307 models, 651 pageModels,
      * 2918 placements, 59 masks by Phase 36 H1 (Dewford, Mauville, Verdanturf, Fallarbor, Slateport): 21 direct models, 24 placements;
      * -> 8606220 / 89364, 311 models, 655 pageModels, 2931 placements, 68 masks by Phase 36 H2 (Fortree, Lavaridge, Pacifidlog): 4 models, 13 placements;
-     * -> 8606276, 66 -> 75 variants by Phase 36 H2: a building's water cells draw the sea under the roof (quarters 0xF variants), 9 variants) */
-    CHECK(a.buildingsSize == 8606276u && a.bModels == 311 && a.bPages == 118 && a.bPageModels == 655 && a.bPlacements == 2931 &&
-          a.bVertices == 89364 && a.bMasks == 68 && a.bVariants == 75 && a.buildingsFailed == 0);
+     * -> 8606276, 66 -> 75 variants by Phase 36 H2: a building's water cells draw the sea under the roof (quarters 0xF variants), 9 variants;
+     * -> 8883292 / 91284, 319 models, 663 pageModels, 2943 placements, 69 masks by Phase 36 H3 (Lilycove): 8 models, 12 placements) */
+    CHECK(a.buildingsSize == 8883292u && a.bModels == 319 && a.bPages == 118 && a.bPageModels == 663 && a.bPlacements == 2943 &&
+          a.bVertices == 91284 && a.bMasks == 69 && a.bVariants == 75 && a.buildingsFailed == 0);
     CHECK(a.regionsSize == 330791u && a.signsSize == 26144u);   /* S0/S1 outputs unchanged by wantBuildings */
     Parse(a.buildings, a.buildingsSize);
     Consume(a.buildings, a.buildingsSize, a.bVariants);
