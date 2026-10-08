@@ -165,6 +165,39 @@ static const struct { unsigned mapsec, count; } kBySec[] = {
     {0x91, 7}, {0x92, 7}, {0x93, 4}, {0x94, 4}, {0x95, 4}, {0x98, 1}, {0x9A, 1}, {0x9F, 1}, {0xA1, 1}, {0xA5, 2},
     {0xA7, 1}, {0xA9, 1}, {0xAE, 1}, {0xBB, 1}};
 
+/* Phase 36 H5: the census seed rect never goes negative (Ruby 27/0 is a 1x1 dummy layout: the door's window clamped to a
+ * -3 x -21 rect, "4,22,-3,-21"); every rect is empty or inside its layout. */
+static void TestCensusRs(void)
+{
+    size_t n = 0;
+    uint8_t *rom = fxr_load_rom(FXR_ENV_RUBY, &n);
+    RgWorld w;
+    RgCensus c;
+    unsigned i, nk = 0, empty = 0;
+    const RgSpec *k;
+
+    if (rom == NULL) {
+        printf("SKIP Ruby census rects: set ROMGEN_ROM or %s\n", FXR_ENV_RUBY);
+        sSkipped++;
+        return;
+    }
+    CHECK(rg_world_open(&w, rom, n) == RG_OK);
+    k = rg_game_specs(w.prof, &nk);
+    CHECK(rg_author_census(&w, k, nk, &c));
+    for (i = 0; i < c.n; i++) {
+        const RgCensusRow *r = &c.row[i];
+        const RgLayout *L = &w.layouts[r->layout - 1u];
+
+        CHECK(r->rect[2] >= 0 && r->rect[3] >= 0 && r->rect[0] >= 0 && r->rect[1] >= 0);
+        CHECK(r->rect[0] + r->rect[2] <= (int)L->w && r->rect[1] + r->rect[3] <= (int)L->h);
+        empty += r->rect[2] == 0 || r->rect[3] == 0;
+    }
+    CHECK(empty >= 1);   /* 27/0 stays a row (its doors are counted); its rect is empty */
+    rg_census_free(&c);
+    rg_world_close(&w);
+    free(rom);
+}
+
 static RgCensus sCen[2];
 
 static void TestCensus(const char *name, const char *env, int idx)
@@ -1061,6 +1094,7 @@ int main(void)
     }
     rg_census_free(&sCen[0]);
     rg_census_free(&sCen[1]);
+    TestCensusRs();
     TestPallet("FireRed", FXR_ENV_FR, GP_FIRERED, 0);
     TestPallet("LeafGreen", FXR_ENV_LG, GP_LEAFGREEN, 1);
     if (sPalletBin[0] != NULL && sPalletBin[1] != NULL) {   /* the pin, and FR and LG produce the identical file */

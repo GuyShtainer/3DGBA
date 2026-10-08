@@ -268,6 +268,8 @@ bool rg_author_census(const RgWorld *w, const RgSpec *specs, unsigned nSpecs, Rg
         if (bb[1] < 0) bb[1] = 0;
         if (bb[2] > (int)L->w) bb[2] = L->w;
         if (bb[3] > (int)L->h) bb[3] = L->h;
+        if (bb[0] > bb[2]) bb[0] = bb[2];   /* a door off a tiny layout (27/0 is a 1x1 dummy): an empty rect, never a negative one */
+        if (bb[1] > bb[3]) bb[1] = bb[3];
         r->rect[0] = (int16_t)bb[0]; r->rect[1] = (int16_t)bb[1];
         r->rect[2] = (int16_t)(bb[2] - bb[0]); r->rect[3] = (int16_t)(bb[3] - bb[1]);
         r->sig = rect_signature(L, r->rect);
