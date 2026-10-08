@@ -14,6 +14,25 @@ games (Sonic, Kirby, etc.).
 
 ---
 
+## New since the last push (2026-06-15 → 2026-10-08)
+
+> **Most of what's below has NOT been tested on a real 3DS yet.** It builds, passes the
+> PC test suites, and much of it was checked in the Azahar emulator, but Azahar doesn't
+> prove timing, touch feel, wireless, or 3D on real hardware. Each item says where it stands.
+
+| What | Hardware status |
+|---|---|
+| **Wireless trade between two consoles** (cable-club trade over local wireless, via Celio-style local link termination) | ✅ A trade completed and saved on both consoles (2026-07-06). ⚠️ Known bug: the joining console can black-screen when leaving the trade room afterwards. A fix is built but **not hardware-tested**. Wireless **battles are not supported** yet. |
+| **New UI** (device-native fonts and art, all screens), plus later fix passes for blur, text size, touch drag-scroll and d-pad navigation | 🟡 The first redesign and the early fix passes were tried on hardware. The latest passes (bigger text, the phase-17–19 fixes) are emulator-checked only, **not hardware-tested**. |
+| **Touch "smart pointer" fixes** (tap-vs-drag thresholds and other fixes after the first hardware test failed in six ways) | ❌ Four of the six defects are fixed, but **none of the fixes is hardware-tested**. Touch events are logged to the SD card for the next test. |
+| **Diagnostics layer** (crash dumps, on-device logs, game-state logger) | ❌ **Not hardware-tested** |
+| **Co-op presence** (see the other game's player walking on your map; same console only) | ❌ **Not hardware-tested** |
+| **Voxel 3D overworld** for FireRed/LeafGreen, Emerald and Ruby/Sapphire: buildings generated on the device from your own ROM (no game art is shipped), Hoenn landmark models, stereo 3D, depth of field and bloom | ❌ **Not hardware-tested.** Checked in Azahar only. Known visual bugs are listed in `docs/phase36-hoenn/LOOK-BUGS.md`. |
+| **Removed:** the older 2.5D depth-pop, tilt and HD-2D post effects (replaced by the voxel world) | — see `docs/REMOVED-3D-ATTEMPTS.md` |
+| **Emulator self-test harness** (`tools/emutest/`, drives Azahar for automated checks) | Dev tooling only, runs on a Mac |
+
+---
+
 ## ✅ Working — verified on a real New 3DS
 
 - **Two GBA games at once**, one per screen — each a full [mGBA](https://mgba.io/) core
@@ -46,15 +65,15 @@ games (Sonic, Kirby, etc.).
 
 ## 🔜 In progress — the wireless emulation link
 
-Playing a real **trade or battle between two consoles over WiFi** (today the wireless part
-is only the lobby + a latency probe). Milestones, each independently testable:
+Playing a real **trade or battle between two consoles over local wireless**. A trade now works;
+battles don't yet. Milestones, each independently testable:
 
 | Step | What | Status |
 |---|---|---|
 | M1 | UDS lobby + seat negotiation | ✅ on 2 consoles |
 | M2 | RTT / packet-loss probe | ✅ (loss ≈ 0, RTT ≈ 1 frame) |
-| M2.5 | Net SIO driver, testable on **one** console via in-memory loopback | 🔜 in progress |
-| M3 | Real 2-console NORMAL/MULTI link — a Pokémon trade over WiFi + "link lost" handling | 🔜 next |
+| M2.5 | Net SIO driver, testable on **one** console via in-memory loopback | ✅ |
+| M3 | Real 2-console link: a Pokémon trade over local wireless | 🟡 trade + save work on 2 consoles; the post-trade room-exit fix is not hardware-tested; battles not supported yet |
 | M4 | 4 seats / mixed topologies (2+2, 2+1+1) | 🔮 planned |
 
 ## 🔮 Planned / aspirational
