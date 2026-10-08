@@ -203,9 +203,11 @@ static void TestRealRom(void)
      * 2918 placements, 59 masks by Phase 36 H1 (Dewford, Mauville, Verdanturf, Fallarbor, Slateport): 21 direct models, 24 placements;
      * -> 8606220 / 89364, 311 models, 655 pageModels, 2931 placements, 68 masks by Phase 36 H2 (Fortree, Lavaridge, Pacifidlog): 4 models, 13 placements;
      * -> 8606276, 66 -> 75 variants by Phase 36 H2: a building's water cells draw the sea under the roof (quarters 0xF variants), 9 variants;
-     * -> 8883292 / 91284, 319 models, 663 pageModels, 2943 placements, 69 masks by Phase 36 H3 (Lilycove): 8 models, 12 placements) */
-    CHECK(a.buildingsSize == 8883292u && a.bModels == 319 && a.bPages == 118 && a.bPageModels == 663 && a.bPlacements == 2943 &&
-          a.bVertices == 91284 && a.bMasks == 69 && a.bVariants == 75 && a.buildingsFailed == 0);
+     * -> 8883292 / 91284, 319 models, 663 pageModels, 2943 placements, 69 masks by Phase 36 H3 (Lilycove): 8 models, 12 placements;
+     * -> 9020476 / 92850, 325 models, 671 pageModels, 2969 placements, 70 masks, 78 variants by Phase 36 H4 (Mossdeep, Sootopolis):
+     * 6 models, 26 placements, 3 more water-cell variants) */
+    CHECK(a.buildingsSize == 9020476u && a.bModels == 325 && a.bPages == 118 && a.bPageModels == 671 && a.bPlacements == 2969 &&
+          a.bVertices == 92850 && a.bMasks == 70 && a.bVariants == 78 && a.buildingsFailed == 0);
     CHECK(a.regionsSize == 330791u && a.signsSize == 26144u);   /* S0/S1 outputs unchanged by wantBuildings */
     Parse(a.buildings, a.buildingsSize);
     Consume(a.buildings, a.buildingsSize, a.bVariants);

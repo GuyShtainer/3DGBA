@@ -321,14 +321,17 @@ static void TestRealRom(void)
     /* S2.6: the 13 interior rows add 200 pieces + 19 bare twins to the S2.5 total of 67 models;
      * 286 -> 307: Phase 36 H1 (Dewford, Mauville, Verdanturf, Fallarbor, Slateport): 21 direct models, 24 placements;
      * 307 -> 311: Phase 36 H2 (Fortree, Lavaridge, Pacifidlog): 4 models, 13 placements;
-     * 311 -> 319: Phase 36 H3 (Lilycove): 8 models, 12 placements */
-    CHECK(ms.n == 319 && ms.nInterior == 200 && ms.nTwin == 19 && ms.nHedge == 6 && ms.nRailing == 35 && ms.nKit == 7 && ms.nProps == 5 && ms.skipped == 0);
+     * 311 -> 319: Phase 36 H3 (Lilycove): 8 models, 12 placements;
+     * 319 -> 325: Phase 36 H4 (Mossdeep, Sootopolis): 6 models, 26 placements (the Sootopolis dwellings and gym also stand
+     * on the unused twin layout 357) */
+    CHECK(ms.n == 325 && ms.nInterior == 200 && ms.nTwin == 19 && ms.nHedge == 6 && ms.nRailing == 35 && ms.nKit == 7 && ms.nProps == 5 && ms.skipped == 0);
     /* 25514 -> 25130: flat-cap merge (look L7 follow-up): six Emerald models with flat-colour cap patches emit 64 triangles fewer each (littleroot_house_e/w, littleroot_lab, kit_house_4/5, oldale_house); previews pixel-identical.
      * 25130 -> 25168: look L6: the hip-roof ridge gets its back face, 38 triangles over the hip-roofed models (closed from behind; the ortho gate stays 0)
      * 25168 -> 27794: Phase 36 H1 (Dewford, Mauville, Verdanturf, Fallarbor, Slateport): 21 direct models, 24 placements
      * 27794 -> 28462: Phase 36 H2 (Fortree, Lavaridge, Pacifidlog): 4 models, 13 placements
-     * 28462 -> 29102: Phase 36 H3 (Lilycove): 8 models, 12 placements */
-    CHECK(gateBad == 0 && nTris == 29102);
+     * 28462 -> 29102: Phase 36 H3 (Lilycove): 8 models, 12 placements
+     * 29102 -> 29624: Phase 36 H4 (Mossdeep, Sootopolis): 6 models, 26 placements */
+    CHECK(gateBad == 0 && nTris == 29624);
     CHECK(ms.seamClash == 0 && ms.connAmbiguous == 0);   /* seam_art column assert, connections assert */
     printf("props tie-break divergence A2: %u tied adjacent groups (informational, model order / _n suffix only)\n", ms.propTies);
     t0 = Now();
@@ -340,14 +343,16 @@ static void TestRealRom(void)
         CHECK(buf && rg_buildings_write(&w, &ms, buf, sz, &st) == sz);
         printf("buildings.bin: %zu bytes, %u pages, %u models, %u pageModels, %u vertices, %u placements, %u masks, %u variants\n",
                sz, st.pages, st.models, st.pageModels, st.vertices, st.placements, st.masks, st.variants);
-        CHECK(st.err == RG_OK && st.models == 319 && st.variants == 75 && st.variants <= 128);
+        CHECK(st.err == RG_OK && st.models == 325 && st.variants == 78 && st.variants <= 128);
         /* 7898476 B / 80520 vertices -> 7870828 / 79368 (1152 vertices = 6 x 64 triangles): the flat-cap merge;
          * -> 7873564 / 79482 (114 vertices = 38 triangles): look L6: the hip-roof ridge gets its back face, 38 triangles over the hip-roofed models;
          * -> 8475268 / 87360, 2918 placements, 59 masks: Phase 36 H1 (Dewford, Mauville, Verdanturf, Fallarbor, Slateport): 21 direct models, 24 placements;
          * -> 8606220 / 89364, 2931 placements, 68 masks, 655 pageModels: Phase 36 H2 (Fortree, Lavaridge, Pacifidlog): 4 models, 13 placements;
          * -> 8606276, 66 -> 75 variants: Phase 36 H2, a building's water cells draw the sea under the roof (quarters 0xF variants), 9 variants;
-         * -> 8883292 / 91284, 2943 placements, 69 masks, 663 pageModels, 75 variants: Phase 36 H3 (Lilycove): 8 models, 12 placements */
-        CHECK(sz == 8883292u && st.pages == 118 && st.placements == 2943u && st.vertices == 91284u && st.masks == 69u);
+         * -> 8883292 / 91284, 2943 placements, 69 masks, 663 pageModels, 75 variants: Phase 36 H3 (Lilycove): 8 models, 12 placements;
+         * -> 9020476 / 92850, 2969 placements, 70 masks, 671 pageModels, 78 variants: Phase 36 H4 (Mossdeep, Sootopolis): 6 models,
+         * 26 placements; 75 -> 78 variants: water cells under the new placements (sea quarters-0xF variants) */
+        CHECK(sz == 9020476u && st.pages == 118 && st.placements == 2969u && st.vertices == 92850u && st.masks == 70u);
         CHECK(memcmp(buf, "VXB7", 4) == 0 && sz % 4 == 0);
         {   /* the vendored consumer reads it back: every variant, every owned model's layout page */
             VoxelMapInstance inst;
