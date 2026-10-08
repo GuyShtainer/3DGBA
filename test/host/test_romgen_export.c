@@ -205,9 +205,11 @@ static void TestRealRom(void)
      * -> 8606276, 66 -> 75 variants by Phase 36 H2: a building's water cells draw the sea under the roof (quarters 0xF variants), 9 variants;
      * -> 8883292 / 91284, 319 models, 663 pageModels, 2943 placements, 69 masks by Phase 36 H3 (Lilycove): 8 models, 12 placements;
      * -> 9020476 / 92850, 325 models, 671 pageModels, 2969 placements, 70 masks, 78 variants by Phase 36 H4 (Mossdeep, Sootopolis):
-     * 6 models, 26 placements, 3 more water-cell variants) */
-    CHECK(a.buildingsSize == 9020476u && a.bModels == 325 && a.bPages == 118 && a.bPageModels == 671 && a.bPlacements == 2969 &&
-          a.bVertices == 92850 && a.bMasks == 70 && a.bVariants == 78 && a.buildingsFailed == 0);
+     * 6 models, 26 placements, 3 more water-cell variants;
+     * -> 9579896 / 94902, 337 models, 119 pages, 684 pageModels, 2983 placements, 71 masks, 83 variants by Phase 36 H5
+     * (routes and landmarks): 12 models, 14 placements, 5 more water-cell variants) */
+    CHECK(a.buildingsSize == 9579896u && a.bModels == 337 && a.bPages == 119 && a.bPageModels == 684 && a.bPlacements == 2983 &&
+          a.bVertices == 94902 && a.bMasks == 71 && a.bVariants == 83 && a.buildingsFailed == 0);
     CHECK(a.regionsSize == 330791u && a.signsSize == 26144u);   /* S0/S1 outputs unchanged by wantBuildings */
     Parse(a.buildings, a.buildingsSize);
     Consume(a.buildings, a.buildingsSize, a.bVariants);

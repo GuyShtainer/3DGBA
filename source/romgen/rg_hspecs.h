@@ -265,4 +265,71 @@ extern const RgSideCfg rg_h_sootopolis_box_side[1];
     {"gym_sootopolis", RG_SPEC_DIRECT, L_H_SOOTOPOLIS, {28, 28, 6, 5}, {0, 0}, H_GRASS1, kGymExact, 4, rg_gym, 0, 0, \
      NULL},
 
+/* ======== Phase 36 slice H5 ======== */
+
+/* ---- routes and landmarks: one layout per map, pins read off each layout (Ruby / Sapphire retarget them, rg_rsspecs.c) ---- */
+#define L_H_EVERGRANDE 9, 0x5476D808u
+#define L_H_R109 25, 0xA525346Du
+#define L_H_R110 26, 0x4A7EB534u
+#define L_H_R111 27, 0x31657B1Au
+#define L_H_R112 28, 0xBE8B08F3u
+#define L_H_R113 29, 0xA32A722Cu
+#define L_H_R114 30, 0x5DAFC653u
+#define L_H_R119 35, 0xB691459Du
+#define L_H_R121 37, 0xCDAAAC93u
+#define L_H_CHIMNEY 136, 0x737C0DC4u
+#define L_H_FRONTIER 241, 0xB13E9480u
+bool rg_h_league_gate(const RgSpec *s, int a0, int a1, RgPartList *out);
+bool rg_h_seashore_house(const RgSpec *s, int width, int a1, RgPartList *out);
+bool rg_h_trick_house(const RgSpec *s, int a0, int a1, RgPartList *out);
+bool rg_h_cycling_gate(const RgSpec *s, int width, int a1, RgPartList *out);
+bool rg_h_cable_car(const RgSpec *s, int a0, int a1, RgPartList *out);
+bool rg_h_slat_house(const RgSpec *s, int a0, int a1, RgPartList *out);
+bool rg_h_weather_institute(const RgSpec *s, int a0, int a1, RgPartList *out);
+bool rg_h_entrance_gate(const RgSpec *s, int width, int a1, RgPartList *out);
+extern const RgExact rg_h_league_gate_exact[2];
+extern const RgExact rg_h_seashore_house_exact[2];
+extern const RgExact rg_h_trick_house_exact[3];
+extern const RgExact rg_h_cycling_gate_exact[2];
+extern const RgExact rg_h_winstrate_house_exact[2];
+extern const RgExact rg_h_cable_car_exact[2];
+extern const RgExact rg_h_slat_house_exact[2];
+extern const RgExact rg_h_weather_institute_exact[2];
+extern const RgExact rg_h_entrance_gate_exact[2];
+extern const RgExact rg_h_entrance_gate_wide_exact[2];
+extern const RgSideCfg rg_h_league_gate_side[1];
+extern const RgSideCfg rg_h_seashore_house_side[1];
+extern const RgSideCfg rg_h_trick_house_side[1];
+extern const RgSideCfg rg_h_gate_side[1];
+extern const RgSideCfg rg_h_cable_car_side[1];
+extern const RgSideCfg rg_h_slat_house_side[1];
+extern const RgSideCfg rg_h_weather_institute_side[1];
+extern const RgSideCfg rg_h_entrance_gate_side[1];
+
+#define RG_HSPECS_ROUTES_ROWS                                                                                        \
+    {"league_gate", RG_SPEC_DIRECT, L_H_EVERGRANDE, {13, 0, 11, 6}, {0, 0}, H_GRASS1, rg_h_league_gate_exact, 2,     \
+     rg_h_league_gate, 0, 0, rg_h_league_gate_side},                                                                 \
+    {"seashore_house", RG_SPEC_DIRECT, L_H_R109, {10, 2, 5, 4}, {0, 0}, {0x124}, 1, rg_h_seashore_house_exact, 2,    \
+     rg_h_seashore_house, 80, 0, rg_h_seashore_house_side},                                                          \
+    {"trick_house", RG_SPEC_DIRECT, L_H_R110, {9, 61, 5, 6}, {0, 0}, H_GRASS1, rg_h_trick_house_exact, 3,           \
+     rg_h_trick_house, 0, 0, rg_h_trick_house_side},                                                                 \
+    {"cycling_gate", RG_SPEC_DIRECT, L_H_R110, {14, 12, 6, 5}, {2, 5}, H_GRASS1, rg_h_cycling_gate_exact, 2,         \
+     rg_h_cycling_gate, 96, 0, rg_h_gate_side},                                                                      \
+    {"winstrate_house", RG_SPEC_DIRECT, L_H_R111, {11, 109, 5, 5}, {0, 0}, H_GRASS1, rg_h_winstrate_house_exact, 2,    \
+     rg_h_cycling_gate, 80, 0, rg_h_gate_side},                                                                      \
+    {"cable_car_station", RG_SPEC_DIRECT, L_H_R112, {27, 23, 6, 5}, {0, 0}, {0x271}, 1, rg_h_cable_car_exact, 2,     \
+     rg_h_cable_car, 0, 0, rg_h_cable_car_side},                                                                     \
+    {"glass_workshop", RG_SPEC_DIRECT, L_H_R113, {32, 2, 4, 4}, {0, 0}, {0x20A}, 1, rg_h_slat_house_exact, 2,        \
+     rg_h_slat_house, 0, 0, rg_h_slat_house_side},                                                                   \
+    {"route114_house", RG_SPEC_DIRECT, L_H_R114, {28, 2, 4, 4}, {0, 0}, {0x279}, 1, rg_h_slat_house_exact, 2,        \
+     rg_h_slat_house, 0, 0, rg_h_slat_house_side},                                                                   \
+    {"weather_institute", RG_SPEC_DIRECT, L_H_R119, {1, 26, 11, 7}, {0, 0}, H_GRASS1, rg_h_weather_institute_exact, 2,\
+     rg_h_weather_institute, 0, 0, rg_h_weather_institute_side},                                                     \
+    {"entrance_gate", RG_SPEC_DIRECT, L_H_R121, {35, 0, 5, 6}, {0, 0}, H_GRASS1, rg_h_entrance_gate_exact, 2,        \
+     rg_h_entrance_gate, 80, 0, rg_h_entrance_gate_side},                                                            \
+    {"entrance_gate_wide", RG_SPEC_DIRECT, L_H_FRONTIER, {30, 29, 10, 5}, {0, 0}, H_GRASS1,                         \
+     rg_h_entrance_gate_wide_exact, 2, rg_h_entrance_gate, 160, 0, rg_h_entrance_gate_side},                         \
+    {"cable_car_chimney", RG_SPEC_DIRECT, L_H_CHIMNEY, {14, 32, 6, 5}, {0, 0}, {0x271}, 1, rg_h_cable_car_exact, 2,  \
+     rg_h_cable_car, 0, 0, rg_h_cable_car_side},
+
 #endif

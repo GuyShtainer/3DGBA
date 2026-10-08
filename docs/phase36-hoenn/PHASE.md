@@ -1,6 +1,6 @@
 # PHASE 36 — Hoenn census follow-up (romgen building recipes)
 
-Status: **H1 built** (2026-10-07, `BUILDLOG-H1.md`); **H2 built** (2026-10-08, `BUILDLOG-H2.md`; with two footprint-ground fixes for buildings in the sea, all games); **H3 built** (2026-10-08, `BUILDLOG-H3.md`); **H4 built** (2026-10-08, `BUILDLOG-H4.md`); H5-H6 planned. Nothing hardware-run.
+Status: **H1 built** (2026-10-07, `BUILDLOG-H1.md`); **H2 built** (2026-10-08, `BUILDLOG-H2.md`; with two footprint-ground fixes for buildings in the sea, all games); **H3 built** (2026-10-08, `BUILDLOG-H3.md`); **H4 built** (2026-10-08, `BUILDLOG-H4.md`); **H5 built** (2026-10-08, `BUILDLOG-H5.md`; census 27/0 negative-rect bug fixed); H6 planned. Nothing hardware-run.
 
 ## Goal
 
@@ -23,7 +23,7 @@ Counts are RS census rows (`romgen author ROM census`, map G/N). Each one is unc
 | H2 | Fortree 0/4 (7), Lavaridge 0/12 (1), Pacifidlog 0/15 (5) | 13 | The gyms of Fortree and Lavaridge carry the Petalburg gym's door signature (try the `rg_gym` builder per layout, like `gym_rustboro`). Pacifidlog's five huts share one signature: one model, 5 placements. |
 | H3 (built) | Lilycove 0/5 (13 on RS, 12 on Emerald) | 13 | Department store, contest hall / museum, harbour; the largest single town. |
 | H4 (built) | Mossdeep 0/6 (7), Sootopolis 0/7 (9) | 16 | Sootopolis is cliff dwellings inside a crater (large rects up to 16x16; relief interplay). |
-| H5 | Routes and landmarks: 0/8, 0/24, 0/25 (3), 0/26..0/29, 0/34, 0/36, 0/37, 24/12, 24/21, 26/3, 26/4, 27/0 | 17 | Mostly singles: League, Weather Institute, Trick House, Cycling Road gates, the Safari Zone, and so on. |
+| H5 (built) | Routes and landmarks: 0/8, 0/24, 0/25 (3), 0/26..0/29, 0/34, 0/36, 0/37, 24/12, 24/21, 26/3, 26/4, 27/0 | 17 | Mostly singles: League, Weather Institute, Trick House, Cycling Road gates, the Safari Zone, and so on. |
 | H6 (Emerald only, not in the 81) | Battle Frontier 26/4 (+7), 26/14 (12), 0/26 (+1) | 20 | Emerald-only buildings, no RS counterpart. |
 
 ## Method (per slice)

@@ -176,16 +176,18 @@ static void WriteAndRead(const RgWorld *w, const RgBuildModels *ms)
      * -> 75 variants: Phase 36 H2, a building's water cells draw the sea under the roof (quarters 0xF variants), 9 variants;
      * -> 319 models, 663 pageModels, 2943 placements: Phase 36 H3 (Lilycove): 8 models, 12 placements (interiors unchanged);
      * -> 325 models, 671 pageModels, 2969 placements, 78 variants: Phase 36 H4 (Mossdeep, Sootopolis): 6 models, 26 placements
+     * -> 337 models, 684 pageModels, 2983 placements, 83 variants: Phase 36 H5 (routes and landmarks): 12 models, 14 placements
      * (interiors unchanged) */
-    CHECK(st.models == 325 && st.variants == 78 && st.pages == 118 && st.pageModels == 671 && st.placements == 2969u);
+    CHECK(st.models == 337 && st.variants == 83 && st.pages == 119 && st.pageModels == 684 && st.placements == 2983u);
     /* 7898476 B / 80520 vertices -> 7870828 / 79368: the look-L7 flat-cap merge (outdoor models; interiors unchanged);
      * -> 7873564 / 79482: look L6, the hip-roof ridge's back face (outdoor models; interiors unchanged);
      * -> 8475268 / 87360, 59 masks: Phase 36 H1's outdoor models (interiors unchanged);
      * -> 8606220 / 89364, 68 masks: Phase 36 H2's outdoor models (interiors unchanged);
      * -> 8606276: Phase 36 H2's water-cell variants (interiors unchanged);
      * -> 8883292 / 91284, 69 masks: Phase 36 H3's outdoor models (interiors unchanged);
-     * -> 9020476 / 92850, 70 masks: Phase 36 H4's outdoor models (interiors unchanged) */
-    CHECK(sz == 9020476u && st.vertices == 92850u && st.masks == 70u);
+     * -> 9020476 / 92850, 70 masks: Phase 36 H4's outdoor models (interiors unchanged);
+     * -> 9579896 / 94902, 71 masks: Phase 36 H5's outdoor models (interiors unchanged) */
+    CHECK(sz == 9579896u && st.vertices == 94902u && st.masks == 71u);
     CHECK(memcmp(buf, "VXB7", 4) == 0 && sz % 4 == 0);
     {
         VoxelMapInstance inst;
