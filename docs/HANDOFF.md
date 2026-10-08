@@ -9,6 +9,13 @@
 
 ## Current status
 
+- **2026-10-08 — H4 MOSSDEEP / SOOTOPOLIS BUILT, NOT MERGED** — branch `worktree-agent-ad7621eb35f0d67b9` @
+  `86b9da5`: mossdeep_house x5, mossdeep_wide, mossdeep_space (RS: own row rs_mossdeep_space, `rg_rsspecs_h4.c`),
+  sootopolis_tower x3, sootopolis_box x6, gym_sootopolis (gym kit). Census Emerald 124/160, Ruby 122/139. Gate 41/41.
+  Pins: Emerald buildings ec319d0e (78 variants: the gym's top row over the lake), R = S b7432279. Sootopolis relief has
+  no lift under any dwelling. Door-less decorated dwelling twins left flat (not census rows). Azahar round (sonnet) in
+  progress; watch the Space Center block vs the rocket behind it.
+
 - **2026-10-08 — H3 LILYCOVE MERGED** (`cf95177`, `--no-ff`; branch and worktree removed). Gate on main green:
   41 / 41 suites, device build links; `3DGBA.cia` rebuilt from `cf95177`. NOTHING PUSHED, nothing hardware-run.
   Eight recipes on layout 6 (department store, museum, Contest Hall, pavilion, wooden house, blue house x5 + a wider
