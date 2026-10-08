@@ -60,7 +60,7 @@ static const struct { const char *name; uint16_t layoutId; uint32_t fnv; } kReta
     {"sootopolis_box", 8, 0x0ECDD398u},
     {"gym_sootopolis", 8, 0x0ECDD398u},
     /* Phase 36 H5: routes and landmarks. The League's layout 9 is byte-identical on RS (no row). Every building's cells
-     * were compared by `art` with Emerald's: the same. Three layouts have another number on RS (136 -> 137, 241 -> 242) */
+     * were compared by `art` with Emerald's: the same. Two layouts have another number on RS (136 -> 137, 241 -> 242) */
     {"seashore_house", 25, 0x74E34955u},
     {"trick_house", 26, 0x7A89EA0Eu},
     {"cycling_gate", 26, 0x7A89EA0Eu},
