@@ -9,6 +9,10 @@
 
 ## Current status
 
+- **2026-10-08 — MERGE IN PROGRESS H3** (`worktree-agent-a5fed3ddecc85ae47` @ `2579772` into main, `--no-ff`, then
+  the 41-suite gate on main). If still here on resume: merge commit in `git log main`? yes -> rerun the gate and
+  clear this line; no -> merge again.
+
 - **2026-10-08 — H3 LILYCOVE BUILT, NOT MERGED** — branch `worktree-agent-a5fed3ddecc85ae47` (worktree
   `.claude/worktrees/agent-a5fed3ddecc85ae47`) @ `99de407`: 8 recipes on layout 6 (store, museum, contest hall,
   pavilion, wooden house, blue house x5 + a wider one, sea-cave arch), RS = retargets only. Census Emerald 107/160,
