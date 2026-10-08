@@ -62,7 +62,10 @@ doubles it: every dwelling stands at lift 0. This was derived from the relief du
 - `budget 0`: 0 over on both. Worst chunk 8982 (Emerald) / 8496 (Ruby), worst model 2808: unchanged. New models, in vertices:
   mossdeep_house 162, mossdeep_wide 114 (Ruby 42), mossdeep_space 402 (rs_mossdeep_space 894), sootopolis_tower 114,
   sootopolis_box 42, gym 732.
-- Variants: Emerald 75 -> 78 and Ruby / Sapphire 75 -> 78 (of 128): cause not isolated (the test comments say water cells under the new placements; unverified).
+- Variants: Emerald 75 -> 78 and Ruby / Sapphire 75 -> 78 (of 128). Cause (checked afterwards in the variant list of
+  the built `buildings.bin`): the gym's top cell row (cells 28-33, row 28) is pond water (metatiles 0x282-0x284, behaviour
+  0x10) on the islet's north edge, and the per-cell water rule of H2 (140f6a7) gives each water cell's metatile its own
+  ground variant. That is the rule doing its job, not a new defect.
 - Pins (each in its test with the reason): Emerald buildings 8883292 B -> ec319d0e (CLI SHA-1 prefix; 9020476 B, 325 models, 671
   pageModels, 2969 placements, 92850 vertices, 70 masks, 78 variants, 29624 triangles; pinned in `expand`, `export`,
   `interior`). Ruby = Sapphire buildings 2dc3a918 -> b7432279 (4074356 B, 103 models, 58 pages, 229 pageModels, 2146 placements,
@@ -71,10 +74,34 @@ doubles it: every dwelling stands at lift 0. This was derived from the relief du
   ba2fde45, relief 32c24146; RS regions 1a09cd5f, signposts 9b4d379c, relief 215a12d9; Ruby == Sapphire.
 - Full gate: `suites ok: 41 (expect 41)`, test rc=0, vtest rc=0, build rc=0. All six CLI runs rc=0; hashes above confirmed (Emerald EL relief eb25a383).
 
+## Evidence (Azahar, 2026-10-08)
+
+Private emutest instance (New 3DS), warp-save copies placed in Mossdeep 0/7 and Sootopolis 0/8 (originals untouched; copies
+deleted afterwards). The worktree's own app build, before and after; only the staged .bin files change: before = main
+`cf95177` (buildings Emerald f127285a, Ruby 2dc3a918), after = this slice (ec319d0e, b7432279). Device logs: Emerald 319
+models / 2943 placements / 91284 vertices before, 325 / 2969 / 92850 after; Ruby 97 / 2130 / 43194 before, 103 / 2146 /
+45180 after; no "chunk scratch full" in any run. Every side-by-side is upscaled 2x (nearest) from 1x captures. Night
+lighting (the 3DS clock read 02:01). Emerald only: no Ruby shot was taken this round.
+
+| spot | before | after |
+|---|---|---|
+| Space Center from the south (64,18), `h4-sc-before-after.png` | the flat deck with its domes over the glazed facade | the block stands, its glazed tower and window bands upright; **the 82 px wall fills the top third of the view and the rocket and gantries behind it are hidden** (before, they showed above the flat deck). Nothing walkable is behind it |
+| Space Center from the north (64,6), `h4-sc2-before-after.png` | flat deck | the deck reads as a roof with both domes; the rocket and gantries stand clear; **the block's back edge cuts across the rocket's base** |
+| brick house by the west cliff, `h4-hs-before-after.png` | flat art | the house stands with its red gable, the roof rail and a side wall, its shadow on the grass; the Pokémon Center to the right is unchanged |
+| wide house below the Mart, `h4-ws-before-after.png` | flat art | the wide house stands with its pillared roof, both arched windows and the door on its front wall; seated on the sand, no float |
+| gym from the lake's west shore, `h4-gy-before-after.png` | flat roof on the islet | the gym stands as a block on its islet; **no ground slab over the water** round it |
+| gym from the north rim, `h4-gy2-before-after.png` | flat roof | the roof stands above the lake; its back edge covers the player's water reflection, nothing else |
+| pointed dwelling and a box dwelling, `h4-dw-before-after.png` | flat art | the box dwelling stands as a pale block with its porch, flush with the stone; the pointed dwelling **looks the same before and after from this camera** (the art already draws it in perspective) |
+| a box dwelling beside two pointed ones, `h4-bx-before-after.png` | flat art | the box stands with its shadow; the pointed dwellings again look unchanged |
+
+Not established on screen: that the pointed dwellings are 3D (placed: `romgen author ... placements sootopolis_tower` lists
+3 on layout 8 and 3 on twin 357; a side camera would show it), and how a modelled dwelling looks beside its flat, door-less
+twin (no shot had both).
+
 ## Next
 
-1. Merge into main; Azahar before / after in Mossdeep and Sootopolis on Emerald, plus an RS town (Ruby Mossdeep for the
-   RS-own Space Center). Look at: the Emerald Space Center wall against the rocket; the Sootopolis pointed dwelling's apex stub
-   and corner alpha; the dwellings against the terrace lines; the gym on its islet.
-2. Optional follow-up: the door-less decorated twins of the two Sootopolis dwellings.
+1. Merge into main; H5 routes and landmarks.
+2. Look backlog, not blocking: **the Space Center hides Mossdeep's rocket from the south** (the art's facade is 82 rows; a
+   lower block or a facade that leans back would keep the rocket in view); the Sootopolis door-less twins left as flat
+   art (a follow-up with the same builders; tower seed 53,34,3,4).
 3. Hardware: pending, as for every slice.
