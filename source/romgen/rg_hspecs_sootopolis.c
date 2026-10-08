@@ -4,7 +4,7 @@
  * clamped at 16 cells and are not the buildings: the rects below were found from the art. Kanto-style profile prisms: every
  * face the front camera sees is a PROJ edge. See docs/phase36-hoenn/BUILDLOG-H4.md.
  *
- *   sootopolis_tower   3x5 cells (48x80), rect (43, 13): the pointed dwelling (dark pyramid roof on a cream octagon), door
+ *   sootopolis_tower   3x4 cells (48x64), rect (43, 14): the pointed dwelling (dark pyramid roof on a cream octagon), door
  *                      at the bottom middle; three in town (the two with a diamond window and no door are left as art)
  *   sootopolis_box     3x4 cells (48x64), rect (44, 3): the pale box dwelling with its door porch; six in town
  *   gym_sootopolis     6x5 cells, rect (28, 28): the Petalburg gym kit (rg_gym) on the islet in the lake */

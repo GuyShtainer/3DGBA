@@ -3,8 +3,10 @@
  * Every number was read off `romgen author roms/emerald.gba art 7 ...`. Kanto-style profile prisms: every face the front
  * camera sees is a PROJ edge. See docs/phase36-hoenn/BUILDLOG-H4.md for the per-building notes.
  *
- *   mossdeep_house   4x4 cells (64x64), rect (17, 13): the red-roofed brick house (six of them in town)
- *   mossdeep_space   9x8 cells (144x128), rect (60, 8): the Space Center, a flat deck over a glazed facade */
+ *   mossdeep_house   4x4 cells (64x64), rect (17, 13): the red-roofed brick house (five placements in town)
+ *   mossdeep_wide    5x5 cells (80x80), rect (35, 20): the wide house with the pillared roof
+ *   mossdeep_space   9x8 cells (144x128), rect (60, 8): the Space Center, a flat deck over a glazed facade (Emerald; RS has
+ *                    its own building, rg_rsspecs_h4.c) */
 #include "rg_hspecs.h"
 
 /* The brick house, 64 art rows: the roof rail 0-14, the red slope 14-38, the facade 38-64. */
