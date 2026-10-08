@@ -225,4 +225,26 @@ extern const RgSideCfg rg_h_lilycove_wood_side[1];
     {"lilycove_cave", RG_SPEC_DIRECT, L_H_LILYCOVE, {69, 4, 3, 2}, {0, 0}, H_GRASS1, rg_h_lilycove_cave_exact, 2,    \
      rg_h_lilycove_cave, 0, 0, rg_h_lilycove_cave_side},
 
+/* ======== Phase 36 slice H4 ======== */
+
+/* ---- Mossdeep City (layout 7) ---- */
+#define L_H_MOSSDEEP 7, 0xAD4D637Fu
+bool rg_h_mossdeep_house(const RgSpec *s, int width, int a1, RgPartList *out);
+bool rg_h_mossdeep_space(const RgSpec *s, int a0, int a1, RgPartList *out);
+bool rg_h_mossdeep_wide(const RgSpec *s, int a0, int a1, RgPartList *out);
+extern const RgExact rg_h_mossdeep_wide_exact[3];
+extern const RgSideCfg rg_h_mossdeep_wide_side[1];
+extern const RgExact rg_h_mossdeep_house_exact[2];
+extern const RgExact rg_h_mossdeep_space_exact[5];
+extern const RgSideCfg rg_h_mossdeep_house_side[1];
+extern const RgSideCfg rg_h_mossdeep_space_side[1];
+
+#define RG_HSPECS_MOSSDEEP_ROWS                                                                                      \
+    {"mossdeep_house", RG_SPEC_DIRECT, L_H_MOSSDEEP, {17, 13, 4, 4}, {1, 4}, H_GRASS1, rg_h_mossdeep_house_exact,    \
+     2, rg_h_mossdeep_house, 64, 0, rg_h_mossdeep_house_side},                                                       \
+    {"mossdeep_space", RG_SPEC_DIRECT, L_H_MOSSDEEP, {60, 8, 9, 8}, {0, 0}, H_GRASS1, rg_h_mossdeep_space_exact, 5,  \
+     rg_h_mossdeep_space, 0, 0, rg_h_mossdeep_space_side},                                                           \
+    {"mossdeep_wide", RG_SPEC_DIRECT, L_H_MOSSDEEP, {35, 20, 5, 5}, {0, 0}, {0x001, 0x124}, 2, rg_h_mossdeep_wide_exact, 3,   \
+     rg_h_mossdeep_wide, 0, 0, rg_h_mossdeep_wide_side},
+
 #endif
