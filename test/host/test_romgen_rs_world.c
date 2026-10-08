@@ -42,8 +42,10 @@ static int sChecks, sFails, sSkipped;
  * Phase 36 H3: a00bb5ae -> 2dc3a918 (8 Lilycove models: store, museum, contest hall, pavilion, wooden house, two house kits,
  *   the cave mouth; 12 placements)
  * Phase 36 H4: 2dc3a918 -> b7432279 (6 models: the Mossdeep house, wide house and RS-own Space Center, the Sootopolis pointed
- *   and box dwellings and the gym; 16 placements, 71 masks, 78 variants) */
-#define BUILDINGS_SHA1 "b74322796cb5681d5f2ed30779fe17cf2b67e8b1"
+ *   and box dwellings and the gym; 16 placements, 71 masks, 78 variants)
+ * Phase 36 H5: b7432279 -> 850ab774 (12 route and landmark models plus the RS-only League facade; 14 placements, 72 masks,
+ *   83 variants; regions, signposts and relief unchanged) */
+#define BUILDINGS_SHA1 "850ab774938d3e8fe6ce37e6570d4f86cac9f234"
 #define LITTLEROOT_LAYOUT 10u      /* the town whose two houses match Emerald's pins */
 
 static const uint8_t kGroupSizes[34] = {54, 5, 5, 6, 7, 7, 8, 7, 7, 13, 8, 17, 10, 24, 13, 13, 14, 2, 2, 2, 3, 1, 1,
@@ -187,7 +189,7 @@ static void TestSpecs(const Cart *C)
 
     t = rg_game_specs(C->w.prof, &n);
     for (i = 0; i < rg_spec_count; i++) interiors += rg_specs[i].kind == RG_SPEC_INTERIOR;
-    CHECK(t != NULL && t != rg_specs && n == rg_spec_count - interiors);
+    CHECK(t != NULL && t != rg_specs && n == rg_spec_count - interiors + 1u);   /* + the RS-only League facade (H5, rg_rsspecs_h5.c) */
     for (i = 0, j = 0; t != NULL && i < rg_spec_count; i++) {
         if (rg_specs[i].kind == RG_SPEC_INTERIOR) continue;
         if (strcmp(rg_specs[i].name, "littleroot_lab") == 0) {
@@ -225,13 +227,14 @@ static void TestSpecs(const Cart *C)
      * Verdanturf, Fallarbor and Slateport ones retargeted to the RS layouts, rg_rsspecs.c); 37 -> 41: Phase 36 H2's 4 Hoenn rows
      * (gym_fortree, gym_lavaridge, fortree_hut, pacifidlog_hut); 41 -> 49: Phase 36 H3's 8 Lilycove rows (all retargeted to the RS
      * layout 6, rg_rsspecs.c); 49 -> 55: Phase 36 H4's 6 Hoenn rows (the Mossdeep house and wide house, the Sootopolis tower,
-     * box and gym retargeted to the RS layouts 7 and 8, and the RS-own Space Center in the Emerald Space Center's place) */
+     * box and gym retargeted to the RS layouts 7 and 8, and the RS-own Space Center in the Emerald Space Center's place);
+     * 55 -> 68: Phase 36 H5's 12 Hoenn rows retargeted to the RS layouts (25-30, 35, 37, 137, 242) and the RS-only League facade */
     for (j = 0; t != NULL && j < n; j++) {
         if (t[j].layoutId == 0) continue;
         pinned++;
         matching += t[j].layoutId <= C->w.layoutCount && rg_layout_fnv(&C->w.layouts[t[j].layoutId - 1u]) == t[j].layoutFnv;
     }
-    CHECK(pinned == 55 && matching == 55);
+    CHECK(pinned == 68 && matching == 68);
     printf("  %s: %u recipe rows (%u Emerald rows, %u interiors left out, %u components retargeted, %u repinned, %u/%u pins "
            "match)\n", C->name, n, rg_spec_count, interiors, comp, repinned, matching, pinned);
     n = 7;
@@ -364,9 +367,11 @@ static void Run(Cart *C)
      * -> 3650252, 66 -> 75 variants: Phase 36 H2, a building's water cells draw the sea under the roof (quarters 0xF variants), 9 variants
      * -> 3927268 / 97 / 2130 / 43194 / 70: Phase 36 H3 (Lilycove: 8 models, 12 placements)
      * -> 4074356 / 103 / 2146 / 45180 / 71, 78 variants: Phase 36 H4 (Mossdeep, Sootopolis: 6 models, 16 placements; the
-     * 3 extra variants are water cells under the new placements) */
-    CHECK(o->buildingsSize == 4074356u && o->bModels == 103 && o->bPages == 58 && o->bPlacements == 2146);
-    CHECK(o->bVertices == 45180 && o->bMasks == 71 && o->bVariants == 78);
+     * 3 extra variants are water cells under the new placements)
+     * -> 4763460 / 116 / 60 / 2160 / 48522 / 72, 83 variants: Phase 36 H5 (routes and landmarks: 12 retargeted models and the
+     * RS-only League facade, 14 placements; 5 more water-cell variants) */
+    CHECK(o->buildingsSize == 4763460u && o->bModels == 116 && o->bPages == 60 && o->bPlacements == 2160);
+    CHECK(o->bVertices == 48522 && o->bMasks == 72 && o->bVariants == 83);
     /* S4: every model passes its art gate (S0 left the Emerald lab out here; rs_littleroot_lab replaces it) */
     CHECK(o->buildingsFailed == 0 && o->buildingsDropped == 0);
     CHECK(o->roleCount[VOXEL_ROLE_SIGNPOST] == 224);
