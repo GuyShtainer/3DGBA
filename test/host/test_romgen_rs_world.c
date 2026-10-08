@@ -40,8 +40,10 @@ static int sChecks, sFails, sSkipped;
  *   Pacifidlog huts and the Pokemon Center on 0x221, two route houses; sizes and counts unchanged)
  * Phase 36 H2: aad730ec -> a00bb5ae (a building's water cells draw the sea under the roof, not the planks: 66 -> 75 variants)
  * Phase 36 H3: a00bb5ae -> 2dc3a918 (8 Lilycove models: store, museum, contest hall, pavilion, wooden house, two house kits,
- *   the cave mouth; 12 placements) */
-#define BUILDINGS_SHA1 "2dc3a918bc7c28ae1399da35bb086d67c324ace8"
+ *   the cave mouth; 12 placements)
+ * Phase 36 H4: 2dc3a918 -> b7432279 (6 models: the Mossdeep house, wide house and RS-own Space Center, the Sootopolis pointed
+ *   and box dwellings and the gym; 16 placements, 71 masks, 78 variants) */
+#define BUILDINGS_SHA1 "b74322796cb5681d5f2ed30779fe17cf2b67e8b1"
 #define LITTLEROOT_LAYOUT 10u      /* the town whose two houses match Emerald's pins */
 
 static const uint8_t kGroupSizes[34] = {54, 5, 5, 6, 7, 7, 8, 7, 7, 13, 8, 17, 10, 24, 13, 13, 14, 2, 2, 2, 3, 1, 1,
@@ -176,9 +178,10 @@ static void TestSpecs(const Cart *C)
 {
     static const char *kRepinned[6] = {"oldale_house", "rustboro_stone", "rustboro_olive", "gym_rustboro", "devon_corporation",
                                        "rustboro_fountain"};
-    static const char *kTents[3][2] = {{"battle_tent_verdanturf", "rs_contest_verdanturf"},
+    static const char *kTents[4][2] = {{"battle_tent_verdanturf", "rs_contest_verdanturf"},
                                        {"battle_tent_fallarbor", "rs_contest_fallarbor"},
-                                       {"battle_tent_slateport", "rs_contest_slateport"}};
+                                       {"battle_tent_slateport", "rs_contest_slateport"},
+                                       {"mossdeep_space", "rs_mossdeep_space"}};
     const RgSpec *t;
     unsigned n = 0, i, interiors = 0, comp = 0, j, k, repinned = 0, pinned = 0, matching = 0, replaced = 0;
 
@@ -194,9 +197,9 @@ static void TestSpecs(const Cart *C)
             j++;
             continue;
         }
-        for (k = 0; k < 3; k++)
+        for (k = 0; k < 4; k++)
             if (strcmp(rg_specs[i].name, kTents[k][0]) == 0) break;
-        if (k < 3) {                                  /* Phase 36 H1: a Contest Hall where Emerald has a Battle Tent */
+        if (k < 4) {                                  /* Phase 36 H1: a Contest Hall where Emerald has a Battle Tent; H4: the RS Space Center */
             CHECK(j < n && strcmp(t[j].name, kTents[k][1]) == 0 && t[j].kind == RG_SPEC_DIRECT && t[j].ext != NULL);
             CHECK(t[j].layoutId == rg_specs[i].layoutId);
             replaced++;
@@ -217,17 +220,18 @@ static void TestSpecs(const Cart *C)
         }
         j++;
     }
-    CHECK(comp > 0 && repinned == 6 && replaced == 3);
+    CHECK(comp > 0 && repinned == 6 && replaced == 4);
     /* every pinned row now names this cart's layout (S0: 7 of 16 did not); 16 -> 37: Phase 36 H1's 21 Hoenn rows (the
      * Verdanturf, Fallarbor and Slateport ones retargeted to the RS layouts, rg_rsspecs.c); 37 -> 41: Phase 36 H2's 4 Hoenn rows
      * (gym_fortree, gym_lavaridge, fortree_hut, pacifidlog_hut); 41 -> 49: Phase 36 H3's 8 Lilycove rows (all retargeted to the RS
-     * layout 6, rg_rsspecs.c) */
+     * layout 6, rg_rsspecs.c); 49 -> 55: Phase 36 H4's 6 Hoenn rows (the Mossdeep house and wide house, the Sootopolis tower,
+     * box and gym retargeted to the RS layouts 7 and 8, and the RS-own Space Center in the Emerald Space Center's place) */
     for (j = 0; t != NULL && j < n; j++) {
         if (t[j].layoutId == 0) continue;
         pinned++;
         matching += t[j].layoutId <= C->w.layoutCount && rg_layout_fnv(&C->w.layouts[t[j].layoutId - 1u]) == t[j].layoutFnv;
     }
-    CHECK(pinned == 49 && matching == 49);
+    CHECK(pinned == 55 && matching == 55);
     printf("  %s: %u recipe rows (%u Emerald rows, %u interiors left out, %u components retargeted, %u repinned, %u/%u pins "
            "match)\n", C->name, n, rg_spec_count, interiors, comp, repinned, matching, pinned);
     n = 7;
@@ -358,9 +362,11 @@ static void Run(Cart *C)
      * (Dewford, Mauville, Verdanturf, Fallarbor, Slateport; three Contest Halls in the Battle Tents' place)
      * -> 3650196 / 89 / 2118 / 41274 / 69: Phase 36 H2 (Fortree, Lavaridge, Pacifidlog: 4 models, 13 placements)
      * -> 3650252, 66 -> 75 variants: Phase 36 H2, a building's water cells draw the sea under the roof (quarters 0xF variants), 9 variants
-     * -> 3927268 / 97 / 2130 / 43194 / 70: Phase 36 H3 (Lilycove: 8 models, 12 placements) */
-    CHECK(o->buildingsSize == 3927268u && o->bModels == 97 && o->bPages == 58 && o->bPlacements == 2130);
-    CHECK(o->bVertices == 43194 && o->bMasks == 70 && o->bVariants == 75);
+     * -> 3927268 / 97 / 2130 / 43194 / 70: Phase 36 H3 (Lilycove: 8 models, 12 placements)
+     * -> 4074356 / 103 / 2146 / 45180 / 71, 78 variants: Phase 36 H4 (Mossdeep, Sootopolis: 6 models, 16 placements; the
+     * 3 extra variants are water cells under the new placements) */
+    CHECK(o->buildingsSize == 4074356u && o->bModels == 103 && o->bPages == 58 && o->bPlacements == 2146);
+    CHECK(o->bVertices == 45180 && o->bMasks == 71 && o->bVariants == 78);
     /* S4: every model passes its art gate (S0 left the Emerald lab out here; rs_littleroot_lab replaces it) */
     CHECK(o->buildingsFailed == 0 && o->buildingsDropped == 0);
     CHECK(o->roleCount[VOXEL_ROLE_SIGNPOST] == 224);

@@ -174,15 +174,18 @@ static void WriteAndRead(const RgWorld *w, const RgBuildModels *ms)
      * pageModels, 2894 -> 2918 placements: Phase 36 H1 (Dewford, Mauville, Verdanturf, Fallarbor, Slateport): 21 direct models, 24 placements (interiors unchanged);
      * -> 311 models, 655 pageModels, 2931 placements: Phase 36 H2 (Fortree, Lavaridge, Pacifidlog): 4 models, 13 placements (interiors unchanged);
      * -> 75 variants: Phase 36 H2, a building's water cells draw the sea under the roof (quarters 0xF variants), 9 variants;
-     * -> 319 models, 663 pageModels, 2943 placements: Phase 36 H3 (Lilycove): 8 models, 12 placements (interiors unchanged) */
-    CHECK(st.models == 319 && st.variants == 75 && st.pages == 118 && st.pageModels == 663 && st.placements == 2943u);
+     * -> 319 models, 663 pageModels, 2943 placements: Phase 36 H3 (Lilycove): 8 models, 12 placements (interiors unchanged);
+     * -> 325 models, 671 pageModels, 2969 placements, 78 variants: Phase 36 H4 (Mossdeep, Sootopolis): 6 models, 26 placements
+     * (interiors unchanged) */
+    CHECK(st.models == 325 && st.variants == 78 && st.pages == 118 && st.pageModels == 671 && st.placements == 2969u);
     /* 7898476 B / 80520 vertices -> 7870828 / 79368: the look-L7 flat-cap merge (outdoor models; interiors unchanged);
      * -> 7873564 / 79482: look L6, the hip-roof ridge's back face (outdoor models; interiors unchanged);
      * -> 8475268 / 87360, 59 masks: Phase 36 H1's outdoor models (interiors unchanged);
      * -> 8606220 / 89364, 68 masks: Phase 36 H2's outdoor models (interiors unchanged);
      * -> 8606276: Phase 36 H2's water-cell variants (interiors unchanged);
-     * -> 8883292 / 91284, 69 masks: Phase 36 H3's outdoor models (interiors unchanged) */
-    CHECK(sz == 8883292u && st.vertices == 91284u && st.masks == 69u);
+     * -> 8883292 / 91284, 69 masks: Phase 36 H3's outdoor models (interiors unchanged);
+     * -> 9020476 / 92850, 70 masks: Phase 36 H4's outdoor models (interiors unchanged) */
+    CHECK(sz == 9020476u && st.vertices == 92850u && st.masks == 70u);
     CHECK(memcmp(buf, "VXB7", 4) == 0 && sz % 4 == 0);
     {
         VoxelMapInstance inst;

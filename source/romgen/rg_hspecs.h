@@ -225,4 +225,44 @@ extern const RgSideCfg rg_h_lilycove_wood_side[1];
     {"lilycove_cave", RG_SPEC_DIRECT, L_H_LILYCOVE, {69, 4, 3, 2}, {0, 0}, H_GRASS1, rg_h_lilycove_cave_exact, 2,    \
      rg_h_lilycove_cave, 0, 0, rg_h_lilycove_cave_side},
 
+/* ======== Phase 36 slice H4 ======== */
+
+/* ---- Mossdeep City (layout 7) ---- */
+#define L_H_MOSSDEEP 7, 0xAD4D637Fu
+bool rg_h_mossdeep_house(const RgSpec *s, int width, int a1, RgPartList *out);
+bool rg_h_mossdeep_space(const RgSpec *s, int a0, int a1, RgPartList *out);
+bool rg_h_mossdeep_wide(const RgSpec *s, int a0, int a1, RgPartList *out);
+extern const RgExact rg_h_mossdeep_wide_exact[3];
+extern const RgSideCfg rg_h_mossdeep_wide_side[1];
+extern const RgExact rg_h_mossdeep_house_exact[2];
+extern const RgExact rg_h_mossdeep_space_exact[5];
+extern const RgSideCfg rg_h_mossdeep_house_side[1];
+extern const RgSideCfg rg_h_mossdeep_space_side[1];
+
+#define RG_HSPECS_MOSSDEEP_ROWS                                                                                      \
+    {"mossdeep_house", RG_SPEC_DIRECT, L_H_MOSSDEEP, {17, 13, 4, 4}, {1, 4}, H_GRASS1, rg_h_mossdeep_house_exact,    \
+     2, rg_h_mossdeep_house, 64, 0, rg_h_mossdeep_house_side},                                                       \
+    {"mossdeep_space", RG_SPEC_DIRECT, L_H_MOSSDEEP, {60, 8, 9, 8}, {0, 0}, H_GRASS1, rg_h_mossdeep_space_exact, 5,  \
+     rg_h_mossdeep_space, 0, 0, rg_h_mossdeep_space_side},                                                           \
+    {"mossdeep_wide", RG_SPEC_DIRECT, L_H_MOSSDEEP, {35, 20, 5, 5}, {0, 0}, {0x001, 0x124}, 2, rg_h_mossdeep_wide_exact, 3,   \
+     rg_h_mossdeep_wide, 0, 0, rg_h_mossdeep_wide_side},
+
+/* ---- Sootopolis City (layout 8): stone floor 0x2D9 (729) and its variants; the lake is 0x279 (633) ---- */
+#define L_H_SOOTOPOLIS 8, 0xA3CC5D0Bu
+#define H_STONE {0x2D9, 0x2E1, 0x2D3, 0x2E2}, 4
+bool rg_h_sootopolis_tower(const RgSpec *s, int a0, int a1, RgPartList *out);
+bool rg_h_sootopolis_box(const RgSpec *s, int a0, int a1, RgPartList *out);
+extern const RgExact rg_h_sootopolis_tower_exact[2];
+extern const RgExact rg_h_sootopolis_box_exact[2];
+extern const RgSideCfg rg_h_sootopolis_tower_side[1];
+extern const RgSideCfg rg_h_sootopolis_box_side[1];
+
+#define RG_HSPECS_SOOTOPOLIS_ROWS                                                                                    \
+    {"sootopolis_tower", RG_SPEC_DIRECT, L_H_SOOTOPOLIS, {43, 14, 3, 4}, {1, 4}, H_STONE, rg_h_sootopolis_tower_exact,\
+     2, rg_h_sootopolis_tower, 0, 0, rg_h_sootopolis_tower_side},                                                    \
+    {"sootopolis_box", RG_SPEC_DIRECT, L_H_SOOTOPOLIS, {44, 3, 3, 4}, {2, 4}, H_STONE, rg_h_sootopolis_box_exact, 2, \
+     rg_h_sootopolis_box, 0, 0, rg_h_sootopolis_box_side},                                                           \
+    {"gym_sootopolis", RG_SPEC_DIRECT, L_H_SOOTOPOLIS, {28, 28, 6, 5}, {0, 0}, H_GRASS1, kGymExact, 4, rg_gym, 0, 0, \
+     NULL},
+
 #endif
