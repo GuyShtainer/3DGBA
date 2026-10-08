@@ -59,6 +59,19 @@ static const struct { const char *name; uint16_t layoutId; uint32_t fnv; } kReta
     {"sootopolis_tower", 8, 0x0ECDD398u},
     {"sootopolis_box", 8, 0x0ECDD398u},
     {"gym_sootopolis", 8, 0x0ECDD398u},
+    /* Phase 36 H5: routes and landmarks. The League's layout 9 is byte-identical on RS (no row). Every building's cells
+     * were compared by `art` with Emerald's: the same. Three layouts have another number on RS (136 -> 137, 241 -> 242) */
+    {"seashore_house", 25, 0x74E34955u},
+    {"trick_house", 26, 0x7A89EA0Eu},
+    {"cycling_gate", 26, 0x7A89EA0Eu},
+    {"route111_gate", 27, 0x15DFA917u},
+    {"cable_car_station", 28, 0x5F21044Au},
+    {"glass_workshop", 29, 0x9D7E921Cu},
+    {"route114_house", 30, 0x46526A3Fu},
+    {"weather_institute", 35, 0xECAD8849u},
+    {"entrance_gate", 37, 0xFA51621Cu},
+    {"cable_car_chimney", 137, 0x479CDF78u},
+    {"entrance_gate_wide", 242, 0xEBF19174u},
 };
 
 /* Phase 35 S4: RS-own recipes (rg_rsspecs_<town>.c, the Kanto files' pattern) in the place of an Emerald row whose art gate
@@ -81,6 +94,14 @@ static const struct { const char *name; const RgSpec *rows; const unsigned *coun
     {"battle_tent_verdanturf", rg_rsspecs_verdanturf, &rg_rsspecs_verdanturf_count},  /* RS: the Contest Hall */
     {"battle_tent_fallarbor", rg_rsspecs_fallarbor, &rg_rsspecs_fallarbor_count},
     {"battle_tent_slateport", rg_rsspecs_slateport, &rg_rsspecs_slateport_count},
+};
+
+/* Phase 36 H5: RS-only rows, which replace no Emerald row (the League facade of Ever Grande, rg_rsspecs_h5.c) */
+extern const RgSpec rg_rsspecs_league[];
+extern const unsigned rg_rsspecs_league_count;
+
+static const struct { const RgSpec *rows; const unsigned *count; } kExtra[] = {
+    {rg_rsspecs_league, &rg_rsspecs_league_count},
 };
 
 static RgSpec sTable[2][RG_RSSPECS_MAX];
@@ -130,6 +151,12 @@ static void build(unsigned g, bool sapphire)
             s.ext = &sComp[g][nComp++];
         }
         sTable[g][sCount[g]++] = s;
+    }
+    for (i = 0; i < sizeof kExtra / sizeof kExtra[0]; i++) {   /* the RS-only rows, at the end */
+        unsigned j;
+
+        for (j = 0; j < *kExtra[i].count && sCount[g] < RG_RSSPECS_MAX; j++)
+            sTable[g][sCount[g]++] = kExtra[i].rows[j];
     }
     sBuilt[g] = true;
 }
