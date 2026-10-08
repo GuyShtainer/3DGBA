@@ -7,7 +7,8 @@
  *   seashore_house     5x4 cells (80x64), rect (10, 2) on layout 25: the Seashore House on the beach
  *   trick_house        5x6 cells (80x96), rect (9, 61) on layout 26: the pink Trick House with its two lower wings
  *   cycling_gate       6x5 cells (96x80), layout 26 (rects (14, 12) and (15, 84)): the Cycling Road gates (a yellow brick front)
- *   route111_gate      5x5 cells (80x80), rect (11, 109) on layout 27: the same gate kit, a cell narrower
+ *   winstrate_house    5x5 cells (80x80), rect (11, 109) on layout 27: the Winstrate family's house on Route 111, drawn in
+ *                      the gates' yellow-brick kit a cell narrower
  *   cable_car_station  6x5 cells (96x80), layout 28 (rect (27, 23)) and layout 136 (rect (14, 32)): the Mt. Chimney cable car
  *                      stations, drawn with an oblique side wall (right on Route 112, left on the mountain)
  *   glass_workshop     4x4 cells (64x64), rect (32, 2) on layout 29: the ash-covered Glass Workshop
@@ -115,7 +116,7 @@ const RgExact rg_h_cycling_gate_exact[2] = {
     {0, 37, 96, 80, false},
     {0, 0, 96, 37, false},
 };
-const RgExact rg_h_route111_gate_exact[2] = {
+const RgExact rg_h_winstrate_house_exact[2] = {
     {0, 37, 80, 80, false},
     {0, 0, 80, 37, false},
 };

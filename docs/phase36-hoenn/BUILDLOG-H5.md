@@ -16,7 +16,7 @@ was fixed from `art` (the census seeds are door signatures). Emerald layout ids 
 | seashore_house | 25 / 10,2,5,4 | 80x64 | 1 | retarget 25 |
 | trick_house | 26 / 9,61,5,6 | 80x96 | 1 | retarget 26 |
 | cycling_gate | 26 / 14,12,6,5, matchRows 2-5 | 96x80 | 2 (14,12 and 15,84) | retarget 26 |
-| route111_gate | 27 / 11,109,5,5 | 80x80 | 1 (+ the twin layout 392) | retarget 27 |
+| winstrate_house | 27 / 11,109,5,5 | 80x80 | 1 (+ the twin layout 392) | retarget 27 |
 | cable_car_station | 28 / 27,23,6,5 | 96x80 | 1 | retarget 28 |
 | cable_car_chimney | 136 / 14,32,6,5 | 96x80 | 1 | retarget 137 |
 | glass_workshop | 29 / 32,2,4,4 | 64x64 | 1 | retarget 29 |
@@ -29,8 +29,8 @@ was fixed from `art` (the census seeds are door signatures). Emerald layout ids 
 Layout pins (Emerald / Ruby = Sapphire): 25 A525346D / 74E34955, 26 4A7EB534 / 7A89EA0E, 27 31657B1A / 15DFA917, 28 BE8B08F3 /
 5F21044A, 29 A32A722C / 9D7E921C, 30 5DAFC653 / 46526A3F, 35 B691459D / ECAD8849, 37 CDAAAC93 / FA51621C, 136 737C0DC4 / 137
 479CDF78, 241 B13E9480 / 242 EBF19174, 9 5476D808 (the same on RS). Every building's cells were compared with `art` between the
-games: identical on all rects, so the RS rows are plain retargets. The 0/27 and 0/28 signatures (Route 111 gate, Route 112
-cable car station) do not differ between the games; each pair of rows exists on both.
+games: identical on all rects, so the RS rows are plain retargets. The 0/27 and 0/28 signatures (Route 112 cable car
+station, Route 113 Glass Workshop) do not differ between the games; each pair of rows exists on both.
 
 Shapes. All are Kanto-style profile prisms (`rg_h_flat`, `rg_h_gable`, and a new local `h_pitched_t` for the Trick House: a
 pitched pink centre with two lower wing roofs); the front faces are PROJ edges, so wrong / missing / extra are 0 by
@@ -63,7 +63,7 @@ top, an approximation. No Ruby / Sapphire relief exists for any of these cells. 
 ## Occlusion
 
 Not exhaustively verified. I read the `art` collision column for the cells above each rect: the Seashore House, Trick House, the
-cycling gates, Route 111 gate, cable car station 28, Route 114 house, Weather Institute and the wide gate have cells north of the
+cycling gates, Winstrate house, cable car station 28, Route 114 house, Weather Institute and the wide gate have cells north of the
 footprint that the metatile data marks as collision 0, so a path or a ledge may stand behind a wall; the League, entrance gate,
 Glass Workshop and mountain station have none. The column also reads 0 on some roof cells of the footprint itself, so it is a hint, not
 proof of walkability, and this was not followed into the rendered camera views. Treat the walls as potentially hiding a walkable

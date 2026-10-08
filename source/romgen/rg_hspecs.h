@@ -291,7 +291,7 @@ extern const RgExact rg_h_league_gate_exact[2];
 extern const RgExact rg_h_seashore_house_exact[2];
 extern const RgExact rg_h_trick_house_exact[3];
 extern const RgExact rg_h_cycling_gate_exact[2];
-extern const RgExact rg_h_route111_gate_exact[2];
+extern const RgExact rg_h_winstrate_house_exact[2];
 extern const RgExact rg_h_cable_car_exact[2];
 extern const RgExact rg_h_slat_house_exact[2];
 extern const RgExact rg_h_weather_institute_exact[2];
@@ -315,7 +315,7 @@ extern const RgSideCfg rg_h_entrance_gate_side[1];
      rg_h_trick_house, 0, 0, rg_h_trick_house_side},                                                                 \
     {"cycling_gate", RG_SPEC_DIRECT, L_H_R110, {14, 12, 6, 5}, {2, 5}, H_GRASS1, rg_h_cycling_gate_exact, 2,         \
      rg_h_cycling_gate, 96, 0, rg_h_gate_side},                                                                      \
-    {"route111_gate", RG_SPEC_DIRECT, L_H_R111, {11, 109, 5, 5}, {0, 0}, H_GRASS1, rg_h_route111_gate_exact, 2,      \
+    {"winstrate_house", RG_SPEC_DIRECT, L_H_R111, {11, 109, 5, 5}, {0, 0}, H_GRASS1, rg_h_winstrate_house_exact, 2,    \
      rg_h_cycling_gate, 80, 0, rg_h_gate_side},                                                                      \
     {"cable_car_station", RG_SPEC_DIRECT, L_H_R112, {27, 23, 6, 5}, {0, 0}, {0x271}, 1, rg_h_cable_car_exact, 2,     \
      rg_h_cable_car, 0, 0, rg_h_cable_car_side},                                                                     \

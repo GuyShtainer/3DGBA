@@ -64,7 +64,7 @@ static const struct { const char *name; uint16_t layoutId; uint32_t fnv; } kReta
     {"seashore_house", 25, 0x74E34955u},
     {"trick_house", 26, 0x7A89EA0Eu},
     {"cycling_gate", 26, 0x7A89EA0Eu},
-    {"route111_gate", 27, 0x15DFA917u},
+    {"winstrate_house", 27, 0x15DFA917u},
     {"cable_car_station", 28, 0x5F21044Au},
     {"glass_workshop", 29, 0x9D7E921Cu},
     {"route114_house", 30, 0x46526A3Fu},
