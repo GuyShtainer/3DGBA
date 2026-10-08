@@ -3,15 +3,26 @@
 > Living resume doc maintained by the `handoff` skill. The **Current status** and **Next steps**
 > sections are always kept current — start there to resume. The **Session log** grows downward,
 > newest first, and is never pruned.
-> Last updated: 2026-10-07 (look backlog L2-L9 done, Ruby/Sapphire 3D (phase 35 S0-S4), Hoenn census H1; Guy restarting the Mac — see Current status top bullet). Earlier: 2026-08-17 (phases 24-30 — all 8 HMs accounted for, 6 planned by touch; the
+> Last updated: 2026-10-08 (Phase 36 H2 merged, a89dffa). Earlier: 2026-10-07 (look backlog L2-L9 done, Ruby/Sapphire 3D (phase 35 S0-S4), Hoenn census H1; Guy restarting the Mac — see Current status top bullet). Earlier: 2026-08-17 (phases 24-30 — all 8 HMs accounted for, 6 planned by touch; the
 > census's broken rows closed; the FIRST REAL HARDWARE TEST of the touch layer found SIX
 > defects, four fixed, all one root cause. Earlier entry: 2026-08-14, phase 21 — TOUCH CENSUS COMPLETE: 143-screen catalog for all 5 games, 61 screens visited + photographed cb2-certain in the emulator, ~60 zero-guess fingerprints harvested, and the master touch plan written — `docs/phase21-touch-census/TOUCH-PLAN.md` + `REPORT.md`. Headline finds: the BPRE profile is rev0 and the user's cart is rev1 → ALL FireRed menu/battle touch silently dead (exact rev1 fixes harvested); undetected screens leak walk keys (the residual) — both CURED and COMMITTED on main (slice 22.0 landed 2026-08-14: a51c50d the GCTX_TITLE/GCTX_FULLUI promotion + dual-rev anchors, 305242f the LG-rev1 row + newKeys fix; test_profiles 546→1295, 14 suites 240,765 checks green, .3dsx+.cia rebuilt))
 
 ## Current status
 
-- **2026-10-08 — MERGE IN PROGRESS H2** (`worktree-agent-af1235a0a6e26f511` @ `255b580` into main, `--no-ff`, then
-  the 41-suite gate on main). If this line is still here on resume: check `git log main` for the merge commit; if
-  present, rerun the gate (`<scratchpad>/gate-run.sh`) and clear this line; if absent, merge again.
+- **2026-10-08 — H2 MERGED** (`a89dffa`, `--no-ff`; branch and worktree removed). Gate on main green: 30 romgen +
+  11 vtest suites (41 / 41) 0 failures, device build links; `3DGBA.cia` built 2026-10-08 03:03 from `a89dffa`.
+  NOTHING PUSHED, nothing hardware-run. H2 = Fortree / Lavaridge / Pacifidlog recipes (census Emerald 95/160, Ruby
+  93/139) plus two footprint-ground fixes for buildings in the sea, all games, after Guy's "water where its wood. Also
+  the pokecenter": `550ff69` (the fill is the commonest dry metatile when the ring round a building is mostly water)
+  and `140f6a7` (a building cell that is water draws its own metatile less the upper layer — the sea under the roof —
+  via a quarters-0xF variant, matched to the cell's own tileset). Azahar evidence: Pacifidlog huts and centre planked,
+  no slab over the sea; FR Two Island's old green slab gone (`docs/phase36-hoenn/evidence/h2-wq-*`). FR = LG now use
+  103 of 128 variant slots. Pins on `a89dffa`: Emerald buildings 5b2711bb, regions 007a370f, signposts 38515605,
+  relief 21a837f0, ledges eb25a383; FR = LG buildings 8f2e72bf, regions 3716874d, signposts ba2fde45, relief 32c24146;
+  R = S buildings a00bb5ae, regions 1a09cd5f, signposts 9b4d379c, relief 215a12d9. **Next: H3 Lilycove** (sonnet
+  agent in a worktree; brief in the session scratchpad `h3-brief.md`), then H4-H6. Look backlog (not blocking):
+  Fortree near hut's canopy hides its doorway; brown wedge left of a Fortree canopy; dark-blue band on Pacifidlog's
+  deck south edge (pre-existing).
 
 - **2026-10-07 — RESUME POINT (Guy restarted the Mac mid-H2).** `main` = `11d90c9`, all local, NOTHING PUSHED,
   nothing hardware-run. Gate on 11d90c9 green: 30 romgen + 11 vtest suites (41) 0 failures, device build links;
@@ -28,7 +39,7 @@
     S5 (interiors, rev 0/1) not started, "if wanted".
   - **Phase 36 Hoenn census** (`docs/phase36-hoenn/PHASE.md`, slices H1-H6): **H1 merged** (Dewford, Mauville,
     Verdanturf, Fallarbor, Slateport). Census Emerald 82/160, Ruby 80/139.
-  - **H2 GATED, NOT MERGED YET (2026-10-08)** — branch `worktree-agent-af1235a0a6e26f511` (worktree
+  - *(superseded by the H2 MERGED bullet above)* **H2 GATED, NOT MERGED YET (2026-10-08)** — branch `worktree-agent-af1235a0a6e26f511` (worktree
     `.claude/worktrees/agent-af1235a0a6e26f511`), commits `2d7eba2` (recipes: gym_fortree, gym_lavaridge,
     fortree_hut ×6, pacifidlog_hut ×5; all `check` 0/0/0 on Emerald + Ruby, budget 0 over; census Emerald 95/160,
     Ruby 93/139), `3cd9652` (BUILDLOG-H2), `b95b8f9` (repins; its Ruby SHA-1/size/vertices were estimates) and
