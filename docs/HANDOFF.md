@@ -3,22 +3,21 @@
 > Living resume doc maintained by the `handoff` skill. The **Current status** and **Next steps**
 > sections are always kept current — start there to resume. The **Session log** grows downward,
 > newest first, and is never pruned.
-> Last updated: 2026-10-08 (Phase 36 H2 merged, a89dffa). Earlier: 2026-10-07 (look backlog L2-L9 done, Ruby/Sapphire 3D (phase 35 S0-S4), Hoenn census H1; Guy restarting the Mac — see Current status top bullet). Earlier: 2026-08-17 (phases 24-30 — all 8 HMs accounted for, 6 planned by touch; the
+> Last updated: 2026-10-08 (Phase 36 H3 merged, cf95177; H2 a89dffa). Earlier: 2026-10-07 (look backlog L2-L9 done, Ruby/Sapphire 3D (phase 35 S0-S4), Hoenn census H1; Guy restarting the Mac — see Current status top bullet). Earlier: 2026-08-17 (phases 24-30 — all 8 HMs accounted for, 6 planned by touch; the
 > census's broken rows closed; the FIRST REAL HARDWARE TEST of the touch layer found SIX
 > defects, four fixed, all one root cause. Earlier entry: 2026-08-14, phase 21 — TOUCH CENSUS COMPLETE: 143-screen catalog for all 5 games, 61 screens visited + photographed cb2-certain in the emulator, ~60 zero-guess fingerprints harvested, and the master touch plan written — `docs/phase21-touch-census/TOUCH-PLAN.md` + `REPORT.md`. Headline finds: the BPRE profile is rev0 and the user's cart is rev1 → ALL FireRed menu/battle touch silently dead (exact rev1 fixes harvested); undetected screens leak walk keys (the residual) — both CURED and COMMITTED on main (slice 22.0 landed 2026-08-14: a51c50d the GCTX_TITLE/GCTX_FULLUI promotion + dual-rev anchors, 305242f the LG-rev1 row + newKeys fix; test_profiles 546→1295, 14 suites 240,765 checks green, .3dsx+.cia rebuilt))
 
 ## Current status
 
-- **2026-10-08 — MERGE IN PROGRESS H3** (`worktree-agent-a5fed3ddecc85ae47` @ `2579772` into main, `--no-ff`, then
-  the 41-suite gate on main). If still here on resume: merge commit in `git log main`? yes -> rerun the gate and
-  clear this line; no -> merge again.
-
-- **2026-10-08 — H3 LILYCOVE BUILT, NOT MERGED** — branch `worktree-agent-a5fed3ddecc85ae47` (worktree
-  `.claude/worktrees/agent-a5fed3ddecc85ae47`) @ `99de407`: 8 recipes on layout 6 (store, museum, contest hall,
-  pavilion, wooden house, blue house x5 + a wider one, sea-cave arch), RS = retargets only. Census Emerald 107/160,
-  Ruby 106/139. Gate on a1951f3: 41/41, device build links. Pins: Emerald buildings f127285a, R = S 2dc3a918, all
-  else unchanged. Azahar before/after (sonnet agent) in progress; then BUILDLOG-H3 evidence section, merge, gate.
-  Watch: the cave-mouth rock block in the relief cliff, the 104 px department-store wall.
+- **2026-10-08 — H3 LILYCOVE MERGED** (`cf95177`, `--no-ff`; branch and worktree removed). Gate on main green:
+  41 / 41 suites, device build links; `3DGBA.cia` rebuilt from `cf95177`. NOTHING PUSHED, nothing hardware-run.
+  Eight recipes on layout 6 (department store, museum, Contest Hall, pavilion, wooden house, blue house x5 + a wider
+  one, sea-cave arch); RS = retargets only. Census Emerald 107/160, Ruby 106/139. Azahar evidence:
+  `docs/phase36-hoenn/evidence/h3-*` (all models stand; the museum steps stay flat and the player reads in front).
+  Pins on `cf95177`: Emerald buildings f127285a, R = S 2dc3a918, FR = LG 8f2e72bf; every other pin as in the H2 bullet.
+  Look backlog: a thin seam on the Contest Hall's right edge, thin black lines at the cave arch's base.
+  **Next: H4 Mossdeep / Sootopolis** (sonnet, brief `h4-brief.md` in the session scratchpad; Sootopolis's crater
+  dwellings vs relief is the risk), then H5, H6.
 
 - **2026-10-08 — H2 MERGED** (`a89dffa`, `--no-ff`; branch and worktree removed). Gate on main green: 30 romgen +
   11 vtest suites (41 / 41) 0 failures, device build links; `3DGBA.cia` built 2026-10-08 03:03 from `a89dffa`.
