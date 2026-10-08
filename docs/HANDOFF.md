@@ -18,7 +18,9 @@
   Azahar evidence in BUILDLOG-H5: no player or NPC hidden by a wall. **Look backlog:** side-face fin/slab at the Weather
   Institute's rounded ends; Route 112 station's oblique roof as a block; the Trick House roof over the player's legs on the
   bridge landing (ghosted, readable). NOTHING PUSHED, nothing hardware-run. Next: H6 the Battle Frontier (Emerald only), IN FLIGHT
-  (sonnet agent in its own worktree off `f35237c`, brief = session scratchpad `h6-brief.md`; nothing of it merged yet).
+  (sonnet agent in worktree `.claude/worktrees/h6-frontier`, branch `h6-frontier` off `a1c0ee2`, brief = session
+  scratchpad `h6-brief.md`; nothing of it merged yet. The first dispatch stopped: the permission check denied the brief's
+  `git reset --hard main` in a harness worktree based on an old commit; the worktree is now created at main by hand).
 
 - **2026-10-08 — H4 MOSSDEEP / SOOTOPOLIS MERGED** (`ee69eb3`, `--no-ff`; branch and worktree removed). Gate on main
   green: 41 / 41 suites, device build links, Emerald buildings ec319d0e, R = S b7432279, every other pin unchanged;
