@@ -9,14 +9,21 @@
 
 ## Current status
 
+- **2026-10-08 — H5 ROUTES / LANDMARKS BUILT, NOT MERGED** — branch `worktree-agent-abdd9c4d54f84196f` @ `0db4b36`
+  (off main `3fe6613`): 12 Emerald rows in `rg_hspecs_routes.c` (League, Seashore House, Trick House, two cycling gates,
+  Route 111 gate, both cable car stations, Glass Workshop, Route 114 house, Weather Institute, two entrance gates), RS
+  retargets + the RS-only League facade (`rg_rsspecs_h5.c`, new `kExtra` table). Census fix: Ruby 27/0 (a 1x1 dummy
+  layout) no longer gives a negative seed rect. Census Emerald 137/160, Ruby 136/139; the two cave mouths (0/37, 24/21)
+  left open (cliff relief at the mouth). Pins: Emerald buildings 3d7cb8cd, R = S 850ab774; variants 83/128. Gate 41/41.
+  Azahar round (sonnet) IN FLIGHT: the open question is whether the new walls hide a walkable strip north of them.
+
 - **2026-10-08 — H4 MOSSDEEP / SOOTOPOLIS MERGED** (`ee69eb3`, `--no-ff`; branch and worktree removed). Gate on main
   green: 41 / 41 suites, device build links, Emerald buildings ec319d0e, R = S b7432279, every other pin unchanged;
   `3DGBA.cia` rebuilt from `ee69eb3`. Recipes: mossdeep_house x5, mossdeep_wide, mossdeep_space (RS: own row
   rs_mossdeep_space), sootopolis_tower x3, sootopolis_box x6, gym_sootopolis. Census Emerald 124/160, Ruby 122/139.
   Azahar evidence in BUILDLOG-H4 (Emerald only). **Look backlog:** the Space Center's 82 px wall hides the rocket from
   the south; the pointed dwellings read the same as before from the default camera (placed, not proven 3D on screen);
-  the door-less dwelling twins are flat art. NOTHING PUSHED, nothing hardware-run. Next: H5 routes and landmarks, IN FLIGHT
-  (sonnet agent in its own worktree off `44deb51`, brief = session scratchpad `h5-brief.md`; nothing of it merged yet).
+  the door-less dwelling twins are flat art. NOTHING PUSHED, nothing hardware-run.
 
 - **2026-10-08 — H3 LILYCOVE MERGED** (`cf95177`, `--no-ff`; branch and worktree removed). Gate on main green:
   41 / 41 suites, device build links; `3DGBA.cia` rebuilt from `cf95177`. NOTHING PUSHED, nothing hardware-run.
