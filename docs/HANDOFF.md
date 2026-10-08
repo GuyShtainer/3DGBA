@@ -9,6 +9,15 @@
 
 ## Current status
 
+- **2026-10-08 — H6 BATTLE FRONTIER BUILT, NOT MERGED** — branch `h6-frontier` (worktree `.claude/worktrees/h6-frontier`, made
+  at main by hand) @ `c239b13`: 16 Emerald-only rows in `rg_hspecs_frontier.c` (tower, temple, palace, dome, pike, two halls,
+  gate, centre, golden, six lodge rows), all flat / gable block approximations; tower wall capped at 96 px. Census Emerald
+  156/160 (open: two cave mouths, the 26/14 21,45 planter, the Route 111 31,113 tunnel arch); Ruby unchanged 136/139, R = S
+  buildings byte-identical. Pins: Emerald buildings a14f72f0, variants 87/128 (Frontier west water cells). Gate 41/41.
+  **To do before merge:** the 16 rows sit in the RS table (89 of 96 slots; overflow drops rows silently, RS-only League
+  first) → fix prepared (`kEmeraldOnly` prefix + refuse a full table; session scratchpad `h6-rsfix.py`), apply + gate after
+  the Azahar round (sonnet) now IN FLIGHT in the worktree.
+
 - **2026-10-08 — H5 ROUTES / LANDMARKS MERGED** (`e297c1c`, `--no-ff`; branch and worktree removed). Gate on main green:
   41 / 41 suites, device build links, Emerald buildings 3d7cb8cd, R = S 850ab774, every other pin unchanged; `3DGBA.cia`
   rebuilt from `e297c1c`. 12 Emerald rows in `rg_hspecs_routes.c` (League, Seashore House, Trick House, two cycling gates,
@@ -17,10 +26,7 @@
   seed rect). Census Emerald 137/160, Ruby 136/139; the two cave mouths left open. Variants 83/128 (Route 110 water cells).
   Azahar evidence in BUILDLOG-H5: no player or NPC hidden by a wall. **Look backlog:** side-face fin/slab at the Weather
   Institute's rounded ends; Route 112 station's oblique roof as a block; the Trick House roof over the player's legs on the
-  bridge landing (ghosted, readable). NOTHING PUSHED, nothing hardware-run. Next: H6 the Battle Frontier (Emerald only), IN FLIGHT
-  (sonnet agent in worktree `.claude/worktrees/h6-frontier`, branch `h6-frontier` off `a1c0ee2`, brief = session
-  scratchpad `h6-brief.md`; nothing of it merged yet. The first dispatch stopped: the permission check denied the brief's
-  `git reset --hard main` in a harness worktree based on an old commit; the worktree is now created at main by hand).
+  bridge landing (ghosted, readable). NOTHING PUSHED, nothing hardware-run. Next: H6, see above.
 
 - **2026-10-08 — H4 MOSSDEEP / SOOTOPOLIS MERGED** (`ee69eb3`, `--no-ff`; branch and worktree removed). Gate on main
   green: 41 / 41 suites, device build links, Emerald buildings ec319d0e, R = S b7432279, every other pin unchanged;
