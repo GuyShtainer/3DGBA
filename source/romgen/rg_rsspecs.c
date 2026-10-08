@@ -55,6 +55,10 @@ static const struct { const char *name; uint16_t layoutId; uint32_t fnv; } kReta
     /* Phase 36 H4: Mossdeep (layout 7) */
     {"mossdeep_house", 7, 0x9CB79195u},
     {"mossdeep_wide", 7, 0x9CB79195u},       /* RS paints the facade differently (rows 3-4); the roof rows are the same */
+    /* Phase 36 H4: Sootopolis (layout 8) */
+    {"sootopolis_tower", 8, 0x0ECDD398u},
+    {"sootopolis_box", 8, 0x0ECDD398u},
+    {"gym_sootopolis", 8, 0x0ECDD398u},
 };
 
 /* Phase 35 S4: RS-own recipes (rg_rsspecs_<town>.c, the Kanto files' pattern) in the place of an Emerald row whose art gate
