@@ -1,8 +1,9 @@
 # 3DGBA — status & roadmap
 
 An honest snapshot of what's solid, what's half-baked, and what's still a dream. This is a
-solo hobby project built and tested on a real New 3DS, so the bar for "done" is *runs on
-hardware* — not *compiles* or *works in an emulator*.
+solo fan project, so **everything is experimental**, and my free time sets the pace of both
+development and hardware testing. The bar for "done" is *runs on a real New 3DS*, not
+*compiles* or *works in an emulator*.
 
 **What this project is:** a general GBA emulator whose *heart* is the **Pokémon**
 experience. The emulator and the emulated link cable work with **any** GBA game; the

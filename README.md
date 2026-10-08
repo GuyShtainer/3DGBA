@@ -16,9 +16,10 @@ depth are **Gen-3-Pokémon-specific** enhancements — they do nothing in, say, 
 Kirby. The emulator and the link are general; the special sauce is for Pokémon. It ships no
 games or other content.
 
-> ⚠️ A hobby project, and a work in progress. The core (two games + the link cable)
-> runs on real New 3DS hardware; the stereoscopic-3D and wireless features are
-> experimental and being tuned on-device.
+> ⚠️ **A fan project, so everything here is experimental.** It's built and tested in my
+> free time, and that sets the pace of both development and hardware testing. The core
+> (two games + the link cable) runs on real New 3DS hardware. Most newer features have
+> not been tested on a real console yet. [STATUS.md](STATUS.md) says which.
 
 ## What it does
 
