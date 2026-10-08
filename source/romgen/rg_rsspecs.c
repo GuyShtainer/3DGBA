@@ -43,6 +43,15 @@ static const struct { const char *name; uint16_t layoutId; uint32_t fnv; } kReta
     {"slateport_fan_club", 2, 0xA8D336A7u},
     {"oceanic_museum", 2, 0xA8D336A7u},
     {"slateport_shipyard", 2, 0xA8D336A7u},
+    /* Phase 36 H3: Lilycove (layout 6) */
+    {"lilycove_house", 6, 0xC5BB1A9Fu},
+    {"lilycove_house_w", 6, 0xC5BB1A9Fu},
+    {"lilycove_store", 6, 0xC5BB1A9Fu},
+    {"lilycove_museum", 6, 0xC5BB1A9Fu},
+    {"lilycove_hall", 6, 0xC5BB1A9Fu},
+    {"lilycove_pavilion", 6, 0xC5BB1A9Fu},
+    {"lilycove_cave", 6, 0xC5BB1A9Fu},
+    {"lilycove_wood", 6, 0xC5BB1A9Fu},       /* RS paints the roof tiles differently: the silhouette is the same */
 };
 
 /* Phase 35 S4: RS-own recipes (rg_rsspecs_<town>.c, the Kanto files' pattern) in the place of an Emerald row whose art gate

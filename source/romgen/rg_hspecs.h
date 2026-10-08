@@ -180,4 +180,49 @@ extern const RgExact rg_h_pacifidlog_hut_exact[3];
     {"pacifidlog_hut", RG_SPEC_DIRECT, L_H_PACIFIDLOG, {15, 10, 3, 4}, {0, 0}, H_PACIFIDLOG_DECK, rg_h_pacifidlog_hut_exact,    \
      3, rg_h_pacifidlog_hut, 0, 0, NULL},
 
+/* ======== Phase 36 slice H3 ======== */
+
+/* ---- Lilycove City (layout 6; Ruby / Sapphire retarget every row, rg_rsspecs.c: no RS-own row) ---- */
+#define L_H_LILYCOVE 6, 0x7A998B47u
+bool rg_h_lilycove_house(const RgSpec *s, int width, int a1, RgPartList *out);
+extern const RgExact rg_h_lilycove_house_exact[2];
+extern const RgExact rg_h_lilycove_house_w_exact[2];
+extern const RgSideCfg rg_h_lilycove_house_side[1];
+bool rg_h_lilycove_store(const RgSpec *s, int a0, int a1, RgPartList *out);
+bool rg_h_lilycove_museum(const RgSpec *s, int a0, int a1, RgPartList *out);
+bool rg_h_lilycove_hall(const RgSpec *s, int a0, int a1, RgPartList *out);
+bool rg_h_lilycove_pavilion(const RgSpec *s, int a0, int a1, RgPartList *out);
+bool rg_h_lilycove_wood(const RgSpec *s, int a0, int a1, RgPartList *out);
+bool rg_h_lilycove_cave(const RgSpec *s, int a0, int a1, RgPartList *out);
+extern const RgExact rg_h_lilycove_cave_exact[2];
+extern const RgSideCfg rg_h_lilycove_cave_side[1];
+extern const RgExact rg_h_lilycove_store_exact[2];
+extern const RgExact rg_h_lilycove_museum_exact[4];
+extern const RgExact rg_h_lilycove_hall_exact[4];
+extern const RgExact rg_h_lilycove_pavilion_exact[3];
+extern const RgExact rg_h_lilycove_wood_exact[3];
+extern const RgSideCfg rg_h_lilycove_store_side[1];
+extern const RgSideCfg rg_h_lilycove_museum_side[1];
+extern const RgSideCfg rg_h_lilycove_hall_side[1];
+extern const RgSideCfg rg_h_lilycove_pavilion_side[1];
+extern const RgSideCfg rg_h_lilycove_wood_side[1];
+
+#define RG_HSPECS_LILYCOVE_ROWS                                                                                     \
+    {"lilycove_house", RG_SPEC_DIRECT, L_H_LILYCOVE, {54, 12, 4, 4}, {2, 4}, H_GRASS1, rg_h_lilycove_house_exact,    \
+     2, rg_h_lilycove_house, 64, 0, rg_h_lilycove_house_side},                                                       \
+    {"lilycove_house_w", RG_SPEC_DIRECT, L_H_LILYCOVE, {37, 11, 5, 4}, {0, 0}, H_GRASS1,                            \
+     rg_h_lilycove_house_w_exact, 2, rg_h_lilycove_house, 80, 0, rg_h_lilycove_house_side},                         \
+    {"lilycove_store", RG_SPEC_DIRECT, L_H_LILYCOVE, {23, 0, 9, 7}, {0, 0}, H_GRASS1, rg_h_lilycove_store_exact, 2,  \
+     rg_h_lilycove_store, 0, 0, rg_h_lilycove_store_side},                                                           \
+    {"lilycove_museum", RG_SPEC_DIRECT, L_H_LILYCOVE, {7, 0, 10, 6}, {0, 0}, H_GRASS1, rg_h_lilycove_museum_exact,   \
+     4, rg_h_lilycove_museum, 0, 0, rg_h_lilycove_museum_side},                                                      \
+    {"lilycove_hall", RG_SPEC_DIRECT, L_H_LILYCOVE, {20, 18, 7, 7}, {0, 0}, H_GRASS1, rg_h_lilycove_hall_exact, 4,   \
+     rg_h_lilycove_hall, 0, 0, rg_h_lilycove_hall_side},                                                             \
+    {"lilycove_pavilion", RG_SPEC_DIRECT, L_H_LILYCOVE, {9, 27, 7, 6}, {0, 0}, H_GRASS1,                            \
+     rg_h_lilycove_pavilion_exact, 3, rg_h_lilycove_pavilion, 0, 0, rg_h_lilycove_pavilion_side},                    \
+    {"lilycove_wood", RG_SPEC_DIRECT, L_H_LILYCOVE, {36, 20, 6, 5}, {0, 0}, H_GRASS1, rg_h_lilycove_wood_exact, 3,   \
+     rg_h_lilycove_wood, 0, 0, rg_h_lilycove_wood_side},                                                             \
+    {"lilycove_cave", RG_SPEC_DIRECT, L_H_LILYCOVE, {69, 4, 3, 2}, {0, 0}, H_GRASS1, rg_h_lilycove_cave_exact, 2,    \
+     rg_h_lilycove_cave, 0, 0, rg_h_lilycove_cave_side},
+
 #endif
