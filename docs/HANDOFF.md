@@ -9,13 +9,9 @@
 
 ## Current status
 
-- **2026-10-08 — H5 ROUTES / LANDMARKS BUILT, NOT MERGED** — branch `worktree-agent-abdd9c4d54f84196f` @ `0db4b36`
-  (off main `3fe6613`): 12 Emerald rows in `rg_hspecs_routes.c` (League, Seashore House, Trick House, two cycling gates,
-  Route 111 gate, both cable car stations, Glass Workshop, Route 114 house, Weather Institute, two entrance gates), RS
-  retargets + the RS-only League facade (`rg_rsspecs_h5.c`, new `kExtra` table). Census fix: Ruby 27/0 (a 1x1 dummy
-  layout) no longer gives a negative seed rect. Census Emerald 137/160, Ruby 136/139; the two cave mouths (0/37, 24/21)
-  left open (cliff relief at the mouth). Pins: Emerald buildings 3d7cb8cd, R = S 850ab774; variants 83/128. Gate 41/41.
-  Azahar round (sonnet) IN FLIGHT: the open question is whether the new walls hide a walkable strip north of them.
+- **2026-10-08 — MERGE IN PROGRESS H5** — merging branch `worktree-agent-abdd9c4d54f84196f` @ `70ac06c` (built, gate
+  41/41, Azahar evidence in BUILDLOG-H5) into main. If this line is still here, the merge or its main gate did not finish:
+  check `git log`, re-run `SP/gate-run.sh` on main (expect Emerald buildings 3d7cb8cd, R = S 850ab774, 41/41).
 
 - **2026-10-08 — H4 MOSSDEEP / SOOTOPOLIS MERGED** (`ee69eb3`, `--no-ff`; branch and worktree removed). Gate on main
   green: 41 / 41 suites, device build links, Emerald buildings ec319d0e, R = S b7432279, every other pin unchanged;
