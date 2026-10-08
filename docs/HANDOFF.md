@@ -9,6 +9,13 @@
 
 ## Current status
 
+- **2026-10-08 — H3 LILYCOVE BUILT, NOT MERGED** — branch `worktree-agent-a5fed3ddecc85ae47` (worktree
+  `.claude/worktrees/agent-a5fed3ddecc85ae47`) @ `99de407`: 8 recipes on layout 6 (store, museum, contest hall,
+  pavilion, wooden house, blue house x5 + a wider one, sea-cave arch), RS = retargets only. Census Emerald 107/160,
+  Ruby 106/139. Gate on a1951f3: 41/41, device build links. Pins: Emerald buildings f127285a, R = S 2dc3a918, all
+  else unchanged. Azahar before/after (sonnet agent) in progress; then BUILDLOG-H3 evidence section, merge, gate.
+  Watch: the cave-mouth rock block in the relief cliff, the 104 px department-store wall.
+
 - **2026-10-08 — H2 MERGED** (`a89dffa`, `--no-ff`; branch and worktree removed). Gate on main green: 30 romgen +
   11 vtest suites (41 / 41) 0 failures, device build links; `3DGBA.cia` built 2026-10-08 03:03 from `a89dffa`.
   NOTHING PUSHED, nothing hardware-run. H2 = Fortree / Lavaridge / Pacifidlog recipes (census Emerald 95/160, Ruby
