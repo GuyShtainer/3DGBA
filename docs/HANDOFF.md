@@ -3,20 +3,30 @@
 > Living resume doc maintained by the `handoff` skill. The **Current status** and **Next steps**
 > sections are always kept current — start there to resume. The **Session log** grows downward,
 > newest first, and is never pruned.
-> Last updated: 2026-10-08 (Phase 36 H3 merged, cf95177; H2 a89dffa). Earlier: 2026-10-07 (look backlog L2-L9 done, Ruby/Sapphire 3D (phase 35 S0-S4), Hoenn census H1; Guy restarting the Mac — see Current status top bullet). Earlier: 2026-08-17 (phases 24-30 — all 8 HMs accounted for, 6 planned by touch; the
+> Last updated: 2026-10-08 end of session (H5 merged e297c1c; H6 built, unmerged, on h6-frontier 049f8b8; Guy's 4 look bugs in docs/phase36-hoenn/LOOK-BUGS.md). Earlier: 2026-10-08 (Phase 36 H3 merged, cf95177; H2 a89dffa). Earlier: 2026-10-07 (look backlog L2-L9 done, Ruby/Sapphire 3D (phase 35 S0-S4), Hoenn census H1; Guy restarting the Mac — see Current status top bullet). Earlier: 2026-08-17 (phases 24-30 — all 8 HMs accounted for, 6 planned by touch; the
 > census's broken rows closed; the FIRST REAL HARDWARE TEST of the touch layer found SIX
 > defects, four fixed, all one root cause. Earlier entry: 2026-08-14, phase 21 — TOUCH CENSUS COMPLETE: 143-screen catalog for all 5 games, 61 screens visited + photographed cb2-certain in the emulator, ~60 zero-guess fingerprints harvested, and the master touch plan written — `docs/phase21-touch-census/TOUCH-PLAN.md` + `REPORT.md`. Headline finds: the BPRE profile is rev0 and the user's cart is rev1 → ALL FireRed menu/battle touch silently dead (exact rev1 fixes harvested); undetected screens leak walk keys (the residual) — both CURED and COMMITTED on main (slice 22.0 landed 2026-08-14: a51c50d the GCTX_TITLE/GCTX_FULLUI promotion + dual-rev anchors, 305242f the LG-rev1 row + newKeys fix; test_profiles 546→1295, 14 suites 240,765 checks green, .3dsx+.cia rebuilt))
 
 ## Current status
 
+- **2026-10-08 (end of session) — STOPPED AT GUY'S REQUEST** ("i wish you would stop now as im reaching the limit").
+  main @ `67db3c0`; `3DGBA.cia` is from `e297c1c` (H5). NOTHING PUSHED, nothing hardware-run.
+  - **Guy's 4 look bugs** from the H3-H5 evidence → `docs/phase36-hoenn/LOOK-BUGS.md` (his words quoted; causes UNVERIFIED):
+    (1) Lilycove wooden house: west side face slants back instead of a vertical wall; (2) Lilycove Department Store: no
+    west side wall; (3) Route 119 planted bed / cliff edge looks like spilled liquid (pre-existing terrain/relief, also in
+    the BEFORE half); (4) Mossdeep rocket + two gantries have no model (flat art above the `mossdeep_space` rect).
+  - Learn skill updated (toolkit repo `07c9f44`).
+
 - **2026-10-08 — H6 BATTLE FRONTIER BUILT, NOT MERGED** — branch `h6-frontier` (worktree `.claude/worktrees/h6-frontier`, made
-  at main by hand) @ `c239b13`: 16 Emerald-only rows in `rg_hspecs_frontier.c` (tower, temple, palace, dome, pike, two halls,
+  at main by hand) @ `049f8b8`: 16 Emerald-only rows in `rg_hspecs_frontier.c` (tower, temple, palace, dome, pike, two halls,
   gate, centre, golden, six lodge rows), all flat / gable block approximations; tower wall capped at 96 px. Census Emerald
   156/160 (open: two cave mouths, the 26/14 21,45 planter, the Route 111 31,113 tunnel arch); Ruby unchanged 136/139, R = S
-  buildings byte-identical. Pins: Emerald buildings a14f72f0, variants 87/128 (Frontier west water cells). Gate 41/41.
-  **To do before merge:** the 16 rows sit in the RS table (89 of 96 slots; overflow drops rows silently, RS-only League
-  first) → fix prepared (`kEmeraldOnly` prefix + refuse a full table; session scratchpad `h6-rsfix.py`), apply + gate after
-  the Azahar round (sonnet) now IN FLIGHT in the worktree.
+  buildings byte-identical. Pins: Emerald buildings a14f72f0, variants 87/128 (Frontier west water cells). Gate 41/41 at
+  `c239b13`. **Azahar evidence round STOPPED** (Guy's request): Azahar killed, its `roms/emerald-h6-*` save copies deleted,
+  NO H6 evidence committed. **RS-table fix NOT applied:** the 16 rows sit in the RS table (89 of 96 slots; overflow silently
+  drops the last rows, the RS-only League first). The fix is committed as a script, `docs/phase36-hoenn/h6-rsfix.py`
+  (`049f8b8`): `kEmeraldOnly` name prefix `frontier_` skipped in build(), `put()` + `sFull` so a full table returns NULL,
+  the rs_world test back to `CHECK(pinned == 68 && matching == 68)`. See Next steps 1.
 
 - **2026-10-08 — H5 ROUTES / LANDMARKS MERGED** (`e297c1c`, `--no-ff`; branch and worktree removed). Gate on main green:
   41 / 41 suites, device build links, Emerald buildings 3d7cb8cd, R = S 850ab774, every other pin unchanged; `3DGBA.cia`
@@ -174,7 +184,16 @@
 
 ## Next steps (resume here)
 
-**2026-10-07 queue (Guy: "just dont stop, you can keep going"):**
+**2026-10-08 queue (resume here; Guy stopped the session near his limit):**
+1. **Finish H6** in `.claude/worktrees/h6-frontier`: `python3 -I docs/phase36-hoenn/h6-rsfix.py <worktree>`, check R = S
+   buildings still 850ab774 and Emerald a14f72f0, delete the script, commit, run the full romgen gate (see "How to build /
+   test / run", 41 suites). Then the Azahar evidence round (sonnet, one agent; patched save COPIES only), the BUILDLOG-H6
+   evidence section, merge `--no-ff`, gate on main, `make -j8 cia`.
+2. **Fix Guy's 4 look bugs** (`docs/phase36-hoenn/LOOK-BUGS.md`) one at a time, each with an Azahar before / after of the
+   same spot from an angled view. Verify each cause in `art` / `preview` first (the "likely" column is unverified).
+3. Hardware run by Guy of the newest `.cia`.
+
+**2026-10-07 queue (Guy: "just dont stop, you can keep going"); H2-H5 done, H6 above:**
 1. Finish **H2** on its branch (see Current status: repin 4 tests, vtest, build, Azahar, merge). Then **H3** Lilycove, **H4** Mossdeep + Sootopolis, **H5** routes/landmarks,
    **H6** Battle Frontier (Emerald only). One agent at a time, worktree, opus for recipe authoring; merge `--no-ff`
    as Guy; gate after every merge (romgen CLI on E/E-ledges/FR/LG/R/S + shasums, `make -C tools/romgen test`,
@@ -420,6 +439,22 @@ Total **10343 checks, 0 failures**. A suite that *drops* checks is as much a reg
 fails: the counts above are the gate.
 Iterate in **Azahar** (Citra successor). **Sign off only on real New 3DS** — 3D fusion, core-2 contention, the 804MHz/L2 budget, ndsp latency and any uds latency are NOT modeled by the emulator (CLAUDE.md rule #6). On-device touch debug: SMART mode draws a bottom-left line `ctx p=x,y key=U/D/L/R/A` — ask the user to read it when a touch bug repro's.
 
+**The romgen gate** (Phase 33-36; ~25 min; run from the checkout under test, OUTDIR anywhere outside it). The ROMs
+are Guy's, in the main checkout's git-ignored `roms/`. Expect every rc=0 and "41" suites with 0 failures; compare the
+printed shasum prefixes with the pins in Current status.
+```
+R=/Users/guyshtainer/VSCodeProjects/3ds-toolkit/projects/3DGBA/roms
+export DEVELOPER_DIR=/Library/Developer/CommandLineTools DEVKITPRO=/opt/devkitpro DEVKITARM=/opt/devkitpro/devkitARM
+export ROMGEN_ROM=$R/emerald.gba ROMGEN_ROM_FR=$R/firered.gba ROMGEN_ROM_LG=$R/leafgreen.gba ROMGEN_ROM_RUBY=$R/ruby.gba ROMGEN_ROM_SAPP=$R/sapphire.gba
+make -C tools/romgen
+tools/romgen/build/romgen $ROMGEN_ROM OUT/e;  tools/romgen/build/romgen $ROMGEN_ROM OUT/el --relief ledges
+tools/romgen/build/romgen $ROMGEN_ROM_FR OUT/fr;  tools/romgen/build/romgen $ROMGEN_ROM_LG OUT/lg
+tools/romgen/build/romgen $ROMGEN_ROM_RUBY OUT/r;  tools/romgen/build/romgen $ROMGEN_ROM_SAPP OUT/s
+shasum OUT/*/*.bin                                   # first 8 hex = the pins
+make -C tools/romgen test > OUT/test.log 2>&1; make -C tools/romgen vtest > OUT/vtest.log 2>&1; make -j8
+cat OUT/test.log OUT/vtest.log | grep -c 'checks, 0 failures'   # 41; never trust the make rc alone
+```
+
 ## Key decisions (and why)
 
 - **Menu/context detection is TASK-BASED + fail-safe.** `game_read` (gamestate.c) decides the on-screen context by scanning `gTasks` for each menu's active input-handler task (`task_active`/`find_bag_list_task`), NOT by windowId/callback heuristics. **Why:** heuristics (stale `sMenu.windowId`, stale `gMenuCallback`) repeatedly false-positived and **blocked walking**; a wrong/absent task address now just means "not detected" → the overworld still walks. This is the structural cure for the recurring walk bug.
@@ -483,6 +518,18 @@ Iterate in **Azahar** (Citra successor). **Sign off only on real New 3DS** — 3
 ---
 
 ## Session log
+
+### Session — 2026-10-08 — Phase 36 H3-H5 merged, H6 built, Guy's look review
+
+- Merged H3 Lilycove (`cf95177`), H4 Mossdeep/Sootopolis (`ee69eb3`) and H5 routes/landmarks (`e297c1c`); each was gated
+  41/41 on main and the `.cia` rebuilt. H6 Battle Frontier is built on `h6-frontier` (`c239b13`, fix script `049f8b8`),
+  not merged.
+- Lesson: an Agent with `isolation: "worktree"` starts at a stale commit, and `git reset --hard main` is now denied. Make
+  the worktree at main by hand and dispatch without isolation (memory `agent-worktree-base`).
+- Guy reviewed the H3-H5 evidence ("its amazing") and reported 4 bugs → `docs/phase36-hoenn/LOOK-BUGS.md`. He asked to
+  stop near his limit, so the H6 evidence round was stopped and cleaned up (Azahar killed, save copies deleted).
+- `/learn`: toolkit repo `07c9f44` (per-cell footprint ground, facades hiding what is behind them, end-wall checks, a
+  door-less landmark inventory, tables that refuse to overflow, the before-half evidence rule).
 
 ### Session — 2026-10-07 — look backlog L2-L9, Ruby/Sapphire in 3D, Hoenn census H1
 Guy's notes drove it: "side walls are not perfect, some roofs are not there. The fences and rocks are also flat",
